@@ -33,11 +33,12 @@ use hir::def::Def;
 use hir::def_id::{DefId, DefIndex, CRATE_DEF_INDEX};
 use util::nodemap::{NodeMap, FxHashSet};
 
-use syntax_pos::{Span, ExpnId, DUMMY_SP};
+use syntax_pos::{Span, DUMMY_SP};
 use syntax::codemap::{self, Spanned};
 use syntax::abi::Abi;
 use syntax::ast::{Ident, Name, NodeId, DUMMY_NODE_ID, AsmDialect};
 use syntax::ast::{Attribute, Lit, StrStyle, FloatTy, IntTy, UintTy, MetaItem};
+use syntax::ext::hygiene::SyntaxContext;
 use syntax::ptr::P;
 use syntax::symbol::{Symbol, keywords};
 use syntax::tokenstream::TokenStream;
@@ -548,9 +549,11 @@ pub struct Block {
     /// Distinguishes between `unsafe { ... }` and `{ ... }`
     pub rules: BlockCheckMode,
     pub span: Span,
-    /// The id of the expression that `break` breaks to if the block can be broken out of.
-    /// Currently only `Some(_)` for `catch {}` blocks
-    pub break_to_expr_id: Option<NodeId>,
+    /// If true, then there may exist `break 'a` values that aim to
+    /// break out of this block early. As of this writing, this is not
+    /// currently permitted in Rust itself, but it is generated as
+    /// part of `catch` statements.
+    pub targeted_by_break: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash)]
@@ -992,8 +995,8 @@ pub enum Expr_ {
     ExprType(P<Expr>, P<Ty>),
     /// An `if` block, with an optional else block
     ///
-    /// `if expr { block } else { expr }`
-    ExprIf(P<Expr>, P<Block>, Option<P<Expr>>),
+    /// `if expr { expr } else { expr }`
+    ExprIf(P<Expr>, P<Expr>, Option<P<Expr>>),
     /// A while loop, with an optional label
     ///
     /// `'label: while expr { block }`
@@ -1367,7 +1370,7 @@ pub struct InlineAsm {
     pub volatile: bool,
     pub alignstack: bool,
     pub dialect: AsmDialect,
-    pub expn_id: ExpnId,
+    pub ctxt: SyntaxContext,
 }
 
 /// represents an argument in a function header
