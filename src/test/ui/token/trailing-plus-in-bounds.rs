@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// gate-test-windows_subsystem
+// compile-flags: -Z parse-only -Z continue-parse-after-error
 
-#![windows_subsystem = "console"]
-//~^ ERROR: the windows subsystem attribute is currently unstable
+use std::fmt::Debug;
 
-fn main() {}
+fn main() {
+    let x: Box<Debug+> = box 3 as Box<Debug+>; // Trailing `+` is OK
+}
+
+FAIL
+//~^ ERROR
+//~| ERROR
