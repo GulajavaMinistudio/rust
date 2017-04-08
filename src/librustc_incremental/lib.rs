@@ -22,8 +22,8 @@
 #![feature(rustc_private)]
 #![feature(staged_api)]
 #![feature(rand)]
-#![feature(core_intrinsics)]
 #![feature(conservative_impl_trait)]
+#![feature(sort_unstable)]
 #![cfg_attr(stage0, feature(pub_restricted))]
 
 extern crate graphviz;
