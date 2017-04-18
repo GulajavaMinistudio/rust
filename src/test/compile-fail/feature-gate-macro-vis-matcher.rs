@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-trait Foo {
-    pub type Foo;
-    //~^ ERROR expected one of `const`, `extern`, `fn`, `type`, `unsafe`, or `}`, found `pub`
-}
+// Test that the MSP430 interrupt ABI cannot be used when msp430_interrupt
+// feature gate is not used.
 
-fn main() {}
+macro_rules! m { ($v:vis) => {} }
+//~^ ERROR :vis fragment specifier is experimental and subject to change
+
+fn main() {
+    m!(pub);
+}
