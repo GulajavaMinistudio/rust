@@ -82,7 +82,6 @@ pub use self::compare_method::{compare_impl_method, compare_const_impl};
 use self::TupleArgumentsFlag::*;
 
 use astconv::AstConv;
-use dep_graph::DepNode;
 use fmt_macros::{Parser, Piece, Position};
 use hir::def::{Def, CtorKind};
 use hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
@@ -126,7 +125,7 @@ use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use rustc::hir::{self, PatKind};
 use rustc::middle::lang_items;
 use rustc_back::slice;
-use rustc_const_eval::eval_length;
+use rustc::middle::const_val::eval_length;
 use rustc_const_math::ConstInt;
 
 mod assoc;
@@ -577,14 +576,13 @@ impl<'a, 'tcx> ItemLikeVisitor<'tcx> for CheckItemTypesVisitor<'a, 'tcx> {
 pub fn check_wf_new<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) -> CompileResult {
     tcx.sess.track_errors(|| {
         let mut visit = wfcheck::CheckTypeWellFormedVisitor::new(tcx);
-        tcx.visit_all_item_likes_in_krate(DepNode::WfCheck, &mut visit.as_deep_visitor());
+        tcx.hir.krate().visit_all_item_likes(&mut visit.as_deep_visitor());
     })
 }
 
 pub fn check_item_types<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) -> CompileResult {
     tcx.sess.track_errors(|| {
-        tcx.visit_all_item_likes_in_krate(DepNode::TypeckItemType,
-                                          &mut CheckItemTypesVisitor { tcx });
+        tcx.hir.krate().visit_all_item_likes(&mut CheckItemTypesVisitor { tcx });
     })
 }
 
@@ -3634,7 +3632,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
               tcx.mk_array(element_ty, args.len())
           }
           hir::ExprRepeat(ref element, count) => {
-            let count = eval_length(self.tcx.global_tcx(), count, "repeat count")
+            let count = eval_length(self.tcx, count, "repeat count")
                   .unwrap_or(0);
 
             let uty = match expected {

@@ -31,7 +31,6 @@ use ty;
 use ty::subst::{Subst, Substs};
 use ty::util::IntTypeExt;
 use ty::walk::TypeWalker;
-use util::common::MemoizationMap;
 use util::nodemap::{NodeSet, DefIdMap, FxHashMap};
 
 use serialize::{self, Encodable, Encoder};
@@ -1690,7 +1689,7 @@ impl<'a, 'gcx, 'tcx> AdtDef {
         self.variants.iter().map(move |v| {
             let mut discr = prev_discr.map_or(initial, |d| d.wrap_incr());
             if let VariantDiscr::Explicit(expr_did) = v.discr {
-                match tcx.maps.monomorphic_const_eval.borrow()[&expr_did] {
+                match queries::monomorphic_const_eval::get(tcx, DUMMY_SP, expr_did) {
                     Ok(ConstVal::Integral(v)) => {
                         discr = v;
                     }
@@ -1701,6 +1700,51 @@ impl<'a, 'gcx, 'tcx> AdtDef {
 
             discr
         })
+    }
+
+    /// Compute the discriminant value used by a specific variant.
+    /// Unlike `discriminants`, this is (amortized) constant-time,
+    /// only doing at most one query for evaluating an explicit
+    /// discriminant (the last one before the requested variant),
+    /// assuming there are no constant-evaluation errors there.
+    pub fn discriminant_for_variant(&self,
+                                    tcx: TyCtxt<'a, 'gcx, 'tcx>,
+                                    variant_index: usize)
+                                    -> ConstInt {
+        let repr_type = self.repr.discr_type();
+        let mut explicit_value = repr_type.initial_discriminant(tcx.global_tcx());
+        let mut explicit_index = variant_index;
+        loop {
+            match self.variants[explicit_index].discr {
+                ty::VariantDiscr::Relative(0) => break,
+                ty::VariantDiscr::Relative(distance) => {
+                    explicit_index -= distance;
+                }
+                ty::VariantDiscr::Explicit(expr_did) => {
+                    match queries::monomorphic_const_eval::get(tcx, DUMMY_SP, expr_did) {
+                        Ok(ConstVal::Integral(v)) => {
+                            explicit_value = v;
+                            break;
+                        }
+                        _ => {
+                            explicit_index -= 1;
+                        }
+                    }
+                }
+            }
+        }
+        let discr = explicit_value.to_u128_unchecked()
+            .wrapping_add((variant_index - explicit_index) as u128);
+        match repr_type {
+            attr::UnsignedInt(ty) => {
+                ConstInt::new_unsigned_truncating(discr, ty,
+                                                  tcx.sess.target.uint_type)
+            }
+            attr::SignedInt(ty) => {
+                ConstInt::new_signed_truncating(discr as i128, ty,
+                                                tcx.sess.target.int_type)
+            }
+        }
     }
 
     pub fn destructor(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>) -> Option<Destructor> {
@@ -2154,30 +2198,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     }
 
     pub fn associated_item_def_ids(self, def_id: DefId) -> Rc<Vec<DefId>> {
-        if !def_id.is_local() {
-            return queries::associated_item_def_ids::get(self, DUMMY_SP, def_id);
-        }
-
-        self.maps.associated_item_def_ids.memoize(def_id, || {
-            let id = self.hir.as_local_node_id(def_id).unwrap();
-            let item = self.hir.expect_item(id);
-            let vec: Vec<_> = match item.node {
-                hir::ItemTrait(.., ref trait_item_refs) => {
-                    trait_item_refs.iter()
-                                   .map(|trait_item_ref| trait_item_ref.id)
-                                   .map(|id| self.hir.local_def_id(id.node_id))
-                                   .collect()
-                }
-                hir::ItemImpl(.., ref impl_item_refs) => {
-                    impl_item_refs.iter()
-                                  .map(|impl_item_ref| impl_item_ref.id)
-                                  .map(|id| self.hir.local_def_id(id.node_id))
-                                  .collect()
-                }
-                _ => span_bug!(item.span, "associated_item_def_ids: not impl or trait")
-            };
-            Rc::new(vec)
-        })
+        queries::associated_item_def_ids::get(self, DUMMY_SP, def_id)
     }
 
     #[inline] // FIXME(#35870) Avoid closures being unexported due to impl Trait.
@@ -2708,9 +2729,33 @@ fn adt_sized_constraint<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     ty
 }
 
+fn associated_item_def_ids<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                     def_id: DefId)
+                                     -> Rc<Vec<DefId>> {
+    let id = tcx.hir.as_local_node_id(def_id).unwrap();
+    let item = tcx.hir.expect_item(id);
+    let vec: Vec<_> = match item.node {
+        hir::ItemTrait(.., ref trait_item_refs) => {
+            trait_item_refs.iter()
+                           .map(|trait_item_ref| trait_item_ref.id)
+                           .map(|id| tcx.hir.local_def_id(id.node_id))
+                           .collect()
+        }
+        hir::ItemImpl(.., ref impl_item_refs) => {
+            impl_item_refs.iter()
+                          .map(|impl_item_ref| impl_item_ref.id)
+                          .map(|id| tcx.hir.local_def_id(id.node_id))
+                          .collect()
+        }
+        _ => span_bug!(item.span, "associated_item_def_ids: not impl or trait")
+    };
+    Rc::new(vec)
+}
+
 pub fn provide(providers: &mut ty::maps::Providers) {
     *providers = ty::maps::Providers {
         associated_item,
+        associated_item_def_ids,
         adt_sized_constraint,
         ..*providers
     };

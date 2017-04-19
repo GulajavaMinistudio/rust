@@ -59,14 +59,11 @@ use constrained_type_params as ctp;
 use middle::lang_items::SizedTraitLangItem;
 use middle::const_val::ConstVal;
 use middle::resolve_lifetime as rl;
-use rustc_const_eval::{ConstContext, report_const_eval_err};
 use rustc::ty::subst::Substs;
 use rustc::ty::{ToPredicate, ReprOptions};
 use rustc::ty::{self, AdtKind, ToPolyTraitRef, Ty, TyCtxt};
 use rustc::ty::maps::Providers;
 use rustc::ty::util::IntTypeExt;
-use rustc::dep_graph::DepNode;
-use util::common::MemoizationMap;
 use util::nodemap::{NodeMap, FxHashMap};
 
 use rustc_const_math::ConstInt;
@@ -89,7 +86,7 @@ use rustc::hir::def_id::DefId;
 
 pub fn collect_item_types<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
     let mut visitor = CollectItemTypesVisitor { tcx: tcx };
-    tcx.visit_all_item_likes_in_krate(DepNode::CollectItem, &mut visitor.as_deep_visitor());
+    tcx.hir.krate().visit_all_item_likes(&mut visitor.as_deep_visitor());
 }
 
 pub fn provide(providers: &mut Providers) {
@@ -128,57 +125,13 @@ struct CollectItemTypesVisitor<'a, 'tcx: 'a> {
     tcx: TyCtxt<'a, 'tcx, 'tcx>
 }
 
-impl<'a, 'tcx> CollectItemTypesVisitor<'a, 'tcx> {
-    /// Collect item types is structured into two tasks. The outer
-    /// task, `CollectItem`, walks the entire content of an item-like
-    /// thing, including its body. It also spawns an inner task,
-    /// `CollectItemSig`, which walks only the signature. This inner
-    /// task is the one that writes the item-type into the various
-    /// maps.  This setup ensures that the item body is never
-    /// accessible to the task that computes its signature, so that
-    /// changes to the body don't affect the signature.
-    ///
-    /// Consider an example function `foo` that also has a closure in its body:
-    ///
-    /// ```
-    /// fn foo(<sig>) {
-    ///     ...
-    ///     let bar = || ...; // we'll label this closure as "bar" below
-    /// }
-    /// ```
-    ///
-    /// This results in a dep-graph like so. I've labeled the edges to
-    /// document where they arise.
-    ///
-    /// ```
-    /// [HirBody(foo)] -2--> [CollectItem(foo)] -4-> [ItemSignature(bar)]
-    ///                       ^           ^
-    ///                       1           3
-    /// [Hir(foo)] -----------+-6-> [CollectItemSig(foo)] -5-> [ItemSignature(foo)]
-    /// ```
-    ///
-    /// 1. This is added by the `visit_all_item_likes_in_krate`.
-    /// 2. This is added when we fetch the item body.
-    /// 3. This is added because `CollectItem` launches `CollectItemSig`.
-    ///    - it is arguably false; if we refactor the `with_task` system;
-    ///      we could get probably rid of it, but it is also harmless enough.
-    /// 4. This is added by the code in `visit_expr` when we write to `item_types`.
-    /// 5. This is added by the code in `convert_item` when we write to `item_types`;
-    ///    note that this write occurs inside the `CollectItemSig` task.
-    /// 6. Added by reads from within `op`.
-    fn with_collect_item_sig(&self, id: ast::NodeId, op: fn(TyCtxt<'a, 'tcx, 'tcx>, ast::NodeId)) {
-        let def_id = self.tcx.hir.local_def_id(id);
-        self.tcx.dep_graph.with_task(DepNode::CollectItemSig(def_id), self.tcx, id, op);
-    }
-}
-
 impl<'a, 'tcx> Visitor<'tcx> for CollectItemTypesVisitor<'a, 'tcx> {
     fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
         NestedVisitorMap::OnlyBodies(&self.tcx.hir)
     }
 
     fn visit_item(&mut self, item: &'tcx hir::Item) {
-        self.with_collect_item_sig(item.id, convert_item);
+        convert_item(self.tcx, item.id);
         intravisit::walk_item(self, item);
     }
 
@@ -211,12 +164,12 @@ impl<'a, 'tcx> Visitor<'tcx> for CollectItemTypesVisitor<'a, 'tcx> {
     }
 
     fn visit_trait_item(&mut self, trait_item: &'tcx hir::TraitItem) {
-        self.with_collect_item_sig(trait_item.id, convert_trait_item);
+        convert_trait_item(self.tcx, trait_item.id);
         intravisit::walk_trait_item(self, trait_item);
     }
 
     fn visit_impl_item(&mut self, impl_item: &'tcx hir::ImplItem) {
-        self.with_collect_item_sig(impl_item.id, convert_impl_item);
+        convert_impl_item(self.tcx, impl_item.id);
         intravisit::walk_impl_item(self, impl_item);
     }
 }
@@ -587,17 +540,6 @@ fn convert_variant_ctor<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     tcx.item_predicates(def_id);
 }
 
-fn evaluate_disr_expr<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                body: hir::BodyId)
-                                -> Result<ConstVal<'tcx>, ()> {
-    let e = &tcx.hir.body(body).value;
-    ConstContext::new(tcx, body).eval(e).map_err(|err| {
-        // enum variant evaluation happens before the global constant check
-        // so we need to report the real error
-        report_const_eval_err(tcx, &err, e.span, "enum discriminant");
-    })
-}
-
 fn convert_enum_variant_types<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                         def_id: DefId,
                                         variants: &[hir::Variant]) {
@@ -611,9 +553,13 @@ fn convert_enum_variant_types<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         let wrapped_discr = prev_discr.map_or(initial, |d| d.wrap_incr());
         prev_discr = Some(if let Some(e) = variant.node.disr_expr {
             let expr_did = tcx.hir.local_def_id(e.node_id);
-            let result = tcx.maps.monomorphic_const_eval.memoize(expr_did, || {
-                evaluate_disr_expr(tcx, e)
-            });
+            let result = ty::queries::monomorphic_const_eval::get(tcx, variant.span, expr_did);
+
+            // enum variant evaluation happens before the global constant check
+            // so we need to report the real error
+            if let Err(ref err) = result {
+                err.report(tcx, variant.span, "enum discriminant");
+            }
 
             match result {
                 Ok(ConstVal::Integral(x)) => Some(x),

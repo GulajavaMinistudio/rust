@@ -9,9 +9,8 @@
 // except according to those terms.
 
 use llvm::{self, ValueRef, BasicBlockRef};
-use rustc_const_eval::{ErrKind, ConstEvalErr, note_const_eval_err};
 use rustc::middle::lang_items;
-use rustc::middle::const_val::ConstInt;
+use rustc::middle::const_val::{ConstEvalErr, ConstInt, ErrKind};
 use rustc::ty::{self, TypeFoldable};
 use rustc::ty::layout::{self, LayoutTyper};
 use rustc::mir;
@@ -363,7 +362,7 @@ impl<'a, 'tcx> MirContext<'a, 'tcx> {
                         let err = ConstEvalErr{ span: span, kind: err };
                         let mut diag = bcx.tcx().sess.struct_span_warn(
                             span, "this expression will panic at run-time");
-                        note_const_eval_err(bcx.tcx(), &err, span, "expression", &mut diag);
+                        err.note(bcx.tcx(), span, "expression", &mut diag);
                         diag.emit();
                     }
                 }
@@ -418,16 +417,6 @@ impl<'a, 'tcx> MirContext<'a, 'tcx> {
                     _ => None
                 };
                 let intrinsic = intrinsic.as_ref().map(|s| &s[..]);
-
-                if intrinsic == Some("move_val_init") {
-                    let &(_, target) = destination.as_ref().unwrap();
-                    // The first argument is a thin destination pointer.
-                    let llptr = self.trans_operand(&bcx, &args[0]).immediate();
-                    let val = self.trans_operand(&bcx, &args[1]);
-                    self.store_operand(&bcx, llptr, None, val);
-                    funclet_br(self, bcx, target);
-                    return;
-                }
 
                 if intrinsic == Some("transmute") {
                     let &(ref dest, target) = destination.as_ref().unwrap();
