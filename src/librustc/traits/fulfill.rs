@@ -171,7 +171,7 @@ impl<'a, 'gcx, 'tcx> FulfillmentContext<'tcx> {
 
         debug!("register_predicate_obligation(obligation={:?})", obligation);
 
-        infcx.obligations_in_snapshot.set(true);
+        assert!(!infcx.is_in_snapshot());
 
         if infcx.tcx.fulfilled_predicates.borrow().check_duplicate(&obligation.predicate) {
             debug!("register_predicate_obligation: duplicate");
@@ -183,6 +183,16 @@ impl<'a, 'gcx, 'tcx> FulfillmentContext<'tcx> {
             stalled_on: vec![]
         });
     }
+
+    pub fn register_predicate_obligations(&mut self,
+                                          infcx: &InferCtxt<'a, 'gcx, 'tcx>,
+                                          obligations: Vec<PredicateObligation<'tcx>>)
+    {
+        for obligation in obligations {
+            self.register_predicate_obligation(infcx, obligation);
+        }
+    }
+
 
     pub fn region_obligations(&self,
                               body_id: ast::NodeId)

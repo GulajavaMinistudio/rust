@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+struct ListNode {
+    head: u8,
+    tail: Option<ListNode>,
+}
+
 fn main() {
-    let x = [];
-    //~^ ERROR type annotations needed
-    //~| NOTE consider giving `x` a type
-    //~| NOTE cannot infer type for `_`
 }
