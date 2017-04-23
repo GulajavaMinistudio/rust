@@ -8,13 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![crate_name = "foo"]
+// aux-build:issue-41211.rs
 
-// ignore-tidy-end-whitespace
+// FIXME: https://github.com/rust-lang/rust/issues/41430
+// This is a temporary regression test for the ICE reported in #41211
 
-// @has foo/fn.f.html
-// @has - '<p>hard break:<br />'
-// @has - 'after hard break</p>'
-/// hard break:  
-/// after hard break
-pub fn f() {}
+#![feature(proc_macro)]
+#![emit_unchanged]
+//~^ ERROR: cannot find attribute macro `emit_unchanged` in this scope
+extern crate issue_41211;
+use issue_41211::emit_unchanged;
+
+fn main() {}

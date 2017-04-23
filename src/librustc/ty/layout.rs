@@ -548,7 +548,11 @@ pub type FieldPath = Vec<u32>;
 /// A structure, a product type in ADT terms.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Struct {
+    /// Maximum alignment of fields and repr alignment.
     pub align: Align,
+
+    /// Primitive alignment of fields without repr alignment.
+    pub primitive_align: Align,
 
     /// If true, no alignment padding is used.
     pub packed: bool,
@@ -583,10 +587,20 @@ impl<'a, 'gcx, 'tcx> Struct {
     fn new(dl: &TargetDataLayout, fields: &Vec<&'a Layout>,
                   repr: &ReprOptions, kind: StructKind,
                   scapegoat: Ty<'gcx>) -> Result<Struct, LayoutError<'gcx>> {
-        let packed = repr.packed();
+        if repr.packed() && repr.align > 0 {
+            bug!("Struct cannot be packed and aligned");
+        }
+
+        let align = if repr.packed() {
+            dl.i8_align
+        } else {
+            dl.aggregate_align
+        };
+
         let mut ret = Struct {
-            align: if packed { dl.i8_align } else { dl.aggregate_align },
-            packed: packed,
+            align: align,
+            primitive_align: align,
+            packed: repr.packed(),
             sized: true,
             offsets: vec![],
             memory_index: vec![],
@@ -660,7 +674,9 @@ impl<'a, 'gcx, 'tcx> Struct {
             // Invariant: offset < dl.obj_size_bound() <= 1<<61
             if !ret.packed {
                 let align = field.align(dl);
+                let primitive_align = field.primitive_align(dl);
                 ret.align = ret.align.max(align);
+                ret.primitive_align = ret.primitive_align.max(primitive_align);
                 offset = offset.abi_align(align);
             }
 
@@ -671,6 +687,11 @@ impl<'a, 'gcx, 'tcx> Struct {
                            .map_or(Err(LayoutError::SizeOverflow(scapegoat)), Ok)?;
         }
 
+        if repr.align > 0 {
+            let repr_align = repr.align as u64;
+            ret.align = ret.align.max(Align::from_bytes(repr_align, repr_align).unwrap());
+            debug!("Struct::new repr_align: {:?}", repr_align);
+        }
 
         debug!("Struct::new min_size: {:?}", offset);
         ret.min_size = offset;
@@ -801,7 +822,7 @@ impl<'a, 'gcx, 'tcx> Struct {
             }
 
             (_, &ty::TyProjection(_)) | (_, &ty::TyAnon(..)) => {
-                let normalized = normalize_associated_type(infcx, ty);
+                let normalized = infcx.normalize_projections(ty);
                 if ty == normalized {
                     return Ok(None);
                 }
@@ -836,12 +857,23 @@ impl<'a, 'gcx, 'tcx> Struct {
         }
         Ok(None)
     }
+
+    pub fn over_align(&self) -> Option<u32> {
+        let align = self.align.abi();
+        let primitive_align = self.primitive_align.abi();
+        if align > primitive_align {
+            Some(align as u32)
+        } else {
+            None
+        }
+    }
 }
 
 /// An untagged union.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Union {
     pub align: Align,
+    pub primitive_align: Align,
 
     pub min_size: Size,
 
@@ -851,8 +883,10 @@ pub struct Union {
 
 impl<'a, 'gcx, 'tcx> Union {
     fn new(dl: &TargetDataLayout, packed: bool) -> Union {
+        let align = if packed { dl.i8_align } else { dl.aggregate_align };
         Union {
-            align: if packed { dl.i8_align } else { dl.aggregate_align },
+            align: align,
+            primitive_align: align,
             min_size: Size::from_bytes(0),
             packed: packed,
         }
@@ -875,6 +909,7 @@ impl<'a, 'gcx, 'tcx> Union {
 
             if !self.packed {
                 self.align = self.align.max(field.align(dl));
+                self.primitive_align = self.primitive_align.max(field.primitive_align(dl));
             }
             self.min_size = cmp::max(self.min_size, field.size(dl));
         }
@@ -887,6 +922,16 @@ impl<'a, 'gcx, 'tcx> Union {
     /// Get the size with trailing alignment padding.
     pub fn stride(&self) -> Size {
         self.min_size.abi_align(self.align)
+    }
+
+    pub fn over_align(&self) -> Option<u32> {
+        let align = self.align.abi();
+        let primitive_align = self.primitive_align.abi();
+        if align > primitive_align {
+            Some(align as u32)
+        } else {
+            None
+        }
     }
 }
 
@@ -924,6 +969,7 @@ pub enum Layout {
         /// If true, the size is exact, otherwise it's only a lower bound.
         sized: bool,
         align: Align,
+        primitive_align: Align,
         element_size: Size,
         count: u64
     },
@@ -970,7 +1016,8 @@ pub enum Layout {
         discr: Integer,
         variants: Vec<Struct>,
         size: Size,
-        align: Align
+        align: Align,
+        primitive_align: Align,
     },
 
     /// Two cases distinguished by a nullable pointer: the case with discriminant
@@ -1020,28 +1067,6 @@ impl<'tcx> fmt::Display for LayoutError<'tcx> {
     }
 }
 
-/// Helper function for normalizing associated types in an inference context.
-fn normalize_associated_type<'a, 'gcx, 'tcx>(infcx: &InferCtxt<'a, 'gcx, 'tcx>,
-                                             ty: Ty<'gcx>)
-                                             -> Ty<'gcx> {
-    if !ty.has_projection_types() {
-        return ty;
-    }
-
-    let mut selcx = traits::SelectionContext::new(infcx);
-    let cause = traits::ObligationCause::dummy();
-    let traits::Normalized { value: result, obligations } =
-        traits::normalize(&mut selcx, cause, &ty);
-
-    let mut fulfill_cx = traits::FulfillmentContext::new();
-
-    for obligation in obligations {
-        fulfill_cx.register_predicate_obligation(infcx, obligation);
-    }
-
-    infcx.drain_fulfillment_cx_or_panic(DUMMY_SP, &mut fulfill_cx, &result)
-}
-
 impl<'a, 'gcx, 'tcx> Layout {
     pub fn compute_uncached(ty: Ty<'gcx>,
                             infcx: &InferCtxt<'a, 'gcx, 'tcx>)
@@ -1053,7 +1078,7 @@ impl<'a, 'gcx, 'tcx> Layout {
 
         let ptr_layout = |pointee: Ty<'gcx>| {
             let non_zero = !ty.is_unsafe_ptr();
-            let pointee = normalize_associated_type(infcx, pointee);
+            let pointee = infcx.normalize_projections(pointee);
             if pointee.is_sized(tcx, &infcx.parameter_environment, DUMMY_SP) {
                 Ok(Scalar { value: Pointer, non_zero: non_zero })
             } else {
@@ -1118,6 +1143,7 @@ impl<'a, 'gcx, 'tcx> Layout {
                 Array {
                     sized: true,
                     align: element.align(dl),
+                    primitive_align: element.primitive_align(dl),
                     element_size: element_size,
                     count: count
                 }
@@ -1127,6 +1153,7 @@ impl<'a, 'gcx, 'tcx> Layout {
                 Array {
                     sized: false,
                     align: element.align(dl),
+                    primitive_align: element.primitive_align(dl),
                     element_size: element.size(dl),
                     count: 0
                 }
@@ -1135,6 +1162,7 @@ impl<'a, 'gcx, 'tcx> Layout {
                 Array {
                     sized: false,
                     align: dl.i8_align,
+                    primitive_align: dl.i8_align,
                     element_size: Size::from_bytes(1),
                     count: 0
                 }
@@ -1340,6 +1368,7 @@ impl<'a, 'gcx, 'tcx> Layout {
                 assert!(discr_max >= 0);
                 let (min_ity, _) = Integer::repr_discr(tcx, ty, &def.repr, 0, discr_max);
                 let mut align = dl.aggregate_align;
+                let mut primitive_align = dl.aggregate_align;
                 let mut size = Size::from_bytes(0);
 
                 // We're interested in the smallest alignment, so start large.
@@ -1369,6 +1398,7 @@ impl<'a, 'gcx, 'tcx> Layout {
                     }
                     size = cmp::max(size, st.min_size);
                     align = align.max(st.align);
+                    primitive_align = primitive_align.max(st.primitive_align);
                     Ok(st)
                 }).collect::<Result<Vec<_>, _>>()?;
 
@@ -1435,13 +1465,14 @@ impl<'a, 'gcx, 'tcx> Layout {
                     discr: ity,
                     variants: variants,
                     size: size,
-                    align: align
+                    align: align,
+                    primitive_align: primitive_align
                 }
             }
 
             // Types with no meaningful known layout.
             ty::TyProjection(_) | ty::TyAnon(..) => {
-                let normalized = normalize_associated_type(infcx, ty);
+                let normalized = infcx.normalize_projections(ty);
                 if ty == normalized {
                     return Err(LayoutError::Unknown(ty));
                 }
@@ -1554,6 +1585,30 @@ impl<'a, 'gcx, 'tcx> Layout {
             StructWrappedNullablePointer { nonnull: ref variant, .. } => {
                 variant.align
             }
+        }
+    }
+
+    /// Returns alignment before repr alignment is applied
+    pub fn primitive_align(&self, dl: &TargetDataLayout) -> Align {
+        match *self {
+            Array { primitive_align, .. } | General { primitive_align, .. } => primitive_align,
+            Univariant { ref variant, .. } |
+            StructWrappedNullablePointer { nonnull: ref variant, .. } => {
+                variant.primitive_align
+            },
+
+            _ => self.align(dl)
+        }
+    }
+
+    /// Returns repr alignment if it is greater than the primitive alignment.
+    pub fn over_align(&self, dl: &TargetDataLayout) -> Option<u32> {
+        let align = self.align(dl);
+        let primitive_align = self.primitive_align(dl);
+        if align.abi() > primitive_align.abi() {
+            Some(align.abi() as u32)
+        } else {
+            None
         }
     }
 
@@ -1735,7 +1790,7 @@ impl<'a, 'gcx, 'tcx> SizeSkeleton<'gcx> {
             }
 
             ty::TyProjection(_) | ty::TyAnon(..) => {
-                let normalized = normalize_associated_type(infcx, ty);
+                let normalized = infcx.normalize_projections(ty);
                 if ty == normalized {
                     Err(err)
                 } else {
@@ -1805,19 +1860,39 @@ pub trait LayoutTyper<'tcx>: HasTyCtxt<'tcx> {
     type TyLayout;
 
     fn layout_of(self, ty: Ty<'tcx>) -> Self::TyLayout;
+    fn normalize_projections(self, ty: Ty<'tcx>) -> Ty<'tcx>;
 }
 
 impl<'a, 'gcx, 'tcx> LayoutTyper<'gcx> for &'a InferCtxt<'a, 'gcx, 'tcx> {
     type TyLayout = Result<TyLayout<'gcx>, LayoutError<'gcx>>;
 
     fn layout_of(self, ty: Ty<'gcx>) -> Self::TyLayout {
-        let ty = normalize_associated_type(self, ty);
+        let ty = self.normalize_projections(ty);
 
         Ok(TyLayout {
             ty: ty,
             layout: ty.layout(self)?,
             variant_index: None
         })
+    }
+
+    fn normalize_projections(self, ty: Ty<'gcx>) -> Ty<'gcx> {
+        if !ty.has_projection_types() {
+            return ty;
+        }
+
+        let mut selcx = traits::SelectionContext::new(self);
+        let cause = traits::ObligationCause::dummy();
+        let traits::Normalized { value: result, obligations } =
+            traits::normalize(&mut selcx, cause, &ty);
+
+        let mut fulfill_cx = traits::FulfillmentContext::new();
+
+        for obligation in obligations {
+            fulfill_cx.register_predicate_obligation(self, obligation);
+        }
+
+        self.drain_fulfillment_cx_or_panic(DUMMY_SP, &mut fulfill_cx, &result)
     }
 }
 
@@ -1942,6 +2017,6 @@ impl<'a, 'tcx> TyLayout<'tcx> {
     }
 
     pub fn field<C: LayoutTyper<'tcx>>(&self, cx: C, i: usize) -> C::TyLayout {
-        cx.layout_of(self.field_type(cx, i))
+        cx.layout_of(cx.normalize_projections(self.field_type(cx, i)))
     }
 }

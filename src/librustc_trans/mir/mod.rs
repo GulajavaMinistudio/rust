@@ -22,7 +22,7 @@ use base;
 use builder::Builder;
 use common::{self, CrateContext, Funclet};
 use debuginfo::{self, declare_local, VariableAccess, VariableKind, FunctionDebugContext};
-use monomorphize::{self, Instance};
+use monomorphize::Instance;
 use abi::FnType;
 use type_of;
 
@@ -102,8 +102,9 @@ pub struct MirContext<'a, 'tcx:'a> {
 
 impl<'a, 'tcx> MirContext<'a, 'tcx> {
     pub fn monomorphize<T>(&self, value: &T) -> T
-        where T: TransNormalize<'tcx> {
-        monomorphize::apply_param_substs(self.ccx.shared(), self.param_substs, value)
+        where T: TransNormalize<'tcx>
+    {
+        self.ccx.tcx().trans_apply_param_substs(self.param_substs, value)
     }
 
     pub fn set_debug_loc(&mut self, bcx: &Builder, source_info: mir::SourceInfo) {
@@ -524,7 +525,7 @@ fn arg_local_refs<'a, 'tcx>(bcx: &Builder<'a, 'tcx>,
             // doesn't actually strip the offset when splitting the closure
             // environment into its components so it ends up out of bounds.
             let env_ptr = if !env_ref {
-                let alloc = bcx.alloca(common::val_ty(llval), "__debuginfo_env_ptr");
+                let alloc = bcx.alloca(common::val_ty(llval), "__debuginfo_env_ptr", None);
                 bcx.store(llval, alloc, None);
                 alloc
             } else {

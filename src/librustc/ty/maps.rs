@@ -10,6 +10,7 @@
 
 use dep_graph::{DepGraph, DepNode, DepTrackingMap, DepTrackingMapConfig};
 use hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
+use hir;
 use middle::const_val;
 use middle::privacy::AccessLevels;
 use mir;
@@ -380,6 +381,9 @@ define_maps! { <'tcx>
     pub adt_destructor: AdtDestructor(DefId) -> Option<ty::Destructor>,
     pub adt_sized_constraint: SizedConstraint(DefId) -> Ty<'tcx>,
 
+    /// True if this is a foreign item (i.e., linked via `extern { ... }`).
+    pub is_foreign_item: IsForeignItem(DefId) -> bool,
+
     /// Maps from def-id of a type or region parameter to its
     /// (inferred) variance.
     pub variances: ItemSignature(DefId) -> Rc<Vec<ty::Variance>>,
@@ -391,6 +395,7 @@ define_maps! { <'tcx>
     pub associated_item: AssociatedItems(DefId) -> ty::AssociatedItem,
 
     pub impl_trait_ref: ItemSignature(DefId) -> Option<ty::TraitRef<'tcx>>,
+    pub impl_polarity: ItemSignature(DefId) -> hir::ImplPolarity,
 
     /// Maps a DefId of a type to a list of its inherent impls.
     /// Contains implementations of methods that are inherent to a type.
@@ -448,7 +453,7 @@ define_maps! { <'tcx>
     /// Performs the privacy check and computes "access levels".
     pub privacy_access_levels: PrivacyAccessLevels(CrateNum) -> Rc<AccessLevels>,
 
-    pub reachable_set: reachability_dep_node(CrateNum) -> NodeSet,
+    pub reachable_set: reachability_dep_node(CrateNum) -> Rc<NodeSet>,
 
     pub mir_shims: mir_shim(ty::InstanceDef<'tcx>) -> &'tcx RefCell<mir::Mir<'tcx>>
 }

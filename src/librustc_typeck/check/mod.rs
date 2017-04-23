@@ -953,6 +953,12 @@ fn check_struct<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     if def.repr.simd() {
         check_simd(tcx, span, def_id);
     }
+
+    // if struct is packed and not aligned, check fields for alignment.
+    // Checks for combining packed and align attrs on single struct are done elsewhere.
+    if tcx.lookup_adt_def(def_id).repr.packed() && tcx.lookup_adt_def(def_id).repr.align == 0 {
+        check_packed(tcx, span, def_id);
+    }
 }
 
 fn check_union<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
@@ -1369,6 +1375,47 @@ pub fn check_simd<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, sp: Span, def_id: DefId
         }
         _ => ()
     }
+}
+
+fn check_packed<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, sp: Span, def_id: DefId) {
+    if check_packed_inner(tcx, def_id, &mut Vec::new()) {
+        struct_span_err!(tcx.sess, sp, E0588,
+            "packed struct cannot transitively contain a `[repr(align)]` struct").emit();
+    }
+}
+
+fn check_packed_inner<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                def_id: DefId,
+                                stack: &mut Vec<DefId>) -> bool {
+    let t = tcx.item_type(def_id);
+    if stack.contains(&def_id) {
+        debug!("check_packed_inner: {:?} is recursive", t);
+        return false;
+    }
+    match t.sty {
+        ty::TyAdt(def, substs) if def.is_struct() => {
+            if tcx.lookup_adt_def(def.did).repr.align > 0 {
+                return true;
+            }
+            // push struct def_id before checking fields
+            stack.push(def_id);
+            for field in &def.struct_variant().fields {
+                let f = field.ty(tcx, substs);
+                match f.sty {
+                    ty::TyAdt(def, _) => {
+                        if check_packed_inner(tcx, def.did, stack) {
+                            return true;
+                        }
+                    }
+                    _ => ()
+                }
+            }
+            // only need to pop if not early out
+            stack.pop();
+        }
+        _ => ()
+    }
+    false
 }
 
 #[allow(trivial_numeric_casts)]
@@ -1907,7 +1954,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         //
         // FIXME(#27579) all uses of this should be migrated to register_wf_obligation eventually
         let cause = traits::ObligationCause::new(span, self.body_id, code);
-        self.register_region_obligation(ty, self.tcx.mk_region(ty::ReEmpty), cause);
+        self.register_region_obligation(ty, self.tcx.types.re_empty, cause);
     }
 
     /// Registers obligations that all types appearing in `substs` are well-formed.
@@ -2466,7 +2513,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         match lit.node {
             ast::LitKind::Str(..) => tcx.mk_static_str(),
             ast::LitKind::ByteStr(ref v) => {
-                tcx.mk_imm_ref(tcx.mk_region(ty::ReStatic),
+                tcx.mk_imm_ref(tcx.types.re_static,
                                 tcx.mk_array(tcx.types.u8, v.len()))
             }
             ast::LitKind::Byte(_) => tcx.types.u8,
