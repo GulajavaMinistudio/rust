@@ -557,6 +557,19 @@ impl Build {
             cargo.env("RUSTC_SAVE_ANALYSIS", "api".to_string());
         }
 
+        // When being built Cargo will at some point call `nmake.exe` on Windows
+        // MSVC. Unfortunately `nmake` will read these two environment variables
+        // below and try to intepret them. We're likely being run, however, from
+        // MSYS `make` which uses the same variables.
+        //
+        // As a result, to prevent confusion and errors, we remove these
+        // variables from our environment to prevent passing MSYS make flags to
+        // nmake, causing it to blow up.
+        if cfg!(target_env = "msvc") {
+            cargo.env_remove("MAKE");
+            cargo.env_remove("MAKEFLAGS");
+        }
+
         // Environment variables *required* needed throughout the build
         //
         // FIXME: should update code to not require this env var
@@ -881,6 +894,13 @@ impl Build {
         // LLVM/jemalloc/etc are all properly compiled.
         if target.contains("apple-darwin") {
             base.push("-stdlib=libc++".into());
+        }
+
+        // Work around an apparently bad MinGW / GCC optimization,
+        // See: http://lists.llvm.org/pipermail/cfe-dev/2016-December/051980.html
+        // See: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=78936
+        if target == "i686-pc-windows-gnu" {
+            base.push("-fno-omit-frame-pointer".into());
         }
         return base
     }
