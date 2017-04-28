@@ -67,6 +67,7 @@ pub use rustc::lint;
 pub use rustc::util;
 
 pub use base::trans_crate;
+pub use back::symbol_names::provide;
 
 pub mod back {
     pub use rustc::hir::svh;
@@ -97,6 +98,7 @@ mod builder;
 mod cabi_aarch64;
 mod cabi_arm;
 mod cabi_asmjs;
+mod cabi_hexagon;
 mod cabi_mips;
 mod cabi_mips64;
 mod cabi_msp430;
@@ -124,8 +126,6 @@ mod meth;
 mod mir;
 mod monomorphize;
 mod partitioning;
-mod symbol_cache;
-mod symbol_map;
 mod symbol_names_test;
 mod trans_item;
 mod tvec;
