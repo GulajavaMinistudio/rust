@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// check that borrowck looks inside consts/statics
+// ignore-tidy-linelength
 
-static FN : &'static (Fn() -> (Box<Fn()->Box<i32>>) + Sync) = &|| {
-    let x = Box::new(0);
-    Box::new(|| x) //~ ERROR cannot move out of captured outer variable
-};
+// compile-flags: -g  -Zremap-path-prefix-from={{cwd}} -Zremap-path-prefix-to=/the/aux-cwd -Zremap-path-prefix-from={{src-base}}/remap_path_prefix/auxiliary -Zremap-path-prefix-to=/the/aux-src
 
-fn main() {
-    let f = (FN)();
-    f();
-    f();
+#[inline]
+pub fn some_aux_function() -> i32 {
+    1234
 }

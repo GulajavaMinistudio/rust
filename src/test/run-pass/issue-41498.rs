@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that a by-ref `FnMut` closure gets an error when it tries to
-// consume a value.
+// regression test for issue #41498.
 
-fn call<F>(f: F) where F : Fn() {
-    f();
+struct S;
+impl S {
+    fn mutate(&mut self) {}
+}
+
+fn call_and_ref<T, F: FnOnce() -> T>(x: &mut Option<T>, f: F) -> &mut T {
+    *x = Some(f());
+    x.as_mut().unwrap()
 }
 
 fn main() {
-    let y = vec![format!("World")];
-    call(|| {
-        y.into_iter();
-        //~^ ERROR cannot move out of captured outer variable in an `Fn` closure
-    });
+    let mut n = None;
+    call_and_ref(&mut n, || [S])[0].mutate();
 }
