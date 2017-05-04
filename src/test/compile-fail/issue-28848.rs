@@ -8,13 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub mod elaborate_drops;
-pub mod def_use;
-pub mod patch;
+struct Foo<'a, 'b: 'a>(&'a &'b ());
 
-mod graphviz;
-mod pretty;
+impl<'a, 'b> Foo<'a, 'b> {
+    fn xmute(a: &'b ()) -> &'a () {
+        unreachable!()
+    }
+}
 
-pub use self::pretty::{dump_enabled, dump_mir, write_mir_pretty};
-pub use self::graphviz::{write_mir_graphviz};
-pub use self::graphviz::write_node_label as write_graphviz_node_label;
+pub fn foo<'a, 'b>(u: &'b ()) -> &'a () {
+    Foo::<'a, 'b>::xmute(u) //~ ERROR lifetime bound not satisfied
+}
+
+fn main() {}

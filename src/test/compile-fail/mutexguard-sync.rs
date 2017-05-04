@@ -8,13 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub mod elaborate_drops;
-pub mod def_use;
-pub mod patch;
+// MutexGuard<Cell<i32>> must not be Sync, that would be unsound.
+use std::sync::Mutex;
+use std::cell::Cell;
 
-mod graphviz;
-mod pretty;
+fn test_sync<T: Sync>(_t: T) {}
 
-pub use self::pretty::{dump_enabled, dump_mir, write_mir_pretty};
-pub use self::graphviz::{write_mir_graphviz};
-pub use self::graphviz::write_node_label as write_graphviz_node_label;
+fn main()
+{
+    let m = Mutex::new(Cell::new(0i32));
+    let guard = m.lock().unwrap();
+    test_sync(guard); //~ ERROR the trait bound
+}

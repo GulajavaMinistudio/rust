@@ -35,7 +35,7 @@ use util::common::ErrorReported;
 use util::nodemap::{NodeSet, DefIdMap, FxHashMap, FxHashSet};
 
 use serialize::{self, Encodable, Encoder};
-use std::cell::{Cell, RefCell, Ref};
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::cmp;
 use std::fmt;
@@ -96,6 +96,7 @@ pub mod _match;
 pub mod maps;
 pub mod outlives;
 pub mod relate;
+pub mod steal;
 pub mod subst;
 pub mod trait_def;
 pub mod walk;
@@ -747,7 +748,7 @@ impl<'a, 'gcx, 'tcx> GenericPredicates<'tcx> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub enum Predicate<'tcx> {
     /// Corresponds to `where Foo : Bar<A,B,C>`. `Foo` here would be
     /// the `Self` type of the trait reference and `A`, `B`, and `C`
@@ -876,7 +877,7 @@ impl<'a, 'gcx, 'tcx> Predicate<'tcx> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub struct TraitPredicate<'tcx> {
     pub trait_ref: TraitRef<'tcx>
 }
@@ -928,18 +929,18 @@ impl<'tcx> PolyTraitPredicate<'tcx> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct EquatePredicate<'tcx>(pub Ty<'tcx>, pub Ty<'tcx>); // `0 == 1`
 pub type PolyEquatePredicate<'tcx> = ty::Binder<EquatePredicate<'tcx>>;
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct OutlivesPredicate<A,B>(pub A, pub B); // `A : B`
 pub type PolyOutlivesPredicate<A,B> = ty::Binder<OutlivesPredicate<A,B>>;
 pub type PolyRegionOutlivesPredicate<'tcx> = PolyOutlivesPredicate<ty::Region<'tcx>,
                                                                    ty::Region<'tcx>>;
 pub type PolyTypeOutlivesPredicate<'tcx> = PolyOutlivesPredicate<Ty<'tcx>, ty::Region<'tcx>>;
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct SubtypePredicate<'tcx> {
     pub a_is_expected: bool,
     pub a: Ty<'tcx>,
@@ -1173,7 +1174,7 @@ pub struct ParameterEnvironment<'tcx> {
     /// Obligations that the caller must satisfy. This is basically
     /// the set of bounds on the in-scope type parameters, translated
     /// into Obligations, and elaborated and normalized.
-    pub caller_bounds: Vec<ty::Predicate<'tcx>>,
+    pub caller_bounds: &'tcx [ty::Predicate<'tcx>],
 
     /// Scope that is attached to free regions for this scope. This is
     /// usually the id of the fn body, but for more abstract scopes
@@ -1196,7 +1197,7 @@ pub struct ParameterEnvironment<'tcx> {
 
 impl<'a, 'tcx> ParameterEnvironment<'tcx> {
     pub fn with_caller_bounds(&self,
-                              caller_bounds: Vec<ty::Predicate<'tcx>>)
+                              caller_bounds: &'tcx [ty::Predicate<'tcx>])
                               -> ParameterEnvironment<'tcx>
     {
         ParameterEnvironment {
@@ -2049,6 +2050,16 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         self.typeck_tables_of(self.hir.body_owner_def_id(body))
     }
 
+    /// Returns an iterator of the def-ids for all body-owners in this
+    /// crate. If you would prefer to iterate over the bodies
+    /// themselves, you can do `self.hir.krate().body_ids.iter()`.
+    pub fn body_owners(self) -> impl Iterator<Item = DefId> + 'a {
+        self.hir.krate()
+                .body_ids
+                .iter()
+                .map(move |&body_id| self.hir.body_owner_def_id(body_id))
+    }
+
     pub fn expr_span(self, id: NodeId) -> Span {
         match self.hir.find(id) {
             Some(hir_map::NodeExpr(e)) => {
@@ -2313,33 +2324,32 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         }
     }
 
-    /// Given the did of an item, returns its MIR, borrowed immutably.
-    pub fn item_mir(self, did: DefId) -> Ref<'gcx, Mir<'gcx>> {
-        self.mir(did).borrow()
-    }
-
     /// Return the possibly-auto-generated MIR of a (DefId, Subst) pair.
     pub fn instance_mir(self, instance: ty::InstanceDef<'gcx>)
-                        -> Ref<'gcx, Mir<'gcx>>
+                        -> &'gcx Mir<'gcx>
     {
         match instance {
-            ty::InstanceDef::Item(did) if true => self.item_mir(did),
-            _ => self.mir_shims(instance).borrow(),
+            ty::InstanceDef::Item(did) => {
+                self.optimized_mir(did)
+            }
+            ty::InstanceDef::Intrinsic(..) |
+            ty::InstanceDef::FnPtrShim(..) |
+            ty::InstanceDef::Virtual(..) |
+            ty::InstanceDef::ClosureOnceShim { .. } |
+            ty::InstanceDef::DropGlue(..) => {
+                self.mir_shims(instance)
+            }
         }
     }
 
     /// Given the DefId of an item, returns its MIR, borrowed immutably.
     /// Returns None if there is no MIR for the DefId
-    pub fn maybe_item_mir(self, did: DefId) -> Option<Ref<'gcx, Mir<'gcx>>> {
-        if did.is_local() && !self.maps.mir.borrow().contains_key(&did) {
-            return None;
+    pub fn maybe_optimized_mir(self, did: DefId) -> Option<&'gcx Mir<'gcx>> {
+        if self.is_mir_available(did) {
+            Some(self.optimized_mir(did))
+        } else {
+            None
         }
-
-        if !did.is_local() && !self.is_item_mir_available(did) {
-            return None;
-        }
-
-        Some(self.item_mir(did))
     }
 
     /// Get the attributes of a definition.
@@ -2441,7 +2451,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     pub fn empty_parameter_environment(self) -> ParameterEnvironment<'tcx> {
         ty::ParameterEnvironment {
             free_substs: self.intern_substs(&[]),
-            caller_bounds: Vec::new(),
+            caller_bounds: Slice::empty(),
             implicit_region_bound: None,
             free_id_outlive: None,
             is_copy_cache: RefCell::new(FxHashMap()),
@@ -2516,7 +2526,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         let unnormalized_env = ty::ParameterEnvironment {
             free_substs: free_substs,
             implicit_region_bound: free_id_outlive.map(|f| tcx.mk_region(ty::ReScope(f))),
-            caller_bounds: predicates,
+            caller_bounds: tcx.intern_predicates(&predicates),
             free_id_outlive: free_id_outlive,
             is_copy_cache: RefCell::new(FxHashMap()),
             is_sized_cache: RefCell::new(FxHashMap()),
@@ -2539,17 +2549,6 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         where F: FnMut(DefId) -> DepNode<DefId>, V: ItemLikeVisitor<'gcx>
     {
         dep_graph::visit_all_item_likes_in_krate(self.global_tcx(), dep_node_fn, visitor);
-    }
-
-    /// Invokes `callback` for each body in the krate. This will
-    /// create a read edge from `DepNode::Krate` to the current task;
-    /// it is meant to be run in the context of some global task like
-    /// `BorrowckCrate`. The callback would then create a task like
-    /// `BorrowckBody(DefId)` to process each individual item.
-    pub fn visit_all_bodies_in_krate<C>(self, callback: C)
-        where C: Fn(/* body_owner */ DefId, /* body id */ hir::BodyId),
-    {
-        dep_graph::visit_all_bodies_in_krate(self.global_tcx(), callback)
     }
 
     /// Looks up the span of `impl_did` if the impl is local; otherwise returns `Err`
