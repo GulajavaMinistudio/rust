@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-enum foo { foo_(bar) }
-struct bar { x: bar }
-//~^ ERROR E0072
-//~| NOTE recursive type has infinite size
-//~| NOTE recursive without indirection
-
-fn main() {
+pub trait Tr {
+    // Note: The function needs to be declared over multiple lines to reproduce
+    // the crash. DO NOT reformat.
+    fn f()
+        where Self: Sized;
 }
