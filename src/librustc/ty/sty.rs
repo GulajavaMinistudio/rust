@@ -43,12 +43,8 @@ pub struct TypeAndMut<'tcx> {
          RustcEncodable, RustcDecodable, Copy)]
 /// A "free" region `fr` can be interpreted as "some region
 /// at least as big as the scope `fr.scope`".
-///
-/// If `fr.scope` is None, then this is in some context (e.g., an
-/// impl) where lifetimes are more abstract and the notion of the
-/// caller/callee stack frames are not applicable.
-pub struct FreeRegion<'tcx> {
-    pub scope: Option<region::CodeExtent<'tcx>>,
+pub struct FreeRegion {
+    pub scope: DefId,
     pub bound_region: BoundRegion,
 }
 
@@ -67,8 +63,8 @@ pub enum BoundRegion {
     /// Fresh bound identifiers created during GLB computations.
     BrFresh(u32),
 
-    // Anonymous region for the implicit env pointer parameter
-    // to a closure
+    /// Anonymous region for the implicit env pointer parameter
+    /// to a closure
     BrEnv,
 }
 
@@ -95,8 +91,8 @@ pub struct Issue32330 {
     pub region_name: ast::Name,
 }
 
-// NB: If you change this, you'll probably want to change the corresponding
-// AST structure in libsyntax/ast.rs as well.
+/// NB: If you change this, you'll probably want to change the corresponding
+/// AST structure in libsyntax/ast.rs as well.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub enum TypeVariants<'tcx> {
     /// The primitive boolean type. Written as `bool`.
@@ -283,11 +279,11 @@ impl<'a, 'gcx, 'acx, 'tcx> ClosureSubsts<'tcx> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub enum ExistentialPredicate<'tcx> {
-    // e.g. Iterator
+    /// e.g. Iterator
     Trait(ExistentialTraitRef<'tcx>),
-    // e.g. Iterator::Item = T
+    /// e.g. Iterator::Item = T
     Projection(ExistentialProjection<'tcx>),
-    // e.g. Send
+    /// e.g. Send
     AutoTrait(DefId),
 }
 
@@ -683,12 +679,12 @@ impl<'a, 'gcx, 'tcx> ParamTy {
 /// [dbi]: http://en.wikipedia.org/wiki/De_Bruijn_index
 #[derive(Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug, Copy)]
 pub struct DebruijnIndex {
-    // We maintain the invariant that this is never 0. So 1 indicates
-    // the innermost binder. To ensure this, create with `DebruijnIndex::new`.
+    /// We maintain the invariant that this is never 0. So 1 indicates
+    /// the innermost binder. To ensure this, create with `DebruijnIndex::new`.
     pub depth: u32,
 }
 
-pub type Region<'tcx> = &'tcx RegionKind<'tcx>;
+pub type Region<'tcx> = &'tcx RegionKind;
 
 /// Representation of regions.
 ///
@@ -747,7 +743,7 @@ pub type Region<'tcx> = &'tcx RegionKind<'tcx>;
 /// [1] http://smallcultfollowing.com/babysteps/blog/2013/10/29/intermingled-parameter-lists/
 /// [2] http://smallcultfollowing.com/babysteps/blog/2013/11/04/intermingled-parameter-lists/
 #[derive(Clone, PartialEq, Eq, Hash, Copy, RustcEncodable, RustcDecodable)]
-pub enum RegionKind<'tcx> {
+pub enum RegionKind {
     // Region bound in a type or fn declaration which will be
     // substituted 'early' -- that is, at the same time when type
     // parameters are substituted.
@@ -760,12 +756,12 @@ pub enum RegionKind<'tcx> {
     /// When checking a function body, the types of all arguments and so forth
     /// that refer to bound region parameters are modified to refer to free
     /// region parameters.
-    ReFree(FreeRegion<'tcx>),
+    ReFree(FreeRegion),
 
     /// A concrete region naming some statically determined extent
     /// (e.g. an expression or sequence of statements) within the
     /// current function.
-    ReScope(region::CodeExtent<'tcx>),
+    ReScope(region::CodeExtent),
 
     /// Static data that has an "infinite" lifetime. Top in the region lattice.
     ReStatic,
@@ -794,6 +790,7 @@ impl<'tcx> serialize::UseSpecializedDecodable for Region<'tcx> {}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug)]
 pub struct EarlyBoundRegion {
+    pub def_id: DefId,
     pub index: u32,
     pub name: Name,
 }
@@ -908,11 +905,10 @@ impl DebruijnIndex {
     }
 }
 
-// Region utilities
-impl<'tcx> RegionKind<'tcx> {
-    pub fn is_bound(&self) -> bool {
+/// Region utilities
+impl RegionKind {
+    pub fn is_late_bound(&self) -> bool {
         match *self {
-            ty::ReEarlyBound(..) => true,
             ty::ReLateBound(..) => true,
             _ => false,
         }
@@ -933,7 +929,7 @@ impl<'tcx> RegionKind<'tcx> {
     }
 
     /// Returns the depth of `self` from the (1-based) binding level `depth`
-    pub fn from_depth(&self, depth: u32) -> RegionKind<'tcx> {
+    pub fn from_depth(&self, depth: u32) -> RegionKind {
         match *self {
             ty::ReLateBound(debruijn, r) => ty::ReLateBound(DebruijnIndex {
                 depth: debruijn.depth - (depth - 1)
@@ -972,7 +968,7 @@ impl<'tcx> RegionKind<'tcx> {
     }
 }
 
-// Type utilities
+/// Type utilities
 impl<'a, 'gcx, 'tcx> TyS<'tcx> {
     pub fn as_opt_param_ty(&self) -> Option<ty::ParamTy> {
         match self.sty {
@@ -995,8 +991,8 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
         }
     }
 
-    // Test whether this is a `()` which was produced by defaulting a
-    // diverging type variable with feature(never_type) disabled.
+    /// Test whether this is a `()` which was produced by defaulting a
+    /// diverging type variable with feature(never_type) disabled.
     pub fn is_defaulted_unit(&self) -> bool {
         match self.sty {
             TyTuple(_, true) => true,
@@ -1171,6 +1167,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
         }
     }
 
+    /// panics if called on any type other than `Box<T>`
     pub fn boxed_ty(&self) -> Ty<'tcx> {
         match self.sty {
             TyAdt(def, substs) if def.is_box() => substs.type_at(0),
@@ -1178,11 +1175,9 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
         }
     }
 
-    /*
-     A scalar type is one that denotes an atomic datum, with no sub-components.
-     (A TyRawPtr is scalar because it represents a non-managed pointer, so its
-     contents are abstract to rustc.)
-    */
+    /// A scalar type is one that denotes an atomic datum, with no sub-components.
+    /// (A TyRawPtr is scalar because it represents a non-managed pointer, so its
+    /// contents are abstract to rustc.)
     pub fn is_scalar(&self) -> bool {
         match self.sty {
             TyBool | TyChar | TyInt(_) | TyFloat(_) | TyUint(_) |
@@ -1278,10 +1273,10 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
         }
     }
 
-    // Returns the type and mutability of *ty.
-    //
-    // The parameter `explicit` indicates if this is an *explicit* dereference.
-    // Some types---notably unsafe ptrs---can only be dereferenced explicitly.
+    /// Returns the type and mutability of *ty.
+    ///
+    /// The parameter `explicit` indicates if this is an *explicit* dereference.
+    /// Some types---notably unsafe ptrs---can only be dereferenced explicitly.
     pub fn builtin_deref(&self, explicit: bool, pref: ty::LvaluePreference)
         -> Option<TypeAndMut<'tcx>>
     {
@@ -1302,7 +1297,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
         }
     }
 
-    // Returns the type of ty[i]
+    /// Returns the type of ty[i]
     pub fn builtin_index(&self) -> Option<Ty<'tcx>> {
         match self.sty {
             TyArray(ty, _) | TySlice(ty) => Some(ty),
@@ -1317,7 +1312,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
         }
     }
 
-    // Type accessors for substructures of types
+    /// Type accessors for substructures of types
     pub fn fn_args(&self) -> ty::Binder<&'tcx [Ty<'tcx>]> {
         self.fn_sig().inputs()
     }
