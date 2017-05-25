@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct S(u8, u16);
+// aux-build:issue_42007_s.rs
 
-fn main() {
-    let s = S{0b1: 10, 0: 11};
-    //~^ ERROR struct `S` has no field named `0b1`
-    //~| NOTE field does not exist - did you mean `1`?
-    match s {
-        S{0: a, 0x1: b, ..} => {}
-        //~^ ERROR does not have a field named `0x1`
-        //~| NOTE struct `S` does not have field `0x1`
-    }
+extern crate issue_42007_s;
+
+enum I {
+    E(issue_42007_s::E),
 }
+
+fn main() {}
