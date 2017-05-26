@@ -891,7 +891,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
         let item = tcx.associated_items(trait_did).find(|i| i.name == assoc_name)
                                                   .expect("missing associated type");
         let def = Def::AssociatedTy(item.def_id);
-        if !tcx.vis_is_accessible_from(item.vis, ref_id) {
+        let def_scope = tcx.adjust(assoc_name, item.container.id(), ref_id).1;
+        if !item.vis.is_accessible_from(def_scope, tcx) {
             let msg = format!("{} `{}` is private", def.kind_name(), assoc_name);
             tcx.sess.span_err(span, &msg);
         }
@@ -962,7 +963,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
     pub fn prohibit_projection(&self, span: Span) {
         let mut err = struct_span_err!(self.tcx().sess, span, E0229,
                                        "associated type bindings are not allowed here");
-        err.span_label(span, "associate type not allowed here").emit();
+        err.span_label(span, "associated type not allowed here").emit();
     }
 
     // Check a type Path and convert it to a Ty.

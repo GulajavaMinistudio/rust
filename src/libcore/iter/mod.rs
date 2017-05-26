@@ -309,7 +309,7 @@ pub use self::iterator::Iterator;
 
 #[unstable(feature = "step_trait",
            reason = "likely to be replaced by finer-grained traits",
-           issue = "27741")]
+           issue = "42168")]
 pub use self::range::Step;
 #[unstable(feature = "step_by", reason = "recent addition",
            issue = "27741")]
@@ -1812,10 +1812,6 @@ impl<B, I, St, F> Iterator for Scan<I, St, F> where
         (0, upper) // can't know a lower bound, due to the scan function
     }
 }
-
-#[unstable(feature = "fused", issue = "35602")]
-impl<B, I, St, F> FusedIterator for Scan<I, St, F>
-    where I: FusedIterator, F: FnMut(&mut St, I::Item) -> Option<B> {}
 
 /// An iterator that maps each element to an iterator, and yields the elements
 /// of the produced iterators.
