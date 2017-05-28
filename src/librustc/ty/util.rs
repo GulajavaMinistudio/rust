@@ -266,13 +266,29 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     /// if not a structure at all. Corresponds to the only possible unsized
     /// field, and its type can be used to determine unsizing strategy.
     pub fn struct_tail(self, mut ty: Ty<'tcx>) -> Ty<'tcx> {
-        while let TyAdt(def, substs) = ty.sty {
-            if !def.is_struct() {
-                break;
-            }
-            match def.struct_variant().fields.last() {
-                Some(f) => ty = f.ty(self, substs),
-                None => break,
+        loop {
+            match ty.sty {
+                ty::TyAdt(def, substs) => {
+                    if !def.is_struct() {
+                        break;
+                    }
+                    match def.struct_variant().fields.last() {
+                        Some(f) => ty = f.ty(self, substs),
+                        None => break,
+                    }
+                }
+
+                ty::TyTuple(tys, _) => {
+                    if let Some((&last_ty, _)) = tys.split_last() {
+                        ty = last_ty;
+                    } else {
+                        break;
+                    }
+                }
+
+                _ => {
+                    break;
+                }
             }
         }
         ty
@@ -583,6 +599,15 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                              |_, _| {
             bug!("empty_substs_for_def_id: {:?} has type parameters", item_def_id)
         })
+    }
+
+    pub fn const_usize(&self, val: u16) -> ConstInt {
+        match self.sess.target.uint_type {
+            ast::UintTy::U16 => ConstInt::Usize(ConstUsize::Us16(val as u16)),
+            ast::UintTy::U32 => ConstInt::Usize(ConstUsize::Us32(val as u32)),
+            ast::UintTy::U64 => ConstInt::Usize(ConstUsize::Us64(val as u64)),
+            _ => bug!(),
+        }
     }
 }
 
