@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,18 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(no_mangle_generic_items)]
-
-#[no_mangle]
-pub fn foo<T>() {} //~ ERROR functions generic over types must be mangled
-
-#[no_mangle]
-pub extern fn bar<T>() {} //~ ERROR functions generic over types must be mangled
-
-#[no_mangle]
-pub fn baz(x: &i32) -> &i32 { x }
-
-#[no_mangle]
-pub fn qux<'a>(x: &'a i32) -> &i32 { x }
-
-fn main() {}
+fn main() {
+    let x = 1;
+    let y = &mut x; //~ ERROR E0596
+}
