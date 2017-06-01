@@ -1252,14 +1252,43 @@ impl<T> Receiver<T> {
     ///
     /// # Examples
     ///
+    /// Successfully receiving value before encountering timeout:
+    ///
     /// ```no_run
-    /// use std::sync::mpsc::{self, RecvTimeoutError};
+    /// use std::thread;
     /// use std::time::Duration;
+    /// use std::sync::mpsc;
     ///
-    /// let (send, recv) = mpsc::channel::<()>();
+    /// let (send, recv) = mpsc::channel();
     ///
-    /// let timeout = Duration::from_millis(100);
-    /// assert_eq!(Err(RecvTimeoutError::Timeout), recv.recv_timeout(timeout));
+    /// thread::spawn(move || {
+    ///     send.send('a').unwrap();
+    /// });
+    ///
+    /// assert_eq!(
+    ///     recv.recv_timeout(Duration::from_millis(400)),
+    ///     Ok('a')
+    /// );
+    /// ```
+    ///
+    /// Receiving an error upon reaching timeout:
+    ///
+    /// ```no_run
+    /// use std::thread;
+    /// use std::time::Duration;
+    /// use std::sync::mpsc;
+    ///
+    /// let (send, recv) = mpsc::channel();
+    ///
+    /// thread::spawn(move || {
+    ///     thread::sleep(Duration::from_millis(800));
+    ///     send.send('a').unwrap();
+    /// });
+    ///
+    /// assert_eq!(
+    ///     recv.recv_timeout(Duration::from_millis(400)),
+    ///     Err(mpsc::RecvTimeoutError::Timeout)
+    /// );
     /// ```
     #[stable(feature = "mpsc_recv_timeout", since = "1.12.0")]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
@@ -1924,7 +1953,7 @@ mod tests {
     fn oneshot_single_thread_send_then_recv() {
         let (tx, rx) = channel::<Box<i32>>();
         tx.send(box 10).unwrap();
-        assert!(rx.recv().unwrap() == box 10);
+        assert!(*rx.recv().unwrap() == 10);
     }
 
     #[test]
@@ -1981,7 +2010,7 @@ mod tests {
     fn oneshot_multi_task_recv_then_send() {
         let (tx, rx) = channel::<Box<i32>>();
         let _t = thread::spawn(move|| {
-            assert!(rx.recv().unwrap() == box 10);
+            assert!(*rx.recv().unwrap() == 10);
         });
 
         tx.send(box 10).unwrap();
@@ -1994,7 +2023,7 @@ mod tests {
             drop(tx);
         });
         let res = thread::spawn(move|| {
-            assert!(rx.recv().unwrap() == box 10);
+            assert!(*rx.recv().unwrap() == 10);
         }).join();
         assert!(res.is_err());
     }
@@ -2048,7 +2077,7 @@ mod tests {
             let _t = thread::spawn(move|| {
                 tx.send(box 10).unwrap();
             });
-            assert!(rx.recv().unwrap() == box 10);
+            assert!(*rx.recv().unwrap() == 10);
         }
     }
 
@@ -2073,7 +2102,7 @@ mod tests {
                 if i == 10 { return }
 
                 thread::spawn(move|| {
-                    assert!(rx.recv().unwrap() == box i);
+                    assert!(*rx.recv().unwrap() == i);
                     recv(rx, i + 1);
                 });
             }
@@ -2610,7 +2639,7 @@ mod sync_tests {
     fn oneshot_single_thread_send_then_recv() {
         let (tx, rx) = sync_channel::<Box<i32>>(1);
         tx.send(box 10).unwrap();
-        assert!(rx.recv().unwrap() == box 10);
+        assert!(*rx.recv().unwrap() == 10);
     }
 
     #[test]
@@ -2682,7 +2711,7 @@ mod sync_tests {
     fn oneshot_multi_task_recv_then_send() {
         let (tx, rx) = sync_channel::<Box<i32>>(0);
         let _t = thread::spawn(move|| {
-            assert!(rx.recv().unwrap() == box 10);
+            assert!(*rx.recv().unwrap() == 10);
         });
 
         tx.send(box 10).unwrap();
@@ -2695,7 +2724,7 @@ mod sync_tests {
             drop(tx);
         });
         let res = thread::spawn(move|| {
-            assert!(rx.recv().unwrap() == box 10);
+            assert!(*rx.recv().unwrap() == 10);
         }).join();
         assert!(res.is_err());
     }
@@ -2749,7 +2778,7 @@ mod sync_tests {
             let _t = thread::spawn(move|| {
                 tx.send(box 10).unwrap();
             });
-            assert!(rx.recv().unwrap() == box 10);
+            assert!(*rx.recv().unwrap() == 10);
         }
     }
 
@@ -2774,7 +2803,7 @@ mod sync_tests {
                 if i == 10 { return }
 
                 thread::spawn(move|| {
-                    assert!(rx.recv().unwrap() == box i);
+                    assert!(*rx.recv().unwrap() == i);
                     recv(rx, i + 1);
                 });
             }

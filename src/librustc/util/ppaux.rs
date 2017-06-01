@@ -216,9 +216,11 @@ pub fn parameterized(f: &mut fmt::Formatter,
 
     for projection in projections {
         start_or_continue(f, "<", ", ")?;
-        write!(f, "{}={}",
-               projection.projection_ty.item_name,
-               projection.ty)?;
+        ty::tls::with(|tcx|
+            write!(f, "{}={}",
+            projection.projection_ty.item_name(tcx),
+            projection.ty)
+        )?;
     }
 
     start_or_continue(f, "", ">")?;
@@ -358,12 +360,6 @@ impl<'tcx> fmt::Display for ty::TypeAndMut<'tcx> {
         write!(f, "{}{}",
                if self.mutbl == hir::MutMutable { "mut " } else { "" },
                self.ty)
-    }
-}
-
-impl<'tcx> fmt::Debug for ty::ItemSubsts<'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ItemSubsts({:?})", self.substs)
     }
 }
 
@@ -929,9 +925,10 @@ impl<'tcx> fmt::Display for ty::ProjectionPredicate<'tcx> {
 
 impl<'tcx> fmt::Display for ty::ProjectionTy<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let item_name = ty::tls::with(|tcx| self.item_name(tcx));
         write!(f, "{:?}::{}",
                self.trait_ref,
-               self.item_name)
+               item_name)
     }
 }
 
