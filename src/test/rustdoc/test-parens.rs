@@ -8,18 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::collections::HashMap;
+#![crate_name = "foo"]
 
-fn main() {
-    let dict: HashMap<i32, i32> = HashMap::new();
-    let debug_dump_dict = || {
-        for (key, value) in dict {
-            println!("{:?} - {:?}", key, value);
-        }
-    };
-    debug_dump_dict();
-    debug_dump_dict();
-    //~^ ERROR use of moved value: `debug_dump_dict`
-    //~| NOTE closure cannot be invoked more than once because it moves the
-    //~| variable `dict` out of its environment
-}
+// @has foo/fn.foo.html
+// @has - '//*[@class="rust fn"]' "_: &(ToString + 'static)"
+pub fn foo(_: &(ToString + 'static)) {}
