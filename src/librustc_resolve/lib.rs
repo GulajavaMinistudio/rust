@@ -1204,7 +1204,7 @@ pub struct Resolver<'a> {
     pub found_unresolved_macro: bool,
 
     // List of crate local macros that we need to warn about as being unused.
-    // Right now this only includes macro_rules! macros.
+    // Right now this only includes macro_rules! macros, and macros 2.0.
     unused_macros: FxHashSet<DefId>,
 
     // Maps the `Mark` of an expansion to its containing module or block.
@@ -3428,7 +3428,7 @@ impl<'a> Resolver<'a> {
 
         for &PrivacyError(span, name, binding) in &self.privacy_errors {
             if !reported_spans.insert(span) { continue }
-            self.session.span_err(span, &format!("{} `{}` is private", binding.descr(), name));
+            span_err!(self.session, span, E0603, "{} `{}` is private", binding.descr(), name);
         }
     }
 
