@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(rustc_private)]
-#![allow(dead_code)]
-
-extern crate serialize;
-
-#[derive(Encodable)]
-//~^ WARNING derive(Encodable) is deprecated in favor of derive(RustcEncodable)
-struct Test1;
-
-fn main() { }
+fn main() {
+    for x in 0..3 {
+        x //~ ERROR mismatched types
+        //~| NOTE expected ()
+        //~| NOTE expected type `()`
+    }
+}

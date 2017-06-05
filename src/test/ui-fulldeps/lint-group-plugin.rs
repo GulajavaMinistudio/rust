@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    let xs : Vec<Option<i32>> = vec![Some(1), None];
+// run-pass
+// aux-build:lint_group_plugin_test.rs
+// ignore-stage1
+#![feature(plugin)]
+#![plugin(lint_group_plugin_test)]
+#![allow(dead_code)]
 
-    for Some(x) in xs {}
-    //~^ ERROR E0005
-    //~| NOTE pattern `None` not covered
+fn lintme() { } //~ WARNING item is named 'lintme'
+fn pleaselintme() { } //~ WARNING item is named 'pleaselintme'
+
+#[allow(lint_me)]
+pub fn main() {
+    fn lintme() { }
+
+    fn pleaselintme() { }
 }

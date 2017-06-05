@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct T { i: i32 }
-fn f<T>() {
-    let t = T { i: 0 }; //~ ERROR expected struct, variant or union type, found type parameter `T`
-}
+// run-pass
 
-mod Foo {
-    pub fn f() {}
-}
-fn g<Foo>() {
-    Foo::f(); //~ ERROR no function or associated item named `f`
-}
+#![feature(rustc_private)]
+#![allow(dead_code)]
 
-fn main() {}
+extern crate serialize;
+
+#[derive(Encodable)]
+//~^ WARNING derive(Encodable) is deprecated in favor of derive(RustcEncodable)
+struct Test1;
+
+fn main() { }

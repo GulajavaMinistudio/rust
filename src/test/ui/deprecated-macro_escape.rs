@@ -8,12 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(dead_code)]
+// run-pass
 
-#[derive]   //~ WARNING empty trait list in `derive`
-struct Foo;
+#[macro_escape] //~ WARNING macro_escape is a deprecated synonym for macro_use
+mod foo {
+}
 
-#[derive()] //~ WARNING empty trait list in `derive`
-struct Bar;
-
-pub fn main() {}
+fn main() {
+}

@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct T { i: i32 }
-fn f<T>() {
-    let t = T { i: 0 }; //~ ERROR expected struct, variant or union type, found type parameter `T`
-}
+// run-pass
 
-mod Foo {
-    pub fn f() {}
-}
-fn g<Foo>() {
-    Foo::f(); //~ ERROR no function or associated item named `f`
-}
+#![allow(dead_code)]
 
-fn main() {}
+#[derive]   //~ WARNING empty trait list in `derive`
+struct Foo;
+
+#[derive()] //~ WARNING empty trait list in `derive`
+struct Bar;
+
+pub fn main() {}
