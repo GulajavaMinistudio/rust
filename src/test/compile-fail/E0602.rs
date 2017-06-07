@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,20 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: -C no-prepopulate-passes
+// compile-flags:-D bogus
 
-#![crate_type = "lib"]
-use std::marker::PhantomData;
+// error-pattern:E0602
+// error-pattern:requested on the command line with `-D bogus`
 
-#[derive(Copy, Clone)]
-struct Zst { phantom: PhantomData<Zst> }
-
-// CHECK-LABEL: @mir
-// CHECK-NOT: store{{.*}}undef
-#[no_mangle]
-fn mir() {
-    let x = Zst { phantom: PhantomData };
-    let y = (x, 0);
-    drop(y);
-    drop((0, x));
-}
+fn main() {}
