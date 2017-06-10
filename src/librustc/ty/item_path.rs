@@ -129,7 +129,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     pub fn try_push_visible_item_path<T>(self, buffer: &mut T, external_def_id: DefId) -> bool
         where T: ItemPathBuffer
     {
-        let visible_parent_map = self.sess.cstore.visible_parent_map();
+        let visible_parent_map = self.sess.cstore.visible_parent_map(self.sess);
 
         let (mut cur_def, mut cur_path) = (external_def_id, Vec::<ast::Name>::new());
         loop {
@@ -197,7 +197,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             data @ DefPathData::ClosureExpr |
             data @ DefPathData::Binding(..) |
             data @ DefPathData::ImplTrait |
-            data @ DefPathData::Typeof => {
+            data @ DefPathData::Typeof |
+            data @ DefPathData::GlobalMetaData(..) => {
                 let parent_def_id = self.parent_def_id(def_id).unwrap();
                 self.push_item_path(buffer, parent_def_id);
                 buffer.push(&data.as_interned_str());
