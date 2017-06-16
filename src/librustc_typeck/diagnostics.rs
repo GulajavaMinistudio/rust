@@ -4096,6 +4096,27 @@ assert_eq!(!Question::No, true);
 ```
 "##,
 
+E0608: r##"
+An attempt to index into a type which doesn't implement the `std::ops::Index`
+trait was performed.
+
+Erroneous code example:
+
+```compile_fail,E0608
+0u8[2]; // error: cannot index into a value of type `u8`
+```
+
+To be able to index into a type it needs to implement the `std::ops::Index`
+trait. Example:
+
+```
+let v: Vec<u8> = vec![0, 1, 2, 3];
+
+// The `Vec` type implements the `Index` trait so you can do:
+println!("{}", v[2]);
+```
+"##,
+
 E0609: r##"
 Attempted to access a non-existent field in a struct.
 
@@ -4172,6 +4193,34 @@ unsafe {
 To fix this error, you need to pass variables corresponding to C types as much
 as possible. For better explanations, see The Rust Book:
 https://doc.rust-lang.org/book/
+"##,
+
+E0618: r##"
+Attempted to call something which isn't a function nor a method.
+
+Erroneous code examples:
+
+```compile_fail,E0618
+enum X {
+    Entry,
+}
+
+X::Entry(); // error: expected function, found `X::Entry`
+
+// Or even simpler:
+let x = 0i32;
+x(); // error: expected function, found `i32`
+```
+
+Only functions and methods can be called using `()`. Example:
+
+```
+// We declare a function:
+fn i_am_a_function() {}
+
+// And we call it:
+i_am_a_function();
+```
 "##,
 
 }

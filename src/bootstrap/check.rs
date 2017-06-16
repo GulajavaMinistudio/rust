@@ -245,6 +245,9 @@ pub fn compiletest(build: &Build,
     let llvm_config = build.llvm_config(target);
     let llvm_version = output(Command::new(&llvm_config).arg("--version"));
     cmd.arg("--llvm-version").arg(llvm_version);
+    if !build.is_rust_llvm(target) {
+        cmd.arg("--system-llvm");
+    }
 
     cmd.args(&build.flags.cmd.test_args());
 
@@ -567,7 +570,9 @@ fn find_tests(dir: &Path,
         let filename = e.file_name().into_string().unwrap();
         if (target.contains("windows") && filename.ends_with(".exe")) ||
            (!target.contains("windows") && !filename.contains(".")) ||
-           (target.contains("emscripten") && filename.ends_with(".js")) {
+           (target.contains("emscripten") &&
+            filename.ends_with(".js") &&
+            !filename.ends_with(".asm.js")) {
             dst.push(e.path());
         }
     }
