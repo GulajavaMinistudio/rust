@@ -8,17 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// #41425 -- error message "mismatched types" has wrong types
+// aux-build:issue_38875_b.rs
 
-fn plus_one(x: i32) -> i32 {
-    x + 1;
-}
-
-fn foo() -> Result<u8, u64> {
-    Ok(1);
-}
+extern crate issue_38875_b;
 
 fn main() {
-    let x = plus_one(5);
-    println!("X = {}", x);
+    let test_x = [0; issue_38875_b::FOO];
 }
