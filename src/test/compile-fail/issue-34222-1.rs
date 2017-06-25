@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// error-pattern:assertion failed: `(left == right)`
-// error-pattern: left: `14`
-// error-pattern:right: `15`
-
 fn main() {
-    assert_eq!(14, 15);
+    /// comment //~ ERROR found a documentation comment that doesn't document anything
 }

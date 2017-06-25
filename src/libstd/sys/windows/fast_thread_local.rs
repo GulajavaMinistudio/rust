@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// error-pattern:assertion failed: `(left == right)`
-// error-pattern: left: `14`
-// error-pattern:right: `15`
+#![unstable(feature = "thread_local_internals", issue = "0")]
+#![cfg(target_thread_local)]
 
-fn main() {
-    assert_eq!(14, 15);
+pub use sys_common::thread_local::register_dtor_fallback as register_dtor;
+
+pub fn requires_move_before_drop() -> bool {
+    false
 }

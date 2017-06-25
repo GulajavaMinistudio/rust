@@ -431,6 +431,10 @@ fn link_binary_output(sess: &Session,
         out_filenames.push(out_filename);
     }
 
+    if sess.opts.cg.save_temps {
+        let _ = tmpdir.into_path();
+    }
+
     out_filenames
 }
 
@@ -784,6 +788,9 @@ fn link_natively(sess: &Session,
     }
     if let Some(args) = sess.target.target.options.post_link_args.get(&flavor) {
         cmd.args(args);
+    }
+    for &(ref k, ref v) in &sess.target.target.options.link_env {
+        cmd.env(k, v);
     }
 
     if sess.opts.debugging_opts.print_link_args {
