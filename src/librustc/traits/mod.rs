@@ -121,6 +121,8 @@ pub enum ObligationCauseCode<'tcx> {
     // Various cases where expressions must be sized/copy/etc:
     /// L = X implies that L is Sized
     AssignmentLhsSized,
+    /// (x1, .., xn) must be Sized
+    TupleInitializerSized,
     /// S { ... } must be Sized
     StructInitializerSized,
     /// Type of each variable must be Sized
@@ -509,7 +511,7 @@ pub fn normalize_param_env_or_error<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         ) {
             Ok(predicates) => predicates,
             Err(errors) => {
-                infcx.report_fulfillment_errors(&errors);
+                infcx.report_fulfillment_errors(&errors, None);
                 // An unnormalized env is better than nothing.
                 return elaborated_env;
             }
@@ -608,7 +610,7 @@ pub fn normalize_and_test_predicates<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     debug!("normalize_and_test_predicates(predicates={:?})",
            predicates);
 
-    tcx.infer_ctxt().enter(|infcx| {
+    let result = tcx.infer_ctxt().enter(|infcx| {
         let param_env = ty::ParamEnv::empty(Reveal::All);
         let mut selcx = SelectionContext::new(&infcx);
         let mut fulfill_cx = FulfillmentContext::new();
@@ -624,7 +626,10 @@ pub fn normalize_and_test_predicates<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         }
 
         fulfill_cx.select_all_or_error(&infcx).is_ok()
-    })
+    });
+    debug!("normalize_and_test_predicates(predicates={:?}) = {:?}",
+           predicates, result);
+    result
 }
 
 /// Given a trait `trait_ref`, iterates the vtable entries
