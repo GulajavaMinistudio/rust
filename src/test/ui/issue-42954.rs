@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// gate-test-associated_consts
-
-trait MyTrait {
-    const C: bool;
-    //~^ associated constants are experimental
+macro_rules! is_plainly_printable {
+    ($i: ident) => {
+        $i as u32 < 0
+    };
 }
 
-struct Foo;
-
-impl Foo {
-    const C: bool = true;
-    //~^ associated constants are experimental
+fn main() {
+    let c = 'a';
+    is_plainly_printable!(c);
 }

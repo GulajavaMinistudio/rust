@@ -8,22 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
-trait Foo {
-    type Out: Sized;
+trait Arr0 {
+    fn arr0_secret(&self);
+}
+trait TyParam {
+    fn ty_param_secret(&self);
 }
 
-impl Foo for String {
-    type Out = String;
+mod m {
+    struct Priv;
+
+    impl ::Arr0 for [Priv; 0] { fn arr0_secret(&self) {} }
+    impl ::TyParam for Option<Priv> { fn ty_param_secret(&self) {} }
 }
 
-trait Bar: Foo {
-    const FROM: Self::Out;
+fn main() {
+    [].arr0_secret(); //~ ERROR type `m::Priv` is private
+    None.ty_param_secret(); //~ ERROR type `m::Priv` is private
 }
-
-impl<T: Foo> Bar for T {
-    const FROM: &'static str = "foo";
-    //~^ ERROR the trait bound `T: Foo` is not satisfied [E0277]
-}
-
-fn main() {}

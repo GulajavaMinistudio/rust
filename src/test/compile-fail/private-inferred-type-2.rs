@@ -8,22 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// aux-build:private-inferred-type.rs
 
-trait Foo {
-    type Out: Sized;
+extern crate private_inferred_type as ext;
+
+mod m {
+    struct Priv;
+    pub struct Pub<T>(pub T);
+
+    impl Pub<Priv> {
+        pub fn get_priv() -> Priv { Priv }
+        pub fn static_method() {}
+    }
 }
 
-impl Foo for String {
-    type Out = String;
+fn main() {
+    m::Pub::get_priv; //~ ERROR type `m::Priv` is private
+    m::Pub::static_method; //~ ERROR type `m::Priv` is private
+    ext::Pub::static_method; //~ ERROR type `ext::Priv` is private
 }
-
-trait Bar: Foo {
-    const FROM: Self::Out;
-}
-
-impl<T: Foo> Bar for T {
-    const FROM: &'static str = "foo";
-    //~^ ERROR the trait bound `T: Foo` is not satisfied [E0277]
-}
-
-fn main() {}
