@@ -249,6 +249,8 @@ pub trait AstBuilder {
                 name: Ident, attrs: Vec<ast::Attribute>,
                 items: Vec<P<ast::Item>>) -> P<ast::Item>;
 
+    fn item_extern_crate(&self, span: Span, name: Ident) -> P<ast::Item>;
+
     fn item_static(&self,
                    span: Span,
                    name: Ident,
@@ -320,7 +322,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
         let last_identifier = idents.pop().unwrap();
         let mut segments: Vec<ast::PathSegment> = Vec::new();
         if global {
-            segments.push(ast::PathSegment::crate_root());
+            segments.push(ast::PathSegment::crate_root(sp));
         }
 
         segments.extend(idents.into_iter().map(|i| ast::PathSegment::from_ident(i, sp)));
@@ -1093,6 +1095,10 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
                 items: items,
             })
         )
+    }
+
+    fn item_extern_crate(&self, span: Span, name: Ident) -> P<ast::Item> {
+        self.item(span, name, Vec::new(), ast::ItemKind::ExternCrate(None))
     }
 
     fn item_static(&self,

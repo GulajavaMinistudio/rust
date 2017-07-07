@@ -61,19 +61,21 @@ for module in $modules; do
     if [ "$module" = src/llvm ]; then
         commit="$(git ls-tree HEAD src/llvm | awk '{print $3}')"
         git rm src/llvm
-        curl -sSL -O "https://github.com/rust-lang/llvm/archive/$commit.tar.gz"
+        retry sh -c "rm -f $commit.tar.gz && \
+            curl -sSL -O https://github.com/rust-lang/llvm/archive/$commit.tar.gz"
         tar -C src/ -xf "$commit.tar.gz"
         rm "$commit.tar.gz"
         mv "src/llvm-$commit" src/llvm
         continue
     fi
-    if [ ! -d "$cache_src_dir/$module" ]; then
+    if [ ! -e "$cache_src_dir/$module/.git" ]; then
         echo "WARNING: $module not found in pristine repo"
-        retry sh -c "git submodule deinit -f $module && git submodule update --init $module"
+        retry sh -c "git submodule deinit -f $module && \
+            git submodule update --init --recursive $module"
         continue
     fi
     retry sh -c "git submodule deinit -f $module && \
-        git submodule update --init --reference $cache_src_dir/$module $module"
+        git submodule update --init --recursive --reference $cache_src_dir/$module $module"
 done
 
 travis_fold end update_submodules

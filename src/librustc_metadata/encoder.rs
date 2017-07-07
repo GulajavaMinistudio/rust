@@ -400,12 +400,17 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let tcx = self.tcx;
         let link_meta = self.link_meta;
         let is_proc_macro = tcx.sess.crate_types.borrow().contains(&CrateTypeProcMacro);
+        let has_default_lib_allocator =
+            attr::contains_name(tcx.hir.krate_attrs(), "default_lib_allocator");
+        let has_global_allocator = tcx.sess.has_global_allocator.get();
         let root = self.lazy(&CrateRoot {
             name: tcx.crate_name(LOCAL_CRATE),
             triple: tcx.sess.opts.target_triple.clone(),
             hash: link_meta.crate_hash,
             disambiguator: tcx.sess.local_crate_disambiguator(),
             panic_strategy: Tracked::new(tcx.sess.panic_strategy()),
+            has_global_allocator: Tracked::new(has_global_allocator),
+            has_default_lib_allocator: Tracked::new(has_default_lib_allocator),
             plugin_registrar_fn: tcx.sess
                 .plugin_registrar_fn
                 .get()
@@ -1129,6 +1134,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
     /// Serialize the text of exported macros
     fn encode_info_for_macro_def(&mut self, macro_def: &hir::MacroDef) -> Entry<'tcx> {
         use syntax::print::pprust;
+        let def_id = self.tcx.hir.local_def_id(macro_def.id);
         Entry {
             kind: EntryKind::MacroDef(self.lazy(&MacroDef {
                 body: pprust::tts_to_string(&macro_def.body.trees().collect::<Vec<_>>()),
@@ -1136,11 +1142,11 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
             })),
             visibility: self.lazy(&ty::Visibility::Public),
             span: self.lazy(&macro_def.span),
-
             attributes: self.encode_attributes(&macro_def.attrs),
+            stability: self.encode_stability(def_id),
+            deprecation: self.encode_deprecation(def_id),
+
             children: LazySeq::empty(),
-            stability: None,
-            deprecation: None,
             ty: None,
             inherent_impls: LazySeq::empty(),
             variances: LazySeq::empty(),

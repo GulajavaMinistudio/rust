@@ -378,9 +378,8 @@ pub struct TargetOptions {
     /// `eh_unwind_resume` lang item.
     pub custom_unwind_resume: bool,
 
-    /// Default crate for allocation symbols to link against
-    pub lib_allocation_crate: String,
-    pub exe_allocation_crate: String,
+    /// If necessary, a different crate to link exe allocators by default
+    pub exe_allocation_crate: Option<String>,
 
     /// Flag indicating whether ELF TLS (e.g. #[thread_local]) is available for
     /// this target.
@@ -410,6 +409,9 @@ pub struct TargetOptions {
 
     /// Whether or not the CRT is statically linked by default.
     pub crt_static_default: bool,
+
+    /// Whether or not stack probes (__rust_probestack) are enabled
+    pub stack_probes: bool,
 }
 
 impl Default for TargetOptions {
@@ -457,8 +459,7 @@ impl Default for TargetOptions {
             link_env: Vec::new(),
             archive_format: "gnu".to_string(),
             custom_unwind_resume: false,
-            lib_allocation_crate: "alloc_system".to_string(),
-            exe_allocation_crate: "alloc_system".to_string(),
+            exe_allocation_crate: None,
             allow_asm: true,
             has_elf_tls: false,
             obj_is_bitcode: false,
@@ -468,6 +469,7 @@ impl Default for TargetOptions {
             panic_strategy: PanicStrategy::Unwind,
             abi_blacklist: vec![],
             crt_static_default: false,
+            stack_probes: false,
         }
     }
 }
@@ -682,8 +684,7 @@ impl Target {
         key!(archive_format);
         key!(allow_asm, bool);
         key!(custom_unwind_resume, bool);
-        key!(lib_allocation_crate);
-        key!(exe_allocation_crate);
+        key!(exe_allocation_crate, optional);
         key!(has_elf_tls, bool);
         key!(obj_is_bitcode, bool);
         key!(no_integrated_as, bool);
@@ -691,6 +692,7 @@ impl Target {
         key!(min_atomic_width, Option<u64>);
         try!(key!(panic_strategy, PanicStrategy));
         key!(crt_static_default, bool);
+        key!(stack_probes, bool);
 
         if let Some(array) = obj.find("abi-blacklist").and_then(Json::as_array) {
             for name in array.iter().filter_map(|abi| abi.as_string()) {
@@ -869,7 +871,6 @@ impl ToJson for Target {
         target_option_val!(archive_format);
         target_option_val!(allow_asm);
         target_option_val!(custom_unwind_resume);
-        target_option_val!(lib_allocation_crate);
         target_option_val!(exe_allocation_crate);
         target_option_val!(has_elf_tls);
         target_option_val!(obj_is_bitcode);
@@ -878,6 +879,7 @@ impl ToJson for Target {
         target_option_val!(max_atomic_width);
         target_option_val!(panic_strategy);
         target_option_val!(crt_static_default);
+        target_option_val!(stack_probes);
 
         if default.abi_blacklist != self.options.abi_blacklist {
             d.insert("abi-blacklist".to_string(), self.options.abi_blacklist.iter()
@@ -889,10 +891,10 @@ impl ToJson for Target {
     }
 }
 
-fn maybe_jemalloc() -> String {
+fn maybe_jemalloc() -> Option<String> {
     if cfg!(feature = "jemalloc") {
-        "alloc_jemalloc".to_string()
+        Some("alloc_jemalloc".to_string())
     } else {
-        "alloc_system".to_string()
+        None
     }
 }
