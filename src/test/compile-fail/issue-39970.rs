@@ -8,10 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(unused)]
+trait Array<'a> {
+    type Element: 'a;
+}
 
-macro_rules! m { ($i) => {} }
-//~^ ERROR missing fragment specifier
-//~| WARN previously accepted
+trait Visit {
+    fn visit() {}
+}
 
-fn main() {}
+impl<'a> Array<'a> for () {
+    type Element = &'a ();
+}
+
+impl Visit for () where
+    //(): for<'a> Array<'a, Element=&'a ()>, // No ICE
+    (): for<'a> Array<'a, Element=()>, // ICE
+{}
+
+fn main() {
+    <() as Visit>::visit();
+    //~^ ERROR type mismatch resolving `for<'a> <() as Array<'a>>::Element == ()`
+}

@@ -8,9 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct Foo;
+pub trait Mirror<Smoke> {
+    type Image;
+}
+
+impl<T, Smoke> Mirror<Smoke> for T {
+    type Image = T;
+}
+
+pub fn poison<S>(victim: String) where <String as Mirror<S>>::Image: Copy {
+    loop { drop(victim); } //~ ERROR use of moved value
+}
 
 fn main() {
-   let y = Foo;
-   y.1; //~ ERROR E0613
+    let s = "Hello!".to_owned();
+    let mut s_copy = s;
+    s_copy.push_str("World!");
+    "0wned!".to_owned();
+    println!("{}", s); //~ ERROR use of moved value
 }
