@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    printlx!("oh noes!");
-    //~^ ERROR cannot find macro
-    //~^^ HELP did you mean `println!`?
+#[no_mangle]
+pub extern fn overflow() {
+    let xs = [0, 1, 2, 3];
+    let _y = unsafe { *xs.as_ptr().offset(4) };
 }

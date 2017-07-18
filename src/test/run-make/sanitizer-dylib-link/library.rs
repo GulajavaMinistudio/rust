@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    &1 as Send;
-    //~^ ERROR cast to unsized type
-    //~| HELP try casting to a reference instead:
-    //~| SUGGESTION &1 as &Send;
-    Box::new(1) as Send;
-    //~^ ERROR cast to unsized type
-    //~| HELP try casting to a `Box` instead:
-    //~| SUGGESTION Box::new(1) as Box<Send>;
+#[no_mangle]
+pub extern fn overflow() {
+    let xs = [0, 1, 2, 3];
+    let _y = unsafe { *xs.as_ptr().offset(4) };
 }

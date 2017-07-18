@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    let xs = [0, 1, 2, 3];
-    let _y = unsafe { *xs.as_ptr().offset(4) };
+// force-host
+// no-prefer-dynamic
+
+#![crate_type = "proc-macro"]
+
+extern crate proc_macro;
+
+use proc_macro::TokenStream;
+
+#[proc_macro_derive(FooWithLongName)]
+pub fn derive_foo(input: TokenStream) -> TokenStream {
+    "".parse().unwrap()
 }

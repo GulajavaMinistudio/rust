@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// Test macro_undefined issue
+
+mod m {
+    #[macro_export]
+    macro_rules! kl {
+        () => ()
+    }
+}
+
 fn main() {
-    let xs = [0, 1, 2, 3];
-    let _y = unsafe { *xs.as_ptr().offset(4) };
+    k!();
+    kl!();
 }
