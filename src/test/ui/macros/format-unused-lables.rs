@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,19 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-arm
-// ignore-aarch64
-// ignore-powerpc
-// ignore-wasm
-// ignore-emscripten
-// ignore-windows
-// no-system-llvm
-// compile-flags: -C no-prepopulate-passes
+fn main() {
+    println!("Test", 123, 456, 789);
 
-#![crate_type = "lib"]
+    println!("Test2",
+        123,
+        456,
+        789
+    );
 
-#[no_mangle]
-pub fn foo() {
-// CHECK: @foo() unnamed_addr #0
-// CHECK: attributes #0 = { {{.*}}"probe-stack"="__rust_probestack"{{.*}} }
+    println!("Some stuff", UNUSED="args");
+
+    println!("Some more $STUFF",
+        "woo!",
+            STUFF=
+       "things"
+             , UNUSED="args");
 }

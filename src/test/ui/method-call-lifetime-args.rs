@@ -8,14 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-arm
-// ignore-aarch64
-// ignore-wasm
-// ignore-emscripten
-// ignore-musl FIXME #31506
-// ignore-pretty
-// no-system-llvm
-// compile-flags: -C lto
-// no-prefer-dynamic
+struct S;
 
-include!("stack-probes.rs");
+impl S {
+    fn late<'a, 'b>(self, _: &'a u8, _: &'b u8) {}
+    fn late_implicit(self, _: &u8, _: &u8) {}
+}
+
+fn ufcs() {
+    S::late::<'static>(S, &0, &0);
+    //~^ ERROR cannot specify lifetime arguments explicitly
+    S::late_implicit::<'static>(S, &0, &0);
+    //~^ ERROR cannot specify lifetime arguments explicitly
+}
+
+fn main() {}
