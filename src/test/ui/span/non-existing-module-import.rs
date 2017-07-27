@@ -8,6 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    compile_error!("test"); //~ ERROR: `compile_error` is not stable enough
-}
+use std::bar::{foo1, foo2};
+
+fn main() {}
