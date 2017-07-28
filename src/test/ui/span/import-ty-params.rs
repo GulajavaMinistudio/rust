@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![cfg_attr(rustc, feature(rustc_private))]
-#![cfg_attr(rustdoc, feature(rustdoc))]
-
-#[cfg(rustdoc)]
-extern crate rustdoc as this;
-
-#[cfg(rustc)]
-extern crate rustc_driver as this;
-
-fn main() {
-    this::main()
+mod a {
+    pub mod b {
+        pub mod c {
+            pub struct S<T>(T);
+        }
+    }
 }
+
+macro_rules! import {
+    ($p: path) => (use $p;);
+}
+
+fn f1() {
+    import! { a::b::c::S<u8> } //~ ERROR generic arguments in import path
+}
+fn f2() {
+    import! { a::b::c::S<> } //~ ERROR generic arguments in import path
+}
+
+fn main() {}

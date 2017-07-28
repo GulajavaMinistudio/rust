@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(rustc_private)]
+// ensure borrowck messages are correct outside special case
 
-extern crate rustdoc;
+fn main() {
+    let mut void = ();
 
-fn main() { rustdoc::main() }
+    let first = &mut void;
+    let second = &mut void;
+
+    loop {
+        let mut inner_void = ();
+
+        let inner_first = &mut inner_void;
+        let inner_second = &mut inner_void;
+    }
+}
+
