@@ -8,13 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct Simba {
-    mother: u32,
+mod private {
+    pub trait Future {
+        fn wait(&self) where Self: Sized;
+    }
+
+    impl Future for Box<Future> {
+        fn wait(&self) { }
+    }
+}
+
+//use private::Future;
+
+fn bar(arg: Box<private::Future>) {
+    arg.wait();
+    //~^ ERROR the `wait` method cannot be invoked on a trait object
+    //~| another candidate was found in the following trait, perhaps add a `use` for it:
 }
 
 fn main() {
-    let s = Simba { mother: 1, father: 0 };
-    //~^ ERROR E0560
-    //~| NOTE `Simba` does not have this field
-    //~| NOTE available fields are: `mother`
+
 }
