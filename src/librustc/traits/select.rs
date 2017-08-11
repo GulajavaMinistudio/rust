@@ -494,7 +494,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
             never_obligation.predicate = never_obligation.predicate.map_bound(|mut trait_pred| {
                 // Swap out () with ! so we can check if the trait is impld for !
                 {
-                    let mut trait_ref = &mut trait_pred.trait_ref;
+                    let trait_ref = &mut trait_pred.trait_ref;
                     let unit_substs = trait_ref.substs;
                     let mut never_substs = Vec::with_capacity(unit_substs.len());
                     never_substs.push(From::from(tcx.types.never));
@@ -512,11 +512,11 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
             }
 
             if raise_warning {
-                tcx.sess.add_lint(lint::builtin::RESOLVE_TRAIT_ON_DEFAULTED_UNIT,
-                                  obligation.cause.body_id,
-                                  obligation.cause.span,
-                                  format!("code relies on type inference rules which are likely \
-                                           to change"));
+                tcx.lint_node(lint::builtin::RESOLVE_TRAIT_ON_DEFAULTED_UNIT,
+                              obligation.cause.body_id,
+                              obligation.cause.span,
+                              &format!("code relies on type inference rules which are likely \
+                                        to change"));
             }
         }
         Ok(ret)

@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Unstable entities should be caught in import lists
+// compile-flags: -Z continue-parse-after-error
 
-// aux-build:lint_stability.rs
-
-#![allow(warnings)]
-
-extern crate lint_stability;
-
-use lint_stability::{unstable, deprecated}; //~ ERROR use of unstable library feature 'test_feature'
+extern "C" {
+    const C: u8; //~ ERROR extern items cannot be `const`
+}
 
 fn main() {
+    let x = C;
 }

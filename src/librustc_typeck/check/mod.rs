@@ -1713,10 +1713,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
             debug!("warn_if_unreachable: id={:?} span={:?} kind={}", id, span, kind);
 
-            self.tables.borrow_mut().lints.add_lint(
+            self.tcx().lint_node(
                 lint::builtin::UNREACHABLE_CODE,
                 id, span,
-                format!("unreachable {}", kind));
+                &format!("unreachable {}", kind));
         }
     }
 
@@ -4016,7 +4016,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             Ok(def) => def,
             Err(error) => {
                 let def = match error {
-                    method::MethodError::PrivateMatch(def) => def,
+                    method::MethodError::PrivateMatch(def, _) => def,
                     _ => Def::Err,
                 };
                 if item_name != keywords::Invalid.name() {
@@ -4183,8 +4183,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             let tail_expr_ty = tail_expr.map(|t| self.check_expr_with_expectation(t, expected));
 
             let mut enclosing_breakables = self.enclosing_breakables.borrow_mut();
-            let mut ctxt = enclosing_breakables.find_breakable(blk.id);
-            let mut coerce = ctxt.coerce.as_mut().unwrap();
+            let ctxt = enclosing_breakables.find_breakable(blk.id);
+            let coerce = ctxt.coerce.as_mut().unwrap();
             if let Some(tail_expr_ty) = tail_expr_ty {
                 let tail_expr = tail_expr.unwrap();
                 let cause = self.cause(tail_expr.span,
@@ -4769,8 +4769,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             } else {
                 let mut multispan = MultiSpan::from_span(lifetimes[0].span);
                 multispan.push_span_label(span_late, note_msg.to_string());
-                self.tcx.sess.add_lint(lint::builtin::LATE_BOUND_LIFETIME_ARGUMENTS,
-                                       lifetimes[0].id, multispan, primary_msg.to_string());
+                self.tcx.lint_node(lint::builtin::LATE_BOUND_LIFETIME_ARGUMENTS,
+                                   lifetimes[0].id, multispan, primary_msg);
             }
             return;
         }
