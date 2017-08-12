@@ -294,7 +294,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                         let item = match self.cx.resolver.resolve_macro(
                                 Mark::root(), path, MacroKind::Derive, false) {
                             Ok(ext) => match *ext {
-                                SyntaxExtension::BuiltinDerive(..) => item_with_markers.clone(),
+                                BuiltinDerive(..) => item_with_markers.clone(),
                                 _ => item.clone(),
                             },
                             _ => item.clone(),
@@ -411,6 +411,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 format: MacroAttribute(Symbol::intern(&format!("{}", attr.path))),
                 span: None,
                 allow_internal_unstable: false,
+                allow_internal_unsafe: false,
             }
         });
 
@@ -427,7 +428,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 items.push(item);
                 kind.expect_from_annotatables(items)
             }
-            SyntaxExtension::AttrProcMacro(ref mac) => {
+            AttrProcMacro(ref mac) => {
                 let item_tok = TokenTree::Token(DUMMY_SP, Token::interpolated(match item {
                     Annotatable::Item(item) => token::NtItem(item),
                     Annotatable::TraitItem(item) => token::NtTraitItem(item.unwrap()),
@@ -436,7 +437,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 let tok_result = mac.expand(self.cx, attr.span, attr.tokens, item_tok);
                 self.parse_expansion(tok_result, kind, &attr.path, attr.span)
             }
-            SyntaxExtension::ProcMacroDerive(..) | SyntaxExtension::BuiltinDerive(..) => {
+            ProcMacroDerive(..) | BuiltinDerive(..) => {
                 self.cx.span_err(attr.span, &format!("`{}` is a derive mode", attr.path));
                 kind.dummy(attr.span)
             }
@@ -458,7 +459,9 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         let path = &mac.node.path;
 
         let ident = ident.unwrap_or_else(|| keywords::Invalid.ident());
-        let validate_and_set_expn_info = |def_site_span, allow_internal_unstable| {
+        let validate_and_set_expn_info = |def_site_span,
+                                          allow_internal_unstable,
+                                          allow_internal_unsafe| {
             if ident.name != keywords::Invalid.name() {
                 return Err(format!("macro {}! expects no ident argument, given '{}'", path, ident));
             }
@@ -467,29 +470,36 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 callee: NameAndSpan {
                     format: MacroBang(Symbol::intern(&format!("{}", path))),
                     span: def_site_span,
-                    allow_internal_unstable: allow_internal_unstable,
+                    allow_internal_unstable,
+                    allow_internal_unsafe,
                 },
             });
             Ok(())
         };
 
         let opt_expanded = match *ext {
-            SyntaxExtension::DeclMacro(ref expand, def_span) => {
+            DeclMacro(ref expand, def_span) => {
                 if let Err(msg) = validate_and_set_expn_info(def_span.map(|(_, s)| s),
-                                                             false) {
+                                                             false, false) {
                     self.cx.span_err(path.span, &msg);
                     return kind.dummy(span);
                 }
                 kind.make_from(expand.expand(self.cx, span, mac.node.stream()))
             }
 
-            NormalTT(ref expandfun, def_info, allow_internal_unstable) => {
+            NormalTT {
+                ref expander,
+                def_info,
+                allow_internal_unstable,
+                allow_internal_unsafe
+            } => {
                 if let Err(msg) = validate_and_set_expn_info(def_info.map(|(_, s)| s),
-                                                             allow_internal_unstable) {
+                                                             allow_internal_unstable,
+                                                             allow_internal_unsafe) {
                     self.cx.span_err(path.span, &msg);
                     return kind.dummy(span);
                 }
-                kind.make_from(expandfun.expand(self.cx, span, mac.node.stream()))
+                kind.make_from(expander.expand(self.cx, span, mac.node.stream()))
             }
 
             IdentTT(ref expander, tt_span, allow_internal_unstable) => {
@@ -504,7 +514,8 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                     callee: NameAndSpan {
                         format: MacroBang(Symbol::intern(&format!("{}", path))),
                         span: tt_span,
-                        allow_internal_unstable: allow_internal_unstable,
+                        allow_internal_unstable,
+                        allow_internal_unsafe: false,
                     }
                 });
 
@@ -512,18 +523,18 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 kind.make_from(expander.expand(self.cx, span, ident, input))
             }
 
-            MultiDecorator(..) | MultiModifier(..) | SyntaxExtension::AttrProcMacro(..) => {
+            MultiDecorator(..) | MultiModifier(..) | AttrProcMacro(..) => {
                 self.cx.span_err(path.span,
                                  &format!("`{}` can only be used in attributes", path));
                 return kind.dummy(span);
             }
 
-            SyntaxExtension::ProcMacroDerive(..) | SyntaxExtension::BuiltinDerive(..) => {
+            ProcMacroDerive(..) | BuiltinDerive(..) => {
                 self.cx.span_err(path.span, &format!("`{}` is a derive mode", path));
                 return kind.dummy(span);
             }
 
-            SyntaxExtension::ProcMacro(ref expandfun) => {
+            ProcMacro(ref expandfun) => {
                 if ident.name != keywords::Invalid.name() {
                     let msg =
                         format!("macro {}! expects no ident argument, given '{}'", path, ident);
@@ -540,6 +551,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                         span: None,
                         // FIXME probably want to follow macro_rules macros here.
                         allow_internal_unstable: false,
+                        allow_internal_unsafe: false,
                     },
                 });
 
@@ -578,11 +590,12 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 format: MacroAttribute(pretty_name),
                 span: None,
                 allow_internal_unstable: false,
+                allow_internal_unsafe: false,
             }
         };
 
         match *ext {
-            SyntaxExtension::ProcMacroDerive(ref ext, _) => {
+            ProcMacroDerive(ref ext, _) => {
                 invoc.expansion_data.mark.set_expn_info(expn_info);
                 let span = Span { ctxt: self.cx.backtrace(), ..span };
                 let dummy = ast::MetaItem { // FIXME(jseyfried) avoid this
@@ -592,7 +605,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 };
                 kind.expect_from_annotatables(ext.expand(self.cx, span, &dummy, item))
             }
-            SyntaxExtension::BuiltinDerive(func) => {
+            BuiltinDerive(func) => {
                 expn_info.callee.allow_internal_unstable = true;
                 invoc.expansion_data.mark.set_expn_info(expn_info);
                 let span = Span { ctxt: self.cx.backtrace(), ..span };
