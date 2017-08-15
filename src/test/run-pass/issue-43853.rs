@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:xcrate.rs
+use std::panic;
 
-extern crate xcrate;
+fn test() {
+    wait(|| panic!());
+}
+
+fn wait<T, F: FnOnce() -> T>(f: F) -> F::Output {
+    From::from(f())
+}
 
 fn main() {
-    assert_eq!(xcrate::fourway_add(1)(2)(3)(4), 10);
-    xcrate::return_closure_accessing_internal_fn()();
+    let result = panic::catch_unwind(move || test());
+    assert!(result.is_err());
 }
