@@ -31,6 +31,7 @@ pub mod simplify;
 pub mod erase_regions;
 pub mod no_landing_pads;
 pub mod type_check;
+pub mod borrow_check;
 pub mod rustc_peek;
 pub mod elaborate_drops;
 pub mod add_call_guards;
@@ -93,7 +94,7 @@ fn mir_keys<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, krate: CrateNum)
         }
     }
     tcx.hir.krate().visit_all_item_likes(&mut GatherCtors {
-        tcx: tcx,
+        tcx,
         set: &mut set,
     }.as_deep_visitor());
 

@@ -401,8 +401,8 @@ impl<'a, 'tcx> CompileState<'a, 'tcx> {
              out_dir: &'a Option<PathBuf>)
              -> Self {
         CompileState {
-            input: input,
-            session: session,
+            input,
+            session,
             out_dir: out_dir.as_ref().map(|s| &**s),
             out_file: None,
             arena: None,
@@ -868,7 +868,7 @@ pub fn phase_2_configure_and_expand<F>(sess: &Session,
             trait_map: resolver.trait_map,
             maybe_unused_trait_imports: resolver.maybe_unused_trait_imports,
         },
-        hir_forest: hir_forest,
+        hir_forest,
     })
 }
 
@@ -970,13 +970,22 @@ pub fn phase_3_run_analysis_passes<'tcx, F, R>(sess: &'tcx Session,
     // We compute "constant qualifications" between MIR_CONST and MIR_VALIDATED.
 
     // What we need to run borrowck etc.
+
     passes.push_pass(MIR_VALIDATED, mir::transform::qualify_consts::QualifyAndPromoteConstants);
+
+    // FIXME: ariel points SimplifyBranches should run after
+    // mir-borrowck; otherwise code within `if false { ... }` would
+    // not be checked.
     passes.push_pass(MIR_VALIDATED,
                      mir::transform::simplify_branches::SimplifyBranches::new("initial"));
     passes.push_pass(MIR_VALIDATED, mir::transform::simplify::SimplifyCfg::new("qualify-consts"));
     passes.push_pass(MIR_VALIDATED, mir::transform::nll::NLL);
 
     // borrowck runs between MIR_VALIDATED and MIR_OPTIMIZED.
+
+    // FIXME: niko says this should be a query (see rustc::ty::maps)
+    // instead of a pass.
+    passes.push_pass(MIR_VALIDATED, mir::transform::borrow_check::BorrowckMir);
 
     // These next passes must be executed together
     passes.push_pass(MIR_OPTIMIZED, mir::transform::no_landing_pads::NoLandingPads);

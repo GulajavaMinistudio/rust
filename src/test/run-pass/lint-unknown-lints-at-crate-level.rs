@@ -8,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(unused_variables)]
-fn main() {
-    let x: &'static u32 = &42; //~ error: does not live long enough
-    let y: &'static Option<u32> = &None; //~ error: does not live long enough
-}
+// compile-flags: -D warnings -D unknown-lints
+
+#![allow(unknown_lints)]
+#![allow(random_lint_name)]
+
+fn main() {}
