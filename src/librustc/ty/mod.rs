@@ -1971,7 +1971,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
     pub fn local_var_name_str(self, id: NodeId) -> InternedString {
         match self.hir.find(id) {
-            Some(hir_map::NodeLocal(pat)) => {
+            Some(hir_map::NodeBinding(pat)) => {
                 match pat.node {
                     hir::PatKind::Binding(_, _, ref path1, _) => path1.node.as_str(),
                     _ => {
@@ -2232,7 +2232,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             ty::InstanceDef::FnPtrShim(..) |
             ty::InstanceDef::Virtual(..) |
             ty::InstanceDef::ClosureOnceShim { .. } |
-            ty::InstanceDef::DropGlue(..) => {
+            ty::InstanceDef::DropGlue(..) |
+            ty::InstanceDef::CloneShim(..) => {
                 self.mir_shims(instance)
             }
         }

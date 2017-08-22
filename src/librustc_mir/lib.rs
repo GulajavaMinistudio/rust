@@ -43,10 +43,11 @@ extern crate rustc_const_math;
 extern crate rustc_const_eval;
 extern crate core; // for NonZero
 
-pub mod diagnostics;
+mod diagnostics;
 
+mod borrow_check;
 mod build;
-pub mod dataflow;
+mod dataflow;
 mod hair;
 mod shim;
 pub mod transform;
@@ -55,6 +56,7 @@ pub mod util;
 use rustc::ty::maps::Providers;
 
 pub fn provide(providers: &mut Providers) {
+    borrow_check::provide(providers);
     shim::provide(providers);
     transform::provide(providers);
 }
