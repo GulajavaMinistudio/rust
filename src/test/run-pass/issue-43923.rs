@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(slice_patterns, box_patterns)]
+struct A<T: ?Sized> { ptr: T }
 
-struct A;
+fn foo<T>(x: &A<[T]>) {}
 
 fn main() {
-    let a: Box<[A]> = Box::new([A]);
-    match a {
-        box [a] => {}, //~ ERROR cannot move out of type `[A]`, a non-copy slice
-        _ => {}
-    }
+    let a = foo;
+    let b = A { ptr: [a, a, a] };
+    a(&A { ptr: [()] });
 }
