@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:issue-13560-1.rs
-// aux-build:issue-13560-2.rs
-// aux-build:issue-13560-3.rs
+#![feature(fn_traits)]
 
-// Regression test for issue #13560, the test itself is all in the dependent
-// libraries. The fail which previously failed to compile is the one numbered 3.
+trait CallSingle<A, B> {
+    fn call(&self, a: A) -> B where Self: Fn(A) -> B;
+}
 
-extern crate issue_13560_2 as t2;
-extern crate issue_13560_3 as t3;
+impl<A, B, F: Fn(A) -> B> CallSingle<A, B> for F {
+    fn call(&self, a: A) -> B {
+        <Self as Fn(A) -> B>::call(self, (a,))
+        //~^ ERROR associated type bindings are not allowed here
+    }
+}
 
 fn main() {}
