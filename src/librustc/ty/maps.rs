@@ -9,6 +9,7 @@
 // except according to those terms.
 
 use dep_graph::{DepConstructor, DepNode, DepNodeIndex};
+use errors::{Diagnostic, DiagnosticBuilder};
 use hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use hir::def::Def;
 use hir;
@@ -28,10 +29,11 @@ use ty::steal::Steal;
 use ty::subst::Substs;
 use ty::fast_reject::SimplifiedType;
 use util::nodemap::{DefIdSet, NodeSet};
+use util::common::{profq_msg, ProfileQueriesMsg};
 
 use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_data_structures::fx::FxHashMap;
-use std::cell::{RefCell, RefMut};
+use std::cell::{RefCell, RefMut, Cell};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -187,7 +189,18 @@ impl<'tcx> Value<'tcx> for ty::SymbolName {
 
 struct QueryMap<D: QueryDescription> {
     phantom: PhantomData<D>,
-    map: FxHashMap<D::Key, (D::Value, DepNodeIndex)>,
+    map: FxHashMap<D::Key, QueryValue<D::Value>>,
+}
+
+struct QueryValue<T> {
+    value: T,
+    index: DepNodeIndex,
+    diagnostics: Option<Box<QueryDiagnostics>>,
+}
+
+struct QueryDiagnostics {
+    diagnostics: Vec<Diagnostic>,
+    emitted_diagnostics: Cell<bool>,
 }
 
 impl<M: QueryDescription> QueryMap<M> {
@@ -513,6 +526,29 @@ impl<'tcx> QueryDescription for queries::lint_levels<'tcx> {
     }
 }
 
+// If enabled, send a message to the profile-queries thread
+macro_rules! profq_msg {
+    ($tcx:expr, $msg:expr) => {
+        if cfg!(debug_assertions) {
+            if  $tcx.sess.profile_queries() {
+                profq_msg($msg)
+            }
+        }
+    }
+}
+
+// If enabled, format a key using its debug string, which can be
+// expensive to compute (in terms of time).
+macro_rules! profq_key {
+    ($tcx:expr, $key:expr) => {
+        if cfg!(debug_assertions) {
+            if $tcx.sess.profile_queries_and_keys() {
+                Some(format!("{:?}", $key))
+            } else { None }
+        } else { None }
+    }
+}
+
 macro_rules! define_maps {
     (<$tcx:tt>
      $($(#[$attr:meta])*
@@ -537,6 +573,12 @@ macro_rules! define_maps {
         #[derive(Copy, Clone, Debug, PartialEq, Eq)]
         pub enum Query<$tcx> {
             $($(#[$attr])* $name($K)),*
+        }
+
+        #[allow(bad_style)]
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub enum QueryMsg {
+            $($name(Option<String>)),*
         }
 
         impl<$tcx> Query<$tcx> {
@@ -581,10 +623,30 @@ macro_rules! define_maps {
                        key,
                        span);
 
-                if let Some(&(ref result, dep_node_index)) = tcx.maps.$name.borrow().map.get(&key) {
-                    tcx.dep_graph.read_index(dep_node_index);
-                    return Ok(f(result));
+                profq_msg!(tcx,
+                    ProfileQueriesMsg::QueryBegin(
+                        span.clone(),
+                        QueryMsg::$name(profq_key!(tcx, key))
+                    )
+                );
+
+                if let Some(value) = tcx.maps.$name.borrow().map.get(&key) {
+                    if let Some(ref d) = value.diagnostics {
+                        if !d.emitted_diagnostics.get() {
+                            d.emitted_diagnostics.set(true);
+                            let handle = tcx.sess.diagnostic();
+                            for diagnostic in d.diagnostics.iter() {
+                                DiagnosticBuilder::new_diagnostic(handle, diagnostic.clone())
+                                    .emit();
+                            }
+                        }
+                    }
+                    profq_msg!(tcx, ProfileQueriesMsg::CacheHit);
+                    tcx.dep_graph.read_index(value.index);
+                    return Ok(f(&value.value));
                 }
+                // else, we are going to run the provider:
+                profq_msg!(tcx, ProfileQueriesMsg::ProviderBegin);
 
                 // FIXME(eddyb) Get more valid Span's on queries.
                 // def_span guard is necessary to prevent a recursive loop,
@@ -593,35 +655,52 @@ macro_rules! define_maps {
                     span = key.default_span(tcx)
                 }
 
-                let (result, dep_node_index) = tcx.cycle_check(span, Query::$name(key), || {
+                let res = tcx.cycle_check(span, Query::$name(key), || {
                     let dep_node = Self::to_dep_node(tcx, &key);
 
-                    if dep_node.kind.is_anon() {
-                        tcx.dep_graph.with_anon_task(dep_node.kind, || {
-                            let provider = tcx.maps.providers[key.map_crate()].$name;
-                            provider(tcx.global_tcx(), key)
-                        })
-                    } else {
-                        fn run_provider<'a, 'tcx, 'lcx>(tcx: TyCtxt<'a, 'tcx, 'lcx>,
-                                                        key: $K)
-                                                        -> $V {
-                            let provider = tcx.maps.providers[key.map_crate()].$name;
-                            provider(tcx.global_tcx(), key)
-                        }
+                    tcx.sess.diagnostic().track_diagnostics(|| {
+                        if dep_node.kind.is_anon() {
+                            tcx.dep_graph.with_anon_task(dep_node.kind, || {
+                                let provider = tcx.maps.providers[key.map_crate()].$name;
+                                provider(tcx.global_tcx(), key)
+                            })
+                        } else {
+                            fn run_provider<'a, 'tcx, 'lcx>(tcx: TyCtxt<'a, 'tcx, 'lcx>,
+                                                            key: $K)
+                                                            -> $V {
+                                let provider = tcx.maps.providers[key.map_crate()].$name;
+                                provider(tcx.global_tcx(), key)
+                            }
 
-                        tcx.dep_graph.with_task(dep_node, tcx, key, run_provider)
-                    }
+                            tcx.dep_graph.with_task(dep_node, tcx, key, run_provider)
+                        }
+                    })
                 })?;
+                profq_msg!(tcx, ProfileQueriesMsg::ProviderEnd);
+                let ((result, dep_node_index), diagnostics) = res;
 
                 tcx.dep_graph.read_index(dep_node_index);
+
+                let value = QueryValue {
+                    value: result,
+                    index: dep_node_index,
+                    diagnostics: if diagnostics.len() == 0 {
+                        None
+                    } else {
+                        Some(Box::new(QueryDiagnostics {
+                            diagnostics,
+                            emitted_diagnostics: Cell::new(true),
+                        }))
+                    },
+                };
 
                 Ok(f(&tcx.maps
                          .$name
                          .borrow_mut()
                          .map
                          .entry(key)
-                         .or_insert((result, dep_node_index))
-                         .0))
+                         .or_insert(value)
+                         .value))
             }
 
             pub fn try_get(tcx: TyCtxt<'a, $tcx, 'lcx>, span: Span, key: $K)

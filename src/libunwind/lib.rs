@@ -9,8 +9,6 @@
 // except according to those terms.
 
 #![no_std]
-#![crate_name = "unwind"]
-#![crate_type = "rlib"]
 #![unstable(feature = "panic_unwind", issue = "32837")]
 #![deny(warnings)]
 
@@ -30,7 +28,7 @@ mod libunwind;
 #[cfg(not(target_env = "msvc"))]
 pub use libunwind::*;
 
-#[cfg(target_env = "musl")]
-#[link(name = "unwind", kind = "static-nobundle", cfg(target_feature = "crt-static"))]
+#[cfg(all(target_env = "musl", not(target_arch = "mips")))]
+#[link(name = "unwind", kind = "static", cfg(target_feature = "crt-static"))]
 #[link(name = "gcc_s", cfg(not(target_feature = "crt-static")))]
 extern {}
