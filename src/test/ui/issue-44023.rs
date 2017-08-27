@@ -8,28 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(fn_must_use)]
-#![warn(unused_must_use)]
+#![feature(non_ascii_idents)]
 
-struct MyStruct {
-    n: usize
-}
+pub fn main () {}
 
-impl MyStruct {
-    #[must_use]
-    fn need_to_use_this_method_value(&self) -> usize {
-        self.n
-    }
-}
-
-#[must_use="it's important"]
-fn need_to_use_this_value() -> bool {
-    false
-}
-
-fn main() {
-    need_to_use_this_value();
-
-    let m = MyStruct { n: 2 };
-    m.need_to_use_this_method_value();
+fn საჭმელად_გემრიელი_სადილი ( ) -> isize {
 }

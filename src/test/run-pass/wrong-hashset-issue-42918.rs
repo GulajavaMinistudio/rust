@@ -7,29 +7,32 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+//
+// compile-flags: -O
 
-#![feature(fn_must_use)]
-#![warn(unused_must_use)]
+use std::collections::HashSet;
 
-struct MyStruct {
-    n: usize
+#[derive(PartialEq, Debug, Hash, Eq, Clone, PartialOrd, Ord)]
+enum MyEnum {
+    E0,
+
+    E1,
+
+    E2,
+    E3,
+    E4,
+
+    E5,
+    E6,
+    E7,
 }
 
-impl MyStruct {
-    #[must_use]
-    fn need_to_use_this_method_value(&self) -> usize {
-        self.n
-    }
-}
-
-#[must_use="it's important"]
-fn need_to_use_this_value() -> bool {
-    false
-}
 
 fn main() {
-    need_to_use_this_value();
+    use MyEnum::*;
+    let s: HashSet<_> = [E4, E1].iter().cloned().collect();
+    let mut v: Vec<_> = s.into_iter().collect();
+    v.sort();
 
-    let m = MyStruct { n: 2 };
-    m.need_to_use_this_method_value();
+    assert_eq!([E1, E4], &v[..]);
 }
