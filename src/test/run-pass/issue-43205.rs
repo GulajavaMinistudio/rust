@@ -8,10 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:issue-36881-aux.rs
-
 fn main() {
-    #[allow(unused_extern_crates)]
-    extern crate issue_36881_aux;
-    use issue_36881_aux::Foo; //~ ERROR unresolved import
+   &&[()][0];
+   println!("{:?}", &[(),()][1]);
 }
