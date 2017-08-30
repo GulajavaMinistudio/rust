@@ -8,15 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// check that we substitute type parameters before we suggest anything - otherwise
+// we would suggest function such as `as_slice` for the `&[u16]`.
 
-// pretty-expanded FIXME #23616
+fn foo(b: &[u16]) {}
 
-#[repr(simd)] //~ ERROR SIMD types are experimental
-struct RGBA {
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32
+fn main() {
+    let a: Vec<u8> = Vec::new();
+    foo(&a);
 }
-
-pub fn main() {}
