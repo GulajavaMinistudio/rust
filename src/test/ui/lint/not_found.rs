@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014–2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,23 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[repr(C, packed)]
-#[derive(Copy, Clone, Debug, PartialEq)]
-struct Foo {
-    a: i8,
-    b: i16,
-    c: i8
-}
+// this tests the `unknown_lint` lint, especially the suggestions
 
-#[link(name = "test", kind = "static")]
-extern {
-    fn foo(f: Foo) -> Foo;
-}
-
+// the suggestion only appears if a lint with the lowercase name exists
+#[allow(FOO_BAR)]
+// the suggestion appears on all-uppercase names
+#[warn(DEAD_CODE)]
+// the suggestion appears also on mixed-case names
+#[deny(Warnings)]
 fn main() {
-    unsafe {
-        let a = Foo { a: 1, b: 2, c: 3 };
-        let b = foo(a);
-        assert_eq!(a, b);
-    }
+    unimplemented!();
 }
