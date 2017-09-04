@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(on_unimplemented)]
+// compile-flags: -O
 
-#[rustc_on_unimplemented]
-//~^ ERROR E0232
-//~| NOTE value required here
-//~| NOTE eg `#[rustc_on_unimplemented = "foo"]`
-trait Bar {}
+#![crate_type = "lib"]
 
-fn main() {
+// CHECK-LABEL: @issue_34947
+#[no_mangle]
+pub fn issue_34947(x: i32) -> i32 {
+    // CHECK: mul
+    // CHECK-NEXT: mul
+    // CHECK-NEXT: mul
+    // CHECK-NEXT: ret
+    x.pow(5)
 }

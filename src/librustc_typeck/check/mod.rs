@@ -85,13 +85,12 @@ use self::method::MethodCallee;
 use self::TupleArgumentsFlag::*;
 
 use astconv::AstConv;
-use fmt_macros::{Parser, Piece, Position};
 use hir::def::{Def, CtorKind};
 use hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc_back::slice::ref_slice;
 use rustc::infer::{self, InferCtxt, InferOk, RegionVariableOrigin};
 use rustc::infer::type_variable::{TypeVariableOrigin};
-use rustc::middle::region::CodeExtent;
+use rustc::middle::region;
 use rustc::ty::subst::{Kind, Subst, Substs};
 use rustc::traits::{self, FulfillmentContext, ObligationCause, ObligationCauseCode};
 use rustc::ty::{ParamTy, LvaluePreference, NoPreference, PreferMutLvalue};
@@ -608,7 +607,7 @@ impl<'a, 'gcx, 'tcx> Inherited<'a, 'gcx, 'tcx> {
         let body_id = item_id.and_then(|id| tcx.hir.maybe_body_owned_by(id));
         let implicit_region_bound = body_id.map(|body_id| {
             let body = tcx.hir.body(body_id);
-            tcx.mk_region(ty::ReScope(CodeExtent::CallSiteScope(body.value.hir_id.local_id)))
+            tcx.mk_region(ty::ReScope(region::Scope::CallSite(body.value.hir_id.local_id)))
         });
 
         Inherited {
@@ -1215,55 +1214,11 @@ pub fn check_item_type<'a,'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, it: &'tcx hir::Item
 }
 
 fn check_on_unimplemented<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                    def_id: DefId,
+                                    trait_def_id: DefId,
                                     item: &hir::Item) {
-    let generics = tcx.generics_of(def_id);
-    if let Some(ref attr) = item.attrs.iter().find(|a| {
-        a.check_name("rustc_on_unimplemented")
-    }) {
-        if let Some(istring) = attr.value_str() {
-            let istring = istring.as_str();
-            let name = tcx.item_name(def_id).as_str();
-            let parser = Parser::new(&istring);
-            let types = &generics.types;
-            for token in parser {
-                match token {
-                    Piece::String(_) => (), // Normal string, no need to check it
-                    Piece::NextArgument(a) => match a.position {
-                        // `{Self}` is allowed
-                        Position::ArgumentNamed(s) if s == "Self" => (),
-                        // `{ThisTraitsName}` is allowed
-                        Position::ArgumentNamed(s) if s == name => (),
-                        // So is `{A}` if A is a type parameter
-                        Position::ArgumentNamed(s) => match types.iter().find(|t| {
-                            t.name == s
-                        }) {
-                            Some(_) => (),
-                            None => {
-                                span_err!(tcx.sess, attr.span, E0230,
-                                                 "there is no type parameter \
-                                                          {} on trait {}",
-                                                           s, name);
-                            }
-                        },
-                        // `{:1}` and `{}` are not to be used
-                        Position::ArgumentIs(_) => {
-                            span_err!(tcx.sess, attr.span, E0231,
-                                                  "only named substitution \
-                                                   parameters are allowed");
-                        }
-                    }
-                }
-            }
-        } else {
-            struct_span_err!(
-                tcx.sess, attr.span, E0232,
-                "this attribute must have a value")
-                .span_label(attr.span, "attribute requires a value")
-                .note(&format!("eg `#[rustc_on_unimplemented = \"foo\"]`"))
-                .emit();
-        }
-    }
+    let item_def_id = tcx.hir.local_def_id(item.id);
+    // an error would be reported if this fails.
+    let _ = traits::OnUnimplementedDirective::of_item(tcx, trait_def_id, item_def_id);
 }
 
 fn report_forbidden_specialization<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,

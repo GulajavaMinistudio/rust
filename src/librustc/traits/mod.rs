@@ -17,7 +17,7 @@ pub use self::ObligationCauseCode::*;
 
 use hir;
 use hir::def_id::DefId;
-use middle::region::RegionMaps;
+use middle::region;
 use middle::free_region::FreeRegionMap;
 use ty::subst::Substs;
 use ty::{self, AdtKind, Ty, TyCtxt, TypeFoldable, ToPredicate};
@@ -37,6 +37,7 @@ pub use self::project::{normalize, normalize_projection_type, Normalized};
 pub use self::project::{ProjectionCache, ProjectionCacheSnapshot, Reveal};
 pub use self::object_safety::ObjectSafetyViolation;
 pub use self::object_safety::MethodViolationCode;
+pub use self::on_unimplemented::{OnUnimplementedDirective, OnUnimplementedNote};
 pub use self::select::{EvaluationCache, SelectionContext, SelectionCache};
 pub use self::specialize::{OverlapError, specialization_graph, translate_substs};
 pub use self::specialize::{SpecializesCache, find_associated_item};
@@ -52,6 +53,7 @@ mod error_reporting;
 mod fulfill;
 mod project;
 mod object_safety;
+mod on_unimplemented;
 mod select;
 mod specialize;
 mod structural_impls;
@@ -532,9 +534,9 @@ pub fn normalize_param_env_or_error<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         debug!("normalize_param_env_or_error: normalized predicates={:?}",
             predicates);
 
-        let region_maps = RegionMaps::default();
+        let region_scope_tree = region::ScopeTree::default();
         let free_regions = FreeRegionMap::new();
-        infcx.resolve_regions_and_report_errors(region_context, &region_maps, &free_regions);
+        infcx.resolve_regions_and_report_errors(region_context, &region_scope_tree, &free_regions);
         let predicates = match infcx.fully_resolve(&predicates) {
             Ok(predicates) => predicates,
             Err(fixup_err) => {
