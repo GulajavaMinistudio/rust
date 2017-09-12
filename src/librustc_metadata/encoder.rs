@@ -548,12 +548,11 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
                                                                  &hir::Visibility)>)
                            -> Entry<'tcx> {
         let tcx = self.tcx;
-        let hir_id = tcx.hir.node_to_hir_id(id);
         let def_id = tcx.hir.local_def_id(id);
         debug!("IsolatedEncoder::encode_info_for_mod({:?})", def_id);
 
         let data = ModData {
-            reexports: match tcx.module_exports(hir_id) {
+            reexports: match tcx.module_exports(def_id) {
                 Some(ref exports) if *vis == hir::Public => {
                     self.lazy_seq_from_slice(exports.as_slice())
                 }
@@ -1521,9 +1520,16 @@ impl<'a, 'b, 'tcx> IndexBuilder<'a, 'b, 'tcx> {
     }
 
     fn encode_info_for_ty(&mut self, ty: &hir::Ty) {
-        if let hir::TyImplTrait(_) = ty.node {
-            let def_id = self.tcx.hir.local_def_id(ty.id);
-            self.record(def_id, IsolatedEncoder::encode_info_for_anon_ty, def_id);
+        match ty.node {
+            hir::TyImplTrait(_) => {
+                let def_id = self.tcx.hir.local_def_id(ty.id);
+                self.record(def_id, IsolatedEncoder::encode_info_for_anon_ty, def_id);
+            }
+            hir::TyArray(_, len) => {
+                let def_id = self.tcx.hir.body_owner_def_id(len);
+                self.record(def_id, IsolatedEncoder::encode_info_for_embedded_const, def_id);
+            }
+            _ => {}
         }
     }
 
