@@ -8,17 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Regression test for issue 9243
-
-pub struct Test {
-    mem: isize,
+fn main() {
+    let f = |_||x, y| x+y;
+    assert_eq!(f(())(1, 2), 3);
 }
-
-pub static g_test: Test = Test {mem: 0};
-//~^ ERROR destructors in statics are an unstable feature
-
-impl Drop for Test {
-    fn drop(&mut self) {}
-}
-
-fn main() {}
