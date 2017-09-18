@@ -94,20 +94,21 @@ impl Step for ToolBuild {
         let _folder = build.fold_output(|| format!("stage{}-{}", compiler.stage, tool));
         println!("Building stage{} tool {} ({})", compiler.stage, tool, target);
 
-        let mut cargo = prepare_tool_cargo(builder, compiler, target, path);
+        let mut cargo = prepare_tool_cargo(builder, compiler, target, "build", path);
         build.run(&mut cargo);
         build.cargo_out(compiler, Mode::Tool, target).join(exe(tool, &compiler.host))
     }
 }
 
-fn prepare_tool_cargo(
+pub fn prepare_tool_cargo(
     builder: &Builder,
     compiler: Compiler,
     target: Interned<String>,
+    command: &'static str,
     path: &'static str,
 ) -> Command {
     let build = builder.build;
-    let mut cargo = builder.cargo(compiler, Mode::Tool, target, "build");
+    let mut cargo = builder.cargo(compiler, Mode::Tool, target, command);
     let dir = build.src.join(path);
     cargo.arg("--manifest-path").arg(dir.join("Cargo.toml"));
 
@@ -295,6 +296,7 @@ impl Step for Rustdoc {
         let mut cargo = prepare_tool_cargo(builder,
                                            build_compiler,
                                            target,
+                                           "build",
                                            "src/tools/rustdoc");
         build.run(&mut cargo);
         // Cargo adds a number of paths to the dylib search path on windows, which results in
@@ -439,6 +441,40 @@ impl Step for Rls {
             tool: "rls",
             mode: Mode::Librustc,
             path: "src/tools/rls",
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct Rustfmt {
+    pub compiler: Compiler,
+    pub target: Interned<String>,
+}
+
+impl Step for Rustfmt {
+    type Output = PathBuf;
+    const DEFAULT: bool = true;
+    const ONLY_HOSTS: bool = true;
+
+    fn should_run(run: ShouldRun) -> ShouldRun {
+        let builder = run.builder;
+        run.path("src/tools/rustfmt").default_condition(builder.build.config.extended)
+    }
+
+    fn make_run(run: RunConfig) {
+        run.builder.ensure(Rustfmt {
+            compiler: run.builder.compiler(run.builder.top_stage, run.builder.build.build),
+            target: run.target,
+        });
+    }
+
+    fn run(self, builder: &Builder) -> PathBuf {
+        builder.ensure(ToolBuild {
+            compiler: self.compiler,
+            target: self.target,
+            tool: "rustfmt",
+            mode: Mode::Librustc,
+            path: "src/tools/rustfmt",
         })
     }
 }
