@@ -65,17 +65,17 @@ pub use self::attr_impl::ArgAttribute;
 mod attr_impl {
     // The subset of llvm::Attribute needed for arguments, packed into a bitfield.
     bitflags! {
-        #[derive(Default, Debug)]
-        flags ArgAttribute : u16 {
-            const ByVal     = 1 << 0,
-            const NoAlias   = 1 << 1,
-            const NoCapture = 1 << 2,
-            const NonNull   = 1 << 3,
-            const ReadOnly  = 1 << 4,
-            const SExt      = 1 << 5,
-            const StructRet = 1 << 6,
-            const ZExt      = 1 << 7,
-            const InReg     = 1 << 8,
+        #[derive(Default)]
+        pub struct ArgAttribute: u16 {
+            const ByVal     = 1 << 0;
+            const NoAlias   = 1 << 1;
+            const NoCapture = 1 << 2;
+            const NonNull   = 1 << 3;
+            const ReadOnly  = 1 << 4;
+            const SExt      = 1 << 5;
+            const StructRet = 1 << 6;
+            const ZExt      = 1 << 7;
+            const InReg     = 1 << 8;
         }
     }
 }
@@ -612,7 +612,7 @@ pub struct FnType<'tcx> {
 impl<'a, 'tcx> FnType<'tcx> {
     pub fn of_instance(ccx: &CrateContext<'a, 'tcx>, instance: &ty::Instance<'tcx>)
                        -> Self {
-        let fn_ty = instance_ty(ccx.shared(), &instance);
+        let fn_ty = instance_ty(ccx.tcx(), &instance);
         let sig = ty_fn_sig(ccx, fn_ty);
         let sig = ccx.tcx().erase_late_bound_regions_and_normalize(&sig);
         Self::new(ccx, sig, &[])

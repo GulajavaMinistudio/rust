@@ -233,8 +233,8 @@ impl<'a, 'tcx> ReachableContext<'a, 'tcx> {
                 } else {
                     false
                 };
-                let is_extern = attr::contains_extern_indicator(&self.tcx.sess.diagnostic(),
-                                                                &item.attrs);
+                let def_id = self.tcx.hir.local_def_id(item.id);
+                let is_extern = self.tcx.contains_extern_indicator(def_id);
                 if reachable || is_extern {
                     self.reachable_symbols.insert(search_item);
                 }
@@ -369,11 +369,13 @@ impl<'a, 'tcx: 'a> ItemLikeVisitor<'tcx> for CollectPrivateImplItemsVisitor<'a, 
     }
 }
 
-pub fn find_reachable<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) -> Rc<NodeSet> {
-    tcx.reachable_set(LOCAL_CRATE)
-}
+// We introduce a new-type here, so we can have a specialized HashStable
+// implementation for it.
+#[derive(Clone)]
+pub struct ReachableSet(pub Rc<NodeSet>);
 
-fn reachable_set<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_num: CrateNum) -> Rc<NodeSet> {
+
+fn reachable_set<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_num: CrateNum) -> ReachableSet {
     debug_assert!(crate_num == LOCAL_CRATE);
 
     let access_levels = &tcx.privacy_access_levels(LOCAL_CRATE);
@@ -418,7 +420,7 @@ fn reachable_set<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_num: CrateNum) -> 
     reachable_context.propagate();
 
     // Return the set of reachable symbols.
-    Rc::new(reachable_context.reachable_symbols)
+    ReachableSet(Rc::new(reachable_context.reachable_symbols))
 }
 
 pub fn provide(providers: &mut Providers) {

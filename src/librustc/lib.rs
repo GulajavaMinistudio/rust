@@ -41,6 +41,7 @@
 #![recursion_limit="256"]
 
 extern crate arena;
+#[macro_use] extern crate bitflags;
 extern crate core;
 extern crate fmt_macros;
 extern crate getopts;
@@ -56,7 +57,6 @@ extern crate rustc_errors as errors;
 #[macro_use] extern crate log;
 #[macro_use] extern crate syntax;
 extern crate syntax_pos;
-#[macro_use] #[no_link] extern crate rustc_bitflags;
 extern crate jobserver;
 
 extern crate serialize as rustc_serialize; // used by deriving
@@ -92,6 +92,7 @@ pub mod middle {
     pub mod dependency_format;
     pub mod effect;
     pub mod entry;
+    pub mod exported_symbols;
     pub mod free_region;
     pub mod intrinsicck;
     pub mod lang_items;
@@ -103,6 +104,7 @@ pub mod middle {
     pub mod recursion_limit;
     pub mod resolve_lifetime;
     pub mod stability;
+    pub mod trans;
     pub mod weak_lang_items;
 }
 

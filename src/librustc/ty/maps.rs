@@ -16,16 +16,21 @@ use hir::{self, TraitCandidate, ItemLocalId};
 use hir::svh::Svh;
 use lint;
 use middle::const_val;
-use middle::cstore::{ExternCrate, LinkagePreference, NativeLibrary};
-use middle::cstore::{NativeLibraryKind, DepKind, CrateSource};
+use middle::cstore::{ExternCrate, LinkagePreference, NativeLibrary,
+                     ExternBodyNestedBodies};
+use middle::cstore::{NativeLibraryKind, DepKind, CrateSource, ExternConstBody};
 use middle::privacy::AccessLevels;
+use middle::reachable::ReachableSet;
 use middle::region;
 use middle::resolve_lifetime::{Region, ObjectLifetimeDefault};
 use middle::stability::{self, DeprecationEntry};
 use middle::lang_items::{LanguageItems, LangItem};
+use middle::exported_symbols::SymbolExportLevel;
+use middle::trans::{CodegenUnit, Stats};
 use mir;
 use mir::transform::{MirSuite, MirPassIndex};
 use session::CompileResult;
+use session::config::OutputFilenames;
 use traits::specialization_graph;
 use ty::{self, CrateInherentImpls, Ty, TyCtxt};
 use ty::layout::{Layout, LayoutError};
@@ -33,7 +38,7 @@ use ty::item_path;
 use ty::steal::Steal;
 use ty::subst::Substs;
 use ty::fast_reject::SimplifiedType;
-use util::nodemap::{DefIdSet, NodeSet, DefIdMap};
+use util::nodemap::{DefIdSet, DefIdMap};
 use util::common::{profq_msg, ProfileQueriesMsg};
 
 use rustc_data_structures::indexed_set::IdxSetBuf;
@@ -41,14 +46,16 @@ use rustc_back::PanicStrategy;
 use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::cell::{RefCell, RefMut, Cell};
+
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem;
-use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Arc;
 use syntax_pos::{Span, DUMMY_SP};
+use syntax_pos::symbol::InternedString;
 use syntax::attr;
 use syntax::ast;
 use syntax::symbol::Symbol;
@@ -174,6 +181,15 @@ impl<'tcx, T: Key> Key for ty::ParamEnvAnd<'tcx, T> {
     }
     fn default_span(&self, tcx: TyCtxt) -> Span {
         self.value.default_span(tcx)
+    }
+}
+
+impl Key for InternedString {
+    fn map_crate(&self) -> CrateNum {
+        LOCAL_CRATE
+    }
+    fn default_span(&self, _tcx: TyCtxt) -> Span {
+        DUMMY_SP
     }
 }
 
@@ -595,7 +611,7 @@ impl<'tcx> QueryDescription for queries::is_sanitizer_runtime<'tcx> {
     }
 }
 
-impl<'tcx> QueryDescription for queries::exported_symbols<'tcx> {
+impl<'tcx> QueryDescription for queries::exported_symbol_ids<'tcx> {
     fn describe(_tcx: TyCtxt, _: CrateNum) -> String {
         format!("looking up the exported symbols of a crate")
     }
@@ -745,6 +761,36 @@ impl<'tcx> QueryDescription for queries::all_crate_nums<'tcx> {
     }
 }
 
+impl<'tcx> QueryDescription for queries::exported_symbols<'tcx> {
+    fn describe(_tcx: TyCtxt, _: CrateNum) -> String {
+        format!("exported_symbols")
+    }
+}
+
+impl<'tcx> QueryDescription for queries::collect_and_partition_translation_items<'tcx> {
+    fn describe(_tcx: TyCtxt, _: CrateNum) -> String {
+        format!("collect_and_partition_translation_items")
+    }
+}
+
+impl<'tcx> QueryDescription for queries::codegen_unit<'tcx> {
+    fn describe(_tcx: TyCtxt, _: InternedString) -> String {
+        format!("codegen_unit")
+    }
+}
+
+impl<'tcx> QueryDescription for queries::compile_codegen_unit<'tcx> {
+    fn describe(_tcx: TyCtxt, _: InternedString) -> String {
+        format!("compile_codegen_unit")
+    }
+}
+
+impl<'tcx> QueryDescription for queries::output_filenames<'tcx> {
+    fn describe(_tcx: TyCtxt, _: CrateNum) -> String {
+        format!("output_filenames")
+    }
+}
+
 // If enabled, send a message to the profile-queries thread
 macro_rules! profq_msg {
     ($tcx:expr, $msg:expr) => {
@@ -881,9 +927,8 @@ macro_rules! define_maps {
                     span = key.default_span(tcx)
                 }
 
+                let dep_node = Self::to_dep_node(tcx, &key);
                 let res = tcx.cycle_check(span, Query::$name(key), || {
-                    let dep_node = Self::to_dep_node(tcx, &key);
-
                     tcx.sess.diagnostic().track_diagnostics(|| {
                         if dep_node.kind.is_anon() {
                             tcx.dep_graph.with_anon_task(dep_node.kind, || {
@@ -1256,7 +1301,7 @@ define_maps! { <'tcx>
     /// Performs the privacy check and computes "access levels".
     [] fn privacy_access_levels: PrivacyAccessLevels(CrateNum) -> Rc<AccessLevels>,
 
-    [] fn reachable_set: reachability_dep_node(CrateNum) -> Rc<NodeSet>,
+    [] fn reachable_set: reachability_dep_node(CrateNum) -> ReachableSet,
 
     /// Per-body `region::ScopeTree`. The `DefId` should be the owner-def-id for the body;
     /// in the case of closures, this will be redirected to the enclosing function.
@@ -1276,8 +1321,7 @@ define_maps! { <'tcx>
     [] fn impl_parent: ImplParent(DefId) -> Option<DefId>,
     [] fn trait_of_item: TraitOfItem(DefId) -> Option<DefId>,
     [] fn is_exported_symbol: IsExportedSymbol(DefId) -> bool,
-    [] fn item_body_nested_bodies: ItemBodyNestedBodies(DefId)
-        -> Rc<BTreeMap<hir::BodyId, hir::Body>>,
+    [] fn item_body_nested_bodies: ItemBodyNestedBodies(DefId) -> ExternBodyNestedBodies,
     [] fn const_is_rvalue_promotable_to_static: ConstIsRvaluePromotableToStatic(DefId) -> bool,
     [] fn is_mir_available: IsMirAvailable(DefId) -> bool,
 
@@ -1322,7 +1366,7 @@ define_maps! { <'tcx>
     [] fn lint_levels: lint_levels_node(CrateNum) -> Rc<lint::LintLevelMap>,
 
     [] fn impl_defaultness: ImplDefaultness(DefId) -> hir::Defaultness,
-    [] fn exported_symbols: ExportedSymbols(CrateNum) -> Rc<Vec<DefId>>,
+    [] fn exported_symbol_ids: ExportedSymbolIds(CrateNum) -> Rc<DefIdSet>,
     [] fn native_libraries: NativeLibraries(CrateNum) -> Rc<Vec<NativeLibrary>>,
     [] fn plugin_registrar_fn: PluginRegistrarFn(CrateNum) -> Option<DefId>,
     [] fn derive_registrar_fn: DeriveRegistrarFn(CrateNum) -> Option<DefId>,
@@ -1355,9 +1399,9 @@ define_maps! { <'tcx>
     [] fn extern_mod_stmt_cnum: ExternModStmtCnum(DefId) -> Option<CrateNum>,
 
     [] fn get_lang_items: get_lang_items_node(CrateNum) -> Rc<LanguageItems>,
-    [] fn defined_lang_items: DefinedLangItems(CrateNum) -> Rc<Vec<(DefIndex, usize)>>,
+    [] fn defined_lang_items: DefinedLangItems(CrateNum) -> Rc<Vec<(DefId, usize)>>,
     [] fn missing_lang_items: MissingLangItems(CrateNum) -> Rc<Vec<LangItem>>,
-    [] fn extern_const_body: ExternConstBody(DefId) -> &'tcx hir::Body,
+    [] fn extern_const_body: ExternConstBody(DefId) -> ExternConstBody<'tcx>,
     [] fn visible_parent_map: visible_parent_map_node(CrateNum)
         -> Rc<DefIdMap<DefId>>,
     [] fn missing_extern_crate_item: MissingExternCrateItem(CrateNum) -> bool,
@@ -1371,6 +1415,19 @@ define_maps! { <'tcx>
 
     [] fn stability_index: stability_index_node(CrateNum) -> Rc<stability::Index<'tcx>>,
     [] fn all_crate_nums: all_crate_nums_node(CrateNum) -> Rc<Vec<CrateNum>>,
+
+    [] fn exported_symbols: ExportedSymbols(CrateNum)
+        -> Arc<Vec<(String, Option<DefId>, SymbolExportLevel)>>,
+    [] fn collect_and_partition_translation_items:
+        collect_and_partition_translation_items_node(CrateNum)
+        -> (Arc<DefIdSet>, Arc<Vec<Arc<CodegenUnit<'tcx>>>>),
+    [] fn export_name: ExportName(DefId) -> Option<Symbol>,
+    [] fn contains_extern_indicator: ContainsExternIndicator(DefId) -> bool,
+    [] fn is_translated_function: IsTranslatedFunction(DefId) -> bool,
+    [] fn codegen_unit: CodegenUnit(InternedString) -> Arc<CodegenUnit<'tcx>>,
+    [] fn compile_codegen_unit: CompileCodegenUnit(InternedString) -> Stats,
+    [] fn output_filenames: output_filenames_node(CrateNum)
+        -> Arc<OutputFilenames>,
 }
 
 fn type_param_predicates<'tcx>((item_id, param_id): (DefId, DefId)) -> DepConstructor<'tcx> {
@@ -1483,4 +1540,12 @@ fn stability_index_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {
 
 fn all_crate_nums_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {
     DepConstructor::AllCrateNums
+}
+
+fn collect_and_partition_translation_items_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {
+    DepConstructor::CollectAndPartitionTranslationItems
+}
+
+fn output_filenames_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {
+    DepConstructor::OutputFilenames
 }

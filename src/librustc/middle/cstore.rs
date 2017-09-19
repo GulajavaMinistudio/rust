@@ -22,6 +22,7 @@
 //! are *mostly* used as a part of that interface, but these should
 //! probably get a better home if someone can find one.
 
+use hir;
 use hir::def;
 use hir::def_id::{CrateNum, DefId, DefIndex, LOCAL_CRATE};
 use hir::map as hir_map;
@@ -34,6 +35,7 @@ use session::search_paths::PathKind;
 use util::nodemap::NodeSet;
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use owning_ref::ErasedBoxRef;
@@ -132,7 +134,7 @@ pub struct NativeLibrary {
     pub kind: NativeLibraryKind,
     pub name: Symbol,
     pub cfg: Option<ast::MetaItem>,
-    pub foreign_items: Vec<DefIndex>,
+    pub foreign_items: Vec<DefId>,
 }
 
 pub enum LoadedMacro {
@@ -216,6 +218,26 @@ pub trait MetadataLoader {
                           target: &Target,
                           filename: &Path)
                           -> Result<ErasedBoxRef<[u8]>, String>;
+}
+
+#[derive(Clone)]
+pub struct ExternConstBody<'tcx> {
+    pub body: &'tcx hir::Body,
+
+    // It would require a lot of infrastructure to enable stable-hashing Bodies
+    // from other crates, so we hash on export and just store the fingerprint
+    // with them.
+    pub fingerprint: ich::Fingerprint,
+}
+
+#[derive(Clone)]
+pub struct ExternBodyNestedBodies {
+    pub nested_bodies: Rc<BTreeMap<hir::BodyId, hir::Body>>,
+
+    // It would require a lot of infrastructure to enable stable-hashing Bodies
+    // from other crates, so we hash on export and just store the fingerprint
+    // with them.
+    pub fingerprint: ich::Fingerprint,
 }
 
 /// A store of Rust crates, through with their metadata
@@ -366,8 +388,9 @@ pub trait CrateLoader {
 // In order to get this left-to-right dependency ordering, we perform a
 // topological sort of all crates putting the leaves at the right-most
 // positions.
-pub fn used_crates<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                             prefer: LinkagePreference) -> Vec<(CrateNum, LibSource)> {
+pub fn used_crates(tcx: TyCtxt, prefer: LinkagePreference)
+    -> Vec<(CrateNum, LibSource)>
+{
     let mut libs = tcx.crates()
         .iter()
         .cloned()

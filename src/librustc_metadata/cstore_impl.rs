@@ -159,7 +159,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     is_exported_symbol => {
         cdata.exported_symbols.contains(&def_id.index)
     }
-    item_body_nested_bodies => { Rc::new(cdata.item_body_nested_bodies(def_id.index)) }
+    item_body_nested_bodies => { cdata.item_body_nested_bodies(def_id.index) }
     const_is_rvalue_promotable_to_static => {
         cdata.const_is_rvalue_promotable_to_static(def_id.index)
     }
@@ -175,7 +175,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     extern_crate => { Rc::new(cdata.extern_crate.get()) }
     is_no_builtins => { cdata.is_no_builtins() }
     impl_defaultness => { cdata.get_impl_defaultness(def_id.index) }
-    exported_symbols => { Rc::new(cdata.get_exported_symbols()) }
+    exported_symbol_ids => { Rc::new(cdata.get_exported_symbols()) }
     native_libraries => { Rc::new(cdata.get_native_libraries()) }
     plugin_registrar_fn => {
         cdata.root.plugin_registrar_fn.map(|index| {
@@ -264,7 +264,7 @@ pub fn provide_local<'tcx>(providers: &mut Providers<'tcx>) {
             tcx.native_libraries(id.krate)
                 .iter()
                 .filter(|lib| native_libs::relevant_lib(&tcx.sess, lib))
-                .find(|l| l.foreign_items.contains(&id.index))
+                .find(|l| l.foreign_items.contains(&id))
                 .map(|l| l.kind)
         },
         native_libraries: |tcx, cnum| {
