@@ -266,6 +266,7 @@ pub struct Cache {
     deref_trait_did: Option<DefId>,
     deref_mut_trait_did: Option<DefId>,
     owned_box_did: Option<DefId>,
+    masked_crates: FxHashSet<CrateNum>,
 
     // In rare case where a structure is defined in one module but implemented
     // in another, if the implementing module is parsed before defining module,
@@ -538,6 +539,7 @@ pub fn run(mut krate: clean::Crate,
         deref_trait_did,
         deref_mut_trait_did,
         owned_box_did,
+        masked_crates: mem::replace(&mut krate.masked_crates, FxHashSet()),
         typarams: external_typarams,
     };
 
@@ -588,14 +590,10 @@ pub fn run(mut krate: clean::Crate,
 
     let markdown_warnings = scx.markdown_warnings.borrow();
     if !markdown_warnings.is_empty() {
-        println!("WARNING: documentation for this crate may be rendered \
-                  differently using the new Pulldown renderer.");
-        println!("    See https://github.com/rust-lang/rust/issues/44229 for details.");
+        let mut intro_msg = false;
         for &(ref span, ref text, ref diffs) in &*markdown_warnings {
-            println!("WARNING: rendering difference in `{}`", concise_str(text));
-            println!("   --> {}:{}:{}", span.filename, span.loline, span.locol);
             for d in diffs {
-                render_difference(d);
+                render_difference(d, &mut intro_msg, span, text);
             }
         }
     }
@@ -648,43 +646,67 @@ fn concise_compared_strs(s1: &str, s2: &str) -> (String, String) {
     (format!("...{}", concise_str(s1)), format!("...{}", concise_str(s2)))
 }
 
-fn render_difference(diff: &html_diff::Difference) {
+
+fn print_message(msg: &str, intro_msg: &mut bool, span: &Span, text: &str) {
+    if !*intro_msg {
+        println!("WARNING: documentation for this crate may be rendered \
+                  differently using the new Pulldown renderer.");
+        println!("    See https://github.com/rust-lang/rust/issues/44229 for details.");
+        *intro_msg = true;
+    }
+    println!("WARNING: rendering difference in `{}`", concise_str(text));
+    println!("   --> {}:{}:{}", span.filename, span.loline, span.locol);
+    println!("{}", msg);
+}
+
+fn render_difference(diff: &html_diff::Difference, intro_msg: &mut bool, span: &Span, text: &str) {
     match *diff {
         html_diff::Difference::NodeType { ref elem, ref opposite_elem } => {
-            println!("    {} Types differ: expected: `{}`, found: `{}`",
-                     elem.path, elem.element_name, opposite_elem.element_name);
+            print_message(&format!("    {} Types differ: expected: `{}`, found: `{}`",
+                                   elem.path, elem.element_name, opposite_elem.element_name),
+                          intro_msg, span, text);
         }
         html_diff::Difference::NodeName { ref elem, ref opposite_elem } => {
-            println!("    {} Tags differ: expected: `{}`, found: `{}`",
-                     elem.path, elem.element_name, opposite_elem.element_name);
+            print_message(&format!("    {} Tags differ: expected: `{}`, found: `{}`",
+                                   elem.path, elem.element_name, opposite_elem.element_name),
+                          intro_msg, span, text);
         }
         html_diff::Difference::NodeAttributes { ref elem,
-                                     ref elem_attributes,
-                                     ref opposite_elem_attributes,
-                                     .. } => {
-            println!("    {} Attributes differ in `{}`: expected: `{:?}`, found: `{:?}`",
-                     elem.path, elem.element_name, elem_attributes, opposite_elem_attributes);
+                                                ref elem_attributes,
+                                                ref opposite_elem_attributes,
+                                                .. } => {
+            print_message(&format!("    {} Attributes differ in `{}`: expected: `{:?}`, \
+                                    found: `{:?}`",
+                                   elem.path, elem.element_name, elem_attributes,
+                                   opposite_elem_attributes),
+                          intro_msg, span, text);
         }
         html_diff::Difference::NodeText { ref elem, ref elem_text, ref opposite_elem_text, .. } => {
             if elem_text.split("\n")
                         .zip(opposite_elem_text.split("\n"))
                         .any(|(a, b)| a.trim() != b.trim()) {
                 let (s1, s2) = concise_compared_strs(elem_text, opposite_elem_text);
-                println!("    {} Text differs:\n        expected: `{}`\n        found:    `{}`",
-                         elem.path, s1, s2);
+                print_message(&format!("    {} Text differs:\n        expected: `{}`\n        \
+                                        found:    `{}`",
+                                       elem.path, s1, s2),
+                              intro_msg, span, text);
             }
         }
         html_diff::Difference::NotPresent { ref elem, ref opposite_elem } => {
             if let Some(ref elem) = *elem {
-                println!("    {} One element is missing: expected: `{}`",
-                         elem.path, elem.element_name);
+                print_message(&format!("    {} One element is missing: expected: `{}`",
+                                       elem.path, elem.element_name),
+                              intro_msg, span, text);
             } else if let Some(ref elem) = *opposite_elem {
                 if elem.element_name.is_empty() {
-                    println!("    {} Unexpected element: `{}`",
-                             elem.path, concise_str(&elem.element_content));
+                    print_message(&format!("    {} One element is missing: expected: `{}`",
+                                           elem.path, concise_str(&elem.element_content)),
+                                  intro_msg, span, text);
                 } else {
-                    println!("    {} Unexpected element `{}`: found: `{}`",
-                             elem.path, elem.element_name, concise_str(&elem.element_content));
+                    print_message(&format!("    {} Unexpected element `{}`: found: `{}`",
+                                           elem.path, elem.element_name,
+                                           concise_str(&elem.element_content)),
+                                  intro_msg, span, text);
                 }
             }
         }
@@ -1114,12 +1136,16 @@ impl DocFolder for Cache {
 
         // Collect all the implementors of traits.
         if let clean::ImplItem(ref i) = item.inner {
-            if let Some(did) = i.trait_.def_id() {
-                self.implementors.entry(did).or_insert(vec![]).push(Implementor {
-                    def_id: item.def_id,
-                    stability: item.stability.clone(),
-                    impl_: i.clone(),
-                });
+            if !self.masked_crates.contains(&item.def_id.krate) {
+                if let Some(did) = i.trait_.def_id() {
+                    if i.for_.def_id().map_or(true, |d| !self.masked_crates.contains(&d.krate)) {
+                        self.implementors.entry(did).or_insert(vec![]).push(Implementor {
+                            def_id: item.def_id,
+                            stability: item.stability.clone(),
+                            impl_: i.clone(),
+                        });
+                    }
+                }
             }
         }
 
@@ -1281,18 +1307,24 @@ impl DocFolder for Cache {
                 // primitive rather than always to a struct/enum.
                 // Note: matching twice to restrict the lifetime of the `i` borrow.
                 let did = if let clean::Item { inner: clean::ImplItem(ref i), .. } = item {
-                    match i.for_ {
-                        clean::ResolvedPath { did, .. } |
-                        clean::BorrowedRef {
-                            type_: box clean::ResolvedPath { did, .. }, ..
-                        } => {
-                            Some(did)
+                    let masked_trait = i.trait_.def_id().map_or(false,
+                        |d| self.masked_crates.contains(&d.krate));
+                    if !masked_trait {
+                        match i.for_ {
+                            clean::ResolvedPath { did, .. } |
+                            clean::BorrowedRef {
+                                type_: box clean::ResolvedPath { did, .. }, ..
+                            } => {
+                                Some(did)
+                            }
+                            ref t => {
+                                t.primitive_type().and_then(|t| {
+                                    self.primitive_locations.get(&t).cloned()
+                                })
+                            }
                         }
-                        ref t => {
-                            t.primitive_type().and_then(|t| {
-                                self.primitive_locations.get(&t).cloned()
-                            })
-                        }
+                    } else {
+                        None
                     }
                 } else {
                     unreachable!()
