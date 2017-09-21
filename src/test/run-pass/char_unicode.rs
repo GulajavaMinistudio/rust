@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(generators)]
 
-fn foo(_a: (), _b: &bool) {}
+#![feature(unicode)]
 
-// Some examples that probably *could* be accepted, but which we reject for now.
 
-fn bar() {
-    || {
-        let b = true;
-        foo(yield, &b); //~ ERROR
-    };
+/// Tests access to the internal Unicode Version type and value.
+pub fn main() {
+    check(std::char::UNICODE_VERSION);
 }
 
-fn main() { }
+pub fn check(unicode_version: std::char::UnicodeVersion) {
+    assert!(unicode_version.major >= 10);
+}
