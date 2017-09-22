@@ -42,6 +42,7 @@ use rustc_data_structures::indexed_set::IdxSetBuf;
 use rustc_back::PanicStrategy;
 use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::stable_hasher::StableVec;
 use std::cell::{RefCell, Cell};
 
 use std::ops::Deref;
@@ -259,7 +260,7 @@ define_maps! { <'tcx>
 
     [] fn specializes: specializes_node((DefId, DefId)) -> bool,
     [] fn in_scope_traits_map: InScopeTraits(DefIndex)
-        -> Option<Rc<FxHashMap<ItemLocalId, Rc<Vec<TraitCandidate>>>>>,
+        -> Option<Rc<FxHashMap<ItemLocalId, Rc<StableVec<TraitCandidate>>>>>,
     [] fn module_exports: ModuleExports(DefId) -> Option<Rc<Vec<Export>>>,
     [] fn lint_levels: lint_levels_node(CrateNum) -> Rc<lint::LintLevelMap>,
 
@@ -326,6 +327,9 @@ define_maps! { <'tcx>
     [] fn compile_codegen_unit: CompileCodegenUnit(InternedString) -> Stats,
     [] fn output_filenames: output_filenames_node(CrateNum)
         -> Arc<OutputFilenames>,
+
+    [] fn has_copy_closures: HasCopyClosures(CrateNum) -> bool,
+    [] fn has_clone_closures: HasCloneClosures(CrateNum) -> bool,
 }
 
 //////////////////////////////////////////////////////////////////////

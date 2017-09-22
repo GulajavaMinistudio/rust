@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,29 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-macro_rules! y {
-    () => {}
-}
+// Check that closures do not implement `Clone` if their environment is not `Clone`.
 
-mod m {
-    pub const A: i32 = 0;
-}
+#![feature(clone_closures)]
 
-mod foo {
-    #[derive(Debug)]
-    pub struct Foo;
-
-    // test whether the use suggestion isn't
-    // placed into the expansion of `#[derive(Debug)]
-    type Bar = Path;
-}
+struct S(i32);
 
 fn main() {
-    y!();
-    let _ = A;
-    foo();
-}
+    let a = S(5);
+    let hello = move || {
+        println!("Hello {}", a.0);
+    };
 
-fn foo() {
-    type Dict<K, V> = HashMap<K, V>;
+    let hello = hello.clone(); //~ ERROR the trait bound `S: std::clone::Clone` is not satisfied
 }

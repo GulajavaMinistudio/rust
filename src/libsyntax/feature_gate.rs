@@ -385,6 +385,13 @@ declare_features! (
 
     // allow '|' at beginning of match arms (RFC 1925)
     (active, match_beginning_vert, "1.21.0", Some(44101)),
+
+    // Copy/Clone closures (RFC 2132)
+    (active, clone_closures, "1.22.0", Some(44490)),
+    (active, copy_closures, "1.22.0", Some(44490)),
+
+    // allow `'_` placeholder lifetimes
+    (active, underscore_lifetimes, "1.22.0", Some(44524)),
 );
 
 declare_features! (
@@ -1568,12 +1575,20 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         }
         visit::walk_lifetime_def(self, lifetime_def)
     }
+
+    fn visit_lifetime(&mut self, lt: &'a ast::Lifetime) {
+        if lt.ident.name == "'_" {
+            gate_feature_post!(&self, underscore_lifetimes, lt.span,
+                               "underscore lifetimes are unstable");
+        }
+        visit::walk_lifetime(self, lt)
+    }
 }
 
 pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute]) -> Features {
     let mut features = Features::new();
 
-    let mut feature_checker = MutexFeatureChecker::default();
+    let mut feature_checker = FeatureChecker::default();
 
     for attr in krate_attrs {
         if !attr.check_name("feature") {
@@ -1622,14 +1637,16 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute]) -> F
     features
 }
 
-// A collector for mutually-exclusive features and their flag spans
+/// A collector for mutually exclusive and interdependent features and their flag spans.
 #[derive(Default)]
-struct MutexFeatureChecker {
+struct FeatureChecker {
     proc_macro: Option<Span>,
     custom_attribute: Option<Span>,
+    copy_closures: Option<Span>,
+    clone_closures: Option<Span>,
 }
 
-impl MutexFeatureChecker {
+impl FeatureChecker {
     // If this method turns out to be a hotspot due to branching,
     // the branching can be eliminated by modifying `set!()` to set these spans
     // only for the features that need to be checked for mutual exclusion.
@@ -1642,6 +1659,14 @@ impl MutexFeatureChecker {
         if features.custom_attribute {
             self.custom_attribute = self.custom_attribute.or(Some(span));
         }
+
+        if features.copy_closures {
+            self.copy_closures = self.copy_closures.or(Some(span));
+        }
+
+        if features.clone_closures {
+            self.clone_closures = self.clone_closures.or(Some(span));
+        }
     }
 
     fn check(self, handler: &Handler) {
@@ -1650,6 +1675,15 @@ impl MutexFeatureChecker {
                                               `#![feature(custom_attribute)] at the same time")
                 .span_note(ca_span, "`#![feature(custom_attribute)]` declared here")
                 .emit();
+
+            panic!(FatalError);
+        }
+
+        if let (Some(span), None) = (self.copy_closures, self.clone_closures) {
+            handler.struct_span_err(span, "`#![feature(copy_closures)]` can only be used with \
+                                           `#![feature(clone_closures)]`")
+                  .span_note(span, "`#![feature(copy_closures)]` declared here")
+                  .emit();
 
             panic!(FatalError);
         }

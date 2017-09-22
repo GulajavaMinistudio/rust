@@ -8,29 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-macro_rules! y {
-    () => {}
-}
-
-mod m {
-    pub const A: i32 = 0;
-}
-
-mod foo {
-    #[derive(Debug)]
-    pub struct Foo;
-
-    // test whether the use suggestion isn't
-    // placed into the expansion of `#[derive(Debug)]
-    type Bar = Path;
-}
-
 fn main() {
-    y!();
-    let _ = A;
-    foo();
-}
-
-fn foo() {
-    type Dict<K, V> = HashMap<K, V>;
+    '_: loop { //~ ERROR invalid label name `'_`
+        break '_ //~ ERROR invalid label name `'_`
+    }
 }

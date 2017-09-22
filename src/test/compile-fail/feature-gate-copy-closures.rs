@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,29 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-macro_rules! y {
-    () => {}
-}
-
-mod m {
-    pub const A: i32 = 0;
-}
-
-mod foo {
-    #[derive(Debug)]
-    pub struct Foo;
-
-    // test whether the use suggestion isn't
-    // placed into the expansion of `#[derive(Debug)]
-    type Bar = Path;
-}
-
 fn main() {
-    y!();
-    let _ = A;
-    foo();
-}
+    let a = 5;
+    let hello = || {
+        println!("Hello {}", a);
+    };
 
-fn foo() {
-    type Dict<K, V> = HashMap<K, V>;
+    let b = hello;
+    let c = hello; //~ ERROR use of moved value: `hello` [E0382]
 }
