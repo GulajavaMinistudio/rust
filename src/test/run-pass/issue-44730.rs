@@ -8,18 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// This test checks cases where the derive-macro does not exist.
+//! dox
 
-mod derive {
-    #[derive(x3300)]
-    //~^ ERROR cannot find derive macro `x3300` in this scope
-    union U { f: i32 }
+#![deny(missing_docs)]
 
-    #[derive(x3300)]
-    //~^ ERROR cannot find derive macro `x3300` in this scope
-    enum E { }
-
-    #[derive(x3300)]
-    //~^ ERROR cannot find derive macro `x3300` in this scope
-    struct S;
+macro_rules! doc {
+    ($e:expr) => (
+        #[doc = $e]
+        pub struct Foo;
+    )
 }
+
+doc!("a");
+
+fn main() {}

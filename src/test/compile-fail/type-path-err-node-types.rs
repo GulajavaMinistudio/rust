@@ -8,18 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// This test checks cases where the derive-macro does not exist.
+// Type arguments of unresolved types should have their types recorded
 
-mod derive {
-    #[derive(x3300)]
-    //~^ ERROR cannot find derive macro `x3300` in this scope
-    union U { f: i32 }
+fn main() {
+    let _: Nonexistent<u8, Assoc = u16>; //~ ERROR cannot find type `Nonexistent` in this scope
 
-    #[derive(x3300)]
-    //~^ ERROR cannot find derive macro `x3300` in this scope
-    enum E { }
-
-    #[derive(x3300)]
-    //~^ ERROR cannot find derive macro `x3300` in this scope
-    struct S;
+    let _ = |a, b: _| -> _ { 0 };
 }
