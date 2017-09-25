@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
-unsafe fn foo(x: *const Box<isize>) -> Box<isize> {
-    let y = *x; //~ ERROR cannot move out of dereference of raw pointer
-    return y;
+enum X {
+    Y(u32)
 }
 
 fn main() {
+    match X::Y(0) {
+        X::Y { number } => {}
+    }
 }
