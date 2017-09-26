@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub use self::process_common::{Command, ExitStatus, Stdio, StdioPipes};
-pub use self::process_inner::Process;
+fn main() {
+    let a = [(1u32, 2u32)];
+    a.iter().map(|_: (u32, u32)| 45);
+    a.iter().map(|_: &(u16, u16)| 45);
+    a.iter().map(|_: (u16, u16)| 45);
+}
 
-mod process_common;
-#[cfg(not(target_os = "fuchsia"))]
-#[path = "process_unix.rs"]
-mod process_inner;
-#[cfg(target_os = "fuchsia")]
-#[path = "process_fuchsia.rs"]
-mod process_inner;
-#[cfg(target_os = "fuchsia")]
-mod zircon;
+fn baz<F: Fn(*mut &u32)>(_: F) {}
+fn _test<'a>(f: fn(*mut &'a u32)) {
+    baz(f);
+}

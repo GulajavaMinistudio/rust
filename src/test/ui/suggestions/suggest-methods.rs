@@ -8,12 +8,33 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(unboxed_closures)]
+struct Foo;
 
-fn f<F: Fn<usize>>(_: F) {}
+impl Foo {
+    fn bar(self) {}
+    fn baz(&self, x: f64) {}
+}
+
+trait FooT {
+    fn bag(&self);
+}
+
+impl FooT for Foo {
+    fn bag(&self) {}
+}
+
 fn main() {
-    [1, 2, 3].sort_by(|| panic!());
-    [1, 2, 3].sort_by(|tuple| panic!());
-    [1, 2, 3].sort_by(|(tuple, tuple2)| panic!());
-    f(|| panic!());
+    let f = Foo;
+    f.bat(1.0);
+
+    let s = "foo".to_string();
+    let _ = s.is_emtpy();
+
+    // Generates a warning for `count_zeros()`. `count_ones()` is also a close
+    // match, but the former is closer.
+    let _ = 63u32.count_eos();
+
+    // Does not generate a warning
+    let _ = 63u32.count_o();
+
 }
