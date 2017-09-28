@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Parsing of range patterns
-
-fn main() {
-    let 10 ..= 10 + 3 = 12; //~ expected one of `:`, `;`, or `=`, found `+`
+trait ListItem<'a> {
+    fn list_name() -> &'a str;
 }
+
+trait Collection { fn len(&self) -> usize; }
+
+struct List<'a, T: ListItem<'a>> {
+    slice: &'a [T]
+}
+
+impl<'a, T: ListItem<'a>> Collection for List<'a, T> {
+    fn len(&self) -> usize {
+        0
+    }
+}
+
+struct Foo<T> {
+    foo: &'static T
+}
+
+fn main() {}
