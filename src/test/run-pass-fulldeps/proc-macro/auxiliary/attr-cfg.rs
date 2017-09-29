@@ -8,19 +8,25 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z emit-end-regions -Z borrowck-mir
+// no-prefer-dynamic
+#![feature(proc_macro)]
+#![crate_type = "proc-macro"]
 
-struct FancyNum {
-    num: u8,
-}
+extern crate proc_macro;
 
-fn main() {
-    let mut fancy_num = FancyNum { num: 5 };
-    let fancy_ref = &fancy_num;
-    fancy_num = FancyNum { num: 6 }; //[ast]~ ERROR E0506
-                                     //[mir]~^ ERROR (Mir) [E0506]
-                                     //[mir]~| ERROR (Ast) [E0506]
+use proc_macro::TokenStream;
 
-    println!("Num: {}, Ref: {}", fancy_num.num, fancy_ref.num);
+#[proc_macro_attribute]
+pub fn attr_cfg(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input_str = input.to_string();
+
+    assert_eq!(input_str, "fn outer() -> u8 {
+    #[cfg(foo)]
+    fn inner() -> u8 { 1 }
+    #[cfg(bar)]
+    fn inner() -> u8 { 2 }
+    inner()
+}");
+
+    input
 }

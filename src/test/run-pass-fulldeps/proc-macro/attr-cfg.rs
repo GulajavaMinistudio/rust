@@ -8,19 +8,32 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z emit-end-regions -Z borrowck-mir
+// aux-build:attr-cfg.rs
+// ignore-stage1
+// revisions: foo bar
 
-struct FancyNum {
-    num: u8,
+#![feature(proc_macro)]
+
+extern crate attr_cfg;
+use attr_cfg::attr_cfg;
+
+#[attr_cfg]
+fn outer() -> u8 {
+    #[cfg(foo)]
+    fn inner() -> u8 { 1 }
+
+    #[cfg(bar)]
+    fn inner() -> u8 { 2 }
+
+    inner()
 }
 
+#[cfg(foo)]
 fn main() {
-    let mut fancy_num = FancyNum { num: 5 };
-    let fancy_ref = &fancy_num;
-    fancy_num = FancyNum { num: 6 }; //[ast]~ ERROR E0506
-                                     //[mir]~^ ERROR (Mir) [E0506]
-                                     //[mir]~| ERROR (Ast) [E0506]
+    assert_eq!(outer(), 1);
+}
 
-    println!("Num: {}, Ref: {}", fancy_num.num, fancy_ref.num);
+#[cfg(bar)]
+fn main() {
+    assert_eq!(outer(), 2);
 }

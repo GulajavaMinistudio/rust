@@ -412,7 +412,7 @@ impl<'c, 'b, 'a: 'b+'c, 'gcx, 'tcx: 'a> MirBorrowckCtxt<'c, 'b, 'a, 'gcx, 'tcx> 
                             WriteKind::StorageDead |
                             WriteKind::Mutate =>
                                 this.report_illegal_mutation_of_borrowed(
-                                    context, lvalue_span),
+                                    context, lvalue_span, borrow),
                             WriteKind::Move =>
                                 this.report_move_out_while_borrowed(
                                     context, lvalue_span, borrow),
@@ -580,7 +580,19 @@ impl<'c, 'b, 'a: 'b+'c, 'gcx, 'tcx: 'a> MirBorrowckCtxt<'c, 'b, 'a, 'gcx, 'tcx> 
             if flow_state.inits.curr_state.contains(&mpi) {
                 // may already be assigned before reaching this statement;
                 // report error.
-                self.report_illegal_reassignment(context, (lvalue, span));
+                // FIXME: Not ideal, it only finds the assignment that lexically comes first
+                let assigned_lvalue = &move_data.move_paths[mpi].lvalue;
+                let assignment_stmt = self.mir.basic_blocks().iter().filter_map(|bb| {
+                    bb.statements.iter().find(|stmt| {
+                        if let StatementKind::Assign(ref lv, _) = stmt.kind {
+                            *lv == *assigned_lvalue
+                        } else {
+                            false
+                        }
+                    })
+                }).next().unwrap();
+                self.report_illegal_reassignment(
+                    context, (lvalue, span), assignment_stmt.source_info.span);
             }
         }
     }
@@ -975,18 +987,33 @@ impl<'c, 'b, 'a: 'b+'c, 'gcx, 'tcx: 'a> MirBorrowckCtxt<'c, 'b, 'a, 'gcx, 'tcx> 
         err.emit();
     }
 
-    fn report_illegal_mutation_of_borrowed(&mut self, _: Context, (lvalue, span): (&Lvalue, Span)) {
+    fn report_illegal_mutation_of_borrowed(&mut self,
+                                           _: Context,
+                                           (lvalue, span): (&Lvalue, Span),
+                                           loan: &BorrowData) {
+        let describe_lvalue = self.describe_lvalue(lvalue);
+        let borrow_span = self.retrieve_borrow_span(loan);
+
         let mut err = self.tcx.cannot_assign_to_borrowed(
             span, &self.describe_lvalue(lvalue), Origin::Mir);
-        // FIXME: add span labels for borrow and assignment points
+
+        err.span_label(borrow_span, format!("borrow of `{}` occurs here", describe_lvalue));
+        err.span_label(span, format!("assignment to borrowed `{}` occurs here", describe_lvalue));
+
         err.emit();
     }
 
-    fn report_illegal_reassignment(&mut self, _context: Context, (lvalue, span): (&Lvalue, Span)) {
-        let mut err = self.tcx.cannot_reassign_immutable(
-            span, &self.describe_lvalue(lvalue), Origin::Mir);
-        // FIXME: add span labels for borrow and assignment points
-        err.emit();
+    fn report_illegal_reassignment(&mut self,
+                                   _context: Context,
+                                   (lvalue, span): (&Lvalue, Span),
+                                   assigned_span: Span) {
+        self.tcx.cannot_reassign_immutable(span,
+                                           &self.describe_lvalue(lvalue),
+                                           Origin::Mir)
+                .span_label(span, "re-assignment of immutable variable")
+                .span_label(assigned_span, format!("first assignment to `{}`",
+                                                   self.describe_lvalue(lvalue)))
+                .emit();
     }
 
     fn report_assignment_to_static(&mut self, _context: Context, (lvalue, span): (&Lvalue, Span)) {

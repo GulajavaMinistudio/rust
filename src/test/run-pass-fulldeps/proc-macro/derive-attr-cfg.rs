@@ -8,19 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z emit-end-regions -Z borrowck-mir
+// aux-build:derive-attr-cfg.rs
+// ignore-stage1
 
-struct FancyNum {
-    num: u8,
+#![feature(proc_macro)]
+
+extern crate derive_attr_cfg;
+use derive_attr_cfg::Foo;
+
+#[derive(Foo)]
+#[foo]
+struct S {
+    #[cfg(any())]
+    x: i32
 }
 
 fn main() {
-    let mut fancy_num = FancyNum { num: 5 };
-    let fancy_ref = &fancy_num;
-    fancy_num = FancyNum { num: 6 }; //[ast]~ ERROR E0506
-                                     //[mir]~^ ERROR (Mir) [E0506]
-                                     //[mir]~| ERROR (Ast) [E0506]
-
-    println!("Num: {}, Ref: {}", fancy_num.num, fancy_ref.num);
 }
