@@ -8,13 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that the type of `sum` falls back to `i32` here,
-// and that the for loop desugaring doesn't interfere with
-// that.
+// compile-flags: -C lto -C codegen-units=8
+// no-prefer-dynamic
 
 fn main() {
-    let mut sum = 0;
-    for i in Vec::new() {
-        sum += &i;
-    }
 }
