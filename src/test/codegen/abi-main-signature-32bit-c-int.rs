@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: -D while-true
+// Checks the signature of the implicitly generated native main()
+// entry point. It must match C's `int main(int, char **)`.
+
+// This test is for targets with 32bit c_int only.
+// ignore-msp430
+
 fn main() {
-  let mut i = 0;
-  while true  { //~ ERROR denote infinite loops with `loop
-    i += 1;
-    if i == 5 { break; }
-  }
 }
+
+// CHECK: define i32 @main(i32, i8**)

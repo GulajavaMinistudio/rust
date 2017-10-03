@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: -D while-true
-fn main() {
-  let mut i = 0;
-  while true  { //~ ERROR denote infinite loops with `loop
-    i += 1;
-    if i == 5 { break; }
-  }
-}
+#![feature(rustc_attrs)]
+#![deny(non_snake_case)]
+
+#[no_mangle]
+pub extern "C" fn SparklingGenerationForeignFunctionInterface() {}
+
+#[rustc_error]
+fn main() {} //~ ERROR compilation successful
