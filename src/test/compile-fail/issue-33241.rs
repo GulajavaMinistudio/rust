@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Nacl-specific definitions
+#![feature(rustc_attrs)]
 
-#![stable(feature = "raw_ext", since = "1.1.0")]
+use std::fmt;
 
-pub mod raw;
-pub mod fs;
+// CoerceUnsized is not implemented for tuples. You can still create
+// an unsized tuple by transmuting a trait object.
+fn any<T>() -> T { unreachable!() }
+
+#[rustc_error]
+fn main() { //~ ERROR compilation successful
+    let t: &(u8, fmt::Debug) = any();
+    println!("{:?}", &t.1);
+}
