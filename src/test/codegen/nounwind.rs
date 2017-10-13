@@ -8,15 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub mod borrowck_errors;
-pub mod elaborate_drops;
-pub mod def_use;
-pub mod patch;
+// aux-build:nounwind.rs
+// compile-flags: -C no-prepopulate-passes -C panic=abort -C metadata=a
+// ignore-windows
 
-mod graphviz;
-mod pretty;
-pub mod liveness;
+#![crate_type = "lib"]
 
-pub use self::pretty::{dump_enabled, dump_mir, write_mir_pretty, PassWhere};
-pub use self::graphviz::{write_mir_graphviz};
-pub use self::graphviz::write_node_label as write_graphviz_node_label;
+extern crate nounwind;
+
+#[no_mangle]
+pub fn foo() {
+    nounwind::bar();
+// CHECK: @foo() unnamed_addr #0
+// CHECK: @bar() unnamed_addr #0
+// CHECK: attributes #0 = { {{.*}}nounwind{{.*}} }
+}
+

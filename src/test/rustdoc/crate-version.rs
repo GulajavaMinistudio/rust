@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub mod borrowck_errors;
-pub mod elaborate_drops;
-pub mod def_use;
-pub mod patch;
+// compile-flags: --crate-version=1.3.37 -Z unstable-options
 
-mod graphviz;
-mod pretty;
-pub mod liveness;
-
-pub use self::pretty::{dump_enabled, dump_mir, write_mir_pretty, PassWhere};
-pub use self::graphviz::{write_mir_graphviz};
-pub use self::graphviz::write_node_label as write_graphviz_node_label;
+// @has 'crate_version/index.html' '//div[@class="block version"]/p' 'Version 1.3.37'
