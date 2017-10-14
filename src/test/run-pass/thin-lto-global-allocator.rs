@@ -8,16 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(unboxed_closures)]
+// compile-flags: -Z thinlto -C codegen-units=2
+// min-llvm-version 4.0
 
-fn f<F: Fn<usize>>(_: F) {}
-fn main() {
-    [1, 2, 3].sort_by(|| panic!());
-    [1, 2, 3].sort_by(|tuple| panic!());
-    [1, 2, 3].sort_by(|(tuple, tuple2)| panic!());
-    f(|| panic!());
+#![feature(allocator_api, global_allocator)]
 
-    let _it = vec![1, 2, 3].into_iter().enumerate().map(|i, x| i);
-    let _it = vec![1, 2, 3].into_iter().enumerate().map(|i: usize, x| i);
-    let _it = vec![1, 2, 3].into_iter().enumerate().map(|i, x, y| i);
-}
+#[global_allocator]
+static A: std::heap::System = std::heap::System;
+
+fn main() {}

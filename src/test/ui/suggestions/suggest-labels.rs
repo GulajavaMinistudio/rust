@@ -8,16 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(unboxed_closures)]
-
-fn f<F: Fn<usize>>(_: F) {}
+#[allow(unreachable_code)]
 fn main() {
-    [1, 2, 3].sort_by(|| panic!());
-    [1, 2, 3].sort_by(|tuple| panic!());
-    [1, 2, 3].sort_by(|(tuple, tuple2)| panic!());
-    f(|| panic!());
+    'foo: loop {
+        break 'fo;
+    }
 
-    let _it = vec![1, 2, 3].into_iter().enumerate().map(|i, x| i);
-    let _it = vec![1, 2, 3].into_iter().enumerate().map(|i: usize, x| i);
-    let _it = vec![1, 2, 3].into_iter().enumerate().map(|i, x, y| i);
+    'bar: loop {
+        continue 'bor;
+    }
+
+    'longlabel: loop {
+        'longlabel1: loop {
+            break 'longlable;
+        }
+    }
 }
