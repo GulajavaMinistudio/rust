@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,4 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(non_snake_case)]
+#![feature(dyn_trait)]
+
+use std::fmt::Display;
+
+static BYTE: u8 = 33;
+
+fn main() {
+    let x: &(dyn 'static + Display) = &BYTE;
+    let y: Box<dyn Display + 'static> = Box::new(BYTE);
+    let xstr = format!("{}", x);
+    let ystr = format!("{}", y);
+    assert_eq!(xstr, "33");
+    assert_eq!(ystr, "33");
+}
