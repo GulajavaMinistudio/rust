@@ -8,20 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn foo(():(), ():()) {}
-fn bar(():()) {}
+// compile-flags: -Z thinlto -C codegen-units=8
 
-struct S;
-impl S {
-    fn baz(self, (): ()) { }
-    fn generic<T>(self, _: T) { }
-}
-
-fn main() {
-    let _: Result<(), String> = Ok();
-    foo();
-    foo(());
-    bar();
-    S.baz();
-    S.generic::<()>();
+#[inline]
+pub fn foo(b: u8) {
+    b.to_string();
 }

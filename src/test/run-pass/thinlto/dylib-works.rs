@@ -8,20 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn foo(():(), ():()) {}
-fn bar(():()) {}
+// aux-build:dylib.rs
+// min-llvm-version 4.0
 
-struct S;
-impl S {
-    fn baz(self, (): ()) { }
-    fn generic<T>(self, _: T) { }
-}
+extern crate dylib;
 
 fn main() {
-    let _: Result<(), String> = Ok();
-    foo();
-    foo(());
-    bar();
-    S.baz();
-    S.generic::<()>();
+    dylib::foo(1);
 }
