@@ -8,22 +8,29 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// This test depends on a patch that was committed to upstream LLVM
-// before 4.0, formerly backported to the Rust LLVM fork.
+#![feature(never_type)]
 
-// ignore-tidy-linelength
-// ignore-windows
-// ignore-macos
-// min-llvm-version 4.0
+// Regression test for inhabitedness check. The old
+// cache used to cause us to incorrectly decide
+// that `test_b` was invalid.
 
-// compile-flags: -g -C no-prepopulate-passes
-
-#![feature(start)]
-
-// CHECK-LABEL: @main
-// CHECK: {{.*}}DISubprogram{{.*}}name: "start",{{.*}}DIFlagMainSubprogram{{.*}}
-
-#[start]
-fn start(_: isize, _: *const *const u8) -> isize {
-    return 0;
+struct Foo {
+    field1: !,
+    field2: Option<&'static Bar>,
 }
+
+struct Bar {
+    field1: &'static Foo
+}
+
+fn test_a() {
+    let x: Option<Foo> = None;
+    match x { None => () }
+}
+
+fn test_b() {
+    let x: Option<Bar> = None;
+    match x { None => () }
+}
+
+fn main() { }

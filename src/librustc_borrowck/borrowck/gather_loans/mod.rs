@@ -48,7 +48,13 @@ pub fn gather_loans_in_fn<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>,
         move_error_collector: move_error::MoveErrorCollector::new(),
     };
 
-    euv::ExprUseVisitor::new(&mut glcx, bccx.tcx, param_env, &bccx.region_scope_tree, bccx.tables)
+    let rvalue_promotable_map = bccx.tcx.rvalue_promotable_map(def_id);
+    euv::ExprUseVisitor::new(&mut glcx,
+                             bccx.tcx,
+                             param_env,
+                             &bccx.region_scope_tree,
+                             bccx.tables,
+                             Some(rvalue_promotable_map))
         .consume_body(bccx.body);
 
     glcx.report_potential_errors();
@@ -406,7 +412,7 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
         self.all_loans.push(loan);
 
         // if loan_gen_scope != borrow_id {
-            // FIXME(#6268) Nested method calls
+            // FIXME(https://github.com/rust-lang/rfcs/issues/811) Nested method calls
             //
             // Typically, the scope of the loan includes the point at
             // which the loan is originated. This
@@ -417,9 +423,8 @@ impl<'a, 'tcx> GatherLoanCtxt<'a, 'tcx> {
             //let restr = restrictions::compute_restrictions(
             //    self.bccx, borrow_span, cmt, RESTR_EMPTY);
             //let loan = {
-            //    let all_loans = &mut *self.all_loans; // FIXME(#5074)
             //    Loan {
-            //        index: all_loans.len(),
+            //        index: self.all_loans.len(),
             //        loan_path,
             //        cmt,
             //        mutbl: ConstMutability,
