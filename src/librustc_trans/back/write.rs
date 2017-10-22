@@ -8,12 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use back::lto;
+use back::bytecode::{self, RLIB_BYTECODE_EXTENSION};
+use back::lto::{self, ModuleBuffer, ThinBuffer};
 use back::link::{self, get_linker, remove};
 use back::linker::LinkerInfo;
 use back::symbol_export::ExportedSymbols;
+use base;
+use consts;
 use rustc_incremental::{save_trans_partition, in_incr_comp_dir};
-use rustc::dep_graph::DepGraph;
+use rustc::dep_graph::{DepGraph, WorkProductFileKind};
 use rustc::middle::cstore::{LinkMeta, EncodedMetadata};
 use rustc::session::config::{self, OutputFilenames, OutputType, OutputTypes, Passes, SomePasses,
                              AllPasses, Sanitizer};
@@ -35,13 +38,14 @@ use syntax::attr;
 use syntax::ext::hygiene::Mark;
 use syntax_pos::MultiSpan;
 use syntax_pos::symbol::Symbol;
+use type_::Type;
 use context::{is_pie_binary, get_reloc_model};
 use jobserver::{Client, Acquired};
 use rustc_demangle;
 
 use std::any::Any;
-use std::ffi::CString;
-use std::fs;
+use std::ffi::{CString, CStr};
+use std::fs::{self, File};
 use std::io;
 use std::io::Write;
 use std::mem;
@@ -225,6 +229,7 @@ pub struct ModuleConfig {
     // Flags indicating which outputs to produce.
     emit_no_opt_bc: bool,
     emit_bc: bool,
+    emit_bc_compressed: bool,
     emit_lto_bc: bool,
     emit_ir: bool,
     emit_asm: bool,
@@ -254,6 +259,7 @@ impl ModuleConfig {
 
             emit_no_opt_bc: false,
             emit_bc: false,
+            emit_bc_compressed: false,
             emit_lto_bc: false,
             emit_ir: false,
             emit_asm: false,
@@ -315,6 +321,8 @@ pub struct CodegenContext {
     metadata_module_config: Arc<ModuleConfig>,
     allocator_module_config: Arc<ModuleConfig>,
     pub tm_factory: Arc<Fn() -> Result<TargetMachineRef, String> + Send + Sync>,
+    pub msvc_imps_needed: bool,
+    pub target_pointer_width: String,
 
     // Number of cgus excluding the allocator/metadata modules
     pub total_cgus: usize,
@@ -586,6 +594,10 @@ unsafe fn codegen(cgcx: &CodegenContext,
     let module_name = Some(&module_name[..]);
     let handlers = DiagnosticHandlers::new(cgcx, diag_handler, llcx);
 
+    if cgcx.msvc_imps_needed {
+        create_msvc_imps(cgcx, llcx, llmod);
+    }
+
     // A codegen-specific pass manager is used to generate object
     // files for an LLVM module.
     //
@@ -618,20 +630,34 @@ unsafe fn codegen(cgcx: &CodegenContext,
     let bc_out = cgcx.output_filenames.temp_path(OutputType::Bitcode, module_name);
     let obj_out = cgcx.output_filenames.temp_path(OutputType::Object, module_name);
 
-    if write_bc {
-        let bc_out_c = path2cstr(&bc_out);
-        if llvm::LLVMRustThinLTOAvailable() {
-            with_codegen(tm, llmod, config.no_builtins, |cpm| {
-                llvm::LLVMRustWriteThinBitcodeToFile(
-                    cpm,
-                    llmod,
-                    bc_out_c.as_ptr(),
-                )
-            });
+
+    if write_bc || config.emit_bc_compressed {
+        let thin;
+        let old;
+        let data = if llvm::LLVMRustThinLTOAvailable() {
+            thin = ThinBuffer::new(llmod);
+            thin.data()
         } else {
-            llvm::LLVMWriteBitcodeToFile(llmod, bc_out_c.as_ptr());
+            old = ModuleBuffer::new(llmod);
+            old.data()
+        };
+        timeline.record("make-bc");
+
+        if write_bc {
+            if let Err(e) = File::create(&bc_out).and_then(|mut f| f.write_all(data)) {
+                diag_handler.err(&format!("failed to write bytecode: {}", e));
+            }
+            timeline.record("write-bc");
         }
-        timeline.record("bc");
+
+        if config.emit_bc_compressed {
+            let dst = bc_out.with_extension(RLIB_BYTECODE_EXTENSION);
+            let data = bytecode::encode(&mtrans.llmod_id, data);
+            if let Err(e) = File::create(&dst).and_then(|mut f| f.write_all(&data)) {
+                diag_handler.err(&format!("failed to write bytecode: {}", e));
+            }
+            timeline.record("compress-bc");
+        }
     }
 
     time(config.time_passes, &format!("codegen passes [{}]", module_name.unwrap()),
@@ -727,6 +753,7 @@ unsafe fn codegen(cgcx: &CodegenContext,
     drop(handlers);
     Ok(mtrans.into_compiled_module(config.emit_obj,
                                    config.emit_bc,
+                                   config.emit_bc_compressed,
                                    &cgcx.output_filenames))
 }
 
@@ -813,11 +840,12 @@ pub fn start_async_translation(tcx: TyCtxt,
         allocator_config.emit_bc = true;
     }
 
-    // Emit bitcode files for the crate if we're emitting an rlib.
-    // Whenever an rlib is created, the bitcode is inserted into the
-    // archive in order to allow LTO against it.
+    // Emit compressed bitcode files for the crate if we're emitting an rlib.
+    // Whenever an rlib is created, the bitcode is inserted into the archive in
+    // order to allow LTO against it.
     if need_crate_bitcode_for_rlib(sess) {
-        modules_config.emit_bc = true;
+        modules_config.emit_bc_compressed = true;
+        allocator_config.emit_bc_compressed = true;
     }
 
     for output_type in output_types_override.keys() {
@@ -897,8 +925,7 @@ pub fn start_async_translation(tcx: TyCtxt,
 
 fn copy_module_artifacts_into_incr_comp_cache(sess: &Session,
                                               dep_graph: &DepGraph,
-                                              compiled_modules: &CompiledModules,
-                                              crate_output: &OutputFilenames) {
+                                              compiled_modules: &CompiledModules) {
     if sess.opts.incremental.is_none() {
         return;
     }
@@ -906,20 +933,17 @@ fn copy_module_artifacts_into_incr_comp_cache(sess: &Session,
     for module in compiled_modules.modules.iter() {
         let mut files = vec![];
 
-        if module.emit_obj {
-            let path = crate_output.temp_path(OutputType::Object, Some(&module.name));
-            files.push((OutputType::Object, path));
+        if let Some(ref path) = module.object {
+            files.push((WorkProductFileKind::Object, path.clone()));
+        }
+        if let Some(ref path) = module.bytecode {
+            files.push((WorkProductFileKind::Bytecode, path.clone()));
+        }
+        if let Some(ref path) = module.bytecode_compressed {
+            files.push((WorkProductFileKind::BytecodeCompressed, path.clone()));
         }
 
-        if module.emit_bc {
-            let path = crate_output.temp_path(OutputType::Bitcode, Some(&module.name));
-            files.push((OutputType::Bitcode, path));
-        }
-
-        save_trans_partition(sess,
-                             dep_graph,
-                             &module.name,
-                             &files);
+        save_trans_partition(sess, dep_graph, &module.name, &files);
     }
 }
 
@@ -1023,8 +1047,6 @@ fn produce_final_output_artifacts(sess: &Session,
         // well.
 
         // Specific rules for keeping .#module-name#.bc:
-        //  - If we're building an rlib (`needs_crate_bitcode`), then keep
-        //    it.
         //  - If the user requested bitcode (`user_wants_bitcode`), and
         //    codegen_units > 1, then keep it.
         //  - If the user requested bitcode but codegen_units == 1, then we
@@ -1034,40 +1056,36 @@ fn produce_final_output_artifacts(sess: &Session,
         // If you change how this works, also update back::link::link_rlib,
         // where .#module-name#.bc files are (maybe) deleted after making an
         // rlib.
-        let needs_crate_bitcode = need_crate_bitcode_for_rlib(sess);
         let needs_crate_object = crate_output.outputs.contains_key(&OutputType::Exe);
 
-        let keep_numbered_bitcode = needs_crate_bitcode ||
-                (user_wants_bitcode && sess.codegen_units() > 1);
+        let keep_numbered_bitcode = user_wants_bitcode && sess.codegen_units() > 1;
 
         let keep_numbered_objects = needs_crate_object ||
                 (user_wants_objects && sess.codegen_units() > 1);
 
         for module in compiled_modules.modules.iter() {
-            let module_name = Some(&module.name[..]);
-
-            if module.emit_obj && !keep_numbered_objects {
-                let path = crate_output.temp_path(OutputType::Object, module_name);
-                remove(sess, &path);
+            if let Some(ref path) = module.object {
+                if !keep_numbered_objects {
+                    remove(sess, path);
+                }
             }
 
-            if module.emit_bc && !keep_numbered_bitcode {
-                let path = crate_output.temp_path(OutputType::Bitcode, module_name);
-                remove(sess, &path);
+            if let Some(ref path) = module.bytecode {
+                if !keep_numbered_bitcode {
+                    remove(sess, path);
+                }
             }
         }
 
-        if compiled_modules.metadata_module.emit_bc && !user_wants_bitcode {
-            let path = crate_output.temp_path(OutputType::Bitcode,
-                                              Some(&compiled_modules.metadata_module.name));
-            remove(sess, &path);
-        }
-
-        if let Some(ref allocator_module) = compiled_modules.allocator_module {
-            if allocator_module.emit_bc && !user_wants_bitcode {
-                let path = crate_output.temp_path(OutputType::Bitcode,
-                                                  Some(&allocator_module.name));
+        if !user_wants_bitcode {
+            if let Some(ref path) = compiled_modules.metadata_module.bytecode {
                 remove(sess, &path);
+            }
+
+            if let Some(ref allocator_module) = compiled_modules.allocator_module {
+                if let Some(ref path) = allocator_module.bytecode {
+                    remove(sess, path);
+                }
             }
         }
     }
@@ -1140,8 +1158,28 @@ fn execute_work_item(cgcx: &CodegenContext,
                                         .as_ref()
                                         .unwrap();
         let name = &mtrans.name;
+        let mut object = None;
+        let mut bytecode = None;
+        let mut bytecode_compressed = None;
         for (kind, saved_file) in wp.saved_files {
-            let obj_out = cgcx.output_filenames.temp_path(kind, Some(name));
+            let obj_out = match kind {
+                WorkProductFileKind::Object => {
+                    let path = cgcx.output_filenames.temp_path(OutputType::Object, Some(name));
+                    object = Some(path.clone());
+                    path
+                }
+                WorkProductFileKind::Bytecode => {
+                    let path = cgcx.output_filenames.temp_path(OutputType::Bitcode, Some(name));
+                    bytecode = Some(path.clone());
+                    path
+                }
+                WorkProductFileKind::BytecodeCompressed => {
+                    let path = cgcx.output_filenames.temp_path(OutputType::Bitcode, Some(name))
+                        .with_extension(RLIB_BYTECODE_EXTENSION);
+                    bytecode_compressed = Some(path.clone());
+                    path
+                }
+            };
             let source_file = in_incr_comp_dir(&incr_comp_session_dir,
                                                &saved_file);
             debug!("copying pre-existing module `{}` from {:?} to {}",
@@ -1158,16 +1196,18 @@ fn execute_work_item(cgcx: &CodegenContext,
                 }
             }
         }
-        let object = cgcx.output_filenames.temp_path(OutputType::Object, Some(name));
+        assert_eq!(object.is_some(), config.emit_obj);
+        assert_eq!(bytecode.is_some(), config.emit_bc);
+        assert_eq!(bytecode_compressed.is_some(), config.emit_bc_compressed);
 
         Ok(WorkItemResult::Compiled(CompiledModule {
-            object,
             llmod_id: mtrans.llmod_id.clone(),
             name: module_name,
             kind: ModuleKind::Regular,
             pre_existing: true,
-            emit_bc: config.emit_bc,
-            emit_obj: config.emit_obj,
+            object,
+            bytecode,
+            bytecode_compressed,
         }))
     } else {
         debug!("llvm-optimizing {:?}", module_name);
@@ -1300,6 +1340,8 @@ fn start_executing_work(tcx: TyCtxt,
         allocator_module_config: allocator_config,
         tm_factory: target_machine_factory(tcx.sess),
         total_cgus,
+        msvc_imps_needed: msvc_imps_needed(tcx),
+        target_pointer_width: tcx.sess.target.target.target_pointer_width.clone(),
     };
 
     // This is the "main loop" of parallel work happening for parallel codegen.
@@ -2042,8 +2084,7 @@ impl OngoingCrateTranslation {
 
         copy_module_artifacts_into_incr_comp_cache(sess,
                                                    dep_graph,
-                                                   &compiled_modules,
-                                                   &self.output_filenames);
+                                                   &compiled_modules);
         produce_final_output_artifacts(sess,
                                        &compiled_modules,
                                        &self.output_filenames);
@@ -2064,6 +2105,7 @@ impl OngoingCrateTranslation {
 
             modules: compiled_modules.modules,
             allocator_module: compiled_modules.allocator_module,
+            metadata_module: compiled_modules.metadata_module,
         };
 
         if self.no_integrated_as {
@@ -2132,4 +2174,52 @@ pub fn submit_translated_module_to_llvm(tcx: TyCtxt,
         llvm_work_item,
         cost,
     })));
+}
+
+fn msvc_imps_needed(tcx: TyCtxt) -> bool {
+    tcx.sess.target.target.options.is_like_msvc &&
+        tcx.sess.crate_types.borrow().iter().any(|ct| *ct == config::CrateTypeRlib)
+}
+
+// Create a `__imp_<symbol> = &symbol` global for every public static `symbol`.
+// This is required to satisfy `dllimport` references to static data in .rlibs
+// when using MSVC linker.  We do this only for data, as linker can fix up
+// code references on its own.
+// See #26591, #27438
+fn create_msvc_imps(cgcx: &CodegenContext, llcx: ContextRef, llmod: ModuleRef) {
+    if !cgcx.msvc_imps_needed {
+        return
+    }
+    // The x86 ABI seems to require that leading underscores are added to symbol
+    // names, so we need an extra underscore on 32-bit. There's also a leading
+    // '\x01' here which disables LLVM's symbol mangling (e.g. no extra
+    // underscores added in front).
+    let prefix = if cgcx.target_pointer_width == "32" {
+        "\x01__imp__"
+    } else {
+        "\x01__imp_"
+    };
+    unsafe {
+        let i8p_ty = Type::i8p_llcx(llcx);
+        let globals = base::iter_globals(llmod)
+            .filter(|&val| {
+                llvm::LLVMRustGetLinkage(val) == llvm::Linkage::ExternalLinkage &&
+                    llvm::LLVMIsDeclaration(val) == 0
+            })
+            .map(move |val| {
+                let name = CStr::from_ptr(llvm::LLVMGetValueName(val));
+                let mut imp_name = prefix.as_bytes().to_vec();
+                imp_name.extend(name.to_bytes());
+                let imp_name = CString::new(imp_name).unwrap();
+                (imp_name, val)
+            })
+            .collect::<Vec<_>>();
+        for (imp_name, val) in globals {
+            let imp = llvm::LLVMAddGlobal(llmod,
+                                          i8p_ty.to_ref(),
+                                          imp_name.as_ptr() as *const _);
+            llvm::LLVMSetInitializer(imp, consts::ptrcast(val, i8p_ty));
+            llvm::LLVMRustSetLinkage(imp, llvm::Linkage::ExternalLinkage);
+        }
+    }
 }
