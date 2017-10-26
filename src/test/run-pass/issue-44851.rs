@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn test() {
-    let v: isize;
-    v = 1; //~ NOTE first assignment
-    println!("v={}", v);
-    v = 2; //~ ERROR cannot assign twice to immutable variable
-           //~| NOTE cannot assign twice to immutable
-    println!("v={}", v);
+macro_rules! a {
+    () => { "a" }
 }
 
-fn main() {
+macro_rules! b {
+    ($doc:expr) => {
+        #[doc = $doc]
+        pub struct B;
+    }
 }
+
+b!(a!());
+
+fn main() {}

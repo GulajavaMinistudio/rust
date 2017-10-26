@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn test() {
-    let v: isize;
-    v = 1; //~ NOTE first assignment
-    println!("v={}", v);
-    v = 2; //~ ERROR cannot assign twice to immutable variable
-           //~| NOTE cannot assign twice to immutable
-    println!("v={}", v);
+trait Nat {
+    const VALUE: usize;
+}
+
+struct Zero;
+struct Succ<N>(N);
+
+impl Nat for Zero {
+    const VALUE: usize = 0;
+}
+
+impl<N: Nat> Nat for Succ<N> {
+    const VALUE: usize = N::VALUE + 1;
 }
 
 fn main() {
+    let x: [i32; <Succ<Succ<Succ<Succ<Zero>>>>>::VALUE] = [1, 2, 3, 4];
 }
