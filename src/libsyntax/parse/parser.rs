@@ -1033,7 +1033,23 @@ impl<'a> Parser<'a> {
                 } else {
                     if let Err(e) = self.expect(t) {
                         fe(e);
-                        break;
+                        // Attempt to keep parsing if it was a similar separator
+                        if let Some(ref tokens) = t.similar_tokens() {
+                            if tokens.contains(&self.token) {
+                                self.bump();
+                            }
+                        }
+                        // Attempt to keep parsing if it was an omitted separator
+                        match f(self) {
+                            Ok(t) => {
+                                v.push(t);
+                                continue;
+                            },
+                            Err(mut e) => {
+                                e.cancel();
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -5671,6 +5687,24 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a type from a foreign module
+    fn parse_item_foreign_type(&mut self, vis: ast::Visibility, lo: Span, attrs: Vec<Attribute>)
+                             -> PResult<'a, ForeignItem> {
+        self.expect_keyword(keywords::Type)?;
+
+        let ident = self.parse_ident()?;
+        let hi = self.span;
+        self.expect(&token::Semi)?;
+        Ok(ast::ForeignItem {
+            ident: ident,
+            attrs: attrs,
+            node: ForeignItemKind::Ty,
+            id: ast::DUMMY_NODE_ID,
+            span: lo.to(hi),
+            vis: vis
+        })
+    }
+
     /// Parse extern crate links
     ///
     /// # Examples
@@ -6144,6 +6178,10 @@ impl<'a> Parser<'a> {
         // FOREIGN FUNCTION ITEM
         if self.check_keyword(keywords::Fn) {
             return Ok(Some(self.parse_item_foreign_fn(visibility, lo, attrs)?));
+        }
+        // FOREIGN TYPE ITEM
+        if self.check_keyword(keywords::Type) {
+            return Ok(Some(self.parse_item_foreign_type(visibility, lo, attrs)?));
         }
 
         // FIXME #5668: this will occur for a macro invocation:
