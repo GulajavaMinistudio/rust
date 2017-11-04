@@ -623,7 +623,8 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
             mir::TerminatorKind::Unreachable |
             mir::TerminatorKind::Assert { .. } => {}
             mir::TerminatorKind::GeneratorDrop |
-            mir::TerminatorKind::Yield { .. } => bug!(),
+            mir::TerminatorKind::Yield { .. } |
+            mir::TerminatorKind::FalseEdges { .. } => bug!(),
         }
 
         self.super_terminator_kind(block, kind, location);
@@ -883,7 +884,7 @@ impl<'b, 'a, 'v> ItemLikeVisitor<'v> for RootCollector<'b, 'a, 'v> {
             hir::ItemUse(..)         |
             hir::ItemForeignMod(..)  |
             hir::ItemTy(..)          |
-            hir::ItemDefaultImpl(..) |
+            hir::ItemAutoImpl(..) |
             hir::ItemTrait(..)       |
             hir::ItemMod(..)         => {
                 // Nothing to do, just keep recursing...
