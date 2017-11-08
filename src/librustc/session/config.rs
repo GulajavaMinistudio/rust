@@ -138,6 +138,34 @@ impl OutputType {
         }
     }
 
+    fn from_shorthand(shorthand: &str) -> Option<Self> {
+        Some(match shorthand {
+             "asm" => OutputType::Assembly,
+             "llvm-ir" => OutputType::LlvmAssembly,
+             "mir" => OutputType::Mir,
+             "llvm-bc" => OutputType::Bitcode,
+             "obj" => OutputType::Object,
+             "metadata" => OutputType::Metadata,
+             "link" => OutputType::Exe,
+             "dep-info" => OutputType::DepInfo,
+            _ => return None,
+        })
+    }
+
+    fn shorthands_display() -> String {
+        format!(
+            "`{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`",
+            OutputType::Bitcode.shorthand(),
+            OutputType::Assembly.shorthand(),
+            OutputType::LlvmAssembly.shorthand(),
+            OutputType::Mir.shorthand(),
+            OutputType::Object.shorthand(),
+            OutputType::Metadata.shorthand(),
+            OutputType::Exe.shorthand(),
+            OutputType::DepInfo.shorthand(),
+        )
+    }
+
     pub fn extension(&self) -> &'static str {
         match *self {
             OutputType::Bitcode => "bc",
@@ -368,6 +396,7 @@ pub enum PrintRequest {
     TargetFeatures,
     RelocationModels,
     CodeModels,
+    TlsModels,
     TargetSpec,
     NativeStaticLibs,
 }
@@ -1104,6 +1133,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "enable ThinLTO when possible"),
     inline_in_all_cgus: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "control whether #[inline] functions are in all cgus"),
+    tls_model: Option<String> = (None, parse_opt_string, [TRACKED],
+         "choose the TLS model to use (rustc --print tls-models for details)"),
 }
 
 pub fn default_lib_output() -> CrateType {
@@ -1330,7 +1361,7 @@ pub fn rustc_short_optgroups() -> Vec<RustcOptGroup> {
                                print on stdout",
                      "[crate-name|file-names|sysroot|cfg|target-list|\
                        target-cpus|target-features|relocation-models|\
-                       code-models|target-spec-json|native-static-libs]"),
+                       code-models|tls-models|target-spec-json|native-static-libs]"),
         opt::flagmulti_s("g",  "",  "Equivalent to -C debuginfo=2"),
         opt::flagmulti_s("O", "", "Equivalent to -C opt-level=2"),
         opt::opt_s("o", "", "Write output to <filename>", "FILENAME"),
@@ -1473,7 +1504,7 @@ pub fn build_session_options_and_crate_config(matches: &getopts::Matches)
         })
     });
 
-    let debugging_opts = build_debugging_options(matches, error_format);
+    let mut debugging_opts = build_debugging_options(matches, error_format);
 
     if !debugging_opts.unstable_options && error_format == ErrorOutputType::Json(true) {
         early_error(ErrorOutputType::Json(false),
@@ -1485,19 +1516,13 @@ pub fn build_session_options_and_crate_config(matches: &getopts::Matches)
         for list in matches.opt_strs("emit") {
             for output_type in list.split(',') {
                 let mut parts = output_type.splitn(2, '=');
-                let output_type = match parts.next().unwrap() {
-                    "asm" => OutputType::Assembly,
-                    "llvm-ir" => OutputType::LlvmAssembly,
-                    "mir" => OutputType::Mir,
-                    "llvm-bc" => OutputType::Bitcode,
-                    "obj" => OutputType::Object,
-                    "metadata" => OutputType::Metadata,
-                    "link" => OutputType::Exe,
-                    "dep-info" => OutputType::DepInfo,
-                    part => {
-                        early_error(error_format, &format!("unknown emission type: `{}`",
-                                                    part))
-                    }
+                let shorthand = parts.next().unwrap();
+                let output_type = match OutputType::from_shorthand(shorthand) {
+                    Some(output_type) => output_type,
+                    None => early_error(error_format, &format!(
+                        "unknown emission type: `{}` - expected one of: {}",
+                        shorthand, OutputType::shorthands_display(),
+                    )),
                 };
                 let path = parts.next().map(PathBuf::from);
                 output_types.insert(output_type, path);
@@ -1578,6 +1603,10 @@ pub fn build_session_options_and_crate_config(matches: &getopts::Matches)
     if cg.code_model.as_ref().map_or(false, |s| s == "help") {
         prints.push(PrintRequest::CodeModels);
         cg.code_model = None;
+    }
+    if debugging_opts.tls_model.as_ref().map_or(false, |s| s == "help") {
+        prints.push(PrintRequest::TlsModels);
+        debugging_opts.tls_model = None;
     }
 
     let cg = cg;
@@ -1678,6 +1707,7 @@ pub fn build_session_options_and_crate_config(matches: &getopts::Matches)
             "target-features" => PrintRequest::TargetFeatures,
             "relocation-models" => PrintRequest::RelocationModels,
             "code-models" => PrintRequest::CodeModels,
+            "tls-models" => PrintRequest::TlsModels,
             "native-static-libs" => PrintRequest::NativeStaticLibs,
             "target-spec-json" => {
                 if nightly_options::is_unstable_enabled(matches) {
@@ -2518,6 +2548,10 @@ mod tests {
 
         opts = reference.clone();
         opts.cg.code_model = Some(String::from("code model"));
+        assert!(reference.dep_tracking_hash() != opts.dep_tracking_hash());
+
+        opts = reference.clone();
+        opts.debugging_opts.tls_model = Some(String::from("tls model"));
         assert!(reference.dep_tracking_hash() != opts.dep_tracking_hash());
 
         opts = reference.clone();
