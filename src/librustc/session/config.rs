@@ -1046,6 +1046,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "print high-level information about incremental reuse (or the lack thereof)"),
     incremental_dump_hash: bool = (false, parse_bool, [UNTRACKED],
         "dump hash information in textual format to stdout"),
+    incremental_verify_ich: bool = (false, parse_bool, [UNTRACKED],
+        "verify incr. comp. hashes of green query instances"),
     dump_dep_graph: bool = (false, parse_bool, [UNTRACKED],
           "dump the dependency graph to $RUST_DEP_GRAPH (default: /tmp/dep_graph.gv)"),
     query_dep_graph: bool = (false, parse_bool, [UNTRACKED],
@@ -1135,6 +1137,9 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "control whether #[inline] functions are in all cgus"),
     tls_model: Option<String> = (None, parse_opt_string, [TRACKED],
          "choose the TLS model to use (rustc --print tls-models for details)"),
+    saturating_float_casts: bool = (false, parse_bool, [TRACKED],
+        "make casts between integers and floats safe: clip out-of-range inputs to the min/max \
+         integer or to infinity respectively, and turn `NAN` into 0 when casting to integers"),
 }
 
 pub fn default_lib_output() -> CrateType {
