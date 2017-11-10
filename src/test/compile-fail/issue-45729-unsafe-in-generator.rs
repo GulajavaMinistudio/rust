@@ -1,4 +1,4 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::option::*;
+#![feature(generators)]
 
 fn main() {
-  let None: isize = 42; //~ ERROR let bindings cannot shadow unit variants
-  log(debug, None);
-  //~^ ERROR cannot find function `log` in this scope
-  //~| ERROR cannot find value `debug` in this scope
+    let _ = || {
+        *(1 as *mut u32) = 42;
+        //~^ ERROR dereference of raw pointer requires unsafe
+        yield;
+    };
 }

@@ -377,12 +377,6 @@ enum PatternSource {
 }
 
 impl PatternSource {
-    fn is_refutable(self) -> bool {
-        match self {
-            PatternSource::Match | PatternSource::IfLet | PatternSource::WhileLet => true,
-            PatternSource::Let | PatternSource::For | PatternSource::FnParam  => false,
-        }
-    }
     fn descr(self) -> &'static str {
         match self {
             PatternSource::Match => "match binding",
@@ -1118,7 +1112,7 @@ impl<'a> NameBinding<'a> {
         match self.kind {
             NameBindingKind::Import {
                 directive: &ImportDirective {
-                    subclass: ImportDirectiveSubclass::ExternCrate, ..
+                    subclass: ImportDirectiveSubclass::ExternCrate(_), ..
                 }, ..
             } => true,
             _ => false,
@@ -1130,6 +1124,15 @@ impl<'a> NameBinding<'a> {
             NameBindingKind::Import { .. } => true,
             _ => false,
         }
+    }
+
+    fn is_renamed_extern_crate(&self) -> bool {
+        if let NameBindingKind::Import { directive, ..} = self.kind {
+            if let ImportDirectiveSubclass::ExternCrate(Some(_)) = directive.subclass {
+                return true;
+            }
+        }
+        false
     }
 
     fn is_glob_import(&self) -> bool {
@@ -2379,20 +2382,24 @@ impl<'a> Resolver<'a> {
                                                                       false, pat.span)
                                       .and_then(LexicalScopeBinding::item);
                     let resolution = binding.map(NameBinding::def).and_then(|def| {
-                        let ivmode = BindingMode::ByValue(Mutability::Immutable);
-                        let always_binding = !pat_src.is_refutable() || opt_pat.is_some() ||
-                                             bmode != ivmode;
+                        let is_syntactic_ambiguity = opt_pat.is_none() &&
+                            bmode == BindingMode::ByValue(Mutability::Immutable);
                         match def {
                             Def::StructCtor(_, CtorKind::Const) |
                             Def::VariantCtor(_, CtorKind::Const) |
-                            Def::Const(..) if !always_binding => {
-                                // A unit struct/variant or constant pattern.
+                            Def::Const(..) if is_syntactic_ambiguity => {
+                                // Disambiguate in favor of a unit struct/variant
+                                // or constant pattern.
                                 self.record_use(ident.node, ValueNS, binding.unwrap(), ident.span);
                                 Some(PathResolution::new(def))
                             }
                             Def::StructCtor(..) | Def::VariantCtor(..) |
                             Def::Const(..) | Def::Static(..) => {
-                                // A fresh binding that shadows something unacceptable.
+                                // This is unambiguously a fresh binding, either syntactically
+                                // (e.g. `IDENT @ PAT` or `ref IDENT`) or because `IDENT` resolves
+                                // to something unusable as a pattern (e.g. constructor function),
+                                // but we still conservatively report an error, see
+                                // issues/33118#issuecomment-233962221 for one reason why.
                                 resolve_error(
                                     self,
                                     ident.span,
@@ -2401,7 +2408,7 @@ impl<'a> Resolver<'a> {
                                 );
                                 None
                             }
-                            Def::Local(..) | Def::Upvar(..) | Def::Fn(..) | Def::Err => {
+                            Def::Fn(..) | Def::Err => {
                                 // These entities are explicitly allowed
                                 // to be shadowed by fresh bindings.
                                 None
@@ -3700,7 +3707,8 @@ impl<'a> Resolver<'a> {
             let cm = self.session.codemap();
             let rename_msg = "You can use `as` to change the binding name of the import";
 
-            if let Ok(snippet) = cm.span_to_snippet(binding.span) {
+            if let (Ok(snippet), false) = (cm.span_to_snippet(binding.span),
+                                           binding.is_renamed_extern_crate()) {
                 err.span_suggestion(binding.span,
                                     rename_msg,
                                     format!("{} as Other{}", snippet, name));
