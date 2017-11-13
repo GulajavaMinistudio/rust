@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,15 +7,19 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+#![feature(arbitrary_self_types)]
 
-struct thing<'a, Q:'a> {
-    x: &'a Q
-}
+use std::rc::Rc;
 
-fn thing<'a,Q>(x: &Q) -> thing<'a,Q> {
-    thing{ x: x } //~ ERROR 16:5: 16:18: explicit lifetime required in the type of `x` [E0621]
+struct Foo<T: ?Sized>(T);
+
+impl Foo<[u8]> {
+    fn len(self: Rc<Self>) -> usize {
+        self.0.len()
+    }
 }
 
 fn main() {
-    thing(&());
+    let rc = Rc::new(Foo([1u8,2,3])) as Rc<Foo<[u8]>>;
+    assert_eq!(3, rc.len());
 }

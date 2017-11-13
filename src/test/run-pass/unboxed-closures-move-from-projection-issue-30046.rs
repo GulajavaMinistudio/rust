@@ -8,25 +8,28 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that assignments to an `&mut` pointer which is found in a
-// borrowed (but otherwise non-aliasable) location is illegal.
+#![allow(unused)]
 
-struct S<'a> {
-    pointer: &'a mut isize
-}
-
-fn copy_borrowed_ptr<'a,'b>(p: &'a mut S<'b>) -> S<'b> {
-    S { pointer: &mut *p.pointer }
-    //~^ ERROR lifetime mismatch
+fn foo<F>(f: F)
+    where F: FnOnce()
+{
 }
 
 fn main() {
-    let mut x = 1;
+    // Test that this closure is inferred to `FnOnce`
+    // because it moves from `y.as<Option::Some>.0`:
+    let x = Some(vec![1, 2, 3]);
+    foo(|| {
+        match x {
+            Some(y) => { }
+            None => { }
+        }
+    });
 
-    {
-        let mut y = S { pointer: &mut x };
-        let z = copy_borrowed_ptr(&mut y);
-        *y.pointer += 1;
-        *z.pointer += 1;
-    }
+    // Test that this closure is inferred to `FnOnce`
+    // because it moves from `y.0`:
+    let y = (vec![1, 2, 3], 0);
+    foo(|| {
+        let x = y.0;
+    });
 }

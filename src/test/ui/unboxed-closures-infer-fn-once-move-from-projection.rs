@@ -8,21 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct Foo<'a> {
-    data: &'a[u8],
+#![allow(unused)]
+
+fn foo<F>(f: F)
+    where F: Fn()
+{
 }
 
-impl <'a> Foo<'a>{
-    fn bar(self: &mut Foo) {
-    //~^ mismatched method receiver
-    //~| expected type `Foo<'a>`
-    //~| found type `Foo<'_>`
-    //~| lifetime mismatch
-    //~| mismatched method receiver
-    //~| expected type `Foo<'a>`
-    //~| found type `Foo<'_>`
-    //~| lifetime mismatch
-    }
+fn main() {
+    // Test that this closure is inferred to `FnOnce` because it moves
+    // from `y.0`. This affects the error output (the error is that
+    // the closure implements `FnOnce`, not that it moves from inside
+    // a `Fn` closure.)
+    let y = (vec![1, 2, 3], 0);
+    let c = || drop(y.0);
+    foo(c);
 }
-
-fn main() {}

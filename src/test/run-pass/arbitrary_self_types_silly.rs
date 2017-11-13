@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,15 +7,23 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+#![feature(arbitrary_self_types)]
 
-struct thing<'a, Q:'a> {
-    x: &'a Q
+struct Foo;
+struct Bar;
+
+impl std::ops::Deref for Bar {
+    type Target = Foo;
+
+    fn deref(&self) -> &Foo {
+        &Foo
+    }
 }
 
-fn thing<'a,Q>(x: &Q) -> thing<'a,Q> {
-    thing{ x: x } //~ ERROR 16:5: 16:18: explicit lifetime required in the type of `x` [E0621]
+impl Foo {
+    fn bar(self: Bar) -> i32 { 3 }
 }
 
 fn main() {
-    thing(&());
+    assert_eq!(3, Bar.bar());
 }

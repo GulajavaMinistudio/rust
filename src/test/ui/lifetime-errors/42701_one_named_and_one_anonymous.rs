@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::rc::Rc;
-
-struct Foo;
-
-impl Foo {
-    fn x(self: Rc<Foo>) {} //~ ERROR E0308
+struct Foo {
+    field: i32,
 }
 
-fn main() {
+fn foo2<'a>(a: &'a Foo, x: &i32) -> &'a i32 {
+    if true {
+        let p: &i32 = &a.field;
+        &*p
+    } else {
+        &*x
+    }
 }
+
+fn main() { }
