@@ -10,18 +10,19 @@
 
 //! Inlining pass for MIR functions
 
+use rustc::hir;
 use rustc::hir::def_id::DefId;
 
 use rustc_data_structures::bitvec::BitVector;
 use rustc_data_structures::indexed_vec::{Idx, IndexVec};
 
 use rustc::mir::*;
-use rustc::mir::transform::{MirPass, MirSource};
 use rustc::mir::visit::*;
-use rustc::ty::{self, Ty, TyCtxt, Instance};
+use rustc::ty::{self, Instance, Ty, TyCtxt, TypeFoldable};
 use rustc::ty::subst::{Subst,Substs};
 
 use std::collections::VecDeque;
+use transform::{MirPass, MirSource};
 use super::simplify::{remove_dead_blocks, CfgSimplifier};
 
 use syntax::{attr};
@@ -77,8 +78,13 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
 
         let mut callsites = VecDeque::new();
 
+        let param_env = self.tcx.param_env(self.source.def_id);
+
         // Only do inlining into fn bodies.
-        if let MirSource::Fn(caller_id) = self.source {
+        let id = self.tcx.hir.as_local_node_id(self.source.def_id).unwrap();
+        let body_owner_kind = self.tcx.hir.body_owner_kind(id);
+        if let (hir::BodyOwnerKind::Fn, None) = (body_owner_kind, self.source.promoted) {
+
             for (bb, bb_data) in caller_mir.basic_blocks().iter_enumerated() {
                 // Don't inline calls that are in cleanup blocks.
                 if bb_data.is_cleanup { continue; }
@@ -88,9 +94,6 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
                 if let TerminatorKind::Call {
                     func: Operand::Constant(ref f), .. } = terminator.kind {
                         if let ty::TyFnDef(callee_def_id, substs) = f.ty.sty {
-                            let caller_def_id = self.tcx.hir.local_def_id(caller_id);
-                            let param_env = self.tcx.param_env(caller_def_id);
-
                             if let Some(instance) = Instance::resolve(self.tcx,
                                                                       param_env,
                                                                       callee_def_id,
@@ -105,6 +108,8 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
                         }
                     }
             }
+        } else {
+            return;
         }
 
         let mut local_change;
@@ -123,7 +128,7 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
                                                                            callsite.location.span,
                                                                            callsite.callee) {
                     Ok(ref callee_mir) if self.should_inline(callsite, callee_mir) => {
-                        callee_mir.subst(self.tcx, callsite.substs)
+                        subst_and_normalize(callee_mir, self.tcx, &callsite.substs, param_env)
                     }
                     Ok(_) => continue,
 
@@ -247,8 +252,7 @@ impl<'a, 'tcx> Inliner<'a, 'tcx> {
 
         // FIXME: Give a bonus to functions with only a single caller
 
-        let def_id = tcx.hir.local_def_id(self.source.item_id());
-        let param_env = tcx.param_env(def_id);
+        let param_env = tcx.param_env(self.source.def_id);
 
         let mut first_block = true;
         let mut cost = 0;
@@ -585,6 +589,30 @@ fn type_size_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     ty.layout(tcx, param_env).ok().map(|layout| {
         layout.size(&tcx.data_layout).bytes()
     })
+}
+
+fn subst_and_normalize<'a, 'tcx: 'a>(
+    mir: &Mir<'tcx>,
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    substs: &'tcx ty::subst::Substs<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+) -> Mir<'tcx> {
+    struct Folder<'a, 'tcx: 'a> {
+        tcx: TyCtxt<'a, 'tcx, 'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+        substs: &'tcx ty::subst::Substs<'tcx>,
+    }
+    impl<'a, 'tcx: 'a> ty::fold::TypeFolder<'tcx, 'tcx> for Folder<'a, 'tcx> {
+        fn tcx<'b>(&'b self) -> TyCtxt<'b, 'tcx, 'tcx> {
+            self.tcx
+        }
+
+        fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
+            self.tcx.trans_apply_param_substs_env(&self.substs, self.param_env, &t)
+        }
+    }
+    let mut f = Folder { tcx, param_env, substs };
+    mir.fold_with(&mut f)
 }
 
 /**

@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,27 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z emit-end-regions -Z borrowck-mir
+// Test that removing an upstream crate does not cause any trouble.
 
-fn main() {
-    let x = 1;
-    let y = &mut x; //[ast]~ ERROR [E0596]
-                    //[mir]~^ ERROR (Ast) [E0596]
-                    //[mir]~| ERROR (Mir) [E0596]
+// revisions:rpass1 rpass2
+// aux-build:extern_crate.rs
+
+#[cfg(rpass1)]
+extern crate extern_crate;
+
+pub fn main() {
+    #[cfg(rpass1)]
+    {
+        extern_crate::foo(1);
+    }
+
+    #[cfg(rpass2)]
+    {
+        foo(1);
+    }
+}
+
+#[cfg(rpass2)]
+pub fn foo(_: u8) {
+
 }

@@ -8,12 +8,31 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z emit-end-regions -Z borrowck-mir
+// compile-flags:-Zmir-opt-level=2
+
+pub enum Enum {
+    A,
+    B,
+}
+
+trait SliceIndex {
+    type Output;
+    fn get(&self) -> &Self::Output;
+}
+
+impl SliceIndex for usize {
+    type Output = Enum;
+    #[inline(never)]
+    fn get(&self) -> &Enum {
+        &Enum::A
+    }
+}
+
+#[inline(always)]
+fn index<T: SliceIndex>(t: &T) -> &T::Output {
+    t.get()
+}
 
 fn main() {
-    let x = 1;
-    let y = &mut x; //[ast]~ ERROR [E0596]
-                    //[mir]~^ ERROR (Ast) [E0596]
-                    //[mir]~| ERROR (Mir) [E0596]
+    match *index(&0) { Enum::A => true, _ => false };
 }

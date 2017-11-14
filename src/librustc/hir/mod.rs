@@ -1028,6 +1028,18 @@ impl Body {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum BodyOwnerKind {
+    /// Functions and methods.
+    Fn,
+
+    /// Constants and associated constants.
+    Const,
+
+    /// Initializer of a `static` item.
+    Static(Mutability),
+}
+
 /// An expression
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash)]
 pub struct Expr {
@@ -1949,7 +1961,7 @@ impl ForeignItem_ {
 }
 
 /// A free variable referred to in a function.
-#[derive(Copy, Clone, RustcEncodable, RustcDecodable)]
+#[derive(Debug, Copy, Clone, RustcEncodable, RustcDecodable)]
 pub struct Freevar {
     /// The variable being accessed free.
     pub def: Def,

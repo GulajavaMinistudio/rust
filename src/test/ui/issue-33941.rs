@@ -8,12 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z emit-end-regions -Z borrowck-mir
+use std::collections::HashMap;
 
 fn main() {
-    let x = 1;
-    let y = &mut x; //[ast]~ ERROR [E0596]
-                    //[mir]~^ ERROR (Ast) [E0596]
-                    //[mir]~| ERROR (Mir) [E0596]
+    for _ in HashMap::new().iter().cloned() {}
 }
