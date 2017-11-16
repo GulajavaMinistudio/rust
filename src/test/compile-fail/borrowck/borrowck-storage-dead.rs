@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:xcrate.rs
+// compile-flags: -Z emit-end-regions -Z borrowck-mir
 
-extern crate xcrate;
+fn ok() {
+    loop {
+        let _x = 1;
+    }
+}
+
+fn fail() {
+    loop {
+        let x: i32;
+        let _ = x + 1; //~ERROR (Ast) [E0381]
+                       //~^ ERROR (Mir) [E0381]
+    }
+}
 
 fn main() {
-//  NOTE line below commeted out due to issue #45994
-//  assert_eq!(xcrate::fourway_add(1)(2)(3)(4), 10);
-    xcrate::return_closure_accessing_internal_fn()();
+    ok();
+    fail();
 }
