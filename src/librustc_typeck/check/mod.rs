@@ -117,6 +117,7 @@ use std::mem::replace;
 use std::ops::{self, Deref};
 use syntax::abi::Abi;
 use syntax::ast;
+use syntax::attr;
 use syntax::codemap::{self, original_sp, Spanned};
 use syntax::feature_gate::{GateIssue, emit_feature_err};
 use syntax::ptr::P;
@@ -136,7 +137,7 @@ mod autoderef;
 pub mod dropck;
 pub mod _match;
 pub mod writeback;
-pub mod regionck;
+mod regionck;
 pub mod coercion;
 pub mod demand;
 pub mod method;
@@ -657,27 +658,8 @@ impl<'a, 'gcx, 'tcx> Inherited<'a, 'gcx, 'tcx> {
                                         value: &T) -> T
         where T : TypeFoldable<'tcx>
     {
-        let ok = self.normalize_associated_types_in_as_infer_ok(span, body_id, param_env, value);
+        let ok = self.partially_normalize_associated_types_in(span, body_id, param_env, value);
         self.register_infer_ok_obligations(ok)
-    }
-
-    fn normalize_associated_types_in_as_infer_ok<T>(&self,
-                                                    span: Span,
-                                                    body_id: ast::NodeId,
-                                                    param_env: ty::ParamEnv<'tcx>,
-                                                    value: &T)
-                                                    -> InferOk<'tcx, T>
-        where T : TypeFoldable<'tcx>
-    {
-        debug!("normalize_associated_types_in(value={:?})", value);
-        let mut selcx = traits::SelectionContext::new(self);
-        let cause = ObligationCause::misc(span, body_id);
-        let traits::Normalized { value, obligations } =
-            traits::normalize(&mut selcx, param_env, cause, value);
-        debug!("normalize_associated_types_in: result={:?} predicates={:?}",
-            value,
-            obligations);
-        InferOk { value, obligations }
     }
 
     /// Replace any late-bound regions bound in `value` with
@@ -1339,24 +1321,12 @@ fn check_impl_items_against_trait<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 hir::ImplItemKind::Method(..) => {
                     let trait_span = tcx.hir.span_if_local(ty_trait_item.def_id);
                     if ty_trait_item.kind == ty::AssociatedKind::Method {
-                        let err_count = tcx.sess.err_count();
                         compare_impl_method(tcx,
                                             &ty_impl_item,
                                             impl_item.span,
                                             &ty_trait_item,
                                             impl_trait_ref,
-                                            trait_span,
-                                            true); // start with old-broken-mode
-                        if err_count == tcx.sess.err_count() {
-                            // old broken mode did not report an error. Try with the new mode.
-                            compare_impl_method(tcx,
-                                                &ty_impl_item,
-                                                impl_item.span,
-                                                &ty_trait_item,
-                                                impl_trait_ref,
-                                                trait_span,
-                                                false); // use the new mode
-                        }
+                                            trait_span);
                     } else {
                         let mut err = struct_span_err!(tcx.sess, impl_item.span, E0324,
                                   "item `{}` is an associated method, \
@@ -1561,12 +1531,15 @@ pub fn check_enum<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let def = tcx.adt_def(def_id);
     def.destructor(tcx); // force the destructor to be evaluated
 
-    if vs.is_empty() && tcx.has_attr(def_id, "repr") {
-        struct_span_err!(
-            tcx.sess, sp, E0084,
-            "unsupported representation for zero-variant enum")
-            .span_label(sp, "unsupported enum representation")
-            .emit();
+    if vs.is_empty() {
+        let attributes = tcx.get_attrs(def_id);
+        if let Some(attr) = attr::find_by_name(&attributes, "repr") {
+            struct_span_err!(
+                tcx.sess, attr.span, E0084,
+                "unsupported representation for zero-variant enum")
+                .span_label(sp, "zero-variant enum")
+                .emit();
+        }
     }
 
     let repr_type_ty = def.repr.discr_type().to_ty(tcx);
@@ -1982,10 +1955,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                                     -> InferOk<'tcx, T>
         where T : TypeFoldable<'tcx>
     {
-        self.inh.normalize_associated_types_in_as_infer_ok(span,
-                                                           self.body_id,
-                                                           self.param_env,
-                                                           value)
+        self.inh.partially_normalize_associated_types_in(span,
+                                                         self.body_id,
+                                                         self.param_env,
+                                                         value)
     }
 
     pub fn require_type_meets(&self,
