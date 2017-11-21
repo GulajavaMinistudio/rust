@@ -432,7 +432,7 @@ impl Session {
             self.opts.debugging_opts.borrowck_mir
     }
     pub fn lto(&self) -> bool {
-        self.opts.cg.lto
+        self.opts.cg.lto || self.target.target.options.requires_lto
     }
     /// Returns the panic strategy for this compile session. If the user explicitly selected one
     /// using '-C panic', use that, otherwise use the panic strategy defined by the target.
@@ -727,9 +727,11 @@ pub fn build_session_with_codemap(sopts: config::Options,
         .unwrap_or(false);
     let cap_lints_allow = sopts.lint_cap.map_or(false, |cap| cap == lint::Allow);
 
-    let can_print_warnings = !(warnings_allow || cap_lints_allow);
+    let can_emit_warnings = !(warnings_allow || cap_lints_allow);
 
     let treat_err_as_bug = sopts.debugging_opts.treat_err_as_bug;
+
+    let external_macro_backtrace = sopts.debugging_opts.external_macro_backtrace;
 
     let emitter: Box<Emitter> = match (sopts.error_format, emitter_dest) {
         (config::ErrorOutputType::HumanReadable(color_config), None) => {
@@ -753,9 +755,14 @@ pub fn build_session_with_codemap(sopts: config::Options,
     };
 
     let diagnostic_handler =
-        errors::Handler::with_emitter(can_print_warnings,
-                                      treat_err_as_bug,
-                                      emitter);
+        errors::Handler::with_emitter_and_flags(
+            emitter,
+            errors::HandlerFlags {
+                can_emit_warnings,
+                treat_err_as_bug,
+                external_macro_backtrace,
+                .. Default::default()
+            });
 
     build_session_(sopts,
                    local_crate_source_file,

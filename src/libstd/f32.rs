@@ -9,8 +9,9 @@
 // except according to those terms.
 
 //! This module provides constants which are specific to the implementation
-//! of the `f32` floating point data type. Mathematically significant
-//! numbers are provided in the `consts` sub-module.
+//! of the `f32` floating point data type.
+//!
+//! Mathematically significant numbers are provided in the `consts` sub-module.
 //!
 //! *[See also the `f32` primitive type](../primitive.f32.html).*
 
@@ -25,7 +26,6 @@ use intrinsics;
 use num::FpCategory;
 #[cfg(not(test))]
 use sys::cmath;
-
 
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::f32::{RADIX, MANTISSA_DIGITS, DIGITS, EPSILON};

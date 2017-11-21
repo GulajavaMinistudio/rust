@@ -1271,6 +1271,7 @@ actual:\n\
             let crate_type = if aux_props.no_prefer_dynamic {
                 None
             } else if (self.config.target.contains("musl") && !aux_props.force_host) ||
+                      self.config.target.contains("wasm32") ||
                       self.config.target.contains("emscripten") {
                 // We primarily compile all auxiliary libraries as dynamic libraries
                 // to avoid code size bloat and large binaries as much as possible
@@ -1432,7 +1433,10 @@ actual:\n\
             }
         }
 
-        if !self.props.no_prefer_dynamic {
+
+        if self.config.target == "wasm32-unknown-unknown" {
+            // rustc.arg("-g"); // get any backtrace at all on errors
+        } else if !self.props.no_prefer_dynamic {
             rustc.args(&["-C", "prefer-dynamic"]);
         }
 
@@ -1473,6 +1477,10 @@ actual:\n\
             let mut fname = f.file_name().unwrap().to_os_string();
             fname.push(".js");
             f.set_file_name(&fname);
+        } else if self.config.target.contains("wasm32") {
+            let mut fname = f.file_name().unwrap().to_os_string();
+            fname.push(".wasm");
+            f.set_file_name(&fname);
         } else if !env::consts::EXE_SUFFIX.is_empty() {
             let mut fname = f.file_name().unwrap().to_os_string();
             fname.push(env::consts::EXE_SUFFIX);
@@ -1493,6 +1501,22 @@ actual:\n\
             } else {
                 self.fatal("no NodeJS binary found (--nodejs)");
             }
+        }
+
+        // If this is otherwise wasm , then run tests under nodejs with our
+        // shim
+        if self.config.target.contains("wasm32") {
+            if let Some(ref p) = self.config.nodejs {
+                args.push(p.clone());
+            } else {
+                self.fatal("no NodeJS binary found (--nodejs)");
+            }
+
+            let src = self.config.src_base
+                .parent().unwrap() // chop off `run-pass`
+                .parent().unwrap() // chop off `test`
+                .parent().unwrap(); // chop off `src`
+            args.push(src.join("src/etc/wasm32-shim.js").display().to_string());
         }
 
         let exe_file = self.make_exe_name();
@@ -2400,15 +2424,25 @@ actual:\n\
     fn normalize_output(&self, output: &str, custom_rules: &[(String, String)]) -> String {
         let parent_dir = self.testpaths.file.parent().unwrap();
         let cflags = self.props.compile_flags.join(" ");
-        let parent_dir_str = if cflags.contains("--error-format json")
-                             || cflags.contains("--error-format pretty-json") {
+        let json = cflags.contains("--error-format json") ||
+                   cflags.contains("--error-format pretty-json");
+        let parent_dir_str = if json {
             parent_dir.display().to_string().replace("\\", "\\\\")
         } else {
             parent_dir.display().to_string()
         };
 
-        let mut normalized = output.replace(&parent_dir_str, "$DIR")
-              .replace("\\\\", "\\") // denormalize for paths on windows
+        let mut normalized = output.replace(&parent_dir_str, "$DIR");
+
+        if json {
+            // escaped newlines in json strings should be readable
+            // in the stderr files. There's no point int being correct,
+            // since only humans process the stderr files.
+            // Thus we just turn escaped newlines back into newlines.
+            normalized = normalized.replace("\\n", "\n");
+        }
+
+        normalized = normalized.replace("\\\\", "\\") // denormalize for paths on windows
               .replace("\\", "/") // normalize for paths on windows
               .replace("\r\n", "\n") // normalize for linebreaks on windows
               .replace("\t", "\\t"); // makes tabs visible

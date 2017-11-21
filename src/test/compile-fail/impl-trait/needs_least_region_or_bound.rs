@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: -Z parse-only
+#![feature(conservative_impl_trait)]
 
-// This file was auto-generated using 'src/etc/generate-keyword-tests.py crate'
+use std::fmt::Debug;
 
-fn main() {
-    let crate = "foo"; //~ error: expected pattern, found keyword `crate`
+trait MultiRegionTrait<'a, 'b> {}
+impl<'a, 'b> MultiRegionTrait<'a, 'b> for (&'a u32, &'b u32) {}
+
+fn no_least_region<'a, 'b>(x: &'a u32, y: &'b u32) -> impl MultiRegionTrait<'a, 'b> {
+//~^ ERROR ambiguous lifetime bound
+    (x, y)
 }
+
+fn main() {}

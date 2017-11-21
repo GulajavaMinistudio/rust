@@ -33,7 +33,7 @@ use syntax_pos::Span;
 use errors::{DiagnosticBuilder, Handler, FatalError};
 use visit::{self, FnKind, Visitor};
 use parse::ParseSess;
-use symbol::Symbol;
+use symbol::{keywords, Symbol};
 
 use std::env;
 
@@ -381,6 +381,8 @@ declare_features! (
     (active, doc_cfg, "1.21.0", Some(43781)),
     // #[doc(masked)]
     (active, doc_masked, "1.21.0", Some(44027)),
+    // #[doc(spotlight)]
+    (active, doc_spotlight, "1.22.0", Some(45040)),
 
     // allow `#[must_use]` on functions and comparison operators (RFC 1940)
     (active, fn_must_use, "1.21.0", Some(43302)),
@@ -415,6 +417,12 @@ declare_features! (
 
     // Allow trait methods with arbitrary self types
     (active, arbitrary_self_types, "1.23.0", Some(44874)),
+
+    // #![wasm_import_memory] attribute
+    (active, wasm_import_memory, "1.22.0", None),
+
+    // `crate` in paths
+    (active, crate_in_paths, "1.23.0", Some(45477)),
 );
 
 declare_features! (
@@ -928,6 +936,11 @@ pub const BUILTIN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeG
                                       never be stable",
                                      cfg_fn!(rustc_attrs))),
 
+    ("wasm_import_memory", Whitelisted, Gated(Stability::Unstable,
+                                 "wasm_import_memory",
+                                 "wasm_import_memory attribute is currently unstable",
+                                 cfg_fn!(wasm_import_memory))),
+
     // Crate level attributes
     ("crate_name", CrateLevel, Ungated),
     ("crate_type", CrateLevel, Ungated),
@@ -1292,6 +1305,10 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                     gate_feature_post!(&self, doc_masked, attr.span,
                         "#[doc(masked)] is experimental"
                     );
+                } else if content.iter().any(|c| c.check_name("spotlight")) {
+                    gate_feature_post!(&self, doc_spotlight, attr.span,
+                        "#[doc(spotlight)] is experimental"
+                    );
                 }
             }
         }
@@ -1618,6 +1635,17 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             _ => {}
         }
         visit::walk_impl_item(self, ii);
+    }
+
+    fn visit_path(&mut self, path: &'a ast::Path, _id: NodeId) {
+        for segment in &path.segments {
+            if segment.identifier.name == keywords::Crate.name() {
+                gate_feature_post!(&self, crate_in_paths, segment.span,
+                                   "`crate` in paths is experimental");
+            }
+        }
+
+        visit::walk_path(self, path);
     }
 
     fn visit_vis(&mut self, vis: &'a ast::Visibility) {
