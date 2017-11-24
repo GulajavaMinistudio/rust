@@ -726,7 +726,7 @@ define_print! {
                     }
                 }
                 ty::ReVar(region_vid) if cx.identify_regions => {
-                    write!(f, "'{}rv", region_vid.index)
+                    write!(f, "'{}rv", region_vid.index())
                 }
                 ty::ReScope(_) |
                 ty::ReVar(_) |
@@ -850,7 +850,7 @@ impl fmt::Debug for ty::FloatVid {
 
 impl fmt::Debug for ty::RegionVid {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "'_#{}r", self.index)
+        write!(f, "'_#{}r", self.index())
     }
 }
 
@@ -1261,7 +1261,7 @@ define_print! {
                     ty::tls::with(|tcx| {
                         write!(f, "the trait `{}` is object-safe", tcx.item_path_str(trait_def_id))
                     }),
-                ty::Predicate::ClosureKind(closure_def_id, kind) =>
+                ty::Predicate::ClosureKind(closure_def_id, _closure_substs, kind) =>
                     ty::tls::with(|tcx| {
                         write!(f, "the closure `{}` implements the trait `{}`",
                                tcx.item_path_str(closure_def_id), kind)
@@ -1285,8 +1285,8 @@ define_print! {
                 ty::Predicate::ObjectSafe(trait_def_id) => {
                     write!(f, "ObjectSafe({:?})", trait_def_id)
                 }
-                ty::Predicate::ClosureKind(closure_def_id, kind) => {
-                    write!(f, "ClosureKind({:?}, {:?})", closure_def_id, kind)
+                ty::Predicate::ClosureKind(closure_def_id, closure_substs, kind) => {
+                    write!(f, "ClosureKind({:?}, {:?}, {:?})", closure_def_id, closure_substs, kind)
                 }
                 ty::Predicate::ConstEvaluatable(def_id, substs) => {
                     write!(f, "ConstEvaluatable({:?}, {:?})", def_id, substs)

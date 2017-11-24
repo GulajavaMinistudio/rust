@@ -588,6 +588,18 @@ struct UsePlacementFinder {
     found_use: bool,
 }
 
+impl UsePlacementFinder {
+    fn check(krate: &Crate, target_module: NodeId) -> (Option<Span>, bool) {
+        let mut finder = UsePlacementFinder {
+            target_module,
+            span: None,
+            found_use: false,
+        };
+        visit::walk_crate(&mut finder, krate);
+        (finder.span, finder.found_use)
+    }
+}
+
 impl<'tcx> Visitor<'tcx> for UsePlacementFinder {
     fn visit_mod(
         &mut self,
@@ -1278,6 +1290,8 @@ pub struct Resolver<'a> {
     ambiguity_errors: Vec<AmbiguityError<'a>>,
     /// `use` injections are delayed for better placement and deduplication
     use_injections: Vec<UseError<'a>>,
+    /// `use` injections for proc macros wrongly imported with #[macro_use]
+    proc_mac_errors: Vec<macros::ProcMacError>,
 
     gated_errors: FxHashSet<Span>,
     disallowed_shadowing: Vec<&'a LegacyBinding<'a>>,
@@ -1486,6 +1500,7 @@ impl<'a> Resolver<'a> {
             privacy_errors: Vec::new(),
             ambiguity_errors: Vec::new(),
             use_injections: Vec::new(),
+            proc_mac_errors: Vec::new(),
             gated_errors: FxHashSet(),
             disallowed_shadowing: Vec::new(),
 
@@ -2599,6 +2614,22 @@ impl<'a> Resolver<'a> {
                         }
                         _ => {}
                     },
+                    (Def::Enum(..), PathSource::TupleStruct)
+                        | (Def::Enum(..), PathSource::Expr(..))  => {
+                        if let Some(variants) = this.collect_enum_variants(def) {
+                            err.note(&format!("did you mean to use one \
+                                               of the following variants?\n{}",
+                                variants.iter()
+                                    .map(|suggestion| path_names_to_string(suggestion))
+                                    .map(|suggestion| format!("- `{}`", suggestion))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")));
+
+                        } else {
+                            err.note("did you mean to use one of the enum's variants?");
+                        }
+                        return (err, candidates);
+                    },
                     _ if ns == ValueNS && is_struct_like(def) => {
                         if let Def::Struct(def_id) = def {
                             if let Some((ctor_def, ctor_vis))
@@ -3525,6 +3556,72 @@ impl<'a> Resolver<'a> {
         candidates
     }
 
+    fn find_module(&mut self,
+                   module_def: Def)
+                   -> Option<(Module<'a>, ImportSuggestion)>
+    {
+        let mut result = None;
+        let mut worklist = Vec::new();
+        let mut seen_modules = FxHashSet();
+        worklist.push((self.graph_root, Vec::new()));
+
+        while let Some((in_module, path_segments)) = worklist.pop() {
+            // abort if the module is already found
+            if let Some(_) = result { break; }
+
+            self.populate_module_if_necessary(in_module);
+
+            in_module.for_each_child_stable(|ident, _, name_binding| {
+                // abort if the module is already found
+                if let Some(_) = result {
+                    return ();
+                }
+                if let Some(module) = name_binding.module() {
+                    // form the path
+                    let mut path_segments = path_segments.clone();
+                    path_segments.push(ast::PathSegment::from_ident(ident, name_binding.span));
+                    if module.def() == Some(module_def) {
+                        let path = Path {
+                            span: name_binding.span,
+                            segments: path_segments,
+                        };
+                        result = Some((module, ImportSuggestion { path: path }));
+                    } else {
+                        // add the module to the lookup
+                        if seen_modules.insert(module.def_id().unwrap()) {
+                            worklist.push((module, path_segments));
+                        }
+                    }
+                }
+            });
+        }
+
+        result
+    }
+
+    fn collect_enum_variants(&mut self, enum_def: Def) -> Option<Vec<Path>> {
+        if let Def::Enum(..) = enum_def {} else {
+            panic!("Non-enum def passed to collect_enum_variants: {:?}", enum_def)
+        }
+
+        self.find_module(enum_def).map(|(enum_module, enum_import_suggestion)| {
+            self.populate_module_if_necessary(enum_module);
+
+            let mut variants = Vec::new();
+            enum_module.for_each_child_stable(|ident, _, name_binding| {
+                if let Def::Variant(..) = name_binding.def() {
+                    let mut segms = enum_import_suggestion.path.segments.clone();
+                    segms.push(ast::PathSegment::from_ident(ident, name_binding.span));
+                    variants.push(Path {
+                        span: name_binding.span,
+                        segments: segms,
+                    });
+                }
+            });
+            variants
+        })
+    }
+
     fn record_def(&mut self, node_id: NodeId, resolution: PathResolution) {
         debug!("(recording def) recording {:?} for {}", resolution, node_id);
         if let Some(prev_res) = self.def_map.insert(node_id, resolution) {
@@ -3569,6 +3666,7 @@ impl<'a> Resolver<'a> {
     fn report_errors(&mut self, krate: &Crate) {
         self.report_shadowing_errors();
         self.report_with_use_injections(krate);
+        self.report_proc_macro_import(krate);
         let mut reported_spans = FxHashSet();
 
         for &AmbiguityError { span, name, b1, b2, lexical, legacy } in &self.ambiguity_errors {
@@ -3618,14 +3716,9 @@ impl<'a> Resolver<'a> {
 
     fn report_with_use_injections(&mut self, krate: &Crate) {
         for UseError { mut err, candidates, node_id, better } in self.use_injections.drain(..) {
-            let mut finder = UsePlacementFinder {
-                target_module: node_id,
-                span: None,
-                found_use: false,
-            };
-            visit::walk_crate(&mut finder, krate);
+            let (span, found_use) = UsePlacementFinder::check(krate, node_id);
             if !candidates.is_empty() {
-                show_candidates(&mut err, finder.span, &candidates, better, finder.found_use);
+                show_candidates(&mut err, span, &candidates, better, found_use);
             }
             err.emit();
         }

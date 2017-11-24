@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct Helper<'a, F: 'a>(&'a F);
+#![feature(external_doc)]
 
-fn fix<F>(f: F) -> i32 where F: Fn(Helper<F>, i32) -> i32 {
-    f(Helper(&f), 8)
-}
-
-fn main() {
-    fix(|_, x| x);
-}
+// @has external_doc/struct.CanHasDocs.html
+// @has - '//h1' 'External Docs'
+// @has - '//h2' 'Inline Docs'
+#[doc(include = "auxiliary/external-doc.md")]
+/// ## Inline Docs
+pub struct CanHasDocs;

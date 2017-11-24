@@ -17,7 +17,7 @@ use rustc::ty::{self, TyCtxt, ParamEnv};
 use rustc::ty::maps::Providers;
 use rustc::mir::{AssertMessage, BasicBlock, BorrowKind, Location, Lvalue, Local};
 use rustc::mir::{Mir, Mutability, Operand, Projection, ProjectionElem, Rvalue};
-use rustc::mir::{Statement, StatementKind, Terminator, TerminatorKind};
+use rustc::mir::{Field, Statement, StatementKind, Terminator, TerminatorKind};
 use transform::nll;
 
 use rustc_data_structures::fx::FxHashSet;
@@ -1577,15 +1577,40 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
     // End-user visible description of `lvalue`
     fn describe_lvalue(&self, lvalue: &Lvalue<'tcx>) -> String {
         let mut buf = String::new();
-        self.append_lvalue_to_string(lvalue, &mut buf, None);
+        self.append_lvalue_to_string(lvalue, &mut buf, false);
         buf
+    }
+
+    /// If this is a field projection, and the field is being projected from a closure type,
+    /// then returns the index of the field being projected. Note that this closure will always
+    /// be `self` in the current MIR, because that is the only time we directly access the fields
+    /// of a closure type.
+    fn is_upvar_field_projection(&self, lvalue: &Lvalue<'tcx>) -> Option<Field> {
+        match *lvalue {
+            Lvalue::Projection(ref proj) => {
+                match proj.elem {
+                    ProjectionElem::Field(field, _ty) => {
+                        let is_projection_from_ty_closure = proj.base.ty(self.mir, self.tcx)
+                                .to_ty(self.tcx).is_closure();
+
+                        if is_projection_from_ty_closure {
+                            Some(field)
+                        } else {
+                            None
+                        }
+                    },
+                    _ => None
+                }
+            },
+            _ => None
+        }
     }
 
     // Appends end-user visible description of `lvalue` to `buf`.
     fn append_lvalue_to_string(&self,
                                lvalue: &Lvalue<'tcx>,
                                buf: &mut String,
-                               autoderef: Option<bool>) {
+                               mut autoderef: bool) {
         match *lvalue {
             Lvalue::Local(local) => {
                 self.append_local_to_string(local, buf, "_");
@@ -1594,38 +1619,45 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                 buf.push_str(&format!("{}", &self.tcx.item_name(static_.def_id)));
             }
             Lvalue::Projection(ref proj) => {
-                let mut autoderef = autoderef.unwrap_or(false);
-
                 match proj.elem {
                     ProjectionElem::Deref => {
-                        if autoderef {
-                            self.append_lvalue_to_string(&proj.base, buf, Some(autoderef));
+                        if let Some(field) = self.is_upvar_field_projection(&proj.base) {
+                            let var_index = field.index();
+                            let name = self.mir.upvar_decls[var_index].debug_name.to_string();
+                            if self.mir.upvar_decls[var_index].by_ref {
+                                buf.push_str(&name);
+                            } else {
+                                buf.push_str(&format!("*{}", &name));
+                            }
                         } else {
-                            buf.push_str(&"(*");
-                            self.append_lvalue_to_string(&proj.base, buf, Some(autoderef));
-                            buf.push_str(&")");
+                            if autoderef {
+                                self.append_lvalue_to_string(&proj.base, buf, autoderef);
+                            } else {
+                                buf.push_str(&"*");
+                                self.append_lvalue_to_string(&proj.base, buf, autoderef);
+                            }
                         }
                     },
                     ProjectionElem::Downcast(..) => {
-                        self.append_lvalue_to_string(&proj.base, buf, Some(autoderef));
+                        self.append_lvalue_to_string(&proj.base, buf, autoderef);
                     },
                     ProjectionElem::Field(field, _ty) => {
                         autoderef = true;
-                        let is_projection_from_ty_closure = proj.base.ty(self.mir, self.tcx)
-                                .to_ty(self.tcx).is_closure();
 
-                        let field_name = self.describe_field(&proj.base, field.index());
-                        if is_projection_from_ty_closure {
-                            buf.push_str(&format!("{}", field_name));
+                        if let Some(field) = self.is_upvar_field_projection(lvalue) {
+                            let var_index = field.index();
+                            let name = self.mir.upvar_decls[var_index].debug_name.to_string();
+                            buf.push_str(&name);
                         } else {
-                            self.append_lvalue_to_string(&proj.base, buf, Some(autoderef));
+                            let field_name = self.describe_field(&proj.base, field);
+                            self.append_lvalue_to_string(&proj.base, buf, autoderef);
                             buf.push_str(&format!(".{}", field_name));
                         }
                     },
                     ProjectionElem::Index(index) => {
                         autoderef = true;
 
-                        self.append_lvalue_to_string(&proj.base, buf, Some(autoderef));
+                        self.append_lvalue_to_string(&proj.base, buf, autoderef);
                         buf.push_str("[");
                         self.append_local_to_string(index, buf, "..");
                         buf.push_str("]");
@@ -1635,7 +1667,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                         // Since it isn't possible to borrow an element on a particular index and
                         // then use another while the borrow is held, don't output indices details
                         // to avoid confusing the end-user
-                        self.append_lvalue_to_string(&proj.base, buf, Some(autoderef));
+                        self.append_lvalue_to_string(&proj.base, buf, autoderef);
                         buf.push_str(&"[..]");
                     },
                 };
@@ -1653,58 +1685,57 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         }
     }
 
-    // FIXME Instead of passing usize, Field should be passed
-    // End-user visible description of the `field_index`nth field of `base`
-    fn describe_field(&self, base: &Lvalue, field_index: usize) -> String {
+    // End-user visible description of the `field`nth field of `base`
+    fn describe_field(&self, base: &Lvalue, field: Field) -> String {
         match *base {
             Lvalue::Local(local) => {
                 let local = &self.mir.local_decls[local];
-                self.describe_field_from_ty(&local.ty, field_index)
+                self.describe_field_from_ty(&local.ty, field)
             },
             Lvalue::Static(ref static_) => {
-                self.describe_field_from_ty(&static_.ty, field_index)
+                self.describe_field_from_ty(&static_.ty, field)
             },
             Lvalue::Projection(ref proj) => {
                 match proj.elem {
                     ProjectionElem::Deref =>
-                        self.describe_field(&proj.base, field_index),
+                        self.describe_field(&proj.base, field),
                     ProjectionElem::Downcast(def, variant_index) =>
-                        format!("{}", def.variants[variant_index].fields[field_index].name),
+                        format!("{}", def.variants[variant_index].fields[field.index()].name),
                     ProjectionElem::Field(_, field_type) =>
-                        self.describe_field_from_ty(&field_type, field_index),
+                        self.describe_field_from_ty(&field_type, field),
                     ProjectionElem::Index(..)
                     | ProjectionElem::ConstantIndex { .. }
                     | ProjectionElem::Subslice { .. } =>
-                        format!("{}", self.describe_field(&proj.base, field_index)),
+                        format!("{}", self.describe_field(&proj.base, field)),
                 }
             }
         }
     }
 
     // End-user visible description of the `field_index`nth field of `ty`
-    fn describe_field_from_ty(&self, ty: &ty::Ty, field_index: usize) -> String {
+    fn describe_field_from_ty(&self, ty: &ty::Ty, field: Field) -> String {
         if ty.is_box() {
             // If the type is a box, the field is described from the boxed type
-            self.describe_field_from_ty(&ty.boxed_ty(), field_index)
+            self.describe_field_from_ty(&ty.boxed_ty(), field)
         }
         else {
             match ty.sty {
                 ty::TyAdt(def, _) => {
                     if def.is_enum() {
-                        format!("{}", field_index)
+                        format!("{}", field.index())
                     }
                     else {
-                        format!("{}", def.struct_variant().fields[field_index].name)
+                        format!("{}", def.struct_variant().fields[field.index()].name)
                     }
                 },
                 ty::TyTuple(_, _) => {
-                    format!("{}", field_index)
+                    format!("{}", field.index())
                 },
                 ty::TyRef(_, tnm) | ty::TyRawPtr(tnm) => {
-                    self.describe_field_from_ty(&tnm.ty, field_index)
+                    self.describe_field_from_ty(&tnm.ty, field)
                 },
                 ty::TyArray(ty, _) | ty::TySlice(ty) => {
-                    self.describe_field_from_ty(&ty, field_index)
+                    self.describe_field_from_ty(&ty, field)
                 },
                 ty::TyClosure(closure_def_id, _) => {
                     // Convert the def-id into a node-id. node-ids are only valid for
@@ -1712,7 +1743,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                     // the closure comes from another crate. But in that case we wouldn't
                     // be borrowck'ing it, so we can just unwrap:
                     let node_id = self.tcx.hir.as_local_node_id(closure_def_id).unwrap();
-                    let freevar = self.tcx.with_freevars(node_id, |fv| fv[field_index]);
+                    let freevar = self.tcx.with_freevars(node_id, |fv| fv[field.index()]);
 
                     self.tcx.hir.name(freevar.var_id()).to_string()
                  }
