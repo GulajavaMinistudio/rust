@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z borrowck=mir
+fn project<T>(x: &(T,)) -> &T { &x.0 }
 
-struct NonCopy;
+fn dummy() {}
 
 fn main() {
-    let array = [NonCopy; 1];
-    let _value = array[0];  //[ast]~ ERROR [E0508]
-                            //[mir]~^ ERROR [E0508]
+    let f = (dummy as fn(),);
+    (*project(&f))();
 }

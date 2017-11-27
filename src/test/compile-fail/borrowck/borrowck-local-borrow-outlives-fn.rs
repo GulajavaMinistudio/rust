@@ -11,10 +11,9 @@
 // revisions: ast mir
 //[mir]compile-flags: -Z borrowck=mir
 
-struct NonCopy;
-
-fn main() {
-    let array = [NonCopy; 1];
-    let _value = array[0];  //[ast]~ ERROR [E0508]
-                            //[mir]~^ ERROR [E0508]
+fn cplusplus_mode(x: isize) -> &'static isize {
+    &x //[ast]~ ERROR `x` does not live long enough
+       //[mir]~^ ERROR borrowed value does not live long enough
 }
+
+fn main() {}
