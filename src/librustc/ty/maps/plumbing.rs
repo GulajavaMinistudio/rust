@@ -81,17 +81,18 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         // (And cycle errors around impls tend to occur during the
         // collect/coherence phases anyhow.)
         item_path::with_forced_impl_filename_line(|| {
+            let span = self.sess.codemap().def_span(span);
             let mut err =
                 struct_span_err!(self.sess, span, E0391,
                                  "unsupported cyclic reference between types/traits detected");
             err.span_label(span, "cyclic reference");
 
-            err.span_note(stack[0].0, &format!("the cycle begins when {}...",
-                                               stack[0].1.describe(self)));
+            err.span_note(self.sess.codemap().def_span(stack[0].0),
+                          &format!("the cycle begins when {}...", stack[0].1.describe(self)));
 
             for &(span, ref query) in &stack[1..] {
-                err.span_note(span, &format!("...which then requires {}...",
-                                             query.describe(self)));
+                err.span_note(self.sess.codemap().def_span(span),
+                              &format!("...which then requires {}...", query.describe(self)));
             }
 
             err.note(&format!("...which then again requires {}, completing the cycle.",
@@ -768,6 +769,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::BorrowCheck => { force!(borrowck, def_id!()); }
         DepKind::MirBorrowCheck => { force!(mir_borrowck, def_id!()); }
         DepKind::UnsafetyCheckResult => { force!(unsafety_check_result, def_id!()); }
+        DepKind::UnsafeDeriveOnReprPacked => { force!(unsafe_derive_on_repr_packed, def_id!()); }
         DepKind::Reachability => { force!(reachable_set, LOCAL_CRATE); }
         DepKind::MirKeys => { force!(mir_keys, LOCAL_CRATE); }
         DepKind::CrateVariances => { force!(crate_variances, LOCAL_CRATE); }
