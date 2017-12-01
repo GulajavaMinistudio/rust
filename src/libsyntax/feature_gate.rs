@@ -428,6 +428,9 @@ declare_features! (
 
     // In-band lifetime bindings (e.g. `fn foo(x: &'a u8) -> &'a u8`)
     (active, in_band_lifetimes, "1.23.0", Some(44524)),
+
+    // Nested groups in `use` (RFC 2128)
+    (active, use_nested_groups, "1.23.0", Some(44494)),
 );
 
 declare_features! (
@@ -742,18 +745,6 @@ pub const BUILTIN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeG
                                         is just used for rustc unit tests \
                                         and will never be stable",
                                        cfg_fn!(rustc_attrs))),
-    ("rustc_metadata_dirty", Whitelisted, Gated(Stability::Unstable,
-                                                "rustc_attrs",
-                                                "the `#[rustc_metadata_dirty]` attribute \
-                                                 is just used for rustc unit tests \
-                                                 and will never be stable",
-                                                 cfg_fn!(rustc_attrs))),
-    ("rustc_metadata_clean", Whitelisted, Gated(Stability::Unstable,
-                                                "rustc_attrs",
-                                                "the `#[rustc_metadata_clean]` attribute \
-                                                 is just used for rustc unit tests \
-                                                 and will never be stable",
-                                                 cfg_fn!(rustc_attrs))),
     ("rustc_partition_reused", Whitelisted, Gated(Stability::Unstable,
                                                   "rustc_attrs",
                                                   "this attribute \
@@ -1659,6 +1650,29 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         }
 
         visit::walk_path(self, path);
+    }
+
+    fn visit_use_tree(&mut self, use_tree: &'a ast::UseTree, id: NodeId, nested: bool) {
+        if nested {
+            match use_tree.kind {
+                ast::UseTreeKind::Simple(_) => {
+                    if use_tree.prefix.segments.len() != 1 {
+                        gate_feature_post!(&self, use_nested_groups, use_tree.span,
+                                           "paths in `use` groups are experimental");
+                    }
+                }
+                ast::UseTreeKind::Glob => {
+                    gate_feature_post!(&self, use_nested_groups, use_tree.span,
+                                       "glob imports in `use` groups are experimental");
+                }
+                ast::UseTreeKind::Nested(_) => {
+                    gate_feature_post!(&self, use_nested_groups, use_tree.span,
+                                       "nested groups in `use` are experimental");
+                }
+            }
+        }
+
+        visit::walk_use_tree(self, use_tree, id);
     }
 
     fn visit_vis(&mut self, vis: &'a ast::Visibility) {

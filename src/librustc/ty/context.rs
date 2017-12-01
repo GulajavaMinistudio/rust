@@ -24,7 +24,7 @@ use hir::map::DefPathHash;
 use lint::{self, Lint};
 use ich::{StableHashingContext, NodeIdHashingMode};
 use middle::const_val::ConstVal;
-use middle::cstore::{CrateStore, LinkMeta, EncodedMetadataHashes};
+use middle::cstore::{CrateStore, LinkMeta};
 use middle::cstore::EncodedMetadata;
 use middle::free_region::FreeRegionMap;
 use middle::lang_items;
@@ -1124,11 +1124,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     }
 
     pub fn stability(self) -> Rc<stability::Index<'tcx>> {
-        // FIXME(#42293) we should actually track this, but fails too many tests
-        // today.
-        self.dep_graph.with_ignore(|| {
-            self.stability_index(LOCAL_CRATE)
-        })
+        self.stability_index(LOCAL_CRATE)
     }
 
     pub fn crates(self) -> Rc<Vec<CrateNum>> {
@@ -1246,7 +1242,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
 impl<'a, 'tcx> TyCtxt<'a, 'tcx, 'tcx> {
     pub fn encode_metadata(self, link_meta: &LinkMeta, reachable: &NodeSet)
-        -> (EncodedMetadata, EncodedMetadataHashes)
+        -> EncodedMetadata
     {
         self.cstore.encode_metadata(self, link_meta, reachable)
     }

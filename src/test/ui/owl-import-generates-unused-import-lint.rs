@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The data that we will serialize and deserialize.
+#![feature(use_nested_groups)]
+#![deny(unused_imports)]
 
-use rustc::dep_graph::{WorkProduct, WorkProductId};
+mod foo {
+    pub enum Bar {}
+}
 
-#[derive(Debug, RustcEncodable, RustcDecodable)]
-pub struct SerializedWorkProduct {
-    /// node that produced the work-product
-    pub id: WorkProductId,
+use foo::{*, *}; //~ ERROR unused import: `*`
 
-    /// work-product data itself
-    pub work_product: WorkProduct,
+fn main() {
+    let _: Bar;
 }
