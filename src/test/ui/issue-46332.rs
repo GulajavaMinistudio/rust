@@ -8,20 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:bang_proc_macro2.rs
-// ignore-stage1
+// Original Levenshtein distance for both of this is 1. We improved accuracy with
+// additional case insensitive comparison.
 
-#![feature(proc_macro)]
-#![allow(unused_macros)]
+struct TyUint {}
 
-extern crate bang_proc_macro2;
-
-use bang_proc_macro2::bang_proc_macro2;
+struct TyInt {}
 
 fn main() {
-    let foobar = 42;
-    bang_proc_macro2!();
-    //~^ ERROR cannot find value `foobar2` in this scope
-    //~^^ did you mean `foobar`?
-    println!("{}", x); //~ ERROR cannot find value `x` in this scope
+    TyUInt {};
+    //~^ ERROR cannot find struct, variant or union type `TyUInt` in this scope
 }
