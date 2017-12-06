@@ -680,6 +680,26 @@ impl<T> Binder<T> {
     {
         ty::Binder(f(self.0))
     }
+
+    /// Unwraps and returns the value within, but only if it contains
+    /// no bound regions at all. (In other words, if this binder --
+    /// and indeed any enclosing binder -- doesn't bind anything at
+    /// all.) Otherwise, returns `None`.
+    ///
+    /// (One could imagine having a method that just unwraps a single
+    /// binder, but permits late-bound regions bound by enclosing
+    /// binders, but that would require adjusting the debruijn
+    /// indices, and given the shallow binding structure we often use,
+    /// would not be that useful.)
+    pub fn no_late_bound_regions<'tcx>(self) -> Option<T>
+        where T : TypeFoldable<'tcx>
+    {
+        if self.skip_binder().has_escaping_regions() {
+            None
+        } else {
+            Some(self.skip_binder().clone())
+        }
+    }
 }
 
 /// Represents the projection of an associated type. In explicit UFCS
@@ -1176,13 +1196,6 @@ impl RegionKind {
 
 /// Type utilities
 impl<'a, 'gcx, 'tcx> TyS<'tcx> {
-    pub fn as_opt_param_ty(&self) -> Option<ty::ParamTy> {
-        match self.sty {
-            ty::TyParam(ref d) => Some(d.clone()),
-            _ => None,
-        }
-    }
-
     pub fn is_nil(&self) -> bool {
         match self.sty {
             TyTuple(ref tys, _) => tys.is_empty(),

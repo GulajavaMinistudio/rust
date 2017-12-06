@@ -24,19 +24,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /tmp
 
-COPY cross/build-rumprun.sh /tmp/
+COPY dist-various-1/build-rumprun.sh /tmp/
 RUN ./build-rumprun.sh
 
-COPY cross/build-arm-musl.sh /tmp/
+COPY dist-various-1/build-arm-musl.sh /tmp/
 RUN ./build-arm-musl.sh
 
-COPY cross/install-mips-musl.sh /tmp/
+COPY dist-various-1/install-mips-musl.sh /tmp/
 RUN ./install-mips-musl.sh
 
-COPY cross/install-mipsel-musl.sh /tmp/
+COPY dist-various-1/install-mipsel-musl.sh /tmp/
 RUN ./install-mipsel-musl.sh
 
-COPY cross/install-x86_64-redox.sh /tmp/
+COPY dist-various-1/install-x86_64-redox.sh /tmp/
 RUN ./install-x86_64-redox.sh
 
 ENV TARGETS=asmjs-unknown-emscripten
@@ -46,15 +46,20 @@ ENV TARGETS=$TARGETS,mips-unknown-linux-musl
 ENV TARGETS=$TARGETS,mipsel-unknown-linux-musl
 ENV TARGETS=$TARGETS,arm-unknown-linux-musleabi
 ENV TARGETS=$TARGETS,arm-unknown-linux-musleabihf
+ENV TARGETS=$TARGETS,armv5te-unknown-linux-gnueabi
 ENV TARGETS=$TARGETS,armv7-unknown-linux-musleabihf
 ENV TARGETS=$TARGETS,aarch64-unknown-linux-musl
 ENV TARGETS=$TARGETS,sparc64-unknown-linux-gnu
 ENV TARGETS=$TARGETS,x86_64-unknown-redox
 
+# FIXME: remove armv5te vars after https://github.com/alexcrichton/cc-rs/issues/271
+#        get fixed and cc update
 ENV CC_mipsel_unknown_linux_musl=mipsel-openwrt-linux-gcc \
     CC_mips_unknown_linux_musl=mips-openwrt-linux-gcc \
     CC_sparc64_unknown_linux_gnu=sparc64-linux-gnu-gcc \
-    CC_x86_64_unknown_redox=x86_64-unknown-redox-gcc
+    CC_x86_64_unknown_redox=x86_64-unknown-redox-gcc \
+    CC_armv5te_unknown_linux_gnueabi=arm-linux-gnueabi-gcc \
+    CFLAGS_armv5te_unknown_linux_gnueabi="-march=armv5te -mfloat-abi=soft"
 
 # Suppress some warnings in the openwrt toolchains we downloaded
 ENV STAGING_DIR=/tmp

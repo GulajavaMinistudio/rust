@@ -87,7 +87,7 @@ use self::TupleArgumentsFlag::*;
 use astconv::AstConv;
 use hir::def::{Def, CtorKind};
 use hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
-use rustc_back::slice::ref_slice;
+use std::slice;
 use namespace::Namespace;
 use rustc::infer::{self, InferCtxt, InferOk, RegionVariableOrigin};
 use rustc::infer::type_variable::{TypeVariableOrigin};
@@ -130,7 +130,6 @@ use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use rustc::hir::map::Node;
 use rustc::hir::{self, PatKind};
 use rustc::middle::lang_items;
-use rustc_back::slice;
 use rustc_const_math::ConstInt;
 
 mod autoderef;
@@ -698,22 +697,6 @@ impl<'a, 'gcx, 'tcx> Inherited<'a, 'gcx, 'tcx> {
         let ok = self.partially_normalize_associated_types_in(span, body_id, param_env, value);
         self.register_infer_ok_obligations(ok)
     }
-
-    /// Replace any late-bound regions bound in `value` with
-    /// free variants attached to `all_outlive_scope`.
-    fn liberate_late_bound_regions<T>(&self,
-        all_outlive_scope: DefId,
-        value: &ty::Binder<T>)
-        -> T
-        where T: TypeFoldable<'tcx>
-    {
-        self.tcx.replace_late_bound_regions(value, |br| {
-            self.tcx.mk_region(ty::ReFree(ty::FreeRegion {
-                scope: all_outlive_scope,
-                bound_region: br
-            }))
-        }).0
-    }
 }
 
 struct CheckItemTypesVisitor<'a, 'tcx: 'a> { tcx: TyCtxt<'a, 'tcx, 'tcx> }
@@ -882,7 +865,7 @@ fn typeck_tables_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
             // Compute the fty from point of view of inside fn.
             let fn_sig =
-                inh.liberate_late_bound_regions(def_id, &fn_sig);
+                tcx.liberate_late_bound_regions(def_id, &fn_sig);
             let fn_sig =
                 inh.normalize_associated_types_in(body.value.span,
                                                   body_id.node_id,
@@ -4168,7 +4151,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         if let Some(cached_def) = self.tables.borrow().type_dependent_defs().get(hir_id) {
             // Return directly on cache hit. This is useful to avoid doubly reporting
             // errors with default match binding modes. See #44614.
-            return (*cached_def, Some(ty), slice::ref_slice(&**item_segment))
+            return (*cached_def, Some(ty), slice::from_ref(&**item_segment))
         }
         let item_name = item_segment.name;
         let def = match self.resolve_ufcs(span, item_name, ty, node_id) {
@@ -4187,7 +4170,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
         // Write back the new resolution.
         self.tables.borrow_mut().type_dependent_defs_mut().insert(hir_id, def);
-        (def, Some(ty), slice::ref_slice(&**item_segment))
+        (def, Some(ty), slice::from_ref(&**item_segment))
     }
 
     pub fn check_decl_initializer(&self,
@@ -4325,7 +4308,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             CoerceMany::new(coerce_to_ty)
         } else {
             let tail_expr: &[P<hir::Expr>] = match tail_expr {
-                Some(e) => ref_slice(e),
+                Some(e) => slice::from_ref(e),
                 None => &[],
             };
             CoerceMany::with_coercion_sites(coerce_to_ty, tail_expr)
