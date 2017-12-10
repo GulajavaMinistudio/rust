@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// note that these aux-build directives must be in this order
-// aux-build:svh-a-base.rs
-// aux-build:svh-b.rs
-// aux-build:svh-a-redundant-cfg.rs
+#![feature(decl_macro)]
 
-// pretty-expanded FIXME #23616
-
-extern crate a;
-extern crate b;
+pub macro create_struct($a:ident) {
+    struct $a;
+    impl Clone for $a {
+        fn clone(&self) -> Self {
+            $a
+        }
+    }
+}
 
 fn main() {
-    b::foo()
+    create_struct!(Test);
+    Test.clone();
 }
