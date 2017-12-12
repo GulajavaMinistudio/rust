@@ -160,6 +160,8 @@ impl<'a, 'gcx, 'tcx> Borrows<'a, 'gcx, 'tcx> {
 
     pub fn borrows(&self) -> &IndexVec<BorrowIndex, BorrowData<'tcx>> { &self.borrows }
 
+    pub fn scope_tree(&self) -> &Rc<region::ScopeTree> { &self.scope_tree }
+
     pub fn location(&self, idx: BorrowIndex) -> &Location {
         &self.borrows[idx].location
     }
@@ -213,7 +215,7 @@ impl<'a, 'gcx, 'tcx> BitDenotation for Borrows<'a, 'gcx, 'tcx> {
     fn bits_per_block(&self) -> usize {
         self.borrows.len()
     }
-    fn start_block_effect(&self, _sets: &mut BlockSets<BorrowIndex>)  {
+    fn start_block_effect(&self, _sets: &mut IdxSet<BorrowIndex>)  {
         // no borrows of code region_scopes have been taken prior to
         // function execution, so this method has no effect on
         // `_sets`.
