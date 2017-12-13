@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(box_syntax)]
+#![feature(extern_absolute_paths)]
 
-use std::cell::RefCell;
+use xcrate::S; //~ ERROR can't find crate for `xcrate`
 
-// Regression test for issue 7364
-static boxed: Box<RefCell<isize>> = box RefCell::new(0);
-//~^ ERROR allocations are not allowed in statics
-//~| ERROR `std::cell::RefCell<isize>: std::marker::Sync` is not satisfied
-
-fn main() { }
+fn main() {}
