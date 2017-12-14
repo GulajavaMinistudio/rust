@@ -40,6 +40,7 @@ use syntax::ext::base::Determinacy::Undetermined;
 use syntax::ext::hygiene::Mark;
 use syntax::ext::tt::macro_rules;
 use syntax::parse::token::{self, Token};
+use syntax::std_inject::injected_crate_name;
 use syntax::symbol::keywords;
 use syntax::symbol::Symbol;
 use syntax::visit::{self, Visitor};
@@ -262,6 +263,10 @@ impl<'a> Resolver<'a> {
                 let module =
                     self.get_module(DefId { krate: crate_id, index: CRATE_DEF_INDEX });
                 self.populate_module_if_necessary(module);
+                if injected_crate_name().map_or(false, |name| item.ident.name == name) {
+                    self.injected_crate = Some(module);
+                }
+
                 let used = self.process_legacy_macro_imports(item, module, expansion);
                 let binding =
                     (module, ty::Visibility::Public, sp, expansion).to_name_binding(self.arenas);
@@ -466,11 +471,8 @@ impl<'a> Resolver<'a> {
 
     /// Builds the reduced graph for a single item in an external crate.
     fn build_reduced_graph_for_external_crate_def(&mut self, parent: Module<'a>, child: Export) {
-        let ident = child.ident;
-        let def = child.def;
+        let Export { ident, def, vis, span, .. } = child;
         let def_id = def.def_id();
-        let vis = self.cstore.visibility_untracked(def_id);
-        let span = child.span;
         let expansion = Mark::root(); // FIXME(jseyfried) intercrate hygiene
         match def {
             Def::Mod(..) | Def::Enum(..) => {
@@ -561,8 +563,7 @@ impl<'a> Resolver<'a> {
         if let Some(id) = self.definitions.as_local_node_id(def_id) {
             self.local_macro_def_scopes[&id]
         } else if def_id.krate == BUILTIN_MACROS_CRATE {
-            // FIXME(jseyfried): This happens when `include!()`ing a `$crate::` path, c.f, #40469.
-            self.graph_root
+            self.injected_crate.unwrap_or(self.graph_root)
         } else {
             let module_def_id = ty::DefIdTree::parent(&*self, def_id).unwrap();
             self.get_module(module_def_id)
@@ -674,7 +675,8 @@ impl<'a> Resolver<'a> {
             let ident = Ident::with_empty_ctxt(name);
             let result = self.resolve_ident_in_module(module, ident, MacroNS, false, false, span);
             if let Ok(binding) = result {
-                self.macro_exports.push(Export { ident: ident, def: binding.def(), span: span });
+                let (def, vis) = (binding.def(), binding.vis);
+                self.macro_exports.push(Export { ident, def, vis, span, is_import: true });
             } else {
                 span_err!(self.session, span, E0470, "reexported macro not found");
             }
