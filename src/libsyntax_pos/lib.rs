@@ -54,7 +54,78 @@ pub use span_encoding::{Span, DUMMY_SP};
 
 pub mod symbol;
 
-pub type FileName = String;
+/// Differentiates between real files and common virtual files
+#[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd, Hash, RustcDecodable, RustcEncodable)]
+pub enum FileName {
+    Real(PathBuf),
+    /// e.g. "std" macros
+    Macros(String),
+    /// call to `quote!`
+    QuoteExpansion,
+    /// Command line
+    Anon,
+    /// Hack in src/libsyntax/parse.rs
+    /// FIXME(jseyfried)
+    MacroExpansion,
+    ProcMacroSourceCode,
+    /// Strings provided as --cfg [cfgspec] stored in a crate_cfg
+    CfgSpec,
+    /// Custom sources for explicit parser calls from plugins and drivers
+    Custom(String),
+}
+
+impl std::fmt::Display for FileName {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use self::FileName::*;
+        match *self {
+            Real(ref path) => write!(fmt, "{}", path.display()),
+            Macros(ref name) => write!(fmt, "<{} macros>", name),
+            QuoteExpansion => write!(fmt, "<quote expansion>"),
+            MacroExpansion => write!(fmt, "<macro expansion>"),
+            Anon => write!(fmt, "<anon>"),
+            ProcMacroSourceCode => write!(fmt, "<proc-macro source code>"),
+            CfgSpec => write!(fmt, "cfgspec"),
+            Custom(ref s) => write!(fmt, "<{}>", s),
+        }
+    }
+}
+
+impl From<PathBuf> for FileName {
+    fn from(p: PathBuf) -> Self {
+        assert!(!p.to_string_lossy().ends_with('>'));
+        FileName::Real(p)
+    }
+}
+
+impl FileName {
+    pub fn is_real(&self) -> bool {
+        use self::FileName::*;
+        match *self {
+            Real(_) => true,
+            Macros(_) |
+            Anon |
+            MacroExpansion |
+            ProcMacroSourceCode |
+            CfgSpec |
+            Custom(_) |
+            QuoteExpansion => false,
+        }
+    }
+
+    pub fn is_macros(&self) -> bool {
+        use self::FileName::*;
+        match *self {
+            Real(_) |
+            Anon |
+            MacroExpansion |
+            ProcMacroSourceCode |
+            CfgSpec |
+            Custom(_) |
+            QuoteExpansion => false,
+            Macros(_) => true,
+        }
+    }
+}
 
 /// Spans represent a region of code, used for error reporting. Positions in spans
 /// are *absolute* positions from the beginning of the codemap, not positions
@@ -600,13 +671,15 @@ pub struct FileMap {
     pub name_was_remapped: bool,
     /// The unmapped path of the file that the source came from.
     /// Set to `None` if the FileMap was imported from an external crate.
-    pub unmapped_path: Option<PathBuf>,
+    pub unmapped_path: Option<FileName>,
     /// Indicates which crate this FileMap was imported from.
     pub crate_of_origin: u32,
     /// The complete source code
     pub src: Option<Rc<String>>,
     /// The source code's hash
     pub src_hash: u128,
+    /// The stable id used during incr. comp.
+    pub stable_id: StableFilemapId,
     /// The external source code (used for external crates, which will have a `None`
     /// value as `self.src`.
     pub external_src: RefCell<ExternalSource>,
@@ -622,15 +695,37 @@ pub struct FileMap {
     pub non_narrow_chars: RefCell<Vec<NonNarrowChar>>,
 }
 
+// This is a FileMap identifier that is used to correlate FileMaps between
+// subsequent compilation sessions (which is something we need to do during
+// incremental compilation).
+#[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug)]
+pub struct StableFilemapId(pub u128);
+
+impl StableFilemapId {
+    pub fn new(name: &FileName,
+               name_was_remapped: bool,
+               unmapped_path: &FileName)
+               -> StableFilemapId {
+        use std::hash::Hash;
+
+        let mut hasher = StableHasher::new();
+        name.hash(&mut hasher);
+        name_was_remapped.hash(&mut hasher);
+        unmapped_path.hash(&mut hasher);
+        StableFilemapId(hasher.finish())
+    }
+}
+
 impl Encodable for FileMap {
     fn encode<S: Encoder>(&self, s: &mut S) -> Result<(), S::Error> {
         s.emit_struct("FileMap", 8, |s| {
             s.emit_struct_field("name", 0, |s| self.name.encode(s))?;
             s.emit_struct_field("name_was_remapped", 1, |s| self.name_was_remapped.encode(s))?;
-            s.emit_struct_field("src_hash", 6, |s| self.src_hash.encode(s))?;
-            s.emit_struct_field("start_pos", 2, |s| self.start_pos.encode(s))?;
-            s.emit_struct_field("end_pos", 3, |s| self.end_pos.encode(s))?;
-            s.emit_struct_field("lines", 4, |s| {
+            s.emit_struct_field("src_hash", 2, |s| self.src_hash.encode(s))?;
+            s.emit_struct_field("stable_id", 3, |s| self.stable_id.encode(s))?;
+            s.emit_struct_field("start_pos", 4, |s| self.start_pos.encode(s))?;
+            s.emit_struct_field("end_pos", 5, |s| self.end_pos.encode(s))?;
+            s.emit_struct_field("lines", 6, |s| {
                 let lines = self.lines.borrow();
                 // store the length
                 s.emit_u32(lines.len() as u32)?;
@@ -676,10 +771,10 @@ impl Encodable for FileMap {
 
                 Ok(())
             })?;
-            s.emit_struct_field("multibyte_chars", 5, |s| {
+            s.emit_struct_field("multibyte_chars", 7, |s| {
                 (*self.multibyte_chars.borrow()).encode(s)
             })?;
-            s.emit_struct_field("non_narrow_chars", 7, |s| {
+            s.emit_struct_field("non_narrow_chars", 8, |s| {
                 (*self.non_narrow_chars.borrow()).encode(s)
             })
         })
@@ -690,15 +785,17 @@ impl Decodable for FileMap {
     fn decode<D: Decoder>(d: &mut D) -> Result<FileMap, D::Error> {
 
         d.read_struct("FileMap", 8, |d| {
-            let name: String = d.read_struct_field("name", 0, |d| Decodable::decode(d))?;
+            let name: FileName = d.read_struct_field("name", 0, |d| Decodable::decode(d))?;
             let name_was_remapped: bool =
                 d.read_struct_field("name_was_remapped", 1, |d| Decodable::decode(d))?;
             let src_hash: u128 =
-                d.read_struct_field("src_hash", 6, |d| Decodable::decode(d))?;
+                d.read_struct_field("src_hash", 2, |d| Decodable::decode(d))?;
+            let stable_id: StableFilemapId =
+                d.read_struct_field("stable_id", 3, |d| Decodable::decode(d))?;
             let start_pos: BytePos =
-                d.read_struct_field("start_pos", 2, |d| Decodable::decode(d))?;
-            let end_pos: BytePos = d.read_struct_field("end_pos", 3, |d| Decodable::decode(d))?;
-            let lines: Vec<BytePos> = d.read_struct_field("lines", 4, |d| {
+                d.read_struct_field("start_pos", 4, |d| Decodable::decode(d))?;
+            let end_pos: BytePos = d.read_struct_field("end_pos", 5, |d| Decodable::decode(d))?;
+            let lines: Vec<BytePos> = d.read_struct_field("lines", 6, |d| {
                 let num_lines: u32 = Decodable::decode(d)?;
                 let mut lines = Vec::with_capacity(num_lines as usize);
 
@@ -727,9 +824,9 @@ impl Decodable for FileMap {
                 Ok(lines)
             })?;
             let multibyte_chars: Vec<MultiByteChar> =
-                d.read_struct_field("multibyte_chars", 5, |d| Decodable::decode(d))?;
+                d.read_struct_field("multibyte_chars", 7, |d| Decodable::decode(d))?;
             let non_narrow_chars: Vec<NonNarrowChar> =
-                d.read_struct_field("non_narrow_chars", 7, |d| Decodable::decode(d))?;
+                d.read_struct_field("non_narrow_chars", 8, |d| Decodable::decode(d))?;
             Ok(FileMap {
                 name,
                 name_was_remapped,
@@ -742,6 +839,7 @@ impl Decodable for FileMap {
                 end_pos,
                 src: None,
                 src_hash,
+                stable_id,
                 external_src: RefCell::new(ExternalSource::AbsentOk),
                 lines: RefCell::new(lines),
                 multibyte_chars: RefCell::new(multibyte_chars),
@@ -760,7 +858,7 @@ impl fmt::Debug for FileMap {
 impl FileMap {
     pub fn new(name: FileName,
                name_was_remapped: bool,
-               unmapped_path: PathBuf,
+               unmapped_path: FileName,
                mut src: String,
                start_pos: BytePos) -> FileMap {
         remove_bom(&mut src);
@@ -768,6 +866,10 @@ impl FileMap {
         let mut hasher: StableHasher<u128> = StableHasher::new();
         hasher.write(src.as_bytes());
         let src_hash = hasher.finish();
+
+        let stable_id = StableFilemapId::new(&name,
+                                             name_was_remapped,
+                                             &unmapped_path);
 
         let end_pos = start_pos.to_usize() + src.len();
 
@@ -778,6 +880,7 @@ impl FileMap {
             crate_of_origin: 0,
             src: Some(Rc::new(src)),
             src_hash,
+            stable_id,
             external_src: RefCell::new(ExternalSource::Unneeded),
             start_pos,
             end_pos: Pos::from_usize(end_pos),
@@ -893,8 +996,7 @@ impl FileMap {
     }
 
     pub fn is_real_file(&self) -> bool {
-        !(self.name.starts_with("<") &&
-          self.name.ends_with(">"))
+        self.name.is_real()
     }
 
     pub fn is_imported(&self) -> bool {
@@ -1114,18 +1216,18 @@ pub enum SpanSnippetError {
     IllFormedSpan(Span),
     DistinctSources(DistinctSources),
     MalformedForCodemap(MalformedCodemapPositions),
-    SourceNotAvailable { filename: String }
+    SourceNotAvailable { filename: FileName }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DistinctSources {
-    pub begin: (String, BytePos),
-    pub end: (String, BytePos)
+    pub begin: (FileName, BytePos),
+    pub end: (FileName, BytePos)
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MalformedCodemapPositions {
-    pub name: String,
+    pub name: FileName,
     pub source_len: usize,
     pub begin_pos: BytePos,
     pub end_pos: BytePos

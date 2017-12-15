@@ -27,7 +27,7 @@ use print::pp::Breaks::{Consistent, Inconsistent};
 use ptr::P;
 use std_inject;
 use symbol::{Symbol, keywords};
-use syntax_pos::DUMMY_SP;
+use syntax_pos::{DUMMY_SP, FileName};
 use tokenstream::{self, TokenStream, TokenTree};
 
 use std::ascii;
@@ -87,7 +87,7 @@ pub const DEFAULT_COLUMNS: usize = 78;
 pub fn print_crate<'a>(cm: &'a CodeMap,
                        sess: &ParseSess,
                        krate: &ast::Crate,
-                       filename: String,
+                       filename: FileName,
                        input: &mut Read,
                        out: Box<Write+'a>,
                        ann: &'a PpAnn,
@@ -120,7 +120,7 @@ pub fn print_crate<'a>(cm: &'a CodeMap,
 impl<'a> State<'a> {
     pub fn new_from_input(cm: &'a CodeMap,
                           sess: &ParseSess,
-                          filename: String,
+                          filename: FileName,
                           input: &mut Read,
                           out: Box<Write+'a>,
                           ann: &'a PpAnn,
@@ -1380,6 +1380,27 @@ impl<'a> State<'a> {
                     self.print_trait_item(trait_item)?;
                 }
                 self.bclose(item.span)?;
+            }
+            ast::ItemKind::TraitAlias(ref generics, ref bounds) => {
+                self.head("")?;
+                self.print_visibility(&item.vis)?;
+                self.word_nbsp("trait")?;
+                self.print_ident(item.ident)?;
+                self.print_generics(generics)?;
+                let mut real_bounds = Vec::with_capacity(bounds.len());
+                // FIXME(durka) this seems to be some quite outdated syntax
+                for b in bounds.iter() {
+                    if let TraitTyParamBound(ref ptr, ast::TraitBoundModifier::Maybe) = *b {
+                        self.s.space()?;
+                        self.word_space("for ?")?;
+                        self.print_trait_ref(&ptr.trait_ref)?;
+                    } else {
+                        real_bounds.push(b.clone());
+                    }
+                }
+                self.print_bounds(" = ", &real_bounds[..])?;
+                self.print_where_clause(&generics.where_clause)?;
+                self.s.word(";")?;
             }
             ast::ItemKind::Mac(codemap::Spanned { ref node, .. }) => {
                 self.print_path(&node.path, false, 0, false)?;

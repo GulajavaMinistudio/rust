@@ -23,13 +23,14 @@
 # Each tool has a list of people to ping
 
 # ping @oli-obk @RalfJung @eddyb
-miri = "Broken"
+miri = "Testing"
 
 # ping @Manishearth @llogiq @mcarton @oli-obk
 clippy = "Testing"
 
 # ping @nrc
-rls = "Testing"
+rls = "Broken"
 
 # ping @nrc
-rustfmt = "Testing"
+# when breaking rustfmt, always break rls as well
+rustfmt = "Broken"
