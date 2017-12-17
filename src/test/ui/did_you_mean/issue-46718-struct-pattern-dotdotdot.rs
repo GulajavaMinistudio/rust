@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test slicing expressions doesn't defeat the borrow checker.
+#![allow(unused)]
 
-fn main() {
-    let y;
-    {
-        let x: &[isize] = &vec![1, 2, 3, 4, 5];
-        y = &x[1..];
+struct PersonalityInventory {
+    expressivity: f32,
+    instrumentality: f32
+}
+
+impl PersonalityInventory {
+    fn expressivity(&self) -> f32 {
+        match *self {
+            PersonalityInventory { expressivity: exp, ... } => exp
+            //~^ ERROR expected field pattern, found `...`
+        }
     }
 }
+
+fn main() {}

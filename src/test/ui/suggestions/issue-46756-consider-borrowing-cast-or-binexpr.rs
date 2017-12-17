@@ -8,13 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct Foo<'a> {
-    x: Option<&'a u32>,
+#![allow(unused)]
+
+fn light_flows_our_war_of_mocking_words(and_yet: &usize) -> usize {
+    and_yet + 1
 }
 
 fn main() {
-    let mut x = Foo { x: None };
-    let y = 0;
-    x.x = Some(&y);
-    //~^ `y` does not live long enough [E0597]
+    let behold: isize = 2;
+    let with_tears: usize = 3;
+    light_flows_our_war_of_mocking_words(behold as usize);
+    //~^ ERROR mismatched types [E0308]
+    light_flows_our_war_of_mocking_words(with_tears + 4);
+    //~^ ERROR mismatched types [E0308]
 }
