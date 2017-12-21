@@ -376,7 +376,7 @@ macro_rules! make_mir_visitor {
                                                ref $($mutability)* inputs,
                                                asm: _ } => {
                         for output in & $($mutability)* outputs[..] {
-                            self.visit_place(output, PlaceContext::Store, location);
+                            self.visit_place(output, PlaceContext::AsmOutput, location);
                         }
                         for input in & $($mutability)* inputs[..] {
                             self.visit_operand(input, location);
@@ -811,6 +811,31 @@ macro_rules! make_mir_visitor {
 make_mir_visitor!(Visitor,);
 make_mir_visitor!(MutVisitor,mut);
 
+pub trait MirVisitable<'tcx> {
+    fn apply(&self, location: Location, visitor: &mut dyn Visitor<'tcx>);
+}
+
+impl<'tcx> MirVisitable<'tcx> for Statement<'tcx> {
+    fn apply(&self, location: Location, visitor: &mut dyn Visitor<'tcx>)
+    {
+        visitor.visit_statement(location.block, self, location)
+    }
+}
+
+impl<'tcx> MirVisitable<'tcx> for Terminator<'tcx> {
+    fn apply(&self, location: Location, visitor: &mut dyn Visitor<'tcx>)
+    {
+        visitor.visit_terminator(location.block, self, location)
+    }
+}
+
+impl<'tcx> MirVisitable<'tcx> for Option<Terminator<'tcx>> {
+    fn apply(&self, location: Location, visitor: &mut dyn Visitor<'tcx>)
+    {
+        visitor.visit_terminator(location.block, self.as_ref().unwrap(), location)
+    }
+}
+
 /// Extra information passed to `visit_ty` and friends to give context
 /// about where the type etc appears.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -834,6 +859,11 @@ pub enum TyContext {
 pub enum PlaceContext<'tcx> {
     // Appears as LHS of an assignment
     Store,
+
+    // Can often be treated as a Store, but needs to be separate because
+    // ASM is allowed to read outputs as well, so a Store-AsmOutput sequence
+    // cannot be simplified the way a Store-Store can be.
+    AsmOutput,
 
     // Dest of a call
     Call,
@@ -910,7 +940,7 @@ impl<'tcx> PlaceContext<'tcx> {
     /// Returns true if this place context represents a use that potentially changes the value.
     pub fn is_mutating_use(&self) -> bool {
         match *self {
-            PlaceContext::Store | PlaceContext::Call |
+            PlaceContext::Store | PlaceContext::AsmOutput | PlaceContext::Call |
             PlaceContext::Borrow { kind: BorrowKind::Mut, .. } |
             PlaceContext::Projection(Mutability::Mut) |
             PlaceContext::Drop => true,
@@ -932,6 +962,7 @@ impl<'tcx> PlaceContext<'tcx> {
             PlaceContext::Projection(Mutability::Not) |
             PlaceContext::Copy | PlaceContext::Move => true,
             PlaceContext::Borrow { kind: BorrowKind::Mut, .. } | PlaceContext::Store |
+            PlaceContext::AsmOutput |
             PlaceContext::Call | PlaceContext::Projection(Mutability::Mut) |
             PlaceContext::Drop | PlaceContext::StorageLive | PlaceContext::StorageDead |
             PlaceContext::Validate => false,

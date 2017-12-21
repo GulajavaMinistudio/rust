@@ -11,9 +11,15 @@
 //! This pass type-checks the MIR to ensure it is not broken.
 #![allow(unreachable_code)]
 
+use borrow_check::nll::region_infer::Cause;
 use borrow_check::nll::region_infer::ClosureRegionRequirementsExt;
+use borrow_check::nll::universal_regions::UniversalRegions;
+use dataflow::FlowAtLocation;
+use dataflow::MaybeInitializedLvals;
+use dataflow::move_paths::MoveData;
+use rustc::hir::def_id::DefId;
 use rustc::infer::{InferCtxt, InferOk, InferResult, LateBoundRegionConversionTime, UnitResult};
-use rustc::infer::region_constraints::RegionConstraintData;
+use rustc::infer::region_constraints::{GenericKind, RegionConstraintData};
 use rustc::traits::{self, FulfillmentContext};
 use rustc::ty::error::TypeError;
 use rustc::ty::fold::TypeFoldable;
@@ -26,24 +32,110 @@ use std::fmt;
 use syntax::ast;
 use syntax_pos::{Span, DUMMY_SP};
 use transform::{MirPass, MirSource};
+use util::liveness::LivenessResults;
 
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::indexed_vec::Idx;
 
+macro_rules! span_mirbug {
+    ($context:expr, $elem:expr, $($message:tt)*) => ({
+        $crate::borrow_check::nll::type_check::mirbug(
+            $context.tcx(),
+            $context.last_span,
+            &format!(
+                "broken MIR in {:?} ({:?}): {}",
+                $context.body_id,
+                $elem,
+                format_args!($($message)*),
+            ),
+        )
+    })
+}
+
+macro_rules! span_mirbug_and_err {
+    ($context:expr, $elem:expr, $($message:tt)*) => ({
+        {
+            span_mirbug!($context, $elem, $($message)*);
+            $context.error()
+        }
+    })
+}
+
+mod liveness;
+mod input_output;
+
 /// Type checks the given `mir` in the context of the inference
 /// context `infcx`. Returns any region constraints that have yet to
-/// be proven.
+/// be proven. This result is includes liveness constraints that
+/// ensure that regions appearing in the types of all local variables
+/// are live at all points where that local variable may later be
+/// used.
 ///
 /// This phase of type-check ought to be infallible -- this is because
 /// the original, HIR-based type-check succeeded. So if any errors
 /// occur here, we will get a `bug!` reported.
-pub fn type_check<'a, 'gcx, 'tcx>(
-    infcx: &InferCtxt<'a, 'gcx, 'tcx>,
+///
+/// # Parameters
+///
+/// - `infcx` -- inference context to use
+/// - `param_env` -- parameter environment to use for trait solving
+/// - `mir` -- MIR to type-check
+/// - `mir_def_id` -- DefId from which the MIR is derived (must be local)
+/// - `region_bound_pairs` -- the implied outlives obligations between type parameters
+///   and lifetimes (e.g., `&'a T` implies `T: 'a`)
+/// - `implicit_region_bound` -- a region which all generic parameters are assumed
+///   to outlive; should represent the fn body
+/// - `input_tys` -- fully liberated, but **not** normalized, expected types of the arguments;
+///   the types of the input parameters found in the MIR itself will be equated with these
+/// - `output_ty` -- fully liberaetd, but **not** normalized, expected return type;
+///   the type for the RETURN_PLACE will be equated with this
+/// - `liveness` -- results of a liveness computation on the MIR; used to create liveness
+///   constraints for the regions in the types of variables
+/// - `flow_inits` -- results of a maybe-init dataflow analysis
+/// - `move_data` -- move-data constructed when performing the maybe-init dataflow analysis
+pub(crate) fn type_check<'gcx, 'tcx>(
+    infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+    param_env: ty::ParamEnv<'gcx>,
+    mir: &Mir<'tcx>,
+    mir_def_id: DefId,
+    universal_regions: &UniversalRegions<'tcx>,
+    liveness: &LivenessResults,
+    flow_inits: &mut FlowAtLocation<MaybeInitializedLvals<'_, 'gcx, 'tcx>>,
+    move_data: &MoveData<'tcx>,
+) -> MirTypeckRegionConstraints<'tcx> {
+    let body_id = infcx.tcx.hir.as_local_node_id(mir_def_id).unwrap();
+    let implicit_region_bound = infcx.tcx.mk_region(ty::ReVar(universal_regions.fr_fn_body));
+    type_check_internal(
+        infcx,
+        body_id,
+        param_env,
+        mir,
+        &universal_regions.region_bound_pairs,
+        Some(implicit_region_bound),
+        &mut |cx| {
+            liveness::generate(cx, mir, liveness, flow_inits, move_data);
+
+            cx.equate_inputs_and_outputs(mir, mir_def_id, universal_regions);
+        },
+    )
+}
+
+fn type_check_internal<'gcx, 'tcx>(
+    infcx: &InferCtxt<'_, 'gcx, 'tcx>,
     body_id: ast::NodeId,
     param_env: ty::ParamEnv<'gcx>,
     mir: &Mir<'tcx>,
+    region_bound_pairs: &[(ty::Region<'tcx>, GenericKind<'tcx>)],
+    implicit_region_bound: Option<ty::Region<'tcx>>,
+    extra: &mut FnMut(&mut TypeChecker<'_, 'gcx, 'tcx>),
 ) -> MirTypeckRegionConstraints<'tcx> {
-    let mut checker = TypeChecker::new(infcx, body_id, param_env);
+    let mut checker = TypeChecker::new(
+        infcx,
+        body_id,
+        param_env,
+        region_bound_pairs,
+        implicit_region_bound,
+    );
     let errors_reported = {
         let mut verifier = TypeVerifier::new(&mut checker, mir);
         verifier.visit_mir(mir);
@@ -55,6 +147,8 @@ pub fn type_check<'a, 'gcx, 'tcx>(
         checker.typeck_mir(mir);
     }
 
+    extra(&mut checker);
+
     checker.constraints
 }
 
@@ -63,25 +157,6 @@ fn mirbug(tcx: TyCtxt, span: Span, msg: &str) {
     // the fact that we check rvalue sized predicates here. So use `delay_span_bug`
     // to avoid reporting bugs in those cases.
     tcx.sess.diagnostic().delay_span_bug(span, msg);
-}
-
-macro_rules! span_mirbug {
-    ($context:expr, $elem:expr, $($message:tt)*) => ({
-        mirbug($context.tcx(), $context.last_span,
-               &format!("broken MIR in {:?} ({:?}): {}",
-                        $context.body_id,
-                        $elem,
-                        format_args!($($message)*)))
-    })
-}
-
-macro_rules! span_mirbug_and_err {
-    ($context:expr, $elem:expr, $($message:tt)*) => ({
-        {
-            span_mirbug!($context, $elem, $($message)*);
-            $context.error()
-        }
-    })
 }
 
 enum FieldAccessError {
@@ -503,11 +578,13 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
 /// constraints needed for it to be valid and well-typed. Along the
 /// way, it accrues region constraints -- these can later be used by
 /// NLL region checking.
-pub struct TypeChecker<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> {
+struct TypeChecker<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> {
     infcx: &'a InferCtxt<'a, 'gcx, 'tcx>,
     param_env: ty::ParamEnv<'gcx>,
     last_span: Span,
     body_id: ast::NodeId,
+    region_bound_pairs: &'a [(ty::Region<'tcx>, GenericKind<'tcx>)],
+    implicit_region_bound: Option<ty::Region<'tcx>>,
     reported_errors: FxHashSet<(Ty<'tcx>, Span)>,
     constraints: MirTypeckRegionConstraints<'tcx>,
 }
@@ -515,7 +592,7 @@ pub struct TypeChecker<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> {
 /// A collection of region constraints that must be satisfied for the
 /// program to be considered well-typed.
 #[derive(Default)]
-pub struct MirTypeckRegionConstraints<'tcx> {
+pub(crate) struct MirTypeckRegionConstraints<'tcx> {
     /// In general, the type-checker is not responsible for enforcing
     /// liveness constraints; this job falls to the region inferencer,
     /// which performs a liveness analysis. However, in some limited
@@ -523,7 +600,7 @@ pub struct MirTypeckRegionConstraints<'tcx> {
     /// not otherwise appear in the MIR -- in particular, the
     /// late-bound regions that it instantiates at call-sites -- and
     /// hence it must report on their liveness constraints.
-    pub liveness_set: Vec<(ty::Region<'tcx>, Location)>,
+    pub liveness_set: Vec<(ty::Region<'tcx>, Location, Cause)>,
 
     /// During the course of type-checking, we will accumulate region
     /// constraints due to performing subtyping operations or solving
@@ -561,12 +638,16 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
         infcx: &'a InferCtxt<'a, 'gcx, 'tcx>,
         body_id: ast::NodeId,
         param_env: ty::ParamEnv<'gcx>,
+        region_bound_pairs: &'a [(ty::Region<'tcx>, GenericKind<'tcx>)],
+        implicit_region_bound: Option<ty::Region<'tcx>>,
     ) -> Self {
         TypeChecker {
             infcx,
             last_span: DUMMY_SP,
             body_id,
             param_env,
+            region_bound_pairs,
+            implicit_region_bound,
             reported_errors: FxHashSet(),
             constraints: MirTypeckRegionConstraints::default(),
         }
@@ -591,8 +672,12 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
             span_mirbug!(self, "", "errors selecting obligation: {:?}", e);
         }
 
-        self.infcx
-            .process_registered_region_obligations(&[], None, self.param_env, self.body_id);
+        self.infcx.process_registered_region_obligations(
+            self.region_bound_pairs,
+            self.implicit_region_bound,
+            self.param_env,
+            self.body_id,
+        );
 
         let data = self.infcx.take_and_reset_region_constraints();
         if !data.is_empty() {
@@ -675,12 +760,12 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                     );
                 };
             }
-            StatementKind::StorageLive(_) |
-            StatementKind::StorageDead(_) |
-            StatementKind::InlineAsm { .. } |
-            StatementKind::EndRegion(_) |
-            StatementKind::Validate(..) |
-            StatementKind::Nop => {}
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::InlineAsm { .. }
+            | StatementKind::EndRegion(_)
+            | StatementKind::Validate(..)
+            | StatementKind::Nop => {}
         }
     }
 
@@ -693,13 +778,13 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
         debug!("check_terminator: {:?}", term);
         let tcx = self.tcx();
         match term.kind {
-            TerminatorKind::Goto { .. } |
-            TerminatorKind::Resume |
-            TerminatorKind::Return |
-            TerminatorKind::GeneratorDrop |
-            TerminatorKind::Unreachable |
-            TerminatorKind::Drop { .. } |
-            TerminatorKind::FalseEdges { .. } => {
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::Resume
+            | TerminatorKind::Return
+            | TerminatorKind::GeneratorDrop
+            | TerminatorKind::Unreachable
+            | TerminatorKind::Drop { .. }
+            | TerminatorKind::FalseEdges { .. } => {
                 // no checks needed for these
             }
 
@@ -799,9 +884,11 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                 // output) types in the signature must be live, since
                 // all the inputs that fed into it were live.
                 for &late_bound_region in map.values() {
-                    self.constraints
-                        .liveness_set
-                        .push((late_bound_region, term_location));
+                    self.constraints.liveness_set.push((
+                        late_bound_region,
+                        term_location,
+                        Cause::LiveOther(term_location),
+                    ));
                 }
 
                 if self.is_box_free(func) {
@@ -1011,9 +1098,9 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                 }
             }
             TerminatorKind::Unreachable => {}
-            TerminatorKind::Drop { target, unwind, .. } |
-            TerminatorKind::DropAndReplace { target, unwind, .. } |
-            TerminatorKind::Assert {
+            TerminatorKind::Drop { target, unwind, .. }
+            | TerminatorKind::DropAndReplace { target, unwind, .. }
+            | TerminatorKind::Assert {
                 target,
                 cleanup: unwind,
                 ..
@@ -1269,13 +1356,13 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
             },
 
             // FIXME: These other cases have to be implemented in future PRs
-            Rvalue::Use(..) |
-            Rvalue::Ref(..) |
-            Rvalue::Len(..) |
-            Rvalue::BinaryOp(..) |
-            Rvalue::CheckedBinaryOp(..) |
-            Rvalue::UnaryOp(..) |
-            Rvalue::Discriminant(..) => {}
+            Rvalue::Use(..)
+            | Rvalue::Ref(..)
+            | Rvalue::Len(..)
+            | Rvalue::BinaryOp(..)
+            | Rvalue::CheckedBinaryOp(..)
+            | Rvalue::UnaryOp(..)
+            | Rvalue::Discriminant(..) => {}
         }
     }
 
@@ -1368,6 +1455,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                 if let Some(closure_region_requirements) = tcx.mir_borrowck(*def_id) {
                     closure_region_requirements.apply_requirements(
                         self.infcx,
+                        self.body_id,
                         location,
                         *def_id,
                         *substs,
@@ -1408,9 +1496,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
             let cause = this.misc(this.last_span);
             let obligations = predicates
                 .iter()
-                .map(|&p| {
-                    traits::Obligation::new(cause.clone(), this.param_env, p)
-                })
+                .map(|&p| traits::Obligation::new(cause.clone(), this.param_env, p))
                 .collect();
             Ok(InferOk {
                 value: (),
@@ -1474,7 +1560,7 @@ impl MirPass for TypeckMir {
         }
         let param_env = tcx.param_env(def_id);
         tcx.infer_ctxt().enter(|infcx| {
-            let _region_constraint_sets = type_check(&infcx, id, param_env, mir);
+            let _ = type_check_internal(&infcx, id, param_env, mir, &[], None, &mut |_| ());
 
             // For verification purposes, we just ignore the resulting
             // region constraint sets. Not our problem. =)

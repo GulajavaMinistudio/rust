@@ -1013,6 +1013,8 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
         "set the threshold for inlining a function (default: 225)"),
     panic: Option<PanicStrategy> = (None, parse_panic_strategy,
         [TRACKED], "panic strategy to compile crate with"),
+    incremental: Option<String> = (None, parse_opt_string, [UNTRACKED],
+          "enable incremental compilation"),
 }
 
 options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
@@ -1188,6 +1190,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "choose which RELRO level to use"),
     nll: bool = (false, parse_bool, [UNTRACKED],
                  "run the non-lexical lifetimes MIR pass"),
+    nll_dump_cause: bool = (false, parse_bool, [UNTRACKED],
+                 "dump cause information when reporting errors from NLL"),
     trans_time_graph: bool = (false, parse_bool, [UNTRACKED],
         "generate a graphical HTML report of time spent in trans and LLVM"),
     thinlto: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -1663,7 +1667,24 @@ pub fn build_session_options_and_crate_config(matches: &getopts::Matches)
         early_error(error_format, "Value for codegen units must be a positive nonzero integer");
     }
 
-    if cg.lto && debugging_opts.incremental.is_some() {
+    let incremental = match (&debugging_opts.incremental, &cg.incremental) {
+        (&Some(ref path1), &Some(ref path2)) => {
+            if path1 != path2 {
+                early_error(error_format,
+                    &format!("conflicting paths for `-Z incremental` and \
+                              `-C incremental` specified: {} versus {}",
+                              path1,
+                              path2));
+            } else {
+                Some(path1)
+            }
+        }
+        (&Some(ref path), &None) => Some(path),
+        (&None, &Some(ref path)) => Some(path),
+        (&None, &None) => None,
+    }.map(|m| PathBuf::from(m));
+
+    if cg.lto && incremental.is_some() {
         early_error(error_format, "can't perform LTO when compiling incrementally");
     }
 
@@ -1836,8 +1857,6 @@ pub fn build_session_options_and_crate_config(matches: &getopts::Matches)
     }
 
     let crate_name = matches.opt_str("crate-name");
-
-    let incremental = debugging_opts.incremental.as_ref().map(|m| PathBuf::from(m));
 
     (Options {
         crate_types,
@@ -2579,6 +2598,9 @@ mod tests {
         assert_eq!(reference.dep_tracking_hash(), opts.dep_tracking_hash());
 
         opts.cg.save_temps = true;
+        assert_eq!(reference.dep_tracking_hash(), opts.dep_tracking_hash());
+
+        opts.cg.incremental = Some(String::from("abc"));
         assert_eq!(reference.dep_tracking_hash(), opts.dep_tracking_hash());
 
 

@@ -21,6 +21,7 @@ use rustc_data_structures::control_flow_graph::ControlFlowGraph;
 use rustc_serialize as serialize;
 use hir::def::CtorKind;
 use hir::def_id::DefId;
+use mir::visit::MirVisitable;
 use ty::subst::{Subst, Substs};
 use ty::{self, AdtDef, ClosureSubsts, Region, Ty, TyCtxt, GeneratorInterior};
 use ty::fold::{TypeFoldable, TypeFolder, TypeVisitor};
@@ -866,6 +867,14 @@ impl<'tcx> BasicBlockData<'tcx> {
             if !f(s) {
                 s.kind = StatementKind::Nop;
             }
+        }
+    }
+
+    pub fn visitable(&self, index: usize) -> &dyn MirVisitable<'tcx> {
+        if index < self.statements.len() {
+            &self.statements[index]
+        } else {
+            &self.terminator
         }
     }
 }
@@ -1832,8 +1841,17 @@ pub struct GeneratorLayout<'tcx> {
 /// instance of the closure is created, the corresponding free regions
 /// can be extracted from its type and constrained to have the given
 /// outlives relationship.
+///
+/// In some cases, we have to record outlives requirements between
+/// types and regions as well. In that case, if those types include
+/// any regions, those regions are recorded as `ReClosureBound`
+/// instances assigned one of these same indices. Those regions will
+/// be substituted away by the creator. We use `ReClosureBound` in
+/// that case because the regions must be allocated in the global
+/// TyCtxt, and hence we cannot use `ReVar` (which is what we use
+/// internally within the rest of the NLL code).
 #[derive(Clone, Debug, RustcEncodable, RustcDecodable)]
-pub struct ClosureRegionRequirements {
+pub struct ClosureRegionRequirements<'gcx> {
     /// The number of external regions defined on the closure.  In our
     /// example above, it would be 3 -- one for `'static`, then `'1`
     /// and `'2`. This is just used for a sanity check later on, to
@@ -1843,21 +1861,38 @@ pub struct ClosureRegionRequirements {
 
     /// Requirements between the various free regions defined in
     /// indices.
-    pub outlives_requirements: Vec<ClosureOutlivesRequirement>,
+    pub outlives_requirements: Vec<ClosureOutlivesRequirement<'gcx>>,
 }
 
-/// Indicates an outlives constraint between two free-regions declared
-/// on the closure.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
-pub struct ClosureOutlivesRequirement {
-    // This region ...
-    pub free_region: ty::RegionVid,
+/// Indicates an outlives constraint between a type or between two
+/// free-regions declared on the closure.
+#[derive(Copy, Clone, Debug, RustcEncodable, RustcDecodable)]
+pub struct ClosureOutlivesRequirement<'tcx> {
+    // This region or type ...
+    pub subject: ClosureOutlivesSubject<'tcx>,
 
     // .. must outlive this one.
     pub outlived_free_region: ty::RegionVid,
 
     // If not, report an error here.
     pub blame_span: Span,
+}
+
+/// The subject of a ClosureOutlivesRequirement -- that is, the thing
+/// that must outlive some region.
+#[derive(Copy, Clone, Debug, RustcEncodable, RustcDecodable)]
+pub enum ClosureOutlivesSubject<'tcx> {
+    /// Subject is a type, typically a type parameter, but could also
+    /// be a projection. Indicates a requirement like `T: 'a` being
+    /// passed to the caller, where the type here is `T`.
+    ///
+    /// The type here is guaranteed not to contain any free regions at
+    /// present.
+    Ty(Ty<'tcx>),
+
+    /// Subject is a free region from the closure. Indicates a requirement
+    /// like `'a: 'b` being passed to the caller; the region here is `'a`.
+    Region(ty::RegionVid),
 }
 
 /*

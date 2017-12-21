@@ -66,7 +66,7 @@ pub struct Borrows<'a, 'gcx: 'tcx, 'tcx: 'a> {
     region_map: FxHashMap<Region<'tcx>, FxHashSet<BorrowIndex>>,
     local_map: FxHashMap<mir::Local, FxHashSet<BorrowIndex>>,
     region_span_map: FxHashMap<RegionKind, Span>,
-    nonlexical_regioncx: Option<RegionInferenceContext<'tcx>>,
+    nonlexical_regioncx: Option<Rc<RegionInferenceContext<'tcx>>>,
 }
 
 // Two-phase borrows actually requires two flow analyses; they need
@@ -147,7 +147,7 @@ impl ReserveOrActivateIndex {
 impl<'a, 'gcx, 'tcx> Borrows<'a, 'gcx, 'tcx> {
     pub fn new(tcx: TyCtxt<'a, 'gcx, 'tcx>,
                mir: &'a Mir<'tcx>,
-               nonlexical_regioncx: Option<RegionInferenceContext<'tcx>>,
+               nonlexical_regioncx: Option<Rc<RegionInferenceContext<'tcx>>>,
                def_id: DefId,
                body_id: Option<hir::BodyId>)
                -> Self {
@@ -540,6 +540,10 @@ impl<'a, 'b, 'tcx> FindPlaceUses<'a, 'b, 'tcx> {
             // "deep" does validation go?
             PlaceContext::Validate => false,
 
+            // FIXME: This is here to not change behaviour from before
+            // AsmOutput existed, but it's not necessarily a pure overwrite.
+            // so it's possible this should activate the place.
+            PlaceContext::AsmOutput |
             // pure overwrites of an place do not activate it. (note
             // PlaceContext::Call is solely about dest place)
             PlaceContext::Store | PlaceContext::Call => false,

@@ -12,22 +12,32 @@ use super::universal_regions::UniversalRegions;
 use rustc::hir::def_id::DefId;
 use rustc::infer::InferCtxt;
 use rustc::infer::NLLRegionVariableOrigin;
+use rustc::infer::RegionObligation;
 use rustc::infer::RegionVariableOrigin;
 use rustc::infer::SubregionOrigin;
-use rustc::infer::region_constraints::VarOrigins;
-use rustc::mir::{ClosureOutlivesRequirement, ClosureRegionRequirements, Location, Mir};
-use rustc::ty::{self, RegionVid};
+use rustc::infer::error_reporting::nice_region_error::NiceRegionError;
+use rustc::infer::region_constraints::{GenericKind, VarOrigins};
+use rustc::mir::{ClosureOutlivesRequirement, ClosureOutlivesSubject, ClosureRegionRequirements,
+                 Local, Location, Mir};
+use rustc::traits::ObligationCause;
+use rustc::ty::{self, RegionVid, Ty, TypeFoldable};
+use rustc::util::common::ErrorReported;
 use rustc_data_structures::indexed_vec::IndexVec;
-use rustc_data_structures::fx::FxHashSet;
+use rustc_errors::DiagnosticBuilder;
 use std::fmt;
 use std::rc::Rc;
+use syntax::ast;
 use syntax_pos::Span;
 
 mod annotation;
+mod dfs;
+use self::dfs::{CopyFromSourceToTarget, TestTargetOutlivesSource};
 mod dump_mir;
 mod graphviz;
 mod values;
 use self::values::{RegionValueElements, RegionValues};
+
+use super::ToRegionVid;
 
 pub struct RegionInferenceContext<'tcx> {
     /// Contains the definition for every region variable.  Region
@@ -52,10 +62,15 @@ pub struct RegionInferenceContext<'tcx> {
     /// The constraints we have accumulated and used during solving.
     constraints: Vec<Constraint>,
 
+    /// Type constraints that we check after solving.
+    type_tests: Vec<TypeTest<'tcx>>,
+
     /// Information about the universally quantified regions in scope
     /// on this function and their (known) relations to one another.
     universal_regions: UniversalRegions<'tcx>,
 }
+
+struct TrackCauses(bool);
 
 struct RegionDefinition<'tcx> {
     /// Why we created this variable. Mostly these will be
@@ -73,6 +88,38 @@ struct RegionDefinition<'tcx> {
     /// If this is 'static or an early-bound region, then this is
     /// `Some(X)` where `X` is the name of the region.
     external_name: Option<ty::Region<'tcx>>,
+}
+
+/// NB: The variants in `Cause` are intentionally ordered. Lower
+/// values are preferred when it comes to error messages. Do not
+/// reorder willy nilly.
+#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
+pub(crate) enum Cause {
+    /// point inserted because Local was live at the given Location
+    LiveVar(Local, Location),
+
+    /// point inserted because Local was dropped at the given Location
+    DropVar(Local, Location),
+
+    /// point inserted because the type was live at the given Location,
+    /// but not as part of some local variable
+    LiveOther(Location),
+
+    /// part of the initial set of values for a universally quantified region
+    UniversalRegion(RegionVid),
+
+    /// Element E was added to R because there was some
+    /// outlives obligation `R: R1 @ P` and `R1` contained `E`.
+    Outlives {
+        /// the reason that R1 had E
+        original_cause: Rc<Cause>,
+
+        /// the point P from the relation
+        constraint_location: Location,
+
+        /// The span indicating why we added the outlives constraint.
+        constraint_span: Span,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -94,12 +141,98 @@ pub struct Constraint {
     span: Span,
 }
 
+/// A "type test" corresponds to an outlives constraint between a type
+/// and a lifetime, like `T: 'x` or `<T as Foo>::Bar: 'x`.  They are
+/// translated from the `Verify` region constraints in the ordinary
+/// inference context.
+///
+/// These sorts of constraints are handled differently than ordinary
+/// constraints, at least at present. During type checking, the
+/// `InferCtxt::process_registered_region_obligations` method will
+/// attempt to convert a type test like `T: 'x` into an ordinary
+/// outlives constraint when possible (for example, `&'a T: 'b` will
+/// be converted into `'a: 'b` and registered as a `Constraint`).
+///
+/// In some cases, however, there are outlives relationships that are
+/// not converted into a region constraint, but rather into one of
+/// these "type tests".  The distinction is that a type test does not
+/// influence the inference result, but instead just examines the
+/// values that we ultimately inferred for each region variable and
+/// checks that they meet certain extra criteria.  If not, an error
+/// can be issued.
+///
+/// One reason for this is that these type tests typically boil down
+/// to a check like `'a: 'x` where `'a` is a universally quantified
+/// region -- and therefore not one whose value is really meant to be
+/// *inferred*, precisely (this is not always the case: one can have a
+/// type test like `<Foo as Trait<'?0>>::Bar: 'x`, where `'?0` is an
+/// inference variable). Another reason is that these type tests can
+/// involve *disjunction* -- that is, they can be satisfied in more
+/// than one way.
+///
+/// For more information about this translation, see
+/// `InferCtxt::process_registered_region_obligations` and
+/// `InferCtxt::type_must_outlive` in `rustc::infer::outlives`.
+#[derive(Clone, Debug)]
+pub struct TypeTest<'tcx> {
+    /// The type `T` that must outlive the region.
+    pub generic_kind: GenericKind<'tcx>,
+
+    /// The region `'x` that the type must outlive.
+    pub lower_bound: RegionVid,
+
+    /// The point where the outlives relation must hold.
+    pub point: Location,
+
+    /// Where did this constraint arise?
+    pub span: Span,
+
+    /// A test which, if met by the region `'x`, proves that this type
+    /// constraint is satisfied.
+    pub test: RegionTest,
+}
+
+/// A "test" that can be applied to some "subject region" `'x`. These are used to
+/// describe type constraints. Tests do not presently affect the
+/// region values that get inferred for each variable; they only
+/// examine the results *after* inference.  This means they can
+/// conveniently include disjuction ("a or b must be true").
+#[derive(Clone, Debug)]
+pub enum RegionTest {
+    /// The subject region `'x` must by outlived by *some* region in
+    /// the given set of regions.
+    ///
+    /// This test comes from e.g. a where clause like `T: 'a + 'b`,
+    /// which implies that we know that `T: 'a` and that `T:
+    /// 'b`. Therefore, if we are trying to prove that `T: 'x`, we can
+    /// do so by showing that `'a: 'x` *or* `'b: 'x`.
+    IsOutlivedByAnyRegionIn(Vec<RegionVid>),
+
+    /// The subject region `'x` must by outlived by *all* regions in
+    /// the given set of regions.
+    ///
+    /// This test comes from e.g. a projection type like `T = <u32 as
+    /// Trait<'a, 'b>>::Foo`, which must outlive `'a` or `'b`, and
+    /// maybe both. Therefore we can prove that `T: 'x` if we know
+    /// that `'a: 'x` *and* `'b: 'x`.
+    IsOutlivedByAllRegionsIn(Vec<RegionVid>),
+
+    /// Any of the given tests are true.
+    ///
+    /// This arises from projections, for which there are multiple
+    /// ways to prove an outlives relationship.
+    Any(Vec<RegionTest>),
+
+    /// All of the given tests are true.
+    All(Vec<RegionTest>),
+}
+
 impl<'tcx> RegionInferenceContext<'tcx> {
     /// Creates a new region inference context with a total of
     /// `num_region_variables` valid inference variables; the first N
     /// of those will be constant regions representing the free
     /// regions defined in `universal_regions`.
-    pub fn new(
+    pub(crate) fn new(
         var_origins: VarOrigins,
         universal_regions: UniversalRegions<'tcx>,
         mir: &Mir<'tcx>,
@@ -115,12 +248,19 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             .map(|origin| RegionDefinition::new(origin))
             .collect();
 
+        let nll_dump_cause = ty::tls::with(|tcx| tcx.sess.nll_dump_cause());
+
         let mut result = Self {
             definitions,
             elements: elements.clone(),
-            liveness_constraints: RegionValues::new(elements, num_region_variables),
+            liveness_constraints: RegionValues::new(
+                elements,
+                num_region_variables,
+                TrackCauses(nll_dump_cause),
+            ),
             inferred_values: None,
             constraints: Vec::new(),
+            type_tests: Vec::new(),
             universal_regions,
         };
 
@@ -167,11 +307,16 @@ impl<'tcx> RegionInferenceContext<'tcx> {
 
             // Add all nodes in the CFG to liveness constraints
             for point_index in self.elements.all_point_indices() {
-                self.liveness_constraints.add(variable, point_index);
+                self.liveness_constraints.add(
+                    variable,
+                    point_index,
+                    &Cause::UniversalRegion(variable),
+                );
             }
 
             // Add `end(X)` into the set for X.
-            self.liveness_constraints.add(variable, variable);
+            self.liveness_constraints
+                .add(variable, variable, &Cause::UniversalRegion(variable));
         }
     }
 
@@ -191,11 +336,25 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// Returns true if the region `r` contains the point `p`.
     ///
     /// Panics if called before `solve()` executes,
-    pub fn region_contains_point(&self, r: RegionVid, p: Location) -> bool {
+    pub fn region_contains_point<R>(&self, r: R, p: Location) -> bool
+    where
+        R: ToRegionVid,
+    {
         let inferred_values = self.inferred_values
             .as_ref()
             .expect("region values not yet inferred");
-        inferred_values.contains(r, p)
+        inferred_values.contains(r.to_region_vid(), p)
+    }
+
+    /// Returns the *reason* that the region `r` contains the given point.
+    pub(crate) fn why_region_contains_point<R>(&self, r: R, p: Location) -> Option<Rc<Cause>>
+    where
+        R: ToRegionVid,
+    {
+        let inferred_values = self.inferred_values
+            .as_ref()
+            .expect("region values not yet inferred");
+        inferred_values.cause(r.to_region_vid(), p)
     }
 
     /// Returns access to the value of `r` for debugging purposes.
@@ -211,13 +370,13 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     ///
     /// Returns `true` if this constraint is new and `false` is the
     /// constraint was already present.
-    pub(super) fn add_live_point(&mut self, v: RegionVid, point: Location) -> bool {
+    pub(super) fn add_live_point(&mut self, v: RegionVid, point: Location, cause: &Cause) -> bool {
         debug!("add_live_point({:?}, {:?})", v, point);
         assert!(self.inferred_values.is_none(), "values already inferred");
-        debug!("add_live_point: @{:?}", point);
+        debug!("add_live_point: @{:?} Adding cause {:?}", point, cause);
 
         let element = self.elements.index(point);
-        if self.liveness_constraints.add(v, element) {
+        if self.liveness_constraints.add(v, element, &cause) {
             true
         } else {
             false
@@ -242,157 +401,50 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         });
     }
 
-    /// Perform region inference.
-    pub(super) fn solve(
+    /// Add a "type test" that must be satisfied.
+    pub(super) fn add_type_test(&mut self, type_test: TypeTest<'tcx>) {
+        self.type_tests.push(type_test);
+    }
+
+    /// Perform region inference and report errors if we see any
+    /// unsatisfiable constraints. If this is a closure, returns the
+    /// region requirements to propagate to our creator, if any.
+    pub(super) fn solve<'gcx>(
         &mut self,
-        infcx: &InferCtxt<'_, '_, 'tcx>,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
         mir: &Mir<'tcx>,
         mir_def_id: DefId,
-    ) -> Option<ClosureRegionRequirements> {
+    ) -> Option<ClosureRegionRequirements<'gcx>> {
         assert!(self.inferred_values.is_none(), "values already inferred");
-        let tcx = infcx.tcx;
 
-        // Find the minimal regions that can solve the constraints. This is infallible.
         self.propagate_constraints(mir);
 
-        // Now, see whether any of the constraints were too strong. In
-        // particular, we want to check for a case where a universally
-        // quantified region exceeded its bounds.  Consider:
-        //
-        //     fn foo<'a, 'b>(x: &'a u32) -> &'b u32 { x }
-        //
-        // In this case, returning `x` requires `&'a u32 <: &'b u32`
-        // and hence we establish (transitively) a constraint that
-        // `'a: 'b`. The `propagate_constraints` code above will
-        // therefore add `end('a)` into the region for `'b` -- but we
-        // have no evidence that `'a` outlives `'b`, so we want to report
-        // an error.
-
-        // The universal regions are always found in a prefix of the
-        // full list.
-        let universal_definitions = self.definitions
-            .iter_enumerated()
-            .take_while(|(_, fr_definition)| fr_definition.is_universal);
-
-        // Go through each of the universal regions `fr` and check that
-        // they did not grow too large, accumulating any requirements
-        // for our caller into the `outlives_requirements` vector.
-        let mut outlives_requirements = vec![];
-        for (fr, _) in universal_definitions {
-            self.check_universal_region(infcx, fr, &mut outlives_requirements);
-        }
-
-        // If this is not a closure, then there is no caller to which we can
-        // "pass the buck". So if there are any outlives-requirements that were
-        // not satisfied, we just have to report a hard error here.
-        if !tcx.is_closure(mir_def_id) {
-            for outlives_requirement in outlives_requirements {
-                self.report_error(
-                    infcx,
-                    outlives_requirement.free_region,
-                    outlives_requirement.outlived_free_region,
-                    outlives_requirement.blame_span,
-                );
-            }
-            return None;
-        }
-
-        let num_external_vids = self.universal_regions.num_global_and_external_regions();
-
-        Some(ClosureRegionRequirements {
-            num_external_vids,
-            outlives_requirements,
-        })
-    }
-
-    /// Check the final value for the free region `fr` to see if it
-    /// grew too large. In particular, examine what `end(X)` points
-    /// wound up in `fr`'s final value; for each `end(X)` where `X !=
-    /// fr`, we want to check that `fr: X`. If not, that's either an
-    /// error, or something we have to propagate to our creator.
-    ///
-    /// Things that are to be propagated are accumulated into the
-    /// `outlives_requirements` vector.
-    fn check_universal_region(
-        &self,
-        infcx: &InferCtxt<'_, '_, 'tcx>,
-        longer_fr: RegionVid,
-        outlives_requirements: &mut Vec<ClosureOutlivesRequirement>,
-    ) {
-        let inferred_values = self.inferred_values.as_ref().unwrap();
-
-        debug!("check_universal_region(fr={:?})", longer_fr);
-
-        // Find every region `o` such that `fr: o`
-        // (because `fr` includes `end(o)`).
-        for shorter_fr in inferred_values.universal_regions_outlived_by(longer_fr) {
-            // If it is known that `fr: o`, carry on.
-            if self.universal_regions.outlives(longer_fr, shorter_fr) {
-                continue;
-            }
-
-            debug!(
-                "check_universal_region: fr={:?} does not outlive shorter_fr={:?}",
-                longer_fr,
-                shorter_fr,
-            );
-
-            let blame_span = self.blame_span(longer_fr, shorter_fr);
-
-            // Shrink `fr` until we find a non-local region (if we do).
-            // We'll call that `fr-` -- it's ever so slightly smaller than `fr`.
-            if let Some(fr_minus) = self.universal_regions.non_local_lower_bound(longer_fr) {
-                debug!("check_universal_region: fr_minus={:?}", fr_minus);
-
-                // Grow `shorter_fr` until we find a non-local
-                // regon. (We always will.)  We'll call that
-                // `shorter_fr+` -- it's ever so slightly larger than
-                // `fr`.
-                let shorter_fr_plus = self.universal_regions.non_local_upper_bound(shorter_fr);
-                debug!(
-                    "check_universal_region: shorter_fr_plus={:?}",
-                    shorter_fr_plus
-                );
-
-                // Push the constraint `fr-: shorter_fr+`
-                outlives_requirements.push(ClosureOutlivesRequirement {
-                    free_region: fr_minus,
-                    outlived_free_region: shorter_fr_plus,
-                    blame_span: blame_span,
-                });
-                return;
-            }
-
-            // If we could not shrink `fr` to something smaller that
-            // the external users care about, then we can't pass the
-            // buck; just report an error.
-            self.report_error(infcx, longer_fr, shorter_fr, blame_span);
-        }
-    }
-
-    fn report_error(
-        &self,
-        infcx: &InferCtxt<'_, '_, 'tcx>,
-        fr: RegionVid,
-        outlived_fr: RegionVid,
-        blame_span: Span,
-    ) {
-        // Obviously uncool error reporting.
-
-        let fr_string = match self.definitions[fr].external_name {
-            Some(r) => format!("free region `{}`", r),
-            None => format!("free region `{:?}`", fr),
+        // If this is a closure, we can propagate unsatisfied
+        // `outlives_requirements` to our creator, so create a vector
+        // to store those. Otherwise, we'll pass in `None` to the
+        // functions below, which will trigger them to report errors
+        // eagerly.
+        let mut outlives_requirements = if infcx.tcx.is_closure(mir_def_id) {
+            Some(vec![])
+        } else {
+            None
         };
 
-        let outlived_fr_string = match self.definitions[outlived_fr].external_name {
-            Some(r) => format!("free region `{}`", r),
-            None => format!("free region `{:?}`", outlived_fr),
-        };
+        self.check_type_tests(infcx, mir, mir_def_id, outlives_requirements.as_mut());
 
-        infcx.tcx.sess.span_err(
-            blame_span,
-            &format!("{} does not outlive {}", fr_string, outlived_fr_string,),
-        );
+        self.check_universal_regions(infcx, mir, mir_def_id, outlives_requirements.as_mut());
+
+        let outlives_requirements = outlives_requirements.unwrap_or(vec![]);
+
+        if outlives_requirements.is_empty() {
+            None
+        } else {
+            let num_external_vids = self.universal_regions.num_global_and_external_regions();
+            Some(ClosureRegionRequirements {
+                num_external_vids,
+                outlives_requirements,
+            })
+        }
     }
 
     /// Propagate the region constraints: this will grow the values
@@ -421,14 +473,18 @@ impl<'tcx> RegionInferenceContext<'tcx> {
 
                 // Grow the value as needed to accommodate the
                 // outlives constraint.
-
-                if self.copy(
-                    &mut inferred_values,
+                let Ok(made_changes) = self.dfs(
                     mir,
-                    constraint.sub,
-                    constraint.sup,
-                    constraint.point,
-                ) {
+                    CopyFromSourceToTarget {
+                        source_region: constraint.sub,
+                        target_region: constraint.sup,
+                        inferred_values: &mut inferred_values,
+                        constraint_point: constraint.point,
+                        constraint_span: constraint.span,
+                    },
+                );
+
+                if made_changes {
                     debug!("propagate_constraints:   sub={:?}", constraint.sub);
                     debug!("propagate_constraints:   sup={:?}", constraint.sup);
                     changed = true;
@@ -440,70 +496,527 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         self.inferred_values = Some(inferred_values);
     }
 
-    fn copy(
+    /// Once regions have been propagated, this method is used to see
+    /// whether the "type tests" produced by typeck were satisfied;
+    /// type tests encode type-outlives relationships like `T:
+    /// 'a`. See `TypeTest` for more details.
+    fn check_type_tests<'gcx>(
         &self,
-        inferred_values: &mut RegionValues,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
         mir: &Mir<'tcx>,
-        from_region: RegionVid,
-        to_region: RegionVid,
-        constraint_point: Location,
+        mir_def_id: DefId,
+        mut propagated_outlives_requirements: Option<&mut Vec<ClosureOutlivesRequirement<'gcx>>>,
+    ) {
+        let tcx = infcx.tcx;
+
+        for type_test in &self.type_tests {
+            debug!("check_type_test: {:?}", type_test);
+
+            if self.eval_region_test(mir, type_test.point, type_test.lower_bound, &type_test.test) {
+                continue;
+            }
+
+            if let Some(propagated_outlives_requirements) = &mut propagated_outlives_requirements {
+                if self.try_promote_type_test(infcx, type_test, propagated_outlives_requirements) {
+                    continue;
+                }
+            }
+
+            // Oh the humanity. Obviously we will do better than this error eventually.
+            let lower_bound_region = self.to_error_region(type_test.lower_bound);
+            if let Some(lower_bound_region) = lower_bound_region {
+                let region_scope_tree = &tcx.region_scope_tree(mir_def_id);
+                infcx.report_generic_bound_failure(
+                    region_scope_tree,
+                    type_test.span,
+                    None,
+                    type_test.generic_kind,
+                    lower_bound_region,
+                );
+            } else {
+                // FIXME. We should handle this case better. It
+                // indicates that we have e.g. some region variable
+                // whose value is like `'a+'b` where `'a` and `'b` are
+                // distinct unrelated univesal regions that are not
+                // known to outlive one another. It'd be nice to have
+                // some examples where this arises to decide how best
+                // to report it; we could probably handle it by
+                // iterating over the universal regions and reporting
+                // an error that multiple bounds are required.
+                tcx.sess.span_err(
+                    type_test.span,
+                    &format!(
+                        "`{}` does not live long enough",
+                        type_test.generic_kind,
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Converts a region inference variable into a `ty::Region` that
+    /// we can use for error reporting. If `r` is universally bound,
+    /// then we use the name that we have on record for it. If `r` is
+    /// existentially bound, then we check its inferred value and try
+    /// to find a good name from that. Returns `None` if we can't find
+    /// one (e.g., this is just some random part of the CFG).
+    fn to_error_region(&self, r: RegionVid) -> Option<ty::Region<'tcx>> {
+        if self.universal_regions.is_universal_region(r) {
+            return self.definitions[r].external_name;
+        } else {
+            let inferred_values = self.inferred_values
+                                      .as_ref()
+                                      .expect("region values not yet inferred");
+            let upper_bound = self.universal_upper_bound(r);
+            if inferred_values.contains(r, upper_bound) {
+                self.to_error_region(upper_bound)
+            } else {
+                None
+            }
+        }
+    }
+
+    fn try_promote_type_test<'gcx>(
+        &self,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        type_test: &TypeTest<'tcx>,
+        propagated_outlives_requirements: &mut Vec<ClosureOutlivesRequirement<'gcx>>,
     ) -> bool {
-        let mut changed = false;
+        let tcx = infcx.tcx;
 
-        let mut stack = vec![];
-        let mut visited = FxHashSet();
+        let TypeTest {
+            generic_kind,
+            lower_bound,
+            point: _,
+            span,
+            test: _,
+        } = type_test;
 
-        stack.push(constraint_point);
-        while let Some(p) = stack.pop() {
-            let point_index = self.elements.index(p);
+        let generic_ty = generic_kind.to_ty(tcx);
+        let subject = match self.try_promote_type_test_subject(infcx, generic_ty) {
+            Some(s) => s,
+            None => return false,
+        };
 
-            if !inferred_values.contains(from_region, point_index) {
-                debug!("            not in from-region");
+        // Find some bounding subject-region R+ that is a super-region
+        // of the existing subject-region R. This should be a non-local, universal
+        // region, which ensures it can be encoded in a `ClosureOutlivesRequirement`.
+        let lower_bound_plus = self.non_local_universal_upper_bound(*lower_bound);
+        assert!(self.universal_regions.is_universal_region(lower_bound_plus));
+        assert!(!self.universal_regions
+            .is_local_free_region(lower_bound_plus));
+
+        propagated_outlives_requirements.push(ClosureOutlivesRequirement {
+            subject,
+            outlived_free_region: lower_bound_plus,
+            blame_span: *span,
+        });
+        true
+    }
+
+    /// When we promote a type test `T: 'r`, we have to convert the
+    /// type `T` into something we can store in a query result (so
+    /// something allocated for `'gcx`). This is problematic if `ty`
+    /// contains regions. During the course of NLL region checking, we
+    /// will have replaced all of those regions with fresh inference
+    /// variables. To create a test subject, we want to replace those
+    /// inference variables with some region from the closure
+    /// signature -- this is not always possible, so this is a
+    /// fallible process. Presuming we do find a suitable region, we
+    /// will represent it with a `ReClosureBound`, which is a
+    /// `RegionKind` variant that can be allocated in the gcx.
+    fn try_promote_type_test_subject<'gcx>(
+        &self,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        ty: Ty<'tcx>,
+    ) -> Option<ClosureOutlivesSubject<'gcx>> {
+        let tcx = infcx.tcx;
+        let gcx = tcx.global_tcx();
+        let inferred_values = self.inferred_values
+            .as_ref()
+            .expect("region values not yet inferred");
+
+        debug!("try_promote_type_test_subject(ty = {:?})", ty);
+
+        let ty = tcx.fold_regions(&ty, &mut false, |r, _depth| {
+            let region_vid = self.to_region_vid(r);
+
+            // The challenge if this. We have some region variable `r`
+            // whose value is a set of CFG points and universal
+            // regions. We want to find if that set is *equivalent* to
+            // any of the named regions found in the closure.
+            //
+            // To do so, we compute the
+            // `non_local_universal_upper_bound`. This will be a
+            // non-local, universal region that is greater than `r`.
+            // However, it might not be *contained* within `r`, so
+            // then we further check whether this bound is contained
+            // in `r`. If so, we can say that `r` is equivalent to the
+            // bound.
+            //
+            // Let's work through a few examples. For these, imagine
+            // that we have 3 non-local regions (I'll denote them as
+            // `'static`, `'a`, and `'b`, though of course in the code
+            // they would be represented with indices) where:
+            //
+            // - `'static: 'a`
+            // - `'static: 'b`
+            //
+            // First, let's assume that `r` is some existential
+            // variable with an inferred value `{'a, 'static}` (plus
+            // some CFG nodes). In this case, the non-local upper
+            // bound is `'static`, since that outlives `'a`. `'static`
+            // is also a member of `r` and hence we consider `r`
+            // equivalent to `'static` (and replace it with
+            // `'static`).
+            //
+            // Now let's consider the inferred value `{'a, 'b}`. This
+            // means `r` is effectively `'a | 'b`. I'm not sure if
+            // this can come about, actually, but assuming it did, we
+            // would get a non-local upper bound of `'static`. Since
+            // `'static` is not contained in `r`, we would fail to
+            // find an equivalent.
+            let upper_bound = self.non_local_universal_upper_bound(region_vid);
+            if inferred_values.contains(region_vid, upper_bound) {
+                tcx.mk_region(ty::ReClosureBound(upper_bound))
+            } else {
+                // In the case of a failure, use a `ReVar`
+                // result. This will cause the `lift` later on to
+                // fail.
+                r
+            }
+        });
+        debug!("try_promote_type_test_subject: folded ty = {:?}", ty);
+
+        // `lift` will only fail if we failed to promote some region.
+        let ty = gcx.lift(&ty)?;
+
+        Some(ClosureOutlivesSubject::Ty(ty))
+    }
+
+    /// Given some universal or existential region `r`, finds a
+    /// non-local, universal region `r+` that outlives `r` at entry to (and
+    /// exit from) the closure. In the worst case, this will be
+    /// `'static`.
+    ///
+    /// This is used for two purposes. First, if we are propagated
+    /// some requirement `T: r`, we can use this method to enlarge `r`
+    /// to something we can encode for our creator (which only knows
+    /// about non-local, universal regions). It is also used when
+    /// encoding `T` as part of `try_promote_type_test_subject` (see
+    /// that fn for details).
+    ///
+    /// This is based on the result `'y` of `universal_upper_bound`,
+    /// except that it converts further takes the non-local upper
+    /// bound of `'y`, so that the final result is non-local.
+    fn non_local_universal_upper_bound(&self, r: RegionVid) -> RegionVid {
+        let inferred_values = self.inferred_values.as_ref().unwrap();
+
+        debug!(
+            "non_local_universal_upper_bound(r={:?}={})",
+            r,
+            inferred_values.region_value_str(r)
+        );
+
+        let lub = self.universal_upper_bound(r);
+
+        // Grow further to get smallest universal region known to
+        // creator.
+        let non_local_lub = self.universal_regions.non_local_upper_bound(lub);
+
+        debug!(
+            "non_local_universal_upper_bound: non_local_lub={:?}",
+            non_local_lub
+        );
+
+        non_local_lub
+    }
+
+    /// Returns a universally quantified region that outlives the
+    /// value of `r` (`r` may be existentially or universally
+    /// quantified).
+    ///
+    /// Since `r` is (potentially) an existential region, it has some
+    /// value which may include (a) any number of points in the CFG
+    /// and (b) any number of `end('x)` elements of universally
+    /// quantified regions. To convert this into a single universal
+    /// region we do as follows:
+    ///
+    /// - Ignore the CFG points in `'r`. All universally quantified regions
+    ///   include the CFG anyhow.
+    /// - For each `end('x)` element in `'r`, compute the mutual LUB, yielding
+    ///   a result `'y`.
+    fn universal_upper_bound(&self, r: RegionVid) -> RegionVid {
+        let inferred_values = self.inferred_values.as_ref().unwrap();
+
+        debug!(
+            "universal_upper_bound(r={:?}={})",
+            r,
+            inferred_values.region_value_str(r)
+        );
+
+        // Find the smallest universal region that contains all other
+        // universal regions within `region`.
+        let mut lub = self.universal_regions.fr_fn_body;
+        for ur in inferred_values.universal_regions_outlived_by(r) {
+            lub = self.universal_regions.postdom_upper_bound(lub, ur);
+        }
+
+        debug!("universal_upper_bound: r={:?} lub={:?}", r, lub);
+
+        lub
+    }
+
+    /// Test if `test` is true when applied to `lower_bound` at
+    /// `point`, and returns true or false.
+    fn eval_region_test(
+        &self,
+        mir: &Mir<'tcx>,
+        point: Location,
+        lower_bound: RegionVid,
+        test: &RegionTest,
+    ) -> bool {
+        debug!(
+            "eval_region_test(point={:?}, lower_bound={:?}, test={:?})",
+            point,
+            lower_bound,
+            test
+        );
+
+        match test {
+            RegionTest::IsOutlivedByAllRegionsIn(regions) => regions
+                .iter()
+                .all(|&r| self.eval_outlives(mir, r, lower_bound, point)),
+
+            RegionTest::IsOutlivedByAnyRegionIn(regions) => regions
+                .iter()
+                .any(|&r| self.eval_outlives(mir, r, lower_bound, point)),
+
+            RegionTest::Any(tests) => tests
+                .iter()
+                .any(|test| self.eval_region_test(mir, point, lower_bound, test)),
+
+            RegionTest::All(tests) => tests
+                .iter()
+                .all(|test| self.eval_region_test(mir, point, lower_bound, test)),
+        }
+    }
+
+    // Evaluate whether `sup_region: sub_region @ point`.
+    fn eval_outlives(
+        &self,
+        mir: &Mir<'tcx>,
+        sup_region: RegionVid,
+        sub_region: RegionVid,
+        point: Location,
+    ) -> bool {
+        debug!(
+            "eval_outlives({:?}: {:?} @ {:?})",
+            sup_region,
+            sub_region,
+            point
+        );
+
+        // Roughly speaking, do a DFS of all region elements reachable
+        // from `point` contained in `sub_region`. If any of those are
+        // *not* present in `sup_region`, the DFS will abort early and
+        // yield an `Err` result.
+        match self.dfs(
+            mir,
+            TestTargetOutlivesSource {
+                source_region: sub_region,
+                target_region: sup_region,
+                constraint_point: point,
+                elements: &self.elements,
+                universal_regions: &self.universal_regions,
+                inferred_values: self.inferred_values.as_ref().unwrap(),
+            },
+        ) {
+            Ok(_) => {
+                debug!("eval_outlives: true");
+                true
+            }
+
+            Err(elem) => {
+                debug!(
+                    "eval_outlives: false because `{:?}` is not present in `{:?}`",
+                    self.elements.to_element(elem),
+                    sup_region
+                );
+                false
+            }
+        }
+    }
+
+    /// Once regions have been propagated, this method is used to see
+    /// whether any of the constraints were too strong. In particular,
+    /// we want to check for a case where a universally quantified
+    /// region exceeded its bounds.  Consider:
+    ///
+    ///     fn foo<'a, 'b>(x: &'a u32) -> &'b u32 { x }
+    ///
+    /// In this case, returning `x` requires `&'a u32 <: &'b u32`
+    /// and hence we establish (transitively) a constraint that
+    /// `'a: 'b`. The `propagate_constraints` code above will
+    /// therefore add `end('a)` into the region for `'b` -- but we
+    /// have no evidence that `'b` outlives `'a`, so we want to report
+    /// an error.
+    ///
+    /// If `propagated_outlives_requirements` is `Some`, then we will
+    /// push unsatisfied obligations into there. Otherwise, we'll
+    /// report them as errors.
+    fn check_universal_regions<'gcx>(
+        &self,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        mir: &Mir<'tcx>,
+        mir_def_id: DefId,
+        mut propagated_outlives_requirements: Option<&mut Vec<ClosureOutlivesRequirement<'gcx>>>,
+    ) {
+        // The universal regions are always found in a prefix of the
+        // full list.
+        let universal_definitions = self.definitions
+            .iter_enumerated()
+            .take_while(|(_, fr_definition)| fr_definition.is_universal);
+
+        // Go through each of the universal regions `fr` and check that
+        // they did not grow too large, accumulating any requirements
+        // for our caller into the `outlives_requirements` vector.
+        for (fr, _) in universal_definitions {
+            self.check_universal_region(
+                infcx,
+                mir,
+                mir_def_id,
+                fr,
+                &mut propagated_outlives_requirements,
+            );
+        }
+    }
+
+    /// Check the final value for the free region `fr` to see if it
+    /// grew too large. In particular, examine what `end(X)` points
+    /// wound up in `fr`'s final value; for each `end(X)` where `X !=
+    /// fr`, we want to check that `fr: X`. If not, that's either an
+    /// error, or something we have to propagate to our creator.
+    ///
+    /// Things that are to be propagated are accumulated into the
+    /// `outlives_requirements` vector.
+    fn check_universal_region<'gcx>(
+        &self,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        mir: &Mir<'tcx>,
+        mir_def_id: DefId,
+        longer_fr: RegionVid,
+        propagated_outlives_requirements: &mut Option<&mut Vec<ClosureOutlivesRequirement<'gcx>>>,
+    ) {
+        let inferred_values = self.inferred_values.as_ref().unwrap();
+
+        debug!("check_universal_region(fr={:?})", longer_fr);
+
+        // Find every region `o` such that `fr: o`
+        // (because `fr` includes `end(o)`).
+        for shorter_fr in inferred_values.universal_regions_outlived_by(longer_fr) {
+            // If it is known that `fr: o`, carry on.
+            if self.universal_regions.outlives(longer_fr, shorter_fr) {
                 continue;
             }
 
-            if !visited.insert(p) {
-                debug!("            already visited");
-                continue;
+            debug!(
+                "check_universal_region: fr={:?} does not outlive shorter_fr={:?}",
+                longer_fr,
+                shorter_fr,
+            );
+
+            let blame_span = self.blame_span(longer_fr, shorter_fr);
+
+            if let Some(propagated_outlives_requirements) = propagated_outlives_requirements {
+                // Shrink `fr` until we find a non-local region (if we do).
+                // We'll call that `fr-` -- it's ever so slightly smaller than `fr`.
+                if let Some(fr_minus) = self.universal_regions.non_local_lower_bound(longer_fr) {
+                    debug!("check_universal_region: fr_minus={:?}", fr_minus);
+
+                    // Grow `shorter_fr` until we find a non-local
+                    // regon. (We always will.)  We'll call that
+                    // `shorter_fr+` -- it's ever so slightly larger than
+                    // `fr`.
+                    let shorter_fr_plus = self.universal_regions.non_local_upper_bound(shorter_fr);
+                    debug!(
+                        "check_universal_region: shorter_fr_plus={:?}",
+                        shorter_fr_plus
+                    );
+
+                    // Push the constraint `fr-: shorter_fr+`
+                    propagated_outlives_requirements.push(ClosureOutlivesRequirement {
+                        subject: ClosureOutlivesSubject::Region(fr_minus),
+                        outlived_free_region: shorter_fr_plus,
+                        blame_span: blame_span,
+                    });
+                    return;
+                }
             }
 
-            let new = inferred_values.add(to_region, point_index);
-            changed |= new;
+            // If we are not in a context where we can propagate
+            // errors, or we could not shrink `fr` to something
+            // smaller, then just report an error.
+            //
+            // Note: in this case, we use the unapproximated regions
+            // to report the error. This gives better error messages
+            // in some cases.
+            self.report_error(infcx, mir, mir_def_id, longer_fr, shorter_fr, blame_span);
+        }
+    }
 
-            let block_data = &mir[p.block];
-            let successor_points = if p.statement_index < block_data.statements.len() {
-                vec![
-                    Location {
-                        statement_index: p.statement_index + 1,
-                        ..p
-                    },
-                ]
-            } else {
-                block_data
-                    .terminator()
-                    .successors()
-                    .iter()
-                    .map(|&basic_block| {
-                        Location {
-                            statement_index: 0,
-                            block: basic_block,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            };
+    /// Report an error because the universal region `fr` was required to outlive
+    /// `outlived_fr` but it is not known to do so. For example:
+    ///
+    /// ```
+    /// fn foo<'a, 'b>(x: &'a u32) -> &'b u32 { x }
+    /// ```
+    ///
+    /// Here we would be invoked with `fr = 'a` and `outlived_fr = `'b`.
+    fn report_error(
+        &self,
+        infcx: &InferCtxt<'_, '_, 'tcx>,
+        mir: &Mir<'tcx>,
+        mir_def_id: DefId,
+        fr: RegionVid,
+        outlived_fr: RegionVid,
+        blame_span: Span,
+    ) {
+        // Obviously uncool error reporting.
 
-            if successor_points.is_empty() {
-                // If we reach the END point in the graph, then copy
-                // over any skolemized end points in the `from_region`
-                // and make sure they are included in the `to_region`.
-                changed |=
-                    inferred_values.add_universal_regions_outlived_by(from_region, to_region);
-            } else {
-                stack.extend(successor_points);
+        let fr_name = self.to_error_region(fr);
+        let outlived_fr_name = self.to_error_region(outlived_fr);
+
+        if let (Some(f), Some(o)) = (fr_name, outlived_fr_name) {
+            let tables = infcx.tcx.typeck_tables_of(mir_def_id);
+            let nice = NiceRegionError::new(infcx.tcx, blame_span, o, f, Some(tables));
+            if let Some(ErrorReported) = nice.try_report() {
+                return;
             }
         }
 
-        changed
+        let fr_string = match fr_name {
+            Some(r) => format!("free region `{}`", r),
+            None => format!("free region `{:?}`", fr),
+        };
+
+        let outlived_fr_string = match outlived_fr_name {
+            Some(r) => format!("free region `{}`", r),
+            None => format!("free region `{:?}`", outlived_fr),
+        };
+
+        let mut diag = infcx.tcx.sess.struct_span_err(
+            blame_span,
+            &format!("{} does not outlive {}", fr_string, outlived_fr_string,),
+        );
+
+        // Find out why `fr` had to outlive `outlived_fr`...
+        let inferred_values = self.inferred_values.as_ref().unwrap();
+        if let Some(cause) = inferred_values.cause(fr, outlived_fr) {
+            cause.label_diagnostic(mir, &mut diag);
+        }
+
+        diag.emit();
     }
 
     /// Tries to finds a good span to blame for the fact that `fr1`
@@ -520,35 +1033,50 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // be obvious to the user -- not to mention the naive notion
         // of dependencies, which doesn't account for the locations of
         // contraints at all. But it will do for now.
-        for constraint in &self.constraints {
-            if constraint.sub == fr2 && influenced_fr1[constraint.sup] {
-                return constraint.span;
-            }
-        }
+        let relevant_constraint = self.constraints
+                .iter()
+                .filter_map(|constraint| {
+                    if constraint.sub != fr2 {
+                        None
+                    } else {
+                        influenced_fr1[constraint.sup]
+                            .map(|distance| (distance, constraint.span))
+                    }
+                })
+                .min() // constraining fr1 with fewer hops *ought* to be more obvious
+                .map(|(_dist, span)| span);
 
-        bug!(
-            "could not find any constraint to blame for {:?}: {:?}",
-            fr1,
-            fr2
-        );
+        relevant_constraint.unwrap_or_else(|| {
+            bug!(
+                "could not find any constraint to blame for {:?}: {:?}",
+                fr1,
+                fr2
+            );
+        })
     }
 
     /// Finds all regions whose values `'a` may depend on in some way.
-    /// Basically if there exists a constraint `'a: 'b @ P`, then `'b`
-    /// and `dependencies('b)` will be in the final set.
+    /// For each region, returns either `None` (does not influence
+    /// `'a`) or `Some(d)` which indicates that it influences `'a`
+    /// with distinct `d` (minimum number of edges that must be
+    /// traversed).
     ///
     /// Used during error reporting, extremely naive and inefficient.
-    fn dependencies(&self, r0: RegionVid) -> IndexVec<RegionVid, bool> {
-        let mut result_set = IndexVec::from_elem(false, &self.definitions);
+    fn dependencies(&self, r0: RegionVid) -> IndexVec<RegionVid, Option<usize>> {
+        let mut result_set = IndexVec::from_elem(None, &self.definitions);
         let mut changed = true;
-        result_set[r0] = true;
+        result_set[r0] = Some(0); // distance 0 from `r0`
 
         while changed {
             changed = false;
             for constraint in &self.constraints {
-                if result_set[constraint.sup] {
-                    if !result_set[constraint.sub] {
-                        result_set[constraint.sub] = true;
+                if let Some(n) = result_set[constraint.sup] {
+                    let m = n + 1;
+                    if result_set[constraint.sub]
+                        .map(|distance| m < distance)
+                        .unwrap_or(true)
+                    {
+                        result_set[constraint.sub] = Some(m);
                         changed = true;
                     }
                 }
@@ -585,21 +1113,31 @@ impl fmt::Debug for Constraint {
     }
 }
 
-pub trait ClosureRegionRequirementsExt {
-    fn apply_requirements<'tcx>(
+pub trait ClosureRegionRequirementsExt<'gcx, 'tcx> {
+    fn apply_requirements(
         &self,
-        infcx: &InferCtxt<'_, '_, 'tcx>,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        body_id: ast::NodeId,
         location: Location,
         closure_def_id: DefId,
         closure_substs: ty::ClosureSubsts<'tcx>,
     );
+
+    fn subst_closure_mapping<T>(
+        &self,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        closure_mapping: &IndexVec<RegionVid, ty::Region<'tcx>>,
+        value: &T,
+    ) -> T
+    where
+        T: TypeFoldable<'tcx>;
 }
 
-impl ClosureRegionRequirementsExt for ClosureRegionRequirements {
+impl<'gcx, 'tcx> ClosureRegionRequirementsExt<'gcx, 'tcx> for ClosureRegionRequirements<'gcx> {
     /// Given an instance T of the closure type, this method
     /// instantiates the "extra" requirements that we computed for the
     /// closure into the inference context. This has the effect of
-    /// adding new subregion obligations to existing variables.
+    /// adding new outlives obligations to existing variables.
     ///
     /// As described on `ClosureRegionRequirements`, the extra
     /// requirements are expressed in terms of regionvids that index
@@ -608,9 +1146,10 @@ impl ClosureRegionRequirementsExt for ClosureRegionRequirements {
     /// a vector. Then we can just index into that vector to extract
     /// out the corresponding region from T and apply the
     /// requirements.
-    fn apply_requirements<'tcx>(
+    fn apply_requirements(
         &self,
-        infcx: &InferCtxt<'_, '_, 'tcx>,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        body_id: ast::NodeId,
         location: Location,
         closure_def_id: DefId,
         closure_substs: ty::ClosureSubsts<'tcx>,
@@ -632,22 +1171,162 @@ impl ClosureRegionRequirementsExt for ClosureRegionRequirements {
         // into a vector.  These are the regions that we will be
         // relating to one another.
         let closure_mapping =
-            UniversalRegions::closure_mapping(infcx, user_closure_ty, self.num_external_vids);
+            &UniversalRegions::closure_mapping(infcx, user_closure_ty, self.num_external_vids);
         debug!("apply_requirements: closure_mapping={:?}", closure_mapping);
 
         // Create the predicates.
         for outlives_requirement in &self.outlives_requirements {
-            let region = closure_mapping[outlives_requirement.free_region];
             let outlived_region = closure_mapping[outlives_requirement.outlived_free_region];
-            debug!(
-                "apply_requirements: region={:?} outlived_region={:?} outlives_requirements={:?}",
-                region,
-                outlived_region,
-                outlives_requirement
-            );
+
             // FIXME, this origin is not entirely suitable.
             let origin = SubregionOrigin::CallRcvr(outlives_requirement.blame_span);
-            infcx.sub_regions(origin, outlived_region, region);
+
+            match outlives_requirement.subject {
+                ClosureOutlivesSubject::Region(region) => {
+                    let region = closure_mapping[region];
+                    debug!(
+                        "apply_requirements: region={:?} \
+                         outlived_region={:?} \
+                         outlives_requirement={:?}",
+                        region,
+                        outlived_region,
+                        outlives_requirement,
+                    );
+                    infcx.sub_regions(origin, outlived_region, region);
+                }
+
+                ClosureOutlivesSubject::Ty(ty) => {
+                    let ty = self.subst_closure_mapping(infcx, closure_mapping, &ty);
+                    debug!(
+                        "apply_requirements: ty={:?} \
+                         outlived_region={:?} \
+                         outlives_requirement={:?}",
+                        ty,
+                        outlived_region,
+                        outlives_requirement,
+                    );
+                    infcx.register_region_obligation(
+                        body_id,
+                        RegionObligation {
+                            sup_type: ty,
+                            sub_region: outlived_region,
+                            cause: ObligationCause::misc(outlives_requirement.blame_span, body_id),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn subst_closure_mapping<T>(
+        &self,
+        infcx: &InferCtxt<'_, 'gcx, 'tcx>,
+        closure_mapping: &IndexVec<RegionVid, ty::Region<'tcx>>,
+        value: &T,
+    ) -> T
+    where
+        T: TypeFoldable<'tcx>,
+    {
+        infcx.tcx.fold_regions(value, &mut false, |r, _depth| {
+            if let ty::ReClosureBound(vid) = r {
+                closure_mapping[*vid]
+            } else {
+                bug!(
+                    "subst_closure_mapping: encountered non-closure bound free region {:?}",
+                    r
+                )
+            }
+        })
+    }
+}
+
+trait CauseExt {
+    fn outlives(&self, constraint_location: Location, constraint_span: Span) -> Cause;
+}
+
+impl CauseExt for Rc<Cause> {
+    /// Creates a derived cause due to an outlives constraint.
+    fn outlives(&self, constraint_location: Location, constraint_span: Span) -> Cause {
+        Cause::Outlives {
+            original_cause: self.clone(),
+            constraint_location,
+            constraint_span,
+        }
+    }
+}
+
+impl Cause {
+    pub(crate) fn label_diagnostic(&self, mir: &Mir<'_>, diag: &mut DiagnosticBuilder<'_>) {
+        // The cause information is pretty messy. Only dump it as an
+        // internal debugging aid if -Znll-dump-cause is given.
+        let nll_dump_cause = ty::tls::with(|tcx| tcx.sess.nll_dump_cause());
+        if !nll_dump_cause {
+            return;
+        }
+
+        let mut string = String::new();
+        self.push_diagnostic_string(mir, &mut string);
+        diag.note(&string);
+    }
+
+    fn push_diagnostic_string(&self, mir: &Mir<'_>, string: &mut String) {
+        match self {
+            Cause::LiveVar(local, location) => {
+                string.push_str(&format!("because `{:?}` is live at {:?}", local, location));
+            }
+
+            Cause::DropVar(local, location) => {
+                string.push_str(&format!(
+                    "because `{:?}` is dropped at {:?}",
+                    local,
+                    location
+                ));
+            }
+
+            Cause::LiveOther(location) => {
+                string.push_str(&format!(
+                    "because of a general liveness constraint at {:?}",
+                    location
+                ));
+            }
+
+            Cause::UniversalRegion(region_vid) => {
+                string.push_str(&format!(
+                    "because `{:?}` is universally quantified",
+                    region_vid
+                ));
+            }
+
+            Cause::Outlives {
+                original_cause,
+                constraint_location,
+                constraint_span: _,
+            } => {
+                string.push_str(&format!(
+                    "because of an outlives relation created at `{:?}`\n",
+                    constraint_location
+                ));
+
+                original_cause.push_diagnostic_string(mir, string);
+            }
+        }
+    }
+
+    pub(crate) fn root_cause(&self) -> &Cause {
+        match self {
+            Cause::LiveVar(..) |
+            Cause::DropVar(..) |
+            Cause::LiveOther(..) |
+            Cause::UniversalRegion(..) => {
+                self
+            }
+
+            Cause::Outlives {
+                original_cause,
+                ..
+            } => {
+                original_cause.root_cause()
+            }
         }
     }
 }
