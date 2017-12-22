@@ -21,6 +21,7 @@ use ast::EnumDef;
 use ast::{Expr, ExprKind, RangeLimits};
 use ast::{Field, FnDecl};
 use ast::{ForeignItem, ForeignItemKind, FunctionRetTy};
+use ast::GenericParam;
 use ast::{Ident, ImplItem, IsAuto, Item, ItemKind};
 use ast::{Lifetime, LifetimeDef, Lit, LitKind, UintTy};
 use ast::Local;
@@ -169,11 +170,49 @@ enum PrevTokenKind {
     Other,
 }
 
-pub(crate) trait RecoverQPath: Sized {
+trait RecoverQPath: Sized {
+    const PATH_STYLE: PathStyle = PathStyle::Expr;
     fn to_ty(&self) -> Option<P<Ty>>;
     fn to_recovered(&self, qself: Option<QSelf>, path: ast::Path) -> Self;
     fn to_string(&self) -> String;
-    const PATH_STYLE: PathStyle = PathStyle::Expr;
+}
+
+impl RecoverQPath for Ty {
+    const PATH_STYLE: PathStyle = PathStyle::Type;
+    fn to_ty(&self) -> Option<P<Ty>> {
+        Some(P(self.clone()))
+    }
+    fn to_recovered(&self, qself: Option<QSelf>, path: ast::Path) -> Self {
+        Self { span: path.span, node: TyKind::Path(qself, path), id: self.id }
+    }
+    fn to_string(&self) -> String {
+        pprust::ty_to_string(self)
+    }
+}
+
+impl RecoverQPath for Pat {
+    fn to_ty(&self) -> Option<P<Ty>> {
+        self.to_ty()
+    }
+    fn to_recovered(&self, qself: Option<QSelf>, path: ast::Path) -> Self {
+        Self { span: path.span, node: PatKind::Path(qself, path), id: self.id }
+    }
+    fn to_string(&self) -> String {
+        pprust::pat_to_string(self)
+    }
+}
+
+impl RecoverQPath for Expr {
+    fn to_ty(&self) -> Option<P<Ty>> {
+        self.to_ty()
+    }
+    fn to_recovered(&self, qself: Option<QSelf>, path: ast::Path) -> Self {
+        Self { span: path.span, node: ExprKind::Path(qself, path),
+               id: self.id, attrs: self.attrs.clone() }
+    }
+    fn to_string(&self) -> String {
+        pprust::expr_to_string(self)
+    }
 }
 
 /* ident is handled by common.rs */
@@ -514,7 +553,10 @@ impl<'a> Parser<'a> {
             restrictions: Restrictions::empty(),
             obsolete_set: HashSet::new(),
             recurse_into_file_modules,
-            directory: Directory { path: PathBuf::new(), ownership: DirectoryOwnership::Owned },
+            directory: Directory {
+                path: PathBuf::new(),
+                ownership: DirectoryOwnership::Owned { relative: None }
+            },
             root_module_name: None,
             expected_tokens: Vec::new(),
             token_cursor: TokenCursor {
@@ -1258,7 +1300,7 @@ impl<'a> Parser<'a> {
     }
 
     /// parse a TyKind::BareFn type:
-    pub fn parse_ty_bare_fn(&mut self, lifetime_defs: Vec<LifetimeDef>)
+    pub fn parse_ty_bare_fn(&mut self, generic_params: Vec<GenericParam>)
                             -> PResult<'a, TyKind> {
         /*
 
@@ -1290,7 +1332,7 @@ impl<'a> Parser<'a> {
         Ok(TyKind::BareFn(P(BareFnTy {
             abi,
             unsafety,
-            lifetimes: lifetime_defs,
+            generic_params,
             decl,
         })))
     }
@@ -1429,7 +1471,7 @@ impl<'a> Parser<'a> {
 
     // Parse a type
     pub fn parse_ty(&mut self) -> PResult<'a, P<Ty>> {
-        self.parse_ty_common(true)
+        self.parse_ty_common(true, true)
     }
 
     /// Parse a type in restricted contexts where `+` is not permitted.
@@ -1438,10 +1480,11 @@ impl<'a> Parser<'a> {
     /// Example 2: `value1 as TYPE + value2`
     ///     `+` is prohibited to avoid interactions with expression grammar.
     fn parse_ty_no_plus(&mut self) -> PResult<'a, P<Ty>> {
-        self.parse_ty_common(false)
+        self.parse_ty_common(false, true)
     }
 
-    fn parse_ty_common(&mut self, allow_plus: bool) -> PResult<'a, P<Ty>> {
+    fn parse_ty_common(&mut self, allow_plus: bool, allow_qpath_recovery: bool)
+                       -> PResult<'a, P<Ty>> {
         maybe_whole!(self, NtTy, |x| x);
 
         let lo = self.span;
@@ -1574,14 +1617,14 @@ impl<'a> Parser<'a> {
 
         // Try to recover from use of `+` with incorrect priority.
         self.maybe_recover_from_bad_type_plus(allow_plus, &ty)?;
-        let ty = self.maybe_recover_from_bad_qpath(ty)?;
+        let ty = self.maybe_recover_from_bad_qpath(ty, allow_qpath_recovery)?;
 
         Ok(P(ty))
     }
 
-    fn parse_remaining_bounds(&mut self, lifetime_defs: Vec<LifetimeDef>, path: ast::Path,
+    fn parse_remaining_bounds(&mut self, generic_params: Vec<GenericParam>, path: ast::Path,
                               lo: Span, parse_plus: bool) -> PResult<'a, TyKind> {
-        let poly_trait_ref = PolyTraitRef::new(lifetime_defs, path, lo.to(self.prev_span));
+        let poly_trait_ref = PolyTraitRef::new(generic_params, path, lo.to(self.prev_span));
         let mut bounds = vec![TraitTyParamBound(poly_trait_ref, TraitBoundModifier::None)];
         if parse_plus {
             self.bump(); // `+`
@@ -1630,9 +1673,10 @@ impl<'a> Parser<'a> {
     }
 
     // Try to recover from associated item paths like `[T]::AssocItem`/`(T, U)::AssocItem`.
-    fn maybe_recover_from_bad_qpath<T: RecoverQPath>(&mut self, base: T) -> PResult<'a, T> {
+    fn maybe_recover_from_bad_qpath<T: RecoverQPath>(&mut self, base: T, allow_recovery: bool)
+                                                     -> PResult<'a, T> {
         // Do not add `::` to expected tokens.
-        if self.token != token::ModSep {
+        if !allow_recovery || self.token != token::ModSep {
             return Ok(base);
         }
         let ty = match base.to_ty() {
@@ -1966,7 +2010,7 @@ impl<'a> Parser<'a> {
                     |p| p.parse_ty())?;
                 self.bump(); // `)`
                 let output = if self.eat(&token::RArrow) {
-                    Some(self.parse_ty_no_plus()?)
+                    Some(self.parse_ty_common(false, false)?)
                 } else {
                     None
                 };
@@ -2373,7 +2417,7 @@ impl<'a> Parser<'a> {
         }
 
         let expr = Expr { node: ex, span: lo.to(hi), id: ast::DUMMY_NODE_ID, attrs };
-        let expr = self.maybe_recover_from_bad_qpath(expr)?;
+        let expr = self.maybe_recover_from_bad_qpath(expr, true)?;
 
         return Ok(P(expr));
     }
@@ -3740,7 +3784,7 @@ impl<'a> Parser<'a> {
         }
 
         let pat = Pat { node: pat, span: lo.to(self.prev_span), id: ast::DUMMY_NODE_ID };
-        let pat = self.maybe_recover_from_bad_qpath(pat)?;
+        let pat = self.maybe_recover_from_bad_qpath(pat, true)?;
 
         Ok(P(pat))
     }
@@ -4547,9 +4591,8 @@ impl<'a> Parser<'a> {
 
     /// Parses (possibly empty) list of lifetime and type parameters, possibly including
     /// trailing comma and erroneous trailing attributes.
-    pub fn parse_generic_params(&mut self) -> PResult<'a, (Vec<LifetimeDef>, Vec<TyParam>)> {
-        let mut lifetime_defs = Vec::new();
-        let mut ty_params = Vec::new();
+    pub fn parse_generic_params(&mut self) -> PResult<'a, Vec<ast::GenericParam>> {
+        let mut params = Vec::new();
         let mut seen_ty_param = false;
         loop {
             let attrs = self.parse_outer_attributes()?;
@@ -4561,18 +4604,18 @@ impl<'a> Parser<'a> {
                 } else {
                     Vec::new()
                 };
-                lifetime_defs.push(LifetimeDef {
+                params.push(ast::GenericParam::Lifetime(LifetimeDef {
                     attrs: attrs.into(),
                     lifetime,
                     bounds,
-                });
+                }));
                 if seen_ty_param {
                     self.span_err(self.prev_span,
                         "lifetime parameters must be declared prior to type parameters");
                 }
             } else if self.check_ident() {
                 // Parse type parameter.
-                ty_params.push(self.parse_ty_param(attrs)?);
+                params.push(ast::GenericParam::Type(self.parse_ty_param(attrs)?));
                 seen_ty_param = true;
             } else {
                 // Check for trailing attributes and stop parsing.
@@ -4588,7 +4631,7 @@ impl<'a> Parser<'a> {
                 break
             }
         }
-        Ok((lifetime_defs, ty_params))
+        Ok(params)
     }
 
     /// Parse a set of optional generic type parameter declarations. Where
@@ -4603,11 +4646,10 @@ impl<'a> Parser<'a> {
 
         let span_lo = self.span;
         if self.eat_lt() {
-            let (lifetime_defs, ty_params) = self.parse_generic_params()?;
+            let params = self.parse_generic_params()?;
             self.expect_gt()?;
             Ok(ast::Generics {
-                lifetimes: lifetime_defs,
-                ty_params,
+                params,
                 where_clause: WhereClause {
                     id: ast::DUMMY_NODE_ID,
                     predicates: Vec::new(),
@@ -4735,7 +4777,7 @@ impl<'a> Parser<'a> {
                     where_clause.predicates.push(ast::WherePredicate::BoundPredicate(
                         ast::WhereBoundPredicate {
                             span: lo.to(self.prev_span),
-                            bound_lifetimes: lifetime_defs,
+                            bound_generic_params: lifetime_defs,
                             bounded_ty: ty,
                             bounds,
                         }
@@ -5360,16 +5402,24 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_late_bound_lifetime_defs(&mut self) -> PResult<'a, Vec<LifetimeDef>> {
+    fn parse_late_bound_lifetime_defs(&mut self) -> PResult<'a, Vec<GenericParam>> {
         if self.eat_keyword(keywords::For) {
             self.expect_lt()?;
-            let (lifetime_defs, ty_params) = self.parse_generic_params()?;
+            let params = self.parse_generic_params()?;
             self.expect_gt()?;
-            if !ty_params.is_empty() {
-                self.span_err(ty_params[0].span,
-                              "only lifetime parameters can be used in this context");
+
+            let first_non_lifetime_param_span = params.iter()
+                .filter_map(|param| match *param {
+                    ast::GenericParam::Lifetime(_) => None,
+                    ast::GenericParam::Type(ref t) => Some(t.span),
+                })
+                .next();
+
+            if let Some(span) = first_non_lifetime_param_span {
+                self.span_err(span, "only lifetime parameters can be used in this context");
             }
-            Ok(lifetime_defs)
+
+            Ok(params)
         } else {
             Ok(Vec::new())
         }
@@ -5731,7 +5781,7 @@ impl<'a> Parser<'a> {
     fn push_directory(&mut self, id: Ident, attrs: &[Attribute]) {
         if let Some(path) = attr::first_attr_value_str_by_name(attrs, "path") {
             self.directory.path.push(&path.as_str());
-            self.directory.ownership = DirectoryOwnership::Owned;
+            self.directory.ownership = DirectoryOwnership::Owned { relative: None };
         } else {
             self.directory.path.push(&id.name.as_str());
         }
@@ -5742,10 +5792,28 @@ impl<'a> Parser<'a> {
     }
 
     /// Returns either a path to a module, or .
-    pub fn default_submod_path(id: ast::Ident, dir_path: &Path, codemap: &CodeMap) -> ModulePath {
+    pub fn default_submod_path(
+        id: ast::Ident,
+        relative: Option<ast::Ident>,
+        dir_path: &Path,
+        codemap: &CodeMap) -> ModulePath
+    {
+        // If we're in a foo.rs file instead of a mod.rs file,
+        // we need to look for submodules in
+        // `./foo/<id>.rs` and `./foo/<id>/mod.rs` rather than
+        // `./<id>.rs` and `./<id>/mod.rs`.
+        let relative_prefix_string;
+        let relative_prefix = if let Some(ident) = relative {
+            relative_prefix_string = format!("{}{}", ident.name.as_str(), path::MAIN_SEPARATOR);
+            &relative_prefix_string
+        } else {
+            ""
+        };
+
         let mod_name = id.to_string();
-        let default_path_str = format!("{}.rs", mod_name);
-        let secondary_path_str = format!("{}{}mod.rs", mod_name, path::MAIN_SEPARATOR);
+        let default_path_str = format!("{}{}.rs", relative_prefix, mod_name);
+        let secondary_path_str = format!("{}{}{}mod.rs",
+                                         relative_prefix, mod_name, path::MAIN_SEPARATOR);
         let default_path = dir_path.join(&default_path_str);
         let secondary_path = dir_path.join(&secondary_path_str);
         let default_exists = codemap.file_exists(&default_path);
@@ -5754,12 +5822,16 @@ impl<'a> Parser<'a> {
         let result = match (default_exists, secondary_exists) {
             (true, false) => Ok(ModulePathSuccess {
                 path: default_path,
-                directory_ownership: DirectoryOwnership::UnownedViaMod(false),
+                directory_ownership: DirectoryOwnership::Owned {
+                    relative: Some(id),
+                },
                 warn: false,
             }),
             (false, true) => Ok(ModulePathSuccess {
                 path: secondary_path,
-                directory_ownership: DirectoryOwnership::Owned,
+                directory_ownership: DirectoryOwnership::Owned {
+                    relative: None,
+                },
                 warn: false,
             }),
             (false, false) => Err(Error::FileNotFoundForModule {
@@ -5790,7 +5862,10 @@ impl<'a> Parser<'a> {
         if let Some(path) = Parser::submod_path_from_attr(outer_attrs, &self.directory.path) {
             return Ok(ModulePathSuccess {
                 directory_ownership: match path.file_name().and_then(|s| s.to_str()) {
-                    Some("mod.rs") => DirectoryOwnership::Owned,
+                    Some("mod.rs") => DirectoryOwnership::Owned { relative: None },
+                    Some(_) => {
+                        DirectoryOwnership::Owned { relative: Some(id) }
+                    }
                     _ => DirectoryOwnership::UnownedViaMod(true),
                 },
                 path,
@@ -5798,49 +5873,69 @@ impl<'a> Parser<'a> {
             });
         }
 
-        let paths = Parser::default_submod_path(id, &self.directory.path, self.sess.codemap());
-
-        if let DirectoryOwnership::UnownedViaBlock = self.directory.ownership {
-            let msg =
-                "Cannot declare a non-inline module inside a block unless it has a path attribute";
-            let mut err = self.diagnostic().struct_span_err(id_sp, msg);
-            if paths.path_exists {
-                let msg = format!("Maybe `use` the module `{}` instead of redeclaring it",
-                                  paths.name);
-                err.span_note(id_sp, &msg);
-            }
-            Err(err)
-        } else if let DirectoryOwnership::UnownedViaMod(warn) = self.directory.ownership {
-            if warn {
-                if let Ok(result) = paths.result {
-                    return Ok(ModulePathSuccess { warn: true, ..result });
+        let relative = match self.directory.ownership {
+            DirectoryOwnership::Owned { relative } => {
+                // Push the usage onto the list of non-mod.rs mod uses.
+                // This is used later for feature-gate error reporting.
+                if let Some(cur_file_ident) = relative {
+                    self.sess
+                        .non_modrs_mods.borrow_mut()
+                        .push((cur_file_ident, id_sp));
                 }
+                relative
+            },
+            DirectoryOwnership::UnownedViaBlock |
+            DirectoryOwnership::UnownedViaMod(_) => None,
+        };
+        let paths = Parser::default_submod_path(
+                        id, relative, &self.directory.path, self.sess.codemap());
+
+        match self.directory.ownership {
+            DirectoryOwnership::Owned { .. } => {
+                paths.result.map_err(|err| self.span_fatal_err(id_sp, err))
+            },
+            DirectoryOwnership::UnownedViaBlock => {
+                let msg =
+                    "Cannot declare a non-inline module inside a block \
+                    unless it has a path attribute";
+                let mut err = self.diagnostic().struct_span_err(id_sp, msg);
+                if paths.path_exists {
+                    let msg = format!("Maybe `use` the module `{}` instead of redeclaring it",
+                                      paths.name);
+                    err.span_note(id_sp, &msg);
+                }
+                Err(err)
             }
-            let mut err = self.diagnostic().struct_span_err(id_sp,
-                "cannot declare a new module at this location");
-            if id_sp != syntax_pos::DUMMY_SP {
-                let src_path = self.sess.codemap().span_to_filename(id_sp);
-                if let FileName::Real(src_path) = src_path {
-                    if let Some(stem) = src_path.file_stem() {
-                        let mut dest_path = src_path.clone();
-                        dest_path.set_file_name(stem);
-                        dest_path.push("mod.rs");
-                        err.span_note(id_sp,
+            DirectoryOwnership::UnownedViaMod(warn) => {
+                if warn {
+                    if let Ok(result) = paths.result {
+                        return Ok(ModulePathSuccess { warn: true, ..result });
+                    }
+                }
+                let mut err = self.diagnostic().struct_span_err(id_sp,
+                    "cannot declare a new module at this location");
+                if id_sp != syntax_pos::DUMMY_SP {
+                    let src_path = self.sess.codemap().span_to_filename(id_sp);
+                    if let FileName::Real(src_path) = src_path {
+                        if let Some(stem) = src_path.file_stem() {
+                            let mut dest_path = src_path.clone();
+                            dest_path.set_file_name(stem);
+                            dest_path.push("mod.rs");
+                            err.span_note(id_sp,
                                     &format!("maybe move this module `{}` to its own \
                                                 directory via `{}`", src_path.display(),
                                             dest_path.display()));
+                        }
                     }
                 }
+                if paths.path_exists {
+                    err.span_note(id_sp,
+                                  &format!("... or maybe `use` the module `{}` instead \
+                                            of possibly redeclaring it",
+                                           paths.name));
+                }
+                Err(err)
             }
-            if paths.path_exists {
-                err.span_note(id_sp,
-                              &format!("... or maybe `use` the module `{}` instead \
-                                        of possibly redeclaring it",
-                                       paths.name));
-            }
-            Err(err)
-        } else {
-            paths.result.map_err(|err| self.span_fatal_err(id_sp, err))
         }
     }
 

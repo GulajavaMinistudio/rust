@@ -47,6 +47,9 @@ pub struct ParseSess {
     pub unstable_features: UnstableFeatures,
     pub config: CrateConfig,
     pub missing_fragment_specifiers: RefCell<HashSet<Span>>,
+    // Spans where a `mod foo;` statement was included in a non-mod.rs file.
+    // These are used to issue errors if the non_modrs_mods feature is not enabled.
+    pub non_modrs_mods: RefCell<Vec<(ast::Ident, Span)>>,
     /// Used to determine and report recursive mod inclusions
     included_mod_stack: RefCell<Vec<PathBuf>>,
     code_map: Rc<CodeMap>,
@@ -70,6 +73,7 @@ impl ParseSess {
             missing_fragment_specifiers: RefCell::new(HashSet::new()),
             included_mod_stack: RefCell::new(vec![]),
             code_map,
+            non_modrs_mods: RefCell::new(vec![]),
         }
     }
 
@@ -86,7 +90,10 @@ pub struct Directory {
 
 #[derive(Copy, Clone)]
 pub enum DirectoryOwnership {
-    Owned,
+    Owned {
+        // None if `mod.rs`, `Some("foo")` if we're in `foo.rs`
+        relative: Option<ast::Ident>,
+    },
     UnownedViaBlock,
     UnownedViaMod(bool /* legacy warnings? */),
 }
@@ -898,9 +905,8 @@ mod tests {
                                         node: ast::Constness::NotConst,
                                     },
                                     Abi::Rust,
-                                    ast::Generics{ // no idea on either of these:
-                                        lifetimes: Vec::new(),
-                                        ty_params: Vec::new(),
+                                    ast::Generics{
+                                        params: Vec::new(),
                                         where_clause: ast::WhereClause {
                                             id: ast::DUMMY_NODE_ID,
                                             predicates: Vec::new(),

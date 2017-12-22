@@ -35,7 +35,7 @@ use visit::{self, FnKind, Visitor};
 use parse::ParseSess;
 use symbol::{keywords, Symbol};
 
-use std::env;
+use std::{env, path};
 
 macro_rules! set {
     (proc_macro) => {{
@@ -438,6 +438,9 @@ declare_features! (
 
     // Resolve absolute paths as paths from other crates
     (active, extern_absolute_paths, "1.24.0", Some(44660)),
+
+    // `foo.rs` as an alternative to `foo/mod.rs`
+    (active, non_modrs_mods, "1.24.0", Some(44660)),
 );
 
 declare_features! (
@@ -1311,6 +1314,31 @@ fn contains_novel_literal(item: &ast::MetaItem) -> bool {
     }
 }
 
+impl<'a> PostExpansionVisitor<'a> {
+    fn whole_crate_feature_gates(&mut self) {
+        for &(ident, span) in &*self.context.parse_sess.non_modrs_mods.borrow() {
+            if !span.allows_unstable() {
+                let cx = &self.context;
+                let level = GateStrength::Hard;
+                let has_feature = cx.features.non_modrs_mods;
+                let name = "non_modrs_mods";
+                debug!("gate_feature(feature = {:?}, span = {:?}); has? {}",
+                        name, span, has_feature);
+
+                if !has_feature && !span.allows_unstable() {
+                    leveled_feature_err(
+                        cx.parse_sess, name, span, GateIssue::Language,
+                        "mod statements in non-mod.rs files are unstable", level
+                    )
+                    .help(&format!("on stable builds, rename this file to {}{}mod.rs",
+                                   ident, path::MAIN_SEPARATOR))
+                    .emit();
+                }
+            }
+        }
+    }
+}
+
 impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
     fn visit_attribute(&mut self, attr: &ast::Attribute) {
         if !attr.span.allows_unstable() {
@@ -1720,22 +1748,19 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         visit::walk_vis(self, vis);
     }
 
-    fn visit_generics(&mut self, g: &'a ast::Generics) {
-        for t in &g.ty_params {
-            if !t.attrs.is_empty() {
-                gate_feature_post!(&self, generic_param_attrs, t.attrs[0].span,
-                                   "attributes on type parameter bindings are experimental");
-            }
-        }
-        visit::walk_generics(self, g)
-    }
+    fn visit_generic_param(&mut self, param: &'a ast::GenericParam) {
+        let (attrs, explain) = match *param {
+            ast::GenericParam::Lifetime(ref ld) =>
+                (&ld.attrs, "attributes on lifetime bindings are experimental"),
+            ast::GenericParam::Type(ref t) =>
+                (&t.attrs, "attributes on type parameter bindings are experimental"),
+        };
 
-    fn visit_lifetime_def(&mut self, lifetime_def: &'a ast::LifetimeDef) {
-        if !lifetime_def.attrs.is_empty() {
-            gate_feature_post!(&self, generic_param_attrs, lifetime_def.attrs[0].span,
-                               "attributes on lifetime bindings are experimental");
+        if !attrs.is_empty() {
+            gate_feature_post!(&self, generic_param_attrs, attrs[0].span, explain);
         }
-        visit::walk_lifetime_def(self, lifetime_def)
+
+        visit::walk_generic_param(self, param)
     }
 
     fn visit_lifetime(&mut self, lt: &'a ast::Lifetime) {
@@ -1863,7 +1888,9 @@ pub fn check_crate(krate: &ast::Crate,
         parse_sess: sess,
         plugin_attributes,
     };
-    visit::walk_crate(&mut PostExpansionVisitor { context: &ctx }, krate);
+    let visitor = &mut PostExpansionVisitor { context: &ctx };
+    visitor.whole_crate_feature_gates();
+    visit::walk_crate(visitor, krate);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

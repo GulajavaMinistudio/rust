@@ -976,7 +976,8 @@ impl<'a, 'b> Folder for InvocationCollector<'a, 'b> {
 
                 if inline_module {
                     if let Some(path) = attr::first_attr_value_str_by_name(&item.attrs, "path") {
-                        self.cx.current_expansion.directory_ownership = DirectoryOwnership::Owned;
+                        self.cx.current_expansion.directory_ownership =
+                            DirectoryOwnership::Owned { relative: None };
                         module.directory.push(&*path.as_str());
                     } else {
                         module.directory.push(&*item.ident.name.as_str());
@@ -988,8 +989,11 @@ impl<'a, 'b> Folder for InvocationCollector<'a, 'b> {
                         other => PathBuf::from(other.to_string()),
                     };
                     let directory_ownership = match path.file_name().unwrap().to_str() {
-                        Some("mod.rs") => DirectoryOwnership::Owned,
-                        _ => DirectoryOwnership::UnownedViaMod(false),
+                        Some("mod.rs") => DirectoryOwnership::Owned { relative: None },
+                        Some(_) => DirectoryOwnership::Owned {
+                            relative: Some(item.ident),
+                        },
+                        None => DirectoryOwnership::UnownedViaMod(false),
                     };
                     path.pop();
                     module.directory = path;
@@ -1111,15 +1115,19 @@ impl<'a, 'b> Folder for InvocationCollector<'a, 'b> {
                     match File::open(&filename).and_then(|mut f| f.read_to_end(&mut buf)) {
                         Ok(..) => {}
                         Err(e) => {
-                            self.cx.span_warn(at.span,
-                                              &format!("couldn't read {}: {}",
-                                                       filename.display(),
-                                                       e));
+                            self.cx.span_err(at.span,
+                                             &format!("couldn't read {}: {}",
+                                                      filename.display(),
+                                                      e));
                         }
                     }
 
                     match String::from_utf8(buf) {
                         Ok(src) => {
+                            // Add this input file to the code map to make it available as
+                            // dependency information
+                            self.cx.codemap().new_filemap_and_lines(&filename, &src);
+
                             let include_info = vec![
                                 dummy_spanned(ast::NestedMetaItemKind::MetaItem(
                                         attr::mk_name_value_item_str("file".into(),
@@ -1133,9 +1141,9 @@ impl<'a, 'b> Folder for InvocationCollector<'a, 'b> {
                                         attr::mk_list_item("include".into(), include_info))));
                         }
                         Err(_) => {
-                            self.cx.span_warn(at.span,
-                                              &format!("{} wasn't a utf-8 file",
-                                                       filename.display()));
+                            self.cx.span_err(at.span,
+                                             &format!("{} wasn't a utf-8 file",
+                                                      filename.display()));
                         }
                     }
                 } else {
