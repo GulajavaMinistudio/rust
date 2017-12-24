@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// error-pattern: can't capture dynamic environment in a fn item
-fn foo() {
-    let x: isize;
-    fn bar() { log(debug, x); }
-}
-fn main() { foo(); }
+// aux-build:issue-46727.rs
+
+extern crate issue_46727;
+
+// @has issue_46727/trait.Foo.html
+// @has - '//code' 'impl<T> Foo for Bar<[T; 3]>'
+pub use issue_46727::{Foo, Bar};
