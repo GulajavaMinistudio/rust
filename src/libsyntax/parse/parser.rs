@@ -1295,6 +1295,10 @@ impl<'a> Parser<'a> {
     fn get_label(&mut self) -> ast::Ident {
         match self.token {
             token::Lifetime(ref ident) => *ident,
+            token::Interpolated(ref nt) => match nt.0 {
+                token::NtLifetime(lifetime) => lifetime.ident,
+                _ => self.bug("not a lifetime"),
+            },
             _ => self.bug("not a lifetime"),
         }
     }
@@ -2031,14 +2035,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse single lifetime 'a or panic.
-    fn expect_lifetime(&mut self) -> Lifetime {
-        match self.token {
-            token::Lifetime(ident) => {
-                let ident_span = self.span;
-                self.bump();
-                Lifetime { ident: ident, span: ident_span, id: ast::DUMMY_NODE_ID }
-            }
-            _ => self.span_bug(self.span, "not a lifetime")
+    pub fn expect_lifetime(&mut self) -> Lifetime {
+        if let Some(lifetime) = self.token.lifetime(self.span) {
+            self.bump();
+            lifetime
+        } else {
+            self.span_bug(self.span, "not a lifetime")
         }
     }
 
@@ -2592,7 +2594,7 @@ impl<'a> Parser<'a> {
                   token::Ident(..) => {
                     e = self.parse_dot_suffix(e, lo)?;
                   }
-                  token::Literal(token::Integer(n), suf) => {
+                  token::Literal(token::Integer(index_ident), suf) => {
                     let sp = self.span;
 
                     // A tuple index may not have a suffix
@@ -2602,16 +2604,25 @@ impl<'a> Parser<'a> {
                     hi = self.span;
                     self.bump();
 
-                    let index = n.as_str().parse::<usize>().ok();
+                    let invalid_msg = "invalid tuple or struct index";
+
+                    let index = index_ident.as_str().parse::<usize>().ok();
                     match index {
                         Some(n) => {
+                            if n.to_string() != index_ident.as_str() {
+                                let mut err = self.struct_span_err(self.prev_span, invalid_msg);
+                                err.span_suggestion(self.prev_span,
+                                                    "try simplifying the index",
+                                                    n.to_string());
+                                err.emit();
+                            }
                             let id = respan(dot_span.to(hi), n);
                             let field = self.mk_tup_field(e, id);
                             e = self.mk_expr(lo.to(hi), field, ThinVec::new());
                         }
                         None => {
                             let prev_span = self.prev_span;
-                            self.span_err(prev_span, "invalid tuple or tuple struct index");
+                            self.span_err(prev_span, invalid_msg);
                         }
                     }
                   }
