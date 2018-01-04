@@ -346,6 +346,16 @@ impl<'tcx> LoanPath<'tcx> {
     }
 
     fn to_type(&self) -> Ty<'tcx> { self.ty }
+
+    fn has_downcast(&self) -> bool {
+        match self.kind {
+            LpDowncast(_, _) => true,
+            LpExtend(ref lp, _, LpInterior(_, _)) => {
+                lp.has_downcast()
+            }
+            _ => false,
+        }
+    }
 }
 
 // FIXME (pnkfelix): See discussion here
@@ -721,16 +731,20 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                          move_note));
             err
         } else {
-            err.span_label(use_span, format!("value {} here after move", verb_participle))
-               .span_label(move_span, format!("value moved{} here", move_note));
+            err.span_label(use_span, format!("value {} here after move", verb_participle));
+            err.span_label(move_span, format!("value moved{} here", move_note));
             err
         };
 
         if need_note {
-            err.note(&format!("move occurs because `{}` has type `{}`, \
-                               which does not implement the `Copy` trait",
-                              self.loan_path_to_string(moved_lp),
-                              moved_lp.ty));
+            err.note(&format!(
+                "move occurs because {} has type `{}`, which does not implement the `Copy` trait",
+                if moved_lp.has_downcast() {
+                    "the value".to_string()
+                } else {
+                    format!("`{}`", self.loan_path_to_string(moved_lp))
+                },
+                moved_lp.ty));
         }
 
         // Note: we used to suggest adding a `ref binding` or calling
@@ -1098,15 +1112,20 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
         };
 
         match cause {
-            mc::AliasableStatic |
+            mc::AliasableStatic => {
+                // This happens when we have an `&mut` or assignment to a
+                // static. We should have already reported a mutability
+                // violation first, but may have continued compiling.
+                self.tcx.sess.delay_span_bug(
+                    span,
+                    &format!("aliasability violation for static `{}`", prefix)
+                );
+                return;
+            }
             mc::AliasableStaticMut => {
-                // This path cannot occur. It happens when we have an
-                // `&mut` or assignment to a static. But in the case
-                // of `static X`, we get a mutability violation first,
-                // and never get here. In the case of `static mut X`,
-                // that is unsafe and hence the aliasability error is
-                // ignored.
-                span_bug!(span, "aliasability violation for static `{}`", prefix)
+                // This path cannot occur. `static mut X` is not checked
+                // for aliasability violations.
+                span_bug!(span, "aliasability violation for static mut `{}`", prefix)
             }
             mc::AliasableBorrowed => {}
         };
@@ -1409,7 +1428,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
             LpDowncast(ref lp_base, variant_def_id) => {
                 out.push('(');
                 self.append_autoderefd_loan_path_to_string(&lp_base, out);
-                out.push(':');
+                out.push_str(DOWNCAST_PRINTED_OPERATOR);
                 out.push_str(&self.tcx.item_path_str(variant_def_id));
                 out.push(')');
             }
