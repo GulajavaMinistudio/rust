@@ -8,8 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(optin_builtin_traits)]
+#![cfg_attr(test, allow(dead_code))]
 
-trait Magic<T> {} //~ ERROR E0567
-#[allow(auto_impl)]
-impl Magic<isize> for .. {}
+pub struct Handler;
+
+impl Handler {
+    pub unsafe fn new() -> Handler {
+        Handler
+    }
+}
+
+pub unsafe fn init() {}
+
+pub unsafe fn cleanup() {}

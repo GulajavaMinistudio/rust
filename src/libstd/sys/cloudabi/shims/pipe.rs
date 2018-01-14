@@ -8,9 +8,25 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(optin_builtin_traits)]
+use io;
+use sys::Void;
 
-trait Foo {}
-impl Foo for .. {}
-//~^ ERROR The form `impl Foo for .. {}` will be removed, please use `auto trait Foo {}`
-//~^^ WARN this was previously accepted by the compiler
+pub struct AnonPipe(Void);
+
+impl AnonPipe {
+    pub fn read(&self, _buf: &mut [u8]) -> io::Result<usize> {
+        match self.0 {}
+    }
+
+    pub fn write(&self, _buf: &[u8]) -> io::Result<usize> {
+        match self.0 {}
+    }
+
+    pub fn diverge(&self) -> ! {
+        match self.0 {}
+    }
+}
+
+pub fn read2(p1: AnonPipe, _v1: &mut Vec<u8>, _p2: AnonPipe, _v2: &mut Vec<u8>) -> io::Result<()> {
+    match p1.0 {}
+}
