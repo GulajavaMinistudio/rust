@@ -160,7 +160,7 @@ impl Step for CargoBook {
 
         let target = self.target;
         let name = self.name;
-        let src = build.src.join("src/tools/cargo/src/doc/book");
+        let src = build.src.join("src/tools/cargo/src/doc");
 
         let out = build.doc_out(target);
         t!(fs::create_dir_all(&out));
@@ -419,8 +419,8 @@ impl Step for Standalone {
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Std {
-    stage: u32,
-    target: Interned<String>,
+    pub stage: u32,
+    pub target: Interned<String>,
 }
 
 impl Step for Std {
