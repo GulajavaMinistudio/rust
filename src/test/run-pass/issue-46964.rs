@@ -8,17 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(allocator_api, nonnull)]
-
-use std::heap::{Heap, Alloc};
-
-fn main() {
-    unsafe {
-        let ptr = Heap.alloc_one::<i32>().unwrap_or_else(|e| {
-            Heap.oom(e)
-        });
-        *ptr.as_ptr() = 4;
-        assert_eq!(*ptr.as_ptr(), 4);
-        Heap.dealloc_one(ptr);
+mod my_mod {
+    #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
+    pub struct Name<'a> {
+        source: &'a str,
     }
+
+    pub const JSON: Name = Name { source: "JSON" };
 }
+
+pub fn crash() -> bool {
+  match (my_mod::JSON, None) {
+    (_, Some(my_mod::JSON)) => true,
+    (my_mod::JSON, None) => true,
+    _ => false,
+  }
+}
+
+fn main() {}
