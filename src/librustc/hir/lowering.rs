@@ -773,22 +773,22 @@ impl<'a> LoweringContext<'a> {
         *self.name_map.entry(ident).or_insert_with(|| Symbol::from_ident(ident))
     }
 
-    fn lower_opt_sp_ident(&mut self, o_id: Option<Spanned<Ident>>) -> Option<Spanned<Name>> {
-        o_id.map(|sp_ident| respan(sp_ident.span, sp_ident.node.name))
+    fn lower_label(&mut self, label: Option<Label>) -> Option<hir::Label> {
+        label.map(|label| hir::Label { name: label.ident.name, span: label.span })
     }
 
-    fn lower_loop_destination(&mut self, destination: Option<(NodeId, Spanned<Ident>)>)
+    fn lower_loop_destination(&mut self, destination: Option<(NodeId, Label)>)
         -> hir::Destination
     {
         match destination {
-            Some((id, label_ident)) => {
+            Some((id, label)) => {
                 let target = if let Def::Label(loop_id) = self.expect_full_def(id) {
                     hir::LoopIdResult::Ok(self.lower_node_id(loop_id).node_id)
                 } else {
                     hir::LoopIdResult::Err(hir::LoopIdError::UnresolvedLabel)
                 };
                 hir::Destination {
-                    ident: Some(label_ident),
+                    label: self.lower_label(Some(label)),
                     target_id: hir::ScopeTarget::Loop(target),
                 }
             },
@@ -798,7 +798,7 @@ impl<'a> LoweringContext<'a> {
                                   .map(|innermost_loop_id| *innermost_loop_id);
 
                 hir::Destination {
-                    ident: None,
+                    label: None,
                     target_id: hir::ScopeTarget::Loop(
                         loop_id.map(|id| Ok(self.lower_node_id(id).node_id))
                                .unwrap_or(Err(hir::LoopIdError::OutsideLoopScope))
@@ -2751,17 +2751,17 @@ impl<'a> LoweringContext<'a> {
 
                 hir::ExprIf(P(self.lower_expr(cond)), P(then_expr), else_opt)
             }
-            ExprKind::While(ref cond, ref body, opt_ident) => {
+            ExprKind::While(ref cond, ref body, opt_label) => {
                 self.with_loop_scope(e.id, |this|
                     hir::ExprWhile(
                         this.with_loop_condition_scope(|this| P(this.lower_expr(cond))),
                         this.lower_block(body, false),
-                        this.lower_opt_sp_ident(opt_ident)))
+                        this.lower_label(opt_label)))
             }
-            ExprKind::Loop(ref body, opt_ident) => {
+            ExprKind::Loop(ref body, opt_label) => {
                 self.with_loop_scope(e.id, |this|
                     hir::ExprLoop(this.lower_block(body, false),
-                                  this.lower_opt_sp_ident(opt_ident),
+                                  this.lower_label(opt_label),
                                   hir::LoopSource::Loop))
             }
             ExprKind::Catch(ref body) => {
@@ -2837,8 +2837,8 @@ impl<'a> LoweringContext<'a> {
                     (&None, &Some(..), Closed) => "RangeToInclusive",
                     (&Some(..), &Some(..), Closed) => "RangeInclusive",
                     (_, &None, Closed) =>
-                        panic!(self.diagnostic().span_fatal(
-                            e.span, "inclusive range with no end")),
+                        self.diagnostic().span_fatal(
+                            e.span, "inclusive range with no end").raise(),
                 };
 
                 let fields =
@@ -2877,30 +2877,30 @@ impl<'a> LoweringContext<'a> {
                 hir::ExprPath(self.lower_qpath(e.id, qself, path, ParamMode::Optional,
                                                ImplTraitContext::Disallowed))
             }
-            ExprKind::Break(opt_ident, ref opt_expr) => {
-                let label_result = if self.is_in_loop_condition && opt_ident.is_none() {
+            ExprKind::Break(opt_label, ref opt_expr) => {
+                let destination = if self.is_in_loop_condition && opt_label.is_none() {
                     hir::Destination {
-                        ident: opt_ident,
+                        label: None,
                         target_id: hir::ScopeTarget::Loop(
                                 Err(hir::LoopIdError::UnlabeledCfInWhileCondition).into()),
                     }
                 } else {
-                    self.lower_loop_destination(opt_ident.map(|ident| (e.id, ident)))
+                    self.lower_loop_destination(opt_label.map(|label| (e.id, label)))
                 };
                 hir::ExprBreak(
-                        label_result,
+                        destination,
                         opt_expr.as_ref().map(|x| P(self.lower_expr(x))))
             }
-            ExprKind::Continue(opt_ident) =>
+            ExprKind::Continue(opt_label) =>
                 hir::ExprAgain(
-                    if self.is_in_loop_condition && opt_ident.is_none() {
+                    if self.is_in_loop_condition && opt_label.is_none() {
                         hir::Destination {
-                            ident: opt_ident,
+                            label: None,
                             target_id: hir::ScopeTarget::Loop(Err(
                                 hir::LoopIdError::UnlabeledCfInWhileCondition).into()),
                         }
                     } else {
-                        self.lower_loop_destination(opt_ident.map( |ident| (e.id, ident)))
+                        self.lower_loop_destination(opt_label.map(|label| (e.id, label)))
                     }),
             ExprKind::Ret(ref e) => hir::ExprRet(e.as_ref().map(|x| P(self.lower_expr(x)))),
             ExprKind::InlineAsm(ref asm) => {
@@ -3000,7 +3000,7 @@ impl<'a> LoweringContext<'a> {
 
             // Desugar ExprWhileLet
             // From: `[opt_ident]: while let <pat> = <sub_expr> <body>`
-            ExprKind::WhileLet(ref pat, ref sub_expr, ref body, opt_ident) => {
+            ExprKind::WhileLet(ref pat, ref sub_expr, ref body, opt_label) => {
                 // to:
                 //
                 //   [opt_ident]: loop {
@@ -3033,7 +3033,7 @@ impl<'a> LoweringContext<'a> {
 
                 // `match <sub_expr> { ... }`
                 let arms = hir_vec![pat_arm, break_arm];
-                let match_expr = self.expr(e.span,
+                let match_expr = self.expr(sub_expr.span,
                                            hir::ExprMatch(sub_expr,
                                                           arms,
                                                           hir::MatchSource::WhileLetDesugar),
@@ -3041,7 +3041,7 @@ impl<'a> LoweringContext<'a> {
 
                 // `[opt_ident]: loop { ... }`
                 let loop_block = P(self.block_expr(P(match_expr)));
-                let loop_expr = hir::ExprLoop(loop_block, self.lower_opt_sp_ident(opt_ident),
+                let loop_expr = hir::ExprLoop(loop_block, self.lower_label(opt_label),
                                               hir::LoopSource::WhileLet);
                 // add attributes to the outer returned expr node
                 loop_expr
@@ -3049,7 +3049,7 @@ impl<'a> LoweringContext<'a> {
 
             // Desugar ExprForLoop
             // From: `[opt_ident]: for <pat> in <head> <body>`
-            ExprKind::ForLoop(ref pat, ref head, ref body, opt_ident) => {
+            ExprKind::ForLoop(ref pat, ref head, ref body, opt_label) => {
                 // to:
                 //
                 //   {
@@ -3071,24 +3071,25 @@ impl<'a> LoweringContext<'a> {
 
                 // expand <head>
                 let head = self.lower_expr(head);
+                let head_sp = head.span;
 
                 let iter = self.str_to_ident("iter");
 
                 let next_ident = self.str_to_ident("__next");
-                let next_pat = self.pat_ident_binding_mode(e.span,
+                let next_pat = self.pat_ident_binding_mode(pat.span,
                                                            next_ident,
                                                            hir::BindingAnnotation::Mutable);
 
                 // `::std::option::Option::Some(val) => next = val`
                 let pat_arm = {
                     let val_ident = self.str_to_ident("val");
-                    let val_pat = self.pat_ident(e.span, val_ident);
-                    let val_expr = P(self.expr_ident(e.span, val_ident, val_pat.id));
-                    let next_expr = P(self.expr_ident(e.span, next_ident, next_pat.id));
-                    let assign = P(self.expr(e.span,
+                    let val_pat = self.pat_ident(pat.span, val_ident);
+                    let val_expr = P(self.expr_ident(pat.span, val_ident, val_pat.id));
+                    let next_expr = P(self.expr_ident(pat.span, next_ident, next_pat.id));
+                    let assign = P(self.expr(pat.span,
                                              hir::ExprAssign(next_expr, val_expr),
                                              ThinVec::new()));
-                    let some_pat = self.pat_some(e.span, val_pat);
+                    let some_pat = self.pat_some(pat.span, val_pat);
                     self.arm(hir_vec![some_pat], assign)
                 };
 
@@ -3101,46 +3102,45 @@ impl<'a> LoweringContext<'a> {
                 };
 
                 // `mut iter`
-                let iter_pat = self.pat_ident_binding_mode(e.span,
+                let iter_pat = self.pat_ident_binding_mode(head_sp,
                                                            iter,
                                                            hir::BindingAnnotation::Mutable);
 
                 // `match ::std::iter::Iterator::next(&mut iter) { ... }`
                 let match_expr = {
-                    let iter = P(self.expr_ident(e.span, iter, iter_pat.id));
-                    let ref_mut_iter = self.expr_mut_addr_of(e.span, iter);
+                    let iter = P(self.expr_ident(head_sp, iter, iter_pat.id));
+                    let ref_mut_iter = self.expr_mut_addr_of(head_sp, iter);
                     let next_path = &["iter", "Iterator", "next"];
-                    let next_path = P(self.expr_std_path(e.span, next_path, ThinVec::new()));
-                    let next_expr = P(self.expr_call(e.span, next_path,
+                    let next_path = P(self.expr_std_path(head_sp, next_path, ThinVec::new()));
+                    let next_expr = P(self.expr_call(head_sp, next_path,
                                       hir_vec![ref_mut_iter]));
                     let arms = hir_vec![pat_arm, break_arm];
 
-                    P(self.expr(e.span,
+                    P(self.expr(head_sp,
                                 hir::ExprMatch(next_expr, arms,
                                                hir::MatchSource::ForLoopDesugar),
                                 ThinVec::new()))
                 };
-                let match_stmt = respan(e.span, hir::StmtExpr(match_expr, self.next_id().node_id));
+                let match_stmt = respan(head_sp, hir::StmtExpr(match_expr, self.next_id().node_id));
 
-                let next_expr = P(self.expr_ident(e.span, next_ident, next_pat.id));
+                let next_expr = P(self.expr_ident(head_sp, next_ident, next_pat.id));
 
                 // `let mut __next`
-                let next_let = self.stmt_let_pat(e.span,
+                let next_let = self.stmt_let_pat(head_sp,
                     None,
                     next_pat,
                     hir::LocalSource::ForLoopDesugar);
 
                 // `let <pat> = __next`
                 let pat = self.lower_pat(pat);
-                let pat_let = self.stmt_let_pat(e.span,
+                let pat_let = self.stmt_let_pat(head_sp,
                     Some(next_expr),
                     pat,
                     hir::LocalSource::ForLoopDesugar);
 
-                let body_block = self.with_loop_scope(e.id,
-                                                        |this| this.lower_block(body, false));
+                let body_block = self.with_loop_scope(e.id, |this| this.lower_block(body, false));
                 let body_expr = P(self.expr_block(body_block, ThinVec::new()));
-                let body_stmt = respan(e.span, hir::StmtExpr(body_expr, self.next_id().node_id));
+                let body_stmt = respan(body.span, hir::StmtExpr(body_expr, self.next_id().node_id));
 
                 let loop_block = P(self.block_all(e.span,
                                                   hir_vec![next_let,
@@ -3150,7 +3150,7 @@ impl<'a> LoweringContext<'a> {
                                                   None));
 
                 // `[opt_ident]: loop { ... }`
-                let loop_expr = hir::ExprLoop(loop_block, self.lower_opt_sp_ident(opt_ident),
+                let loop_expr = hir::ExprLoop(loop_block, self.lower_label(opt_label),
                                               hir::LoopSource::ForLoop);
                 let LoweredNodeId { node_id, hir_id } = self.lower_node_id(e.id);
                 let loop_expr = P(hir::Expr {
@@ -3167,12 +3167,12 @@ impl<'a> LoweringContext<'a> {
                 // `match ::std::iter::IntoIterator::into_iter(<head>) { ... }`
                 let into_iter_expr = {
                     let into_iter_path = &["iter", "IntoIterator", "into_iter"];
-                    let into_iter = P(self.expr_std_path(e.span, into_iter_path,
+                    let into_iter = P(self.expr_std_path(head_sp, into_iter_path,
                                                          ThinVec::new()));
-                    P(self.expr_call(e.span, into_iter, hir_vec![head]))
+                    P(self.expr_call(head_sp, into_iter, hir_vec![head]))
                 };
 
-                let match_expr = P(self.expr_match(e.span,
+                let match_expr = P(self.expr_match(head_sp,
                                                    into_iter_expr,
                                                    hir_vec![iter_arm],
                                                    hir::MatchSource::ForLoopDesugar));
@@ -3270,7 +3270,7 @@ impl<'a> LoweringContext<'a> {
                             e.span,
                             hir::ExprBreak(
                                 hir::Destination {
-                                    ident: None,
+                                    label: None,
                                     target_id: hir::ScopeTarget::Block(catch_node),
                                 },
                                 Some(from_err_expr)
