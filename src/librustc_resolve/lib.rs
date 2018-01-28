@@ -2871,8 +2871,8 @@ impl<'a> Resolver<'a> {
         if let Some(sp) = self.current_type_ascription.last() {
             let mut sp = *sp;
             loop {  // try to find the `:`, bail on first non-':'/non-whitespace
-                sp = sp.next_point();
-                if let Ok(snippet) = cm.span_to_snippet(sp.to(sp.next_point())) {
+                sp = cm.next_point(sp);
+                if let Ok(snippet) = cm.span_to_snippet(sp.to(cm.next_point(sp))) {
                     debug!("snippet {:?}", snippet);
                     let line_sp = cm.lookup_char_pos(sp.hi()).line;
                     let line_base_sp = cm.lookup_char_pos(base_span.lo()).line;
@@ -3980,14 +3980,14 @@ impl<'a> Resolver<'a> {
                           container));
 
         err.span_label(span, format!("`{}` re{} here", name, new_participle));
-        if old_binding.span != syntax_pos::DUMMY_SP {
+        if old_binding.span != DUMMY_SP {
             err.span_label(self.session.codemap().def_span(old_binding.span),
                            format!("previous {} of the {} `{}` here", old_noun, old_kind, name));
         }
 
         // See https://github.com/rust-lang/rust/issues/32354
         if old_binding.is_import() || new_binding.is_import() {
-            let binding = if new_binding.is_import() {
+            let binding = if new_binding.is_import() && new_binding.span != DUMMY_SP {
                 new_binding
             } else {
                 old_binding
@@ -4000,7 +4000,13 @@ impl<'a> Resolver<'a> {
                                            binding.is_renamed_extern_crate()) {
                 err.span_suggestion(binding.span,
                                     rename_msg,
-                                    format!("{} as Other{}", snippet, name));
+                                    if snippet.ends_with(';') {
+                                        format!("{} as Other{};",
+                                                &snippet[..snippet.len()-1],
+                                                name)
+                                    } else {
+                                        format!("{} as Other{}", snippet, name)
+                                    });
             } else {
                 err.span_label(binding.span, rename_msg);
             }

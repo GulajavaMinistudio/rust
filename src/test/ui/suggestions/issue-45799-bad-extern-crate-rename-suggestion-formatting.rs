@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-
-fn main() {
-    let path = PathBuf::from(env::var_os("RUST_TEST_TMPDIR").unwrap());
-    env::set_current_dir(&path).unwrap();
-    fs::create_dir_all("create-dir-all-bare").unwrap();
-}
+extern crate std;
+fn main() {}
+//~^^ ERROR the name `std` is defined multiple times [E0259]
