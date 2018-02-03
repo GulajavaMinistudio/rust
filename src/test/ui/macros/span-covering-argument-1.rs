@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,18 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-trait Trait {
-    fn bar<'a,'b:'a>(x: &'a str, y: &'b str);
-    //~^ NOTE lifetimes in impl do not match this method in trait
-}
-
-struct Foo;
-
-impl Trait for Foo {
-    fn bar<'a,'b>(x: &'a str, y: &'b str) { //~ ERROR E0195
-    //~^ NOTE lifetimes do not match method in trait
+macro_rules! bad {
+    ($s:ident whatever) => {
+        {
+            let $s = 0;
+            *&mut $s = 0;
+            //~^ ERROR cannot borrow immutable local variable `foo` as mutable [E0596]
+        }
     }
 }
 
 fn main() {
+    bad!(foo whatever);
 }
