@@ -8,18 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-mod a {
-    pub mod b1 {
-        pub enum C2 {}
-    }
+// Just check if we don't get an ICE for the _S type.
 
-    pub enum B2 {}
+#![feature(const_size_of)]
+
+use std::cell::Cell;
+use std::mem;
+
+pub struct S {
+    s: Cell<usize>
 }
 
-use a::{b1::{C1, C2}, B2};
-//~^ ERROR unresolved import `a::b1::C1`
-
-fn main() {
-    let _: C2;
-    let _: B2;
-}
+pub type _S = [usize; 0 - (mem::size_of::<S>() != 4) as usize];

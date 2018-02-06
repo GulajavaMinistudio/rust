@@ -8,18 +8,26 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-mod a {
-    pub mod b1 {
-        pub enum C2 {}
-    }
+#![feature(nll)]
 
-    pub enum B2 {}
+pub struct DescriptorSet<'a> {
+    pub slots: Vec<AttachInfo<'a, Resources>>
 }
 
-use a::{b1::{C1, C2}, B2};
-//~^ ERROR unresolved import `a::b1::C1`
+pub trait ResourcesTrait<'r>: Sized {
+    type DescriptorSet: 'r;
+}
+
+pub struct Resources;
+
+impl<'a> ResourcesTrait<'a> for Resources {
+    type DescriptorSet = DescriptorSet<'a>;
+}
+
+pub enum AttachInfo<'a, R: ResourcesTrait<'a>> {
+    NextDescriptorSet(Box<R::DescriptorSet>)
+}
 
 fn main() {
-    let _: C2;
-    let _: B2;
+    let _x = DescriptorSet {slots: Vec::new()};
 }

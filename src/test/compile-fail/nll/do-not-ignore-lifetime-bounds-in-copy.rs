@@ -1,4 +1,4 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,18 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-mod a {
-    pub mod b1 {
-        pub enum C2 {}
-    }
+// Test that the 'static bound from the Copy impl is respected. Regression test for #29149.
 
-    pub enum B2 {}
-}
+#![feature(nll)]
 
-use a::{b1::{C1, C2}, B2};
-//~^ ERROR unresolved import `a::b1::C1`
+#[derive(Clone)] struct Foo<'a>(&'a u32);
+impl Copy for Foo<'static> {}
 
 fn main() {
-    let _: C2;
-    let _: B2;
+    let s = 2;
+    let a = Foo(&s); //~ ERROR `s` does not live long enough [E0597]
+    drop(a);
+    drop(a);
 }

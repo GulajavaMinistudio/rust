@@ -8,18 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-mod a {
-    pub mod b1 {
-        pub enum C2 {}
-    }
+use std::any::TypeId;
 
-    pub enum B2 {}
-}
-
-use a::{b1::{C1, C2}, B2};
-//~^ ERROR unresolved import `a::b1::C1`
+struct A;
 
 fn main() {
-    let _: C2;
-    let _: B2;
+    const A_ID: TypeId = TypeId::of::<A>();
+    //~^ ERROR `std::any::TypeId::of` is not yet stable as a const fn
 }
