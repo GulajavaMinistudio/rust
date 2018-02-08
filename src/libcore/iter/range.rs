@@ -325,25 +325,26 @@ impl<A: Step> Iterator for ops::RangeFrom<A> {
 #[unstable(feature = "fused", issue = "35602")]
 impl<A: Step> FusedIterator for ops::RangeFrom<A> {}
 
+#[unstable(feature = "trusted_len", issue = "37572")]
+unsafe impl<A: Step> TrustedLen for ops::RangeFrom<A> {}
+
 #[unstable(feature = "inclusive_range", reason = "recently added, follows RFC", issue = "28237")]
 impl<A: Step> Iterator for ops::RangeInclusive<A> {
     type Item = A;
 
     #[inline]
     fn next(&mut self) -> Option<A> {
-        use cmp::Ordering::*;
-
-        match self.start.partial_cmp(&self.end) {
-            Some(Less) => {
+        if self.start <= self.end {
+            if self.start < self.end {
                 let n = self.start.add_one();
                 Some(mem::replace(&mut self.start, n))
-            },
-            Some(Equal) => {
+            } else {
                 let last = self.start.replace_one();
                 self.end.replace_zero();
                 Some(last)
-            },
-            _ => None,
+            }
+        } else {
+            None
         }
     }
 
@@ -425,19 +426,17 @@ impl<A: Step> Iterator for ops::RangeInclusive<A> {
 impl<A: Step> DoubleEndedIterator for ops::RangeInclusive<A> {
     #[inline]
     fn next_back(&mut self) -> Option<A> {
-        use cmp::Ordering::*;
-
-        match self.start.partial_cmp(&self.end) {
-            Some(Less) => {
+        if self.start <= self.end {
+            if self.start < self.end {
                 let n = self.end.sub_one();
                 Some(mem::replace(&mut self.end, n))
-            },
-            Some(Equal) => {
+            } else {
                 let last = self.end.replace_zero();
                 self.start.replace_one();
                 Some(last)
-            },
-            _ => None,
+            }
+        } else {
+            None
         }
     }
 
