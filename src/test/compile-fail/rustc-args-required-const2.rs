@@ -8,23 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Regression test for issue #45045
+#![feature(attr_literals, rustc_attrs, const_fn)]
 
-#![feature(nll)]
-
-enum Xyz {
-    A,
-    B,
+#[rustc_args_required_const(0)]
+fn foo(_a: i32) {
 }
 
 fn main() {
-    let mut e = Xyz::A;
-    let f = &mut e;
-    let g = f;
-    match e { //~ cannot use `e` because it was mutably borrowed [E0503]
-        Xyz::A => println!("a"),
-        //~^ cannot use `e` because it was mutably borrowed [E0503]
-        Xyz::B => println!("b"),
-    };
-    *g = Xyz::B;
+    let a = foo; //~ ERROR: this function can only be invoked directly
+    a(2);
 }

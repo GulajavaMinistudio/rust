@@ -8,23 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Regression test for issue #45045
-
-#![feature(nll)]
-
-enum Xyz {
-    A,
-    B,
-}
+#![feature(generators)]
 
 fn main() {
-    let mut e = Xyz::A;
-    let f = &mut e;
-    let g = f;
-    match e { //~ cannot use `e` because it was mutably borrowed [E0503]
-        Xyz::A => println!("a"),
-        //~^ cannot use `e` because it was mutably borrowed [E0503]
-        Xyz::B => println!("b"),
+    let x = (|_| {},);
+
+    || {
+        let x = x;
+
+        x.0({ //~ ERROR borrow may still be in use when generator yields
+            yield;
+        });
     };
-    *g = Xyz::B;
 }

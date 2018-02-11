@@ -8,11 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    1 + Some(1); //~ ERROR cannot add `std::option::Option<{integer}>` to `{integer}`
-    2 as usize - Some(1); //~ ERROR cannot subtract `std::option::Option<{integer}>` from `usize`
-    3 * (); //~ ERROR cannot multiply `()` to `{integer}`
-    4 / ""; //~ ERROR cannot divide `{integer}` by `&str`
-    5 < String::new(); //~ ERROR is not satisfied
-    6 == Ok(1); //~ ERROR is not satisfied
+// Issue 46036: [NLL] false edges on infinite loops
+// Infinite loops should create false edges to the cleanup block.
+#![feature(nll)]
+
+struct Foo { x: &'static u32 }
+
+fn foo() {
+    let a = 3;
+    let foo = Foo { x: &a }; //~ ERROR E0597
+    loop { }
 }
+
+fn main() { }

@@ -8,23 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Regression test for issue #45045
+pub fn f2<F: FnMut(u32) + Clone>(f: F) {}
 
-#![feature(nll)]
-
-enum Xyz {
-    A,
-    B,
-}
-
-fn main() {
-    let mut e = Xyz::A;
-    let f = &mut e;
-    let g = f;
-    match e { //~ cannot use `e` because it was mutably borrowed [E0503]
-        Xyz::A => println!("a"),
-        //~^ cannot use `e` because it was mutably borrowed [E0503]
-        Xyz::B => println!("b"),
-    };
-    *g = Xyz::B;
-}
+pub fn f3<F: FnMut(u64) -> () + Clone>(f: F) {}
