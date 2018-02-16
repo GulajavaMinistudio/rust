@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,25 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(specialization)]
-
-// Regression test for ICE when combining specialized associated types and type
-// aliases
-
-trait Id_ {
-    type Out;
-}
-
-type Id<T> = <T as Id_>::Out;
-
-default impl<T> Id_ for T {
-    type Out = T;
-}
-
-fn test_proection() {
-    let x: Id<bool> = panic!();
-}
-
-fn main() {
-
-}
+extern "C" fn foo(x: u8, ...);
+//~^ ERROR only foreign functions are allowed to be variadic
+//~| ERROR expected one of `->`, `where`, or `{`, found `;`
