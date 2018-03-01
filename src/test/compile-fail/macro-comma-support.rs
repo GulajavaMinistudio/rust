@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,20 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(warnings)]
+// This is a companion to the similarly-named test in run-pass.
+//
+// It tests macros that unavoidably produce compile errors.
 
-#![feature(i128_type)]
-#![feature(rand)]
-#![feature(repr_simd)]
-#![feature(test)]
+fn compile_error() {
+    compile_error!("lel"); //~ ERROR lel
+    compile_error!("lel",); //~ ERROR lel
+}
 
-extern crate rand;
-extern crate test;
-
-mod btree;
-mod linked_list;
-mod string;
-mod str;
-mod slice;
-mod vec;
-mod vec_deque;
+fn main() {}
