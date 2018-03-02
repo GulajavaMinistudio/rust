@@ -129,7 +129,7 @@ pub struct CodeMap {
     pub(super) files: RefCell<Vec<Rc<FileMap>>>,
     file_loader: Box<FileLoader>,
     // This is used to apply the file path remapping as specified via
-    // -Zremap-path-prefix to all FileMaps allocated within this CodeMap.
+    // --remap-path-prefix to all FileMaps allocated within this CodeMap.
     path_mapping: FilePathMapping,
     stable_id_to_filemap: RefCell<FxHashMap<StableFilemapId, Rc<FileMap>>>,
     /// In case we are in a doctest, replace all file names with the PathBuf,
@@ -705,17 +705,20 @@ impl CodeMap {
         };
         debug!("find_width_of_character_at_span: snippet=`{:?}`", snippet);
 
-        let file_start_pos = local_begin.fm.start_pos.to_usize();
-        let file_end_pos = local_begin.fm.end_pos.to_usize();
-        debug!("find_width_of_character_at_span: file_start_pos=`{:?}` file_end_pos=`{:?}`",
-               file_start_pos, file_end_pos);
-
         let mut target = if forwards { end_index + 1 } else { end_index - 1 };
         debug!("find_width_of_character_at_span: initial target=`{:?}`", target);
 
-        while !snippet.is_char_boundary(target - start_index)
-                && target >= file_start_pos && target <= file_end_pos {
-            target = if forwards { target + 1 } else { target - 1 };
+        while !snippet.is_char_boundary(target - start_index) && target < source_len {
+            target = if forwards {
+                target + 1
+            } else {
+                match target.checked_sub(1) {
+                    Some(target) => target,
+                    None => {
+                        break;
+                    }
+                }
+            };
             debug!("find_width_of_character_at_span: target=`{:?}`", target);
         }
         debug!("find_width_of_character_at_span: final target=`{:?}`", target);
