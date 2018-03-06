@@ -8,13 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(overflowing_literals)]
+// This test makes sure that we detect changed feature gates.
+
+// revisions:rpass1 cfail2
+// compile-flags: -Z query-dep-graph
+
+#![feature(rustc_attrs)]
+#![cfg_attr(rpass1, feature(nll))]
 
 fn main() {
-    const XYZ: char = 0x1F888 as char;
-    //~^ ERROR only u8 can be cast into char
-    const XY: char = 129160 as char;
-    //~^ ERROR only u8 can be cast into char
-    const ZYX: char = '\u{01F888}';
-    println!("{}", XYZ);
+    let mut v = vec![1];
+    v.push(v[0]);
+    //[cfail2]~^ ERROR cannot borrow
 }
