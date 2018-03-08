@@ -21,8 +21,10 @@ extern crate getopts;
 extern crate libc;
 #[macro_use]
 extern crate log;
-extern crate rustc_serialize;
 extern crate regex;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
 extern crate test;
 
 use std::env;
@@ -51,7 +53,7 @@ mod raise_fd_limit;
 mod read2;
 
 fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
 
     let config = parse_config(env::args().collect());
 
