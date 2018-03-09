@@ -17,8 +17,13 @@
 use errors::DiagnosticBuilder;
 use lint::{LintPass, LateLintPass, LintArray};
 use session::Session;
-use session::config::Epoch;
 use syntax::codemap::Span;
+
+declare_lint! {
+    pub EXCEEDING_BITSHIFTS,
+    Deny,
+    "shift exceeds the type's number of bits"
+}
 
 declare_lint! {
     pub CONST_ERR,
@@ -258,9 +263,14 @@ declare_lint! {
 
 declare_lint! {
     pub BARE_TRAIT_OBJECT,
+    Allow,
+    "suggest using `dyn Trait` for trait objects"
+}
+
+declare_lint! {
+    pub ILLEGAL_FLOATING_POINT_LITERAL_PATTERN,
     Warn,
-    "suggest using `dyn Trait` for trait objects",
-    Epoch::Epoch2018
+    "floating-point literals cannot be used in patterns"
 }
 
 /// Does nothing as a lint pass, but registers some `Lint`s
@@ -271,6 +281,8 @@ pub struct HardwiredLints;
 impl LintPass for HardwiredLints {
     fn get_lints(&self) -> LintArray {
         lint_array!(
+            ILLEGAL_FLOATING_POINT_LITERAL_PATTERN,
+            EXCEEDING_BITSHIFTS,
             UNUSED_IMPORTS,
             UNUSED_EXTERN_CRATES,
             UNUSED_QUALIFICATIONS,

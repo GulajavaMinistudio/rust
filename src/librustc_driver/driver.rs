@@ -36,8 +36,7 @@ use rustc_typeck as typeck;
 use rustc_privacy;
 use rustc_plugin::registry::Registry;
 use rustc_plugin as plugin;
-use rustc_passes::{self, ast_validation, loops, consts, hir_stats};
-use rustc_const_eval::{self, check_match};
+use rustc_passes::{self, ast_validation, loops, rvalue_promotion, hir_stats};
 use super::Compilation;
 
 use serialize::json;
@@ -648,7 +647,9 @@ pub fn phase_2_configure_and_expand_inner<'a, F>(sess: &'a Session,
 {
     let time_passes = sess.time_passes();
 
-    let (mut krate, features) = syntax::config::features(krate, &sess.parse_sess, sess.opts.test);
+    let (mut krate, features) = syntax::config::features(krate, &sess.parse_sess,
+                                                         sess.opts.test,
+                                                         sess.opts.debugging_opts.epoch);
     // these need to be set "early" so that expansion sees `quote` if enabled.
     sess.init_features(features);
 
@@ -942,7 +943,6 @@ pub fn default_provide(providers: &mut ty::maps::Providers) {
     ty::provide(providers);
     traits::provide(providers);
     reachable::provide(providers);
-    rustc_const_eval::provide(providers);
     rustc_passes::provide(providers);
     middle::region::provide(providers);
     cstore::provide(providers);
@@ -1038,8 +1038,8 @@ pub fn phase_3_run_analysis_passes<'tcx, F, R>(trans: &TransCrate,
         }
 
         time(time_passes,
-             "const checking",
-             || consts::check_crate(tcx));
+             "rvalue promotion",
+             || rvalue_promotion::check_crate(tcx));
 
         analysis.access_levels =
             time(time_passes, "privacy checking", || rustc_privacy::check_crate(tcx));
@@ -1050,7 +1050,7 @@ pub fn phase_3_run_analysis_passes<'tcx, F, R>(trans: &TransCrate,
 
         time(time_passes,
              "match checking",
-             || check_match::check_crate(tcx));
+             || mir::matchck_crate(tcx));
 
         // this must run before MIR dump, because
         // "not all control paths return a value" is reported here.

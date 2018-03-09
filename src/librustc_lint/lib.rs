@@ -39,15 +39,16 @@ extern crate syntax;
 extern crate rustc;
 #[macro_use]
 extern crate log;
-extern crate rustc_const_eval;
+extern crate rustc_mir;
 extern crate syntax_pos;
 
 use rustc::lint;
-use rustc::middle;
+use rustc::lint::builtin::BARE_TRAIT_OBJECT;
 use rustc::session;
 use rustc::util;
 
 use session::Session;
+use syntax::epoch::Epoch;
 use lint::LintId;
 use lint::FutureIncompatibleInfo;
 
@@ -107,7 +108,6 @@ pub fn register_builtins(store: &mut lint::LintStore, sess: Option<&Session>) {
                        UnusedParens,
                        UnusedImportBraces,
                        AnonymousParameters,
-                       IllegalFloatLiteralPattern,
                        UnusedDocComment,
                        );
 
@@ -177,6 +177,11 @@ pub fn register_builtins(store: &mut lint::LintStore, sess: Option<&Session>) {
                     UNUSED_EXTERN_CRATES,
                     UNUSED_FEATURES,
                     UNUSED_PARENS);
+
+    add_lint_group!(sess,
+                    "rust_2018_idioms",
+                    BARE_TRAIT_OBJECT,
+                    UNREACHABLE_PUB);
 
     // Guidelines for creating a future incompatibility lint:
     //
@@ -276,13 +281,8 @@ pub fn register_builtins(store: &mut lint::LintStore, sess: Option<&Session>) {
         FutureIncompatibleInfo {
             id: LintId::of(TYVAR_BEHIND_RAW_POINTER),
             reference: "issue #46906 <https://github.com/rust-lang/rust/issues/46906>",
-            epoch: None,
-        },
-         FutureIncompatibleInfo {
-             id: LintId::of(lint::builtin::BARE_TRAIT_OBJECT),
-             reference: "issue #48457 <https://github.com/rust-lang/rust/issues/48457>",
-             epoch: Some(session::config::Epoch::Epoch2018),
-         }
+            epoch: Some(Epoch::Epoch2018),
+        }
         ]);
 
     // Register renamed and removed lints
