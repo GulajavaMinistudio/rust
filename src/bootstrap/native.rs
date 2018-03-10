@@ -81,11 +81,14 @@ impl Step for Llvm {
 
         let (out_dir, llvm_config_ret_dir) = if emscripten {
             let dir = build.emscripten_llvm_out(target);
-            let config_dir = dir.join("build/bin");
+            let config_dir = dir.join("bin");
             (dir, config_dir)
         } else {
-            (build.llvm_out(target),
-                build.llvm_out(build.config.build).join("build/bin"))
+            let mut dir = build.llvm_out(build.config.build);
+            if !build.config.build.contains("msvc") || build.config.ninja {
+                dir.push("build");
+            }
+            (build.llvm_out(target), dir.join("bin"))
         };
         let done_stamp = out_dir.join("llvm-finished-building");
         let build_llvm_config = llvm_config_ret_dir
@@ -421,9 +424,9 @@ impl Step for TestHelpers {
     }
 }
 
-const OPENSSL_VERS: &'static str = "1.0.2m";
+const OPENSSL_VERS: &'static str = "1.0.2n";
 const OPENSSL_SHA256: &'static str =
-    "8c6ff15ec6b319b50788f42c7abc2890c08ba5a1cdcd3810eb9092deada37b0f";
+    "370babb75f278c39e0c50e8c4e7493bc0f18db6867478341a832a982fd15a8fe";
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Openssl {
@@ -593,7 +596,7 @@ impl Step for Openssl {
         println!("Building openssl for {}", target);
         build.run_quiet(Command::new("make").arg("-j1").current_dir(&obj));
         println!("Installing openssl for {}", target);
-        build.run_quiet(Command::new("make").arg("install").current_dir(&obj));
+        build.run_quiet(Command::new("make").arg("install").arg("-j1").current_dir(&obj));
 
         let mut f = t!(File::create(&stamp));
         t!(f.write_all(OPENSSL_VERS.as_bytes()));

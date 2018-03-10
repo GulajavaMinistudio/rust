@@ -8,6 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-type Foo<T: std::ops::Add> = T; //~ WARNING E0122
+#![crate_name = "foo"]
 
-type Bar<T> where T: std::ops::Add = T; //~ WARNING E0122
+// @has foo/fn.bar.html
+// @has - '//*[@class="sidebar-elems"]' ''
+pub fn bar() {}
+
+// @has foo/constant.BAR.html
+// @has - '//*[@class="sidebar-elems"]' ''
+pub const BAR: u32 = 0;
