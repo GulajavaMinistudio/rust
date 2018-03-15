@@ -18,7 +18,7 @@ use rustc_lint;
 use rustc_resolve::MakeGlobMap;
 use rustc::middle::region;
 use rustc::ty::subst::Subst;
-use rustc::traits::{ObligationCause, Reveal};
+use rustc::traits::ObligationCause;
 use rustc::ty::{self, Ty, TyCtxt, TypeFoldable};
 use rustc::ty::maps::OnDiskCache;
 use rustc::infer::{self, InferOk, InferResult};
@@ -29,6 +29,7 @@ use rustc::hir::map as hir_map;
 use rustc::session::{self, config};
 use rustc::session::config::{OutputFilenames, OutputTypes};
 use rustc_data_structures::sync::Lrc;
+use syntax;
 use syntax::ast;
 use syntax::abi::Abi;
 use syntax::codemap::{CodeMap, FilePathMapping, FileName};
@@ -93,8 +94,18 @@ fn errors(msgs: &[&str]) -> (Box<Emitter + Send>, usize) {
 }
 
 fn test_env<F>(source_string: &str,
-               (emitter, expected_err_count): (Box<Emitter + Send>, usize),
+               args: (Box<Emitter + Send>, usize),
                body: F)
+    where F: FnOnce(Env)
+{
+    syntax::with_globals(|| {
+        test_env_impl(source_string, args, body)
+    });
+}
+
+fn test_env_impl<F>(source_string: &str,
+                    (emitter, expected_err_count): (Box<Emitter + Send>, usize),
+                    body: F)
     where F: FnOnce(Env)
 {
     let mut options = config::basic_options();
@@ -153,7 +164,7 @@ fn test_env<F>(source_string: &str,
                              |tcx| {
         tcx.infer_ctxt().enter(|infcx| {
             let mut region_scope_tree = region::ScopeTree::default();
-            let param_env = ty::ParamEnv::empty(Reveal::UserFacing);
+            let param_env = ty::ParamEnv::empty();
             body(Env {
                 infcx: &infcx,
                 region_scope_tree: &mut region_scope_tree,
