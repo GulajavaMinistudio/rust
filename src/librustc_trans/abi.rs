@@ -30,6 +30,7 @@ use cabi_sparc64;
 use cabi_nvptx;
 use cabi_nvptx64;
 use cabi_hexagon;
+use cabi_wasm32;
 use mir::place::PlaceRef;
 use mir::operand::OperandValue;
 use type_::Type;
@@ -722,7 +723,7 @@ impl<'a, 'tcx> FnType<'tcx> {
             assert!(!sig.variadic && extra_args.is_empty());
 
             match sig.inputs().last().unwrap().sty {
-                ty::TyTuple(ref tupled_arguments, _) => {
+                ty::TyTuple(ref tupled_arguments) => {
                     inputs = &sig.inputs()[0..sig.inputs().len() - 1];
                     tupled_arguments
                 }
@@ -948,7 +949,13 @@ impl<'a, 'tcx> FnType<'tcx> {
             "powerpc64" => cabi_powerpc64::compute_abi_info(cx, self),
             "s390x" => cabi_s390x::compute_abi_info(cx, self),
             "asmjs" => cabi_asmjs::compute_abi_info(cx, self),
-            "wasm32" => cabi_asmjs::compute_abi_info(cx, self),
+            "wasm32" => {
+                if cx.sess().opts.target_triple.contains("emscripten") {
+                    cabi_asmjs::compute_abi_info(cx, self)
+                } else {
+                    cabi_wasm32::compute_abi_info(cx, self)
+                }
+            }
             "msp430" => cabi_msp430::compute_abi_info(self),
             "sparc" => cabi_sparc::compute_abi_info(cx, self),
             "sparc64" => cabi_sparc64::compute_abi_info(cx, self),

@@ -8,14 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Make sure that #![feature(inclusive_range)] is required.
-
-#![feature(inclusive_range_syntax)]
-// #![feature(inclusive_range)]
-
-pub fn main() {
-    let _: std::ops::RangeInclusive<_> = { use std::intrinsics; 1 } ..= { use std::intrinsics; 2 };
-    //~^ ERROR use of unstable library feature 'inclusive_range'
-    //~| ERROR core_intrinsics
-    //~| ERROR core_intrinsics
+fn main() {
+    let v = Vec::new();
+    v.try_reserve(10); //~ ERROR: use of unstable library feature 'try_reserve'
 }
