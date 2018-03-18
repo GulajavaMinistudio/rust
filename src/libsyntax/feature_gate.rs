@@ -832,6 +832,13 @@ pub const BUILTIN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeG
                                                           across crates and will never be stable",
                                                           cfg_fn!(rustc_attrs))),
 
+    ("rustc_dump_program_clauses", Whitelisted, Gated(Stability::Unstable,
+                                                     "rustc_attrs",
+                                                     "the `#[rustc_dump_program_clauses]` \
+                                                      attribute is just used for rustc unit \
+                                                      tests and will never be stable",
+                                                     cfg_fn!(rustc_attrs))),
+
     // RFC #2094
     ("nll", Whitelisted, Gated(Stability::Unstable,
                                "nll",
@@ -1438,7 +1445,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
     }
 
     fn visit_use_tree(&mut self, use_tree: &'a ast::UseTree, id: NodeId, _nested: bool) {
-        if let ast::UseTreeKind::Simple(ident) = use_tree.kind {
+        if let ast::UseTreeKind::Simple(Some(ident)) = use_tree.kind {
             if ident.name == "_" {
                 gate_feature_post!(&self, underscore_imports, use_tree.span,
                                    "renaming imports with `_` is unstable");
@@ -1790,7 +1797,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
     }
 
     fn visit_lifetime(&mut self, lt: &'a ast::Lifetime) {
-        if lt.ident.name == "'_" {
+        if lt.ident.name == keywords::UnderscoreLifetime.name() {
             gate_feature_post!(&self, underscore_lifetimes, lt.span,
                                "underscore lifetimes are unstable");
         }

@@ -309,8 +309,8 @@ impl<'a> Builder<'a> {
                 test::CompileFailFullDeps, test::IncrementalFullDeps, test::Rustdoc, test::Pretty,
                 test::RunPassPretty, test::RunFailPretty, test::RunPassValgrindPretty,
                 test::RunPassFullDepsPretty, test::RunFailFullDepsPretty, test::RunMake,
-                test::Crate, test::CrateLibrustc, test::Rustdoc, test::Linkcheck, test::Cargotest,
-                test::Cargo, test::Rls, test::ErrorIndex, test::Distcheck,
+                test::Crate, test::CrateLibrustc, test::CrateRustdoc, test::Linkcheck,
+                test::Cargotest, test::Cargo, test::Rls, test::ErrorIndex, test::Distcheck,
                 test::Nomicon, test::Reference, test::RustdocBook, test::RustByExample,
                 test::TheBook, test::UnstableBook,
                 test::Rustfmt, test::Miri, test::Clippy, test::RustdocJS, test::RustdocTheme),
@@ -763,7 +763,7 @@ impl<'a> Builder<'a> {
             cargo.env("WINAPI_NO_BUNDLED_LIBRARIES", "1");
         }
 
-        if self.is_very_verbose() {
+        for _ in 1..self.verbosity {
             cargo.arg("-v");
         }
 
