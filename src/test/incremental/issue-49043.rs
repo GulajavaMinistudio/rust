@@ -8,13 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-emscripten apparently only works in optimized mode
+// Regression test for hashing involving canonical variables.  In this
+// test -- which has an intensional error -- the type of the value
+// being dropped winds up including a type variable. Canonicalization
+// would then produce a `?0` which -- in turn -- triggered an ICE in
+// hashing.
 
-const TEST_DATA: [u8; 32 * 1024 * 1024] = [42; 32 * 1024 * 1024];
+// revisions:cfail1
 
-// Check that the promoted copy of TEST_DATA doesn't
-// leave an alloca from an unused temp behind, which,
-// without optimizations, can still blow the stack.
 fn main() {
-    println!("{}", TEST_DATA.len());
+    println!("Hello, world! {}",*thread_rng().choose(&[0, 1, 2, 3]).unwrap());
+    //[cfail1]~^ ERROR cannot find function `thread_rng`
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-emscripten apparently only works in optimized mode
+// https://github.com/rust-lang/rust/issues/49081
 
-const TEST_DATA: [u8; 32 * 1024 * 1024] = [42; 32 * 1024 * 1024];
+// revisions:rpass1 rpass2
 
-// Check that the promoted copy of TEST_DATA doesn't
-// leave an alloca from an unused temp behind, which,
-// without optimizations, can still blow the stack.
-fn main() {
-    println!("{}", TEST_DATA.len());
-}
+pub static A: i32 = 42;
+pub static B: &i32 = &A;
+
+fn main() {}
