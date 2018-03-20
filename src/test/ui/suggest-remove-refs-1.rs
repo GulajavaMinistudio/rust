@@ -8,15 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// gate-test-advanced_slice_patterns
-
-#![feature(slice_patterns)]
-
 fn main() {
-    let x = [ 1, 2, 3, 4, 5 ];
-    match x {
-        [ xs.., 4, 5 ] => {}    //~ ERROR multiple-element slice matches
-        [ 1, xs.., 5 ] => {}    //~ ERROR multiple-element slice matches
-        [ 1, 2, xs.. ] => {}    // OK without feature gate
+    let v = vec![0, 1, 2, 3];
+
+    for (i, n) in &v.iter().enumerate() {
+        //~^ ERROR the trait bound
+        println!("{}", i);
     }
 }
