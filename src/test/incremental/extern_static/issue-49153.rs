@@ -8,19 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub struct Inner<T> {
-    field: T,
+// https://github.com/rust-lang/rust/issues/49153
+
+// revisions:rpass1 rpass2
+
+extern "C" {
+    pub static __ImageBase: u8;
 }
 
-unsafe impl<T> Send for Inner<T>
-where
-    T: Copy + Send,
-{
-}
+pub static FOO: &'static u8 = unsafe { &__ImageBase };
 
-// @has no_redundancy/struct.Outer.html
-// @has - '//*[@id="synthetic-implementations-list"]/*[@class="impl"]/*/code' "impl<T> Send for \
-// Outer<T> where T: Copy + Send"
-pub struct Outer<T> {
-    inner_field: Inner<T>,
-}
+fn main() {}
