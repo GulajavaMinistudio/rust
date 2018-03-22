@@ -25,6 +25,8 @@ source "$ci_dir/shared.sh"
 
 if [ "$TRAVIS" == "true" ] && [ "$TRAVIS_BRANCH" != "auto" ]; then
     RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --enable-quiet-tests"
+else
+    RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --set build.print-step-timings"
 fi
 
 RUST_CONFIGURE_ARGS="$RUST_CONFIGURE_ARGS --enable-sccache"
@@ -105,7 +107,15 @@ fi
 travis_fold end log-system-info
 
 if [ ! -z "$SCRIPT" ]; then
-  sh -x -c "$SCRIPT"
+  # FIXME(#49246): Re-enable these tools after #49246 has been merged and thus fixing the cache.
+  if [ "$DEPLOY_ALT" = 1 ]; then
+    sh -x -c "$SCRIPT \
+       --exclude src/tools/rls \
+       --exclude src/tools/rustfmt \
+       --exclude src/tools/clippy"
+  else
+    sh -x -c "$SCRIPT"
+  fi
 else
   do_make() {
     travis_fold start "make-$1"
