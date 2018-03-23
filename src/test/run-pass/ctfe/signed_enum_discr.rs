@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,23 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that a field can have the same name in different variants
-// of an enum
+// https://github.com/rust-lang/rust/issues/49181
 
-pub enum Foo {
-    X { foo: u32 },
-    Y { foo: u32 }
+#[derive(Eq, PartialEq)]
+#[repr(i8)]
+pub enum A {
+    B = -1,
+    C = 1,
 }
 
-pub fn foo(mut x: Foo) {
-    let mut y = None;
-    let mut z = None;
-    if let Foo::X { ref foo } = x {
-        z = Some(foo);
-    }
-    if let Foo::Y { ref mut foo } = x {
-        y = Some(foo);
+pub const D: A = A::B;
+
+fn main() {
+    match A::C {
+        D => {},
+        _ => {}
     }
 }
-
-fn main() {}
