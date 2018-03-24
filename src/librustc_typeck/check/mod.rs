@@ -960,10 +960,19 @@ impl<'a, 'gcx, 'tcx> Visitor<'gcx> for GatherLocalsVisitor<'a, 'gcx, 'tcx> {
     // Add explicitly-declared locals.
     fn visit_local(&mut self, local: &'gcx hir::Local) {
         let o_ty = match local.ty {
-            Some(ref ty) => Some(self.fcx.to_ty(&ty)),
-            None => None
+            Some(ref ty) => {
+                let o_ty = self.fcx.to_ty(&ty);
+
+                let (c_ty, _orig_values) = self.fcx.inh.infcx.canonicalize_response(&o_ty);
+                debug!("visit_local: ty.hir_id={:?} o_ty={:?} c_ty={:?}", ty.hir_id, o_ty, c_ty);
+                self.fcx.tables.borrow_mut().user_provided_tys_mut().insert(ty.hir_id, c_ty);
+
+                Some(o_ty)
+            },
+            None => None,
         };
         self.assign(local.span, local.id, o_ty);
+
         debug!("Local variable {:?} is assigned type {}",
                local.pat,
                self.fcx.ty_to_string(
@@ -1121,25 +1130,23 @@ fn check_fn<'a, 'gcx, 'tcx>(inherited: &'a Inherited<'a, 'gcx, 'tcx>,
     }
     fcx.demand_suptype(span, ret_ty, actual_return_ty);
 
-    if fcx.tcx.features().termination_trait {
-        // If the termination trait language item is activated, check that the main return type
-        // implements the termination trait.
-        if let Some(term_id) = fcx.tcx.lang_items().termination() {
-            if let Some((id, _)) = *fcx.tcx.sess.entry_fn.borrow() {
-                if id == fn_id {
-                    match fcx.sess().entry_type.get() {
-                        Some(config::EntryMain) => {
-                            let substs = fcx.tcx.mk_substs(iter::once(Kind::from(ret_ty)));
-                            let trait_ref = ty::TraitRef::new(term_id, substs);
-                            let cause = traits::ObligationCause::new(
-                                span, fn_id, ObligationCauseCode::MainFunctionType);
+    // Check that the main return type implements the termination trait.
+    if let Some(term_id) = fcx.tcx.lang_items().termination() {
+        if let Some((id, _)) = *fcx.tcx.sess.entry_fn.borrow() {
+            if id == fn_id {
+                match fcx.sess().entry_type.get() {
+                    Some(config::EntryMain) => {
+                        let substs = fcx.tcx.mk_substs(iter::once(Kind::from(ret_ty)));
+                        let trait_ref = ty::TraitRef::new(term_id, substs);
+                        let return_ty_span = decl.output.span();
+                        let cause = traits::ObligationCause::new(
+                            return_ty_span, fn_id, ObligationCauseCode::MainFunctionType);
 
-                            inherited.register_predicate(
-                                traits::Obligation::new(
-                                    cause, param_env, trait_ref.to_predicate()));
-                        },
-                        _ => {},
-                    }
+                        inherited.register_predicate(
+                            traits::Obligation::new(
+                                cause, param_env, trait_ref.to_predicate()));
+                    },
+                    _ => {},
                 }
             }
         }
@@ -1182,9 +1189,15 @@ pub fn check_item_type<'a,'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, it: &'tcx hir::Item
     let _indenter = indenter();
     match it.node {
       // Consts can play a role in type-checking, so they are included here.
-      hir::ItemStatic(..) |
+      hir::ItemStatic(..) => {
+        tcx.typeck_tables_of(tcx.hir.local_def_id(it.id));
+      }
       hir::ItemConst(..) => {
         tcx.typeck_tables_of(tcx.hir.local_def_id(it.id));
+        if it.attrs.iter().any(|a| a.check_name("wasm_custom_section")) {
+            let def_id = tcx.hir.local_def_id(it.id);
+            check_const_is_u8_array(tcx, def_id, it.span);
+        }
       }
       hir::ItemEnum(ref enum_definition, _) => {
         check_enum(tcx,
@@ -1254,6 +1267,21 @@ pub fn check_item_type<'a,'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, it: &'tcx hir::Item
       }
       _ => {/* nothing to do */ }
     }
+}
+
+fn check_const_is_u8_array<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                     def_id: DefId,
+                                     span: Span) {
+    match tcx.type_of(def_id).sty {
+        ty::TyArray(t, _) => {
+            match t.sty {
+                ty::TyUint(ast::UintTy::U8) => return,
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    tcx.sess.span_err(span, "must be an array of bytes like `[u8; N]`");
 }
 
 fn check_on_unimplemented<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
@@ -3057,7 +3085,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             self.apply_adjustments(base, adjustments);
                             autoderef.finalize();
 
-                            self.tcx.check_stability(field.did, expr.id, expr.span);
+                            self.tcx.check_stability(field.did, Some(expr.id), expr.span);
 
                             return field_ty;
                         }
@@ -3198,7 +3226,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     if let Some(field) = fields.iter().find(|f| f.name.to_ident() == ident) {
                         let field_ty = self.field_ty(expr.span, field, substs);
                         if field.vis.is_accessible_from(def_scope, self.tcx) {
-                            self.tcx.check_stability(field.did, expr.id, expr.span);
+                            self.tcx.check_stability(field.did, Some(expr.id), expr.span);
                             Some(field_ty)
                         } else {
                             private_candidate = Some((base_def.did, field_ty));
@@ -3343,7 +3371,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 // struct-like enums (yet...), but it's definitely not
                 // a bug to have construct one.
                 if adt_kind != ty::AdtKind::Enum {
-                    tcx.check_stability(v_field.did, expr_id, field.span);
+                    tcx.check_stability(v_field.did, Some(expr_id), field.span);
                 }
 
                 self.field_ty(field.span, v_field, substs)

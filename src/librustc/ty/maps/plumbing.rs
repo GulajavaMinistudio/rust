@@ -886,6 +886,9 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
             force!(all_trait_implementations, krate!());
         }
 
+        DepKind::DllimportForeignItems => {
+            force!(dllimport_foreign_items, krate!());
+        }
         DepKind::IsDllimportForeignItem => {
             force!(is_dllimport_foreign_item, def_id!());
         }
@@ -917,8 +920,6 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         }
         DepKind::UsedCrateSource => { force!(used_crate_source, krate!()); }
         DepKind::PostorderCnums => { force!(postorder_cnums, LOCAL_CRATE); }
-        DepKind::HasCloneClosures => { force!(has_clone_closures, krate!()); }
-        DepKind::HasCopyClosures => { force!(has_copy_closures, krate!()); }
 
         DepKind::Freevars => { force!(freevars, def_id!()); }
         DepKind::MaybeUnusedTraitImport => {
@@ -940,6 +941,9 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::Features => { force!(features_query, LOCAL_CRATE); }
 
         DepKind::ProgramClausesFor => { force!(program_clauses_for, def_id!()); }
+        DepKind::WasmCustomSections => { force!(wasm_custom_sections, krate!()); }
+        DepKind::WasmImportModuleMap => { force!(wasm_import_module_map, krate!()); }
+        DepKind::ForeignModules => { force!(foreign_modules, krate!()); }
     }
 
     true

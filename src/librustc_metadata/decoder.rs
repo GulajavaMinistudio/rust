@@ -10,11 +10,12 @@
 
 // Decoding metadata from a single crate's metadata
 
-use cstore::{self, CrateMetadata, MetadataBlob, NativeLibrary};
+use cstore::{self, CrateMetadata, MetadataBlob, NativeLibrary, ForeignModule};
 use schema::*;
 
 use rustc_data_structures::sync::{Lrc, ReadGuard};
-use rustc::hir::map::{DefKey, DefPath, DefPathData, DefPathHash};
+use rustc::hir::map::{DefKey, DefPath, DefPathData, DefPathHash,
+                      DisambiguatedDefPathData};
 use rustc::hir;
 use rustc::middle::cstore::{LinkagePreference, ExternConstBody,
                             ExternBodyNestedBodies};
@@ -1031,6 +1032,10 @@ impl<'a, 'tcx> CrateMetadata {
         self.root.native_libraries.decode((self, sess)).collect()
     }
 
+    pub fn get_foreign_modules(&self, sess: &Session) -> Vec<ForeignModule> {
+        self.root.foreign_modules.decode((self, sess)).collect()
+    }
+
     pub fn get_dylib_dependency_formats(&self) -> Vec<(CrateNum, LinkagePreference)> {
         self.root
             .dylib_dependency_formats
@@ -1067,6 +1072,16 @@ impl<'a, 'tcx> CrateMetadata {
             .collect()
     }
 
+    pub fn wasm_custom_sections(&self) -> Vec<DefId> {
+        let sections = self.root
+            .wasm_custom_sections
+            .decode(self)
+            .map(|def_index| self.local_def_id(def_index))
+            .collect::<Vec<_>>();
+        info!("loaded wasm sections {:?}", sections);
+        return sections
+    }
+
     pub fn get_macro(&self, id: DefIndex) -> (InternedString, MacroDef) {
         let entry = self.entry(id);
         match entry.kind {
@@ -1093,10 +1108,6 @@ impl<'a, 'tcx> CrateMetadata {
         }
     }
 
-    pub fn is_dllimport_foreign_item(&self, id: DefIndex) -> bool {
-        self.dllimport_foreign_items.contains(&id)
-    }
-
     pub fn fn_sig(&self,
                   id: DefIndex,
                   tcx: TyCtxt<'a, 'tcx, 'tcx>)
@@ -1115,7 +1126,23 @@ impl<'a, 'tcx> CrateMetadata {
 
     #[inline]
     pub fn def_key(&self, index: DefIndex) -> DefKey {
-        self.def_path_table.def_key(index)
+        if !self.is_proc_macro(index) {
+            self.def_path_table.def_key(index)
+        } else {
+            // FIXME(#49271) - It would be better if the DefIds were consistent
+            //                 with the DefPathTable, but for proc-macro crates
+            //                 they aren't.
+            let name = self.proc_macros
+                           .as_ref()
+                           .unwrap()[index.to_proc_macro_index()].0;
+            DefKey {
+                parent: Some(CRATE_DEF_INDEX),
+                disambiguated_data: DisambiguatedDefPathData {
+                    data: DefPathData::MacroDef(name.as_str()),
+                    disambiguator: 0,
+                }
+            }
+        }
     }
 
     // Returns the path leading to the thing with this `id`.
