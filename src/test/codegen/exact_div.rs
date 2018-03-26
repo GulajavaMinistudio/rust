@@ -8,11 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(non_camel_case_types)]
+// compile-flags: -C no-prepopulate-passes
 
-#[allow(dead_code)]
-fn qqq(lol: impl Iterator<Item=u32>) -> impl Iterator<Item=u64> {
-        lol.map(|x|x as u64)
+#![crate_type = "lib"]
+#![feature(core_intrinsics)]
+
+use std::intrinsics::exact_div;
+
+// CHECK-LABEL: @exact_sdiv
+#[no_mangle]
+pub unsafe fn exact_sdiv(x: i32, y: i32) -> i32 {
+// CHECK: sdiv exact
+    exact_div(x, y)
 }
 
-fn main() {}
+// CHECK-LABEL: @exact_udiv
+#[no_mangle]
+pub unsafe fn exact_udiv(x: u32, y: u32) -> u32 {
+// CHECK: udiv exact
+    exact_div(x, y)
+}
