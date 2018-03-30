@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,20 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// NB: this test was introduced in #23121 and will have to change when default match binding modes
-// stabilizes.
+// https://github.com/rust-lang/rust/issues/49081
 
-#![feature(slice_patterns)]
+// revisions:rpass1 rpass2
 
-fn slice_pat(x: &[u8]) {
-    // OLD!
-    match x {
-        [a, b..] => {},
-        //~^ ERROR non-reference pattern used to match a reference
-        _ => panic!(),
-    }
+#[cfg(rpass1)]
+pub static A: &str = "hello";
+#[cfg(rpass2)]
+pub static A: &str = "xxxxx";
+
+#[cfg(rpass1)]
+fn main() {
+    assert_eq!(A, "hello");
 }
 
+#[cfg(rpass2)]
 fn main() {
-    slice_pat("foo".as_bytes());
+    assert_eq!(A, "xxxxx");
 }

@@ -379,13 +379,13 @@ impl_stable_hash_for!(struct mir::interpret::MemoryPointer {
 });
 
 enum AllocDiscriminant {
-    Static,
-    Constant,
+    Alloc,
+    ExternStatic,
     Function,
 }
 impl_stable_hash_for!(enum self::AllocDiscriminant {
-    Static,
-    Constant,
+    Alloc,
+    ExternStatic,
     Function
 });
 
@@ -397,17 +397,23 @@ impl<'a> HashStable<StableHashingContext<'a>> for mir::interpret::AllocId {
     ) {
         ty::tls::with_opt(|tcx| {
             let tcx = tcx.expect("can't hash AllocIds during hir lowering");
-            if let Some(def_id) = tcx.interpret_interner.get_corresponding_static_def_id(*self) {
-                AllocDiscriminant::Static.hash_stable(hcx, hasher);
-                // statics are unique via their DefId
-                def_id.hash_stable(hcx, hasher);
-            } else if let Some(alloc) = tcx.interpret_interner.get_alloc(*self) {
-                // not a static, can't be recursive, hash the allocation
-                AllocDiscriminant::Constant.hash_stable(hcx, hasher);
-                alloc.hash_stable(hcx, hasher);
+            if let Some(alloc) = tcx.interpret_interner.get_alloc(*self) {
+                AllocDiscriminant::Alloc.hash_stable(hcx, hasher);
+                if !hcx.alloc_id_recursion_tracker.insert(*self) {
+                    tcx
+                        .interpret_interner
+                        .get_corresponding_static_def_id(*self)
+                        .hash_stable(hcx, hasher);
+                    alloc.hash_stable(hcx, hasher);
+                    assert!(hcx.alloc_id_recursion_tracker.remove(self));
+                }
             } else if let Some(inst) = tcx.interpret_interner.get_fn(*self) {
                 AllocDiscriminant::Function.hash_stable(hcx, hasher);
                 inst.hash_stable(hcx, hasher);
+            } else if let Some(def_id) = tcx.interpret_interner
+                                            .get_corresponding_static_def_id(*self) {
+                AllocDiscriminant::ExternStatic.hash_stable(hcx, hasher);
+                def_id.hash_stable(hcx, hasher);
             } else {
                 bug!("no allocation for {}", self);
             }
@@ -1111,7 +1117,6 @@ for ty::steal::Steal<T>
 
 impl_stable_hash_for!(struct ty::ParamEnv<'tcx> {
     caller_bounds,
-    universe,
     reveal
 });
 
@@ -1279,15 +1284,6 @@ for traits::VtableGeneratorData<'gcx, N> where N: HashStable<StableHashingContex
         closure_def_id.hash_stable(hcx, hasher);
         substs.hash_stable(hcx, hasher);
         nested.hash_stable(hcx, hasher);
-    }
-}
-
-impl<'a> HashStable<StableHashingContext<'a>>
-for ty::UniverseIndex {
-    fn hash_stable<W: StableHasherResult>(&self,
-                                          hcx: &mut StableHashingContext<'a>,
-                                          hasher: &mut StableHasher<W>) {
-        self.depth().hash_stable(hcx, hasher);
     }
 }
 

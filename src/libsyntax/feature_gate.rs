@@ -563,6 +563,10 @@ declare_features! (
     (accepted, conservative_impl_trait, "1.26.0", Some(34511), None),
     // The `i128` type
     (accepted, i128_type, "1.26.0", Some(35118), None),
+    // Default match binding modes (RFC 2005)
+    (accepted, match_default_bindings, "1.26.0", Some(42640), None),
+    // allow `'_` placeholder lifetimes
+    (accepted, underscore_lifetimes, "1.26.0", Some(44524), None),
 );
 
 // If you change this, please modify src/doc/unstable-book as well. You must
@@ -1792,14 +1796,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         }
 
         visit::walk_generic_param(self, param)
-    }
-
-    fn visit_lifetime(&mut self, lt: &'a ast::Lifetime) {
-        if lt.ident.name == keywords::UnderscoreLifetime.name() {
-            gate_feature_post!(&self, underscore_lifetimes, lt.span,
-                               "underscore lifetimes are unstable");
-        }
-        visit::walk_lifetime(self, lt)
     }
 }
 

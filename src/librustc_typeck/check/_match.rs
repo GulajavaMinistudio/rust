@@ -23,7 +23,6 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::cmp;
 use syntax::ast;
 use syntax::codemap::Spanned;
-use syntax::feature_gate;
 use syntax::ptr::P;
 use syntax_pos::Span;
 
@@ -114,42 +113,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
             };
             if pat_adjustments.len() > 0 {
-                if tcx.features().match_default_bindings {
-                    debug!("default binding mode is now {:?}", def_bm);
-                    self.inh.tables.borrow_mut()
-                        .pat_adjustments_mut()
-                        .insert(pat.hir_id, pat_adjustments);
-                } else {
-                    let mut ref_sp = pat.span;
-                    let mut id = pat.id;
-                    loop {  // make span include all enclosing `&` to avoid confusing diag output
-                        id = tcx.hir.get_parent_node(id);
-                        let node = tcx.hir.find(id);
-                        if let Some(hir::map::NodePat(pat)) = node {
-                            if let hir::PatKind::Ref(..) = pat.node {
-                                ref_sp = pat.span;
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                    let sp = ref_sp.to(pat.span);
-                    let mut err = feature_gate::feature_err(
-                        &tcx.sess.parse_sess,
-                        "match_default_bindings",
-                        sp,
-                        feature_gate::GateIssue::Language,
-                        "non-reference pattern used to match a reference",
-                    );
-                    if let Ok(snippet) = tcx.sess.codemap().span_to_snippet(sp) {
-                        err.span_suggestion(sp,
-                                            "consider using a reference",
-                                            format!("&{}", &snippet));
-                    }
-                    err.emit();
-                }
+                debug!("default binding mode is now {:?}", def_bm);
+                self.inh.tables.borrow_mut()
+                    .pat_adjustments_mut()
+                    .insert(pat.hir_id, pat_adjustments);
             }
         } else if let PatKind::Ref(..) = pat.node {
             // When you encounter a `&pat` pattern, reset to "by
@@ -329,7 +296,6 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 let element_tys_iter = (0..max_len).map(|_| self.next_ty_var(
                     // FIXME: MiscVariable for now, obtaining the span and name information
                     //       from all tuple elements isn't trivial.
-                    ty::UniverseIndex::ROOT,
                     TypeVariableOrigin::TypeInference(pat.span)));
                 let element_tys = tcx.mk_type_list(element_tys_iter);
                 let pat_ty = tcx.mk_ty(ty::TyTuple(element_tys));
@@ -340,8 +306,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 pat_ty
             }
             PatKind::Box(ref inner) => {
-                let inner_ty = self.next_ty_var(ty::UniverseIndex::ROOT,
-                                                TypeVariableOrigin::TypeInference(inner.span));
+                let inner_ty = self.next_ty_var(TypeVariableOrigin::TypeInference(inner.span));
                 let uniq_ty = tcx.mk_box(inner_ty);
 
                 if self.check_dereferencable(pat.span, expected, &inner) {
@@ -374,7 +339,6 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         }
                         _ => {
                             let inner_ty = self.next_ty_var(
-                                ty::UniverseIndex::ROOT,
                                 TypeVariableOrigin::TypeInference(inner.span));
                             let mt = ty::TypeAndMut { ty: inner_ty, mutbl: mutbl };
                             let region = self.next_region_var(infer::PatternRegion(pat.span));
@@ -633,8 +597,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
             // ...but otherwise we want to use any supertype of the
             // discriminant. This is sort of a workaround, see note (*) in
             // `check_pat` for some details.
-            discrim_ty = self.next_ty_var(ty::UniverseIndex::ROOT,
-                                          TypeVariableOrigin::TypeInference(discrim.span));
+            discrim_ty = self.next_ty_var(TypeVariableOrigin::TypeInference(discrim.span));
             self.check_expr_has_type_or_error(discrim, discrim_ty);
         };
 
@@ -695,8 +658,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                 // arm for inconsistent arms or to the whole match when a `()` type
                 // is required).
                 Expectation::ExpectHasType(ety) if ety != self.tcx.mk_nil() => ety,
-                _ => self.next_ty_var(ty::UniverseIndex::ROOT,
-                                      TypeVariableOrigin::MiscVariable(expr.span)),
+                _ => self.next_ty_var(TypeVariableOrigin::MiscVariable(expr.span)),
             };
             CoerceMany::with_coercion_sites(coerce_first, arms)
         };

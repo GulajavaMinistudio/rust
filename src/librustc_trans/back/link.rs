@@ -31,6 +31,8 @@ use rustc::util::fs::fix_windows_verbatim_for_gcc;
 use rustc::hir::def_id::CrateNum;
 use tempdir::TempDir;
 use rustc_back::{PanicStrategy, RelroLevel};
+use rustc_back::target::TargetTriple;
+use rustc_data_structures::fx::FxHashSet;
 use context::get_reloc_model;
 use llvm;
 
@@ -81,7 +83,7 @@ pub fn get_linker(sess: &Session) -> (PathBuf, Command) {
         }
     };
 
-    let msvc_tool = windows_registry::find_tool(&sess.opts.target_triple, "link.exe");
+    let msvc_tool = windows_registry::find_tool(&sess.opts.target_triple.triple(), "link.exe");
 
     let linker_path = sess.opts.cg.linker.as_ref().map(|s| &**s)
         .or(sess.target.target.options.linker.as_ref().map(|s| s.as_ref()))
@@ -712,6 +714,7 @@ fn link_natively(sess: &Session,
         // linking executables as pie. Different versions of gcc seem to use
         // different quotes in the error message so don't check for them.
         if sess.target.target.options.linker_is_gnu &&
+           sess.linker_flavor() != LinkerFlavor::Ld &&
            (out.contains("unrecognized command line option") ||
             out.contains("unknown argument")) &&
            out.contains("-no-pie") &&
@@ -812,7 +815,7 @@ fn link_natively(sess: &Session,
         }
     }
 
-    if sess.opts.target_triple == "wasm32-unknown-unknown" {
+    if sess.opts.target_triple == TargetTriple::from_triple("wasm32-unknown-unknown") {
         wasm::rewrite_imports(&out_filename, &trans.crate_info.wasm_imports);
         wasm::add_custom_sections(&out_filename,
                                   &trans.crate_info.wasm_custom_sections);
@@ -1007,8 +1010,9 @@ fn link_args(cmd: &mut Linker,
         } else {
             // recent versions of gcc can be configured to generate position
             // independent executables by default. We have to pass -no-pie to
-            // explicitly turn that off.
-            if sess.target.target.options.linker_is_gnu {
+            // explicitly turn that off. Not applicable to ld.
+            if sess.target.target.options.linker_is_gnu
+                && sess.linker_flavor() != LinkerFlavor::Ld {
                 cmd.no_position_independent_executable();
             }
         }
@@ -1094,7 +1098,7 @@ fn link_args(cmd: &mut Linker,
     // addl_lib_search_paths
     if sess.opts.cg.rpath {
         let sysroot = sess.sysroot();
-        let target_triple = &sess.opts.target_triple;
+        let target_triple = sess.opts.target_triple.triple();
         let mut get_install_prefix_lib_path = || {
             let install_prefix = option_env!("CFG_PREFIX").expect("CFG_PREFIX");
             let tlib = filesearch::relative_target_lib_path(sysroot, target_triple);
@@ -1185,9 +1189,56 @@ fn add_upstream_rust_crates(cmd: &mut Linker,
     // crates.
     let deps = &trans.crate_info.used_crates_dynamic;
 
+    // There's a few internal crates in the standard library (aka libcore and
+    // libstd) which actually have a circular dependence upon one another. This
+    // currently arises through "weak lang items" where libcore requires things
+    // like `rust_begin_unwind` but libstd ends up defining it. To get this
+    // circular dependence to work correctly in all situations we'll need to be
+    // sure to correctly apply the `--start-group` and `--end-group` options to
+    // GNU linkers, otherwise if we don't use any other symbol from the standard
+    // library it'll get discarded and the whole application won't link.
+    //
+    // In this loop we're calculating the `group_end`, after which crate to
+    // pass `--end-group` and `group_start`, before which crate to pass
+    // `--start-group`. We currently do this by passing `--end-group` after
+    // the first crate (when iterating backwards) that requires a lang item
+    // defined somewhere else. Once that's set then when we've defined all the
+    // necessary lang items we'll pass `--start-group`.
+    //
+    // Note that this isn't amazing logic for now but it should do the trick
+    // for the current implementation of the standard library.
+    let mut group_end = None;
+    let mut group_start = None;
+    let mut end_with = FxHashSet();
+    let info = &trans.crate_info;
+    for &(cnum, _) in deps.iter().rev() {
+        if let Some(missing) = info.missing_lang_items.get(&cnum) {
+            end_with.extend(missing.iter().cloned());
+            if end_with.len() > 0 && group_end.is_none() {
+                group_end = Some(cnum);
+            }
+        }
+        end_with.retain(|item| info.lang_item_to_crate.get(item) != Some(&cnum));
+        if end_with.len() == 0 && group_end.is_some() {
+            group_start = Some(cnum);
+            break
+        }
+    }
+
+    // If we didn't end up filling in all lang items from upstream crates then
+    // we'll be filling it in with our crate. This probably means we're the
+    // standard library itself, so skip this for now.
+    if group_end.is_some() && group_start.is_none() {
+        group_end = None;
+    }
+
     let mut compiler_builtins = None;
 
     for &(cnum, _) in deps.iter() {
+        if group_start == Some(cnum) {
+            cmd.group_start();
+        }
+
         // We may not pass all crates through to the linker. Some crates may
         // appear statically in an existing dylib, meaning we'll pick up all the
         // symbols from the dylib.
@@ -1213,6 +1264,10 @@ fn add_upstream_rust_crates(cmd: &mut Linker,
             Linkage::Dynamic => {
                 add_dynamic_crate(cmd, sess, &src.dylib.as_ref().unwrap().0)
             }
+        }
+
+        if group_end == Some(cnum) {
+            cmd.group_end();
         }
     }
 

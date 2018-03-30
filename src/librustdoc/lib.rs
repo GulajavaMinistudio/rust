@@ -64,6 +64,7 @@ use std::sync::mpsc::channel;
 use externalfiles::ExternalHtml;
 use rustc::session::search_paths::SearchPaths;
 use rustc::session::config::{ErrorOutputType, RustcOptGroup, nightly_options, Externs};
+use rustc_back::target::TargetTriple;
 
 #[macro_use]
 pub mod externalfiles;
@@ -266,8 +267,8 @@ pub fn opts() -> Vec<RustcOptGroup> {
         unstable("resource-suffix", |o| {
             o.optopt("",
                      "resource-suffix",
-                     "suffix to add to CSS and JavaScript files, e.g. \"main.css\" will become \
-                      \"main-suffix.css\"",
+                     "suffix to add to CSS and JavaScript files, e.g. \"light.css\" will become \
+                      \"light-suffix.css\"",
                      "PATH")
         }),
     ]
@@ -321,7 +322,7 @@ pub fn main_args(args: &[String]) -> isize {
 
     let to_check = matches.opt_strs("theme-checker");
     if !to_check.is_empty() {
-        let paths = theme::load_css_paths(include_bytes!("html/static/themes/main.css"));
+        let paths = theme::load_css_paths(include_bytes!("html/static/themes/light.css"));
         let mut errors = 0;
 
         println!("rustdoc: [theme-checker] Starting tests!");
@@ -392,7 +393,7 @@ pub fn main_args(args: &[String]) -> isize {
 
     let mut themes = Vec::new();
     if matches.opt_present("themes") {
-        let paths = theme::load_css_paths(include_bytes!("html/static/themes/main.css"));
+        let paths = theme::load_css_paths(include_bytes!("html/static/themes/light.css"));
 
         for (theme_file, theme_s) in matches.opt_strs("themes")
                                             .iter()
@@ -542,7 +543,13 @@ where R: 'static + Send, F: 'static + Send + FnOnce(Output) -> R {
         paths.add_path(s, ErrorOutputType::default());
     }
     let cfgs = matches.opt_strs("cfg");
-    let triple = matches.opt_str("target");
+    let triple = matches.opt_str("target").map(|target| {
+        if target.ends_with(".json") {
+            TargetTriple::TargetPath(PathBuf::from(target))
+        } else {
+            TargetTriple::TargetTriple(target)
+        }
+    });
     let maybe_sysroot = matches.opt_str("sysroot").map(PathBuf::from);
     let crate_name = matches.opt_str("crate-name");
     let crate_version = matches.opt_str("crate-version");

@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct Foo<'a>(&'a u8);
+#![feature(allocator_api)]
+#![crate_type = "rlib"]
 
-fn foo(x: &u8) -> Foo<'_> { //~ ERROR underscore lifetimes are unstable
-    Foo(x)
-}
+use std::heap::*;
 
-fn main() {
-    let x = 5;
-    let _ = foo(&x);
+pub struct A;
+
+unsafe impl<'a> Alloc for &'a A {
+    unsafe fn alloc(&mut self, _: Layout) -> Result<*mut u8, AllocErr> {
+        loop {}
+    }
+
+    unsafe fn dealloc(&mut self, _ptr: *mut u8, _: Layout) {
+        loop {}
+    }
 }

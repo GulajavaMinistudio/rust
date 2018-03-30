@@ -73,6 +73,7 @@ use type_of::LayoutLlvmExt;
 use rustc::util::nodemap::{FxHashMap, FxHashSet, DefIdSet};
 use CrateInfo;
 use rustc_data_structures::sync::Lrc;
+use rustc_back::target::TargetTriple;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -1081,12 +1082,15 @@ impl CrateInfo {
             used_crate_source: FxHashMap(),
             wasm_custom_sections: BTreeMap::new(),
             wasm_imports: FxHashMap(),
+            lang_item_to_crate: FxHashMap(),
+            missing_lang_items: FxHashMap(),
         };
+        let lang_items = tcx.lang_items();
 
         let load_wasm_items = tcx.sess.crate_types.borrow()
             .iter()
             .any(|c| *c != config::CrateTypeRlib) &&
-            tcx.sess.opts.target_triple == "wasm32-unknown-unknown";
+            tcx.sess.opts.target_triple == TargetTriple::from_triple("wasm32-unknown-unknown");
 
         if load_wasm_items {
             info!("attempting to load all wasm sections");
@@ -1127,6 +1131,13 @@ impl CrateInfo {
                 }
                 info.load_wasm_imports(tcx, cnum);
             }
+            let missing = tcx.missing_lang_items(cnum);
+            for &item in missing.iter() {
+                if let Ok(id) = lang_items.require(item) {
+                    info.lang_item_to_crate.insert(item, id.krate);
+                }
+            }
+            info.missing_lang_items.insert(cnum, missing);
         }
 
         return info

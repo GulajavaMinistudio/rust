@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn foo(s: &str) -> bool { true }
+// aux-build:extern-impl-trait.rs
 
-fn main() {
-    let x = vec![(String::new(), String::new())];
-    x.iter()
-        .filter(|&(ref a, _)| foo(a))
-        //~^ ERROR non-reference pattern used to match a reference
-        .collect();
-}
+#![crate_name = "foo"]
+
+extern crate extern_impl_trait;
+
+// @has 'foo/struct.X.html' '//code' "impl Foo<Associated = ()> + 'a"
+pub use extern_impl_trait::X;
+
+// @has 'foo/struct.Y.html' '//code' "impl ?Sized + Foo<Associated = ()> + 'a"
+pub use extern_impl_trait::Y;
