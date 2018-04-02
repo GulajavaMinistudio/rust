@@ -259,7 +259,7 @@ fn initial_buffer_size(file: &File) -> usize {
 ///     Ok(())
 /// }
 /// ```
-#[stable(feature = "fs_read_write_bytes", since = "1.27.0")]
+#[stable(feature = "fs_read_write_bytes", since = "1.26.0")]
 pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
     let mut bytes = Vec::with_capacity(initial_buffer_size(&file));
@@ -297,12 +297,12 @@ pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
 /// use std::net::SocketAddr;
 ///
 /// fn main() -> Result<(), Box<std::error::Error + 'static>> {
-///     let foo: SocketAddr = fs::read_string("address.txt")?.parse()?;
+///     let foo: SocketAddr = fs::read_to_string("address.txt")?.parse()?;
 ///     Ok(())
 /// }
 /// ```
-#[unstable(feature = "fs_read_write", issue = "46588")]
-pub fn read_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
+#[stable(feature = "fs_read_write", since = "1.26.0")]
+pub fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut string = String::with_capacity(initial_buffer_size(&file));
     file.read_to_string(&mut string)?;
@@ -330,7 +330,7 @@ pub fn read_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
 ///     Ok(())
 /// }
 /// ```
-#[stable(feature = "fs_read_write_bytes", since = "1.27.0")]
+#[stable(feature = "fs_read_write_bytes", since = "1.26.0")]
 pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result<()> {
     File::create(path)?.write_all(contents.as_ref())
 }
@@ -3122,12 +3122,12 @@ mod tests {
         assert!(v == &bytes[..]);
 
         check!(fs::write(&tmpdir.join("not-utf8"), &[0xFF]));
-        error_contains!(fs::read_string(&tmpdir.join("not-utf8")),
+        error_contains!(fs::read_to_string(&tmpdir.join("not-utf8")),
                         "stream did not contain valid UTF-8");
 
         let s = "𐁁𐀓𐀠𐀴𐀍";
         check!(fs::write(&tmpdir.join("utf8"), s.as_bytes()));
-        let string = check!(fs::read_string(&tmpdir.join("utf8")));
+        let string = check!(fs::read_to_string(&tmpdir.join("utf8")));
         assert_eq!(string, s);
     }
 

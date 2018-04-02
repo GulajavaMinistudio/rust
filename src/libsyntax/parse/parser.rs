@@ -455,7 +455,7 @@ impl Error {
                                            ref dir_path } => {
                 let mut err = struct_span_err!(handler, sp, E0583,
                                                "file not found for module `{}`", mod_name);
-                err.help(&format!("name the file either {} or {} inside the directory {:?}",
+                err.help(&format!("name the file either {} or {} inside the directory \"{}\"",
                                   default_path,
                                   secondary_path,
                                   dir_path));
@@ -4601,6 +4601,9 @@ impl<'a> Parser<'a> {
 
     /// Parse a statement, including the trailing semicolon.
     pub fn parse_full_stmt(&mut self, macro_legacy_warnings: bool) -> PResult<'a, Option<Stmt>> {
+        // skip looking for a trailing semicolon when we have an interpolated statement
+        maybe_whole!(self, NtStmt, |x| Some(x));
+
         let mut stmt = match self.parse_stmt_without_recovery(macro_legacy_warnings)? {
             Some(stmt) => stmt,
             None => return Ok(None),

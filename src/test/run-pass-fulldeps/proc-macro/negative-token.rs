@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-const X: i32 = #[allow(dead_code)] 8;
-//~^ ERROR attributes on expressions are experimental. (see issue #15701)
+// aux-build:negative-token.rs
+// ignore-stage1
 
-fn main() {}
+#![feature(proc_macro)]
+
+extern crate negative_token;
+
+use negative_token::*;
+
+fn main() {
+    assert_eq!(-1, neg_one!());
+    assert_eq!(-1.0, neg_one_float!());
+}

@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-const X: i32 = #[allow(dead_code)] 8;
-//~^ ERROR attributes on expressions are experimental. (see issue #15701)
+// revisions:rpass1 rpass2
+
+#[cfg(rpass1)]
+pub static A: i32 = 42;
+#[cfg(rpass2)]
+pub static A: i32 = 43;
+
+pub static B: &i32 = &A;
 
 fn main() {}
