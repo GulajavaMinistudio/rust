@@ -1,4 +1,4 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Checks if the correct registers are being used to pass arguments
-// when the sysv64 ABI is specified.
+// revisions: lxl nll
+//[lxl]compile-flags: -Z borrowck=mir -Z two-phase-borrows
+//[nll]compile-flags: -Z borrowck=mir -Z two-phase-borrows -Z nll
 
-#![feature(rust_2018_preview)]
+// run-pass
 
-pub trait Foo {}
+struct Foo<'a> {
+    x: &'a i32
+}
 
-// should compile without the dyn trait feature flag
-fn foo(x: &dyn Foo) {}
+impl<'a> Foo<'a> {
+    fn method(&mut self, _: &i32) {
+    }
+}
 
-pub fn main() {}
+fn main() {
+    let a = &mut Foo { x: &22 };
+    Foo::method(a, a.x);
+}
