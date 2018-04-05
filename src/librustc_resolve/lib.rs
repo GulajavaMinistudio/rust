@@ -427,14 +427,14 @@ fn generate_fn_name_span(cm: &CodeMap, span: Span) -> Option<Span> {
 /// a new local type parameter.
 ///
 /// For instance:
-/// ```
+/// ```rust,ignore (pseudo-Rust)
 /// // Given span
 /// fn my_function(param: T)
-///                       ^ Original span
+/// //                    ^ Original span
 ///
 /// // Result
 /// fn my_function(param: T)
-///    ^^^^^^^^^^^ Generated span with snippet `my_function<T>`
+/// // ^^^^^^^^^^^ Generated span with snippet `my_function<T>`
 /// ```
 ///
 /// Attention: The method used is very fragile since it essentially duplicates the work of the
@@ -863,6 +863,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Resolver<'a> {
             }
             ForeignItemKind::Static(..) => NoTypeParameters,
             ForeignItemKind::Ty => NoTypeParameters,
+            ForeignItemKind::Macro(..) => NoTypeParameters,
         };
         self.with_type_parameter_rib(type_parameters, |this| {
             visit::walk_foreign_item(this, foreign_item);

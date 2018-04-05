@@ -8,10 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(box_syntax)]
-#![feature(placement_in_syntax)]
+#![crate_type = "rlib"]
 
-fn main() {
-    () <- 0;
-    //~^ ERROR: `(): std::ops::Placer<_>` is not satisfied
-}
+extern crate bar;
+
+pub fn baz() { bar::bar() }

@@ -146,7 +146,6 @@ declare_features! (
     (active, rustc_diagnostic_macros, "1.0.0", None, None),
     (active, rustc_const_unstable, "1.0.0", None, None),
     (active, box_syntax, "1.0.0", Some(27779), None),
-    (active, placement_in_syntax, "1.0.0", Some(27779), None),
     (active, unboxed_closures, "1.0.0", Some(29625), None),
 
     (active, fundamental, "1.0.0", Some(29635), None),
@@ -194,7 +193,7 @@ declare_features! (
     (active, rustc_attrs, "1.0.0", Some(29642), None),
 
     // Allows the use of non lexical lifetimes; RFC 2094
-    (active, nll, "1.0.0", Some(43234), None),
+    (active, nll, "1.0.0", Some(43234), Some(Edition::Edition2018)),
 
     // Allows the use of #[allow_internal_unstable]. This is an
     // attribute on macro_rules! and can't use the attribute handling
@@ -288,9 +287,6 @@ declare_features! (
     // Used to identify the `compiler_builtins` crate
     // rustc internal
     (active, compiler_builtins, "1.13.0", None, None),
-
-    // Allows attributes on lifetime/type formal parameters in generics (RFC 1327)
-    (active, generic_param_attrs, "1.11.0", Some(34761), None),
 
     // Allows #[link(..., cfg(..))]
     (active, link_cfg, "1.14.0", Some(37406), None),
@@ -392,7 +388,7 @@ declare_features! (
     (active, dyn_trait, "1.22.0", Some(44662), Some(Edition::Edition2018)),
 
     // `crate` as visibility modifier, synonymous to `pub(crate)`
-    (active, crate_visibility_modifier, "1.23.0", Some(45388), None),
+    (active, crate_visibility_modifier, "1.23.0", Some(45388), Some(Edition::Edition2018)),
 
     // extern types
     (active, extern_types, "1.23.0", Some(43467), None),
@@ -401,10 +397,10 @@ declare_features! (
     (active, arbitrary_self_types, "1.23.0", Some(44874), None),
 
     // `crate` in paths
-    (active, crate_in_paths, "1.23.0", Some(45477), None),
+    (active, crate_in_paths, "1.23.0", Some(45477), Some(Edition::Edition2018)),
 
     // In-band lifetime bindings (e.g. `fn foo(x: &'a u8) -> &'a u8`)
-    (active, in_band_lifetimes, "1.23.0", Some(44524), None),
+    (active, in_band_lifetimes, "1.23.0", Some(44524), Some(Edition::Edition2018)),
 
     // generic associated types (RFC 1598)
     (active, generic_associated_types, "1.23.0", Some(44265), None),
@@ -413,10 +409,10 @@ declare_features! (
     (active, extern_absolute_paths, "1.24.0", Some(44660), None),
 
     // `foo.rs` as an alternative to `foo/mod.rs`
-    (active, non_modrs_mods, "1.24.0", Some(44660), None),
+    (active, non_modrs_mods, "1.24.0", Some(44660), Some(Edition::Edition2018)),
 
     // Termination trait in tests (RFC 1937)
-    (active, termination_trait_test, "1.24.0", Some(48854), None),
+    (active, termination_trait_test, "1.24.0", Some(48854), Some(Edition::Edition2018)),
 
     // Allows use of the :lifetime macro fragment specifier
     (active, macro_lifetime_matcher, "1.24.0", Some(46895), None),
@@ -447,6 +443,9 @@ declare_features! (
 
     // Allows keywords to be escaped for use as identifiers
     (active, raw_identifiers, "1.26.0", Some(48589), None),
+
+    // Allows macro invocations in `extern {}` blocks
+    (active, macros_in_extern, "1.27.0", Some(49476), None),
 );
 
 declare_features! (
@@ -567,6 +566,8 @@ declare_features! (
     (accepted, match_default_bindings, "1.26.0", Some(42640), None),
     // allow `'_` placeholder lifetimes
     (accepted, underscore_lifetimes, "1.26.0", Some(44524), None),
+    // Allows attributes on lifetime/type formal parameters in generics (RFC 1327)
+    (accepted, generic_param_attrs, "1.26.0", Some(48848), None),
 );
 
 // If you change this, please modify src/doc/unstable-book as well. You must
@@ -1287,14 +1288,18 @@ pub const EXPLAIN_VIS_MATCHER: &'static str =
 pub const EXPLAIN_LIFETIME_MATCHER: &'static str =
     ":lifetime fragment specifier is experimental and subject to change";
 
-pub const EXPLAIN_PLACEMENT_IN: &'static str =
-    "placement-in expression syntax is experimental and subject to change.";
-
 pub const EXPLAIN_UNSIZED_TUPLE_COERCION: &'static str =
     "Unsized tuple coercion is not stable enough for use and is subject to change";
 
 pub const EXPLAIN_MACRO_AT_MOST_ONCE_REP: &'static str =
     "Using the `?` macro Kleene operator for \"at most one\" repetition is unstable";
+
+pub const EXPLAIN_MACROS_IN_EXTERN: &'static str =
+    "Macro invocations in `extern {}` blocks are experimental.";
+
+// mention proc-macros when enabled
+pub const EXPLAIN_PROC_MACROS_IN_EXTERN: &'static str =
+    "Macro and proc-macro invocations in `extern {}` blocks are experimental.";
 
 struct PostExpansionVisitor<'a> {
     context: &'a Context<'a>,
@@ -1600,6 +1605,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                     gate_feature_post!(&self, extern_types, i.span,
                                        "extern types are experimental");
             }
+            ast::ForeignItemKind::Macro(..) => {}
         }
 
         visit::walk_foreign_item(self, i)
@@ -1635,9 +1641,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             ast::ExprKind::Type(..) => {
                 gate_feature_post!(&self, type_ascription, e.span,
                                   "type ascription is experimental");
-            }
-            ast::ExprKind::InPlace(..) => {
-                gate_feature_post!(&self, placement_in_syntax, e.span, EXPLAIN_PLACEMENT_IN);
             }
             ast::ExprKind::Yield(..) => {
                 gate_feature_post!(&self, generators,
@@ -1781,21 +1784,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                                "`crate` visibility modifier is experimental");
         }
         visit::walk_vis(self, vis);
-    }
-
-    fn visit_generic_param(&mut self, param: &'a ast::GenericParam) {
-        let (attrs, explain) = match *param {
-            ast::GenericParam::Lifetime(ref ld) =>
-                (&ld.attrs, "attributes on lifetime bindings are experimental"),
-            ast::GenericParam::Type(ref t) =>
-                (&t.attrs, "attributes on type parameter bindings are experimental"),
-        };
-
-        if !attrs.is_empty() {
-            gate_feature_post!(&self, generic_param_attrs, attrs[0].span, explain);
-        }
-
-        visit::walk_generic_param(self, param)
     }
 }
 

@@ -76,7 +76,6 @@
 #![deny(missing_debug_implementations)]
 
 #![cfg_attr(test, allow(deprecated))] // rand
-#![cfg_attr(test, feature(placement_in))]
 #![cfg_attr(not(test), feature(core_float))]
 #![cfg_attr(not(test), feature(exact_size_is_empty))]
 #![cfg_attr(not(test), feature(generator_trait))]
@@ -98,9 +97,8 @@
 #![feature(fmt_internals)]
 #![feature(from_ref)]
 #![feature(fundamental)]
-#![feature(generic_param_attrs)]
+#![cfg_attr(stage0, feature(generic_param_attrs))]
 #![cfg_attr(stage0, feature(i128_type))]
-#![feature(iter_rfold)]
 #![feature(lang_items)]
 #![feature(needs_allocator)]
 #![feature(nonzero)]
@@ -108,8 +106,6 @@
 #![feature(optin_builtin_traits)]
 #![feature(pattern)]
 #![feature(pin)]
-#![feature(placement_in_syntax)]
-#![feature(placement_new_protocol)]
 #![feature(ptr_internals)]
 #![feature(rustc_attrs)]
 #![feature(slice_get_slice)]
@@ -128,8 +124,8 @@
 #![feature(pointer_methods)]
 #![feature(inclusive_range_fields)]
 
-#![cfg_attr(not(test), feature(fn_traits, placement_new_protocol, swap_with_slice, i128))]
-#![cfg_attr(test, feature(test, box_heap))]
+#![cfg_attr(not(test), feature(fn_traits, swap_with_slice, i128))]
+#![cfg_attr(test, feature(test))]
 
 // Allow testing this library
 
@@ -159,13 +155,12 @@ pub mod heap;
 
 // Need to conditionally define the mod from `boxed.rs` to avoid
 // duplicating the lang-items when building in test cfg; but also need
-// to allow code to have `use boxed::HEAP;`
-// and `use boxed::Box;` declarations.
+// to allow code to have `use boxed::Box;` declarations.
 #[cfg(not(test))]
 pub mod boxed;
 #[cfg(test)]
 mod boxed {
-    pub use std::boxed::{Box, IntermediateBox, HEAP};
+    pub use std::boxed::Box;
 }
 #[cfg(test)]
 mod boxed_test;

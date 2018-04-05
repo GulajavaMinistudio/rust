@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Check that placement in respects unstable code checks.
+#![crate_type = "rlib"]
 
-#![feature(placement_in_syntax)]
+extern crate foo;
 
-fn main() {
-    use std::boxed::HEAP; //~ ERROR use of unstable library feature
-
-    let _ = HEAP <- { //~ ERROR use of unstable library feature
-        HEAP //~ ERROR use of unstable library feature
-    };
-}
+pub fn bar() { foo::foo() }

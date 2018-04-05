@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Check that placement in respects unsafe code checks.
-
-#![feature(box_heap)]
-#![feature(placement_in_syntax)]
-
-fn main() {
-    use std::boxed::HEAP;
-
-    let p: *const i32 = &42;
-    let _ = HEAP <- *p; //~ ERROR requires unsafe
-
-    let p: *const _ = &HEAP;
-    let _ = *p <- 42; //~ ERROR requires unsafe
-}
+/// Blah blah blah
+/// ```ignore (testing rustdoc's handling of ignore)
+/// bad_assert!();
+/// ```
+pub fn foo() {}

@@ -266,7 +266,7 @@
 #![feature(float_from_str_radix)]
 #![feature(fn_traits)]
 #![feature(fnbox)]
-#![feature(generic_param_attrs)]
+#![cfg_attr(stage0, feature(generic_param_attrs))]
 #![feature(hashmap_internals)]
 #![feature(heap_api)]
 #![cfg_attr(stage0, feature(i128_type, i128))]
@@ -290,7 +290,6 @@
 #![feature(panic_internals)]
 #![feature(panic_unwind)]
 #![feature(peek)]
-#![feature(placement_in_syntax)]
 #![feature(placement_new_protocol)]
 #![feature(prelude_import)]
 #![feature(ptr_internals)]
@@ -379,7 +378,7 @@ extern crate compiler_builtins;
 // During testing, this crate is not actually the "real" std library, but rather
 // it links to the real std library, which was compiled from this same source
 // code. So any lang items std defines are conditionally excluded (or else they
-// wolud generate duplicate lang item errors), and any globals it defines are
+// would generate duplicate lang item errors), and any globals it defines are
 // _not_ the globals used by "real" std. So this import, defined only during
 // testing gives test-std access to real-std lang items and globals. See #2912
 #[cfg(test)] extern crate std as realstd;
