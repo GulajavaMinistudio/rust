@@ -14,6 +14,8 @@
 
 use dep_graph::{DepNodeIndex, DepNode, DepKind, DepNodeColor};
 use errors::DiagnosticBuilder;
+use errors::Level;
+use ty::tls;
 use ty::{TyCtxt};
 use ty::maps::config::QueryDescription;
 use ty::maps::job::{QueryResult, QueryInfo};
@@ -106,6 +108,33 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
             return err
         })
+    }
+
+    pub fn try_print_query_stack() {
+        eprintln!("query stack during panic:");
+
+        tls::with_context_opt(|icx| {
+            if let Some(icx) = icx {
+                let mut current_query = icx.query.clone();
+                let mut i = 0;
+
+                while let Some(query) = current_query {
+                    let mut db = DiagnosticBuilder::new(icx.tcx.sess.diagnostic(),
+                        Level::FailureNote,
+                        &format!("#{} [{}] {}",
+                                 i,
+                                 query.info.query.name(),
+                                 query.info.query.describe(icx.tcx)));
+                    db.set_span(icx.tcx.sess.codemap().def_span(query.info.span));
+                    icx.tcx.sess.diagnostic().force_print_db(db);
+
+                    current_query = query.parent.clone();
+                    i += 1;
+                }
+            }
+        });
+
+        eprintln!("end of query stack");
     }
 
     /// Try to read a node index for the node dep_node.
@@ -219,6 +248,12 @@ macro_rules! define_maps {
         }
 
         impl<$tcx> Query<$tcx> {
+            pub fn name(&self) -> &'static str {
+                match *self {
+                    $(Query::$name(_) => stringify!($name),)*
+                }
+            }
+
             pub fn describe(&self, tcx: TyCtxt) -> String {
                 let (r, name) = match *self {
                     $(Query::$name(key) => {
@@ -1003,6 +1038,9 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::ImplParent => { force!(impl_parent, def_id!()); }
         DepKind::TraitOfItem => { force!(trait_of_item, def_id!()); }
         DepKind::IsReachableNonGeneric => { force!(is_reachable_non_generic, def_id!()); }
+        DepKind::IsUnreachableLocalDefinition => {
+            force!(is_unreachable_local_definition, def_id!());
+        }
         DepKind::IsMirAvailable => { force!(is_mir_available, def_id!()); }
         DepKind::ItemAttrs => { force!(item_attrs, def_id!()); }
         DepKind::TransFnAttrs => { force!(trans_fn_attrs, def_id!()); }
@@ -1087,13 +1125,19 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
 
         DepKind::TargetFeaturesWhitelist => { force!(target_features_whitelist, LOCAL_CRATE); }
 
-        DepKind::GetSymbolExportLevel => { force!(symbol_export_level, def_id!()); }
         DepKind::Features => { force!(features_query, LOCAL_CRATE); }
 
         DepKind::ProgramClausesFor => { force!(program_clauses_for, def_id!()); }
         DepKind::WasmCustomSections => { force!(wasm_custom_sections, krate!()); }
         DepKind::WasmImportModuleMap => { force!(wasm_import_module_map, krate!()); }
         DepKind::ForeignModules => { force!(foreign_modules, krate!()); }
+
+        DepKind::UpstreamMonomorphizations => {
+            force!(upstream_monomorphizations, krate!());
+        }
+        DepKind::UpstreamMonomorphizationsFor => {
+            force!(upstream_monomorphizations_for, def_id!());
+        }
     }
 
     true

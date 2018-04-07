@@ -17,8 +17,6 @@
 #![allow(unused_attributes)]
 #![feature(range_contains)]
 #![cfg_attr(unix, feature(libc))]
-#![cfg_attr(stage0, feature(conservative_impl_trait))]
-#![cfg_attr(stage0, feature(i128_type))]
 #![feature(optin_builtin_traits)]
 
 extern crate atty;
@@ -639,6 +637,11 @@ impl Handler {
     /// calling `-Zteach`.
     pub fn code_emitted(&self, code: &DiagnosticId) -> bool {
         self.tracked_diagnostic_codes.borrow().contains(code)
+    }
+
+    pub fn force_print_db(&self, mut db: DiagnosticBuilder) {
+        self.emitter.borrow_mut().emit(&db);
+        db.cancel();
     }
 
     fn emit_db(&self, db: &DiagnosticBuilder) {
