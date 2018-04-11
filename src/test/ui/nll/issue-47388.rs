@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,19 +7,14 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+#![feature(nll)]
+struct FancyNum {
+    num: u8,
+}
 
-#![feature(rand)]
-#![feature(repr_simd)]
-#![feature(slice_sort_by_cached_key)]
-#![feature(test)]
-
-extern crate rand;
-extern crate test;
-
-mod btree;
-mod linked_list;
-mod string;
-mod str;
-mod slice;
-mod vec;
-mod vec_deque;
+fn main() {
+    let mut fancy = FancyNum{ num: 5 };
+    let fancy_ref = &(&mut fancy);
+    fancy_ref.num = 6; //~ ERROR E0594
+    println!("{}", fancy_ref.num);
+}
