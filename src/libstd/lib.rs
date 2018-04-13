@@ -275,6 +275,7 @@
 #![feature(macro_reexport)]
 #![feature(macro_vis_matcher)]
 #![feature(needs_panic_runtime)]
+#![feature(nonnull_cast)]
 #![feature(exhaustive_patterns)]
 #![feature(nonzero)]
 #![feature(num_bits_bytes)]
@@ -307,7 +308,6 @@
 #![feature(toowned_clone_into)]
 #![feature(try_reserve)]
 #![feature(unboxed_closures)]
-#![feature(unicode)]
 #![feature(untagged_unions)]
 #![feature(unwind_attributes)]
 #![feature(vec_push_all)]
@@ -352,9 +352,8 @@ extern crate core as __core;
 
 #[macro_use]
 #[macro_reexport(vec, format)]
-extern crate alloc;
+extern crate alloc as alloc_crate;
 extern crate alloc_system;
-extern crate std_unicode;
 #[doc(masked)]
 extern crate libc;
 
@@ -439,23 +438,23 @@ pub use core::u32;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::u64;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::boxed;
+pub use alloc_crate::boxed;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::rc;
+pub use alloc_crate::rc;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::borrow;
+pub use alloc_crate::borrow;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::fmt;
+pub use alloc_crate::fmt;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::slice;
+pub use alloc_crate::slice;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::str;
+pub use alloc_crate::str;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::string;
+pub use alloc_crate::string;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use alloc::vec;
+pub use alloc_crate::vec;
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use std_unicode::char;
+pub use core::char;
 #[stable(feature = "i128", since = "1.26.0")]
 pub use core::u128;
 
@@ -479,7 +478,14 @@ pub mod path;
 pub mod process;
 pub mod sync;
 pub mod time;
-pub mod heap;
+pub mod alloc;
+
+#[unstable(feature = "allocator_api", issue = "32838")]
+#[rustc_deprecated(since = "1.27.0", reason = "module renamed to `alloc`")]
+/// Use the `alloc` module instead.
+pub mod heap {
+    pub use alloc::*;
+}
 
 // Platform-abstraction modules
 #[macro_use]

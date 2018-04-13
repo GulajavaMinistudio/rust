@@ -13,14 +13,12 @@ dependencies = [
  "compiler_builtins 0.0.0",
  "core 0.0.0",
  "rand 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "std_unicode 0.0.0",
 ]
 
 [[package]]
 name = "alloc_jemalloc"
 version = "0.0.0"
 dependencies = [
- "alloc 0.0.0",
  "alloc_system 0.0.0",
  "build_helper 0.1.0",
  "cc 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -33,7 +31,6 @@ dependencies = [
 name = "alloc_system"
 version = "0.0.0"
 dependencies = [
- "alloc 0.0.0",
  "compiler_builtins 0.0.0",
  "core 0.0.0",
  "dlmalloc 0.0.0",
@@ -286,11 +283,11 @@ dependencies = [
 
 [[package]]
 name = "clippy"
-version = "0.0.191"
+version = "0.0.193"
 dependencies = [
  "cargo_metadata 0.5.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "clippy-mini-macro-test 0.2.0",
- "clippy_lints 0.0.191",
+ "clippy_lints 0.0.193",
  "compiletest_rs 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "derive-new 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -306,7 +303,7 @@ version = "0.2.0"
 
 [[package]]
 name = "clippy_lints"
-version = "0.0.191"
+version = "0.0.193"
 dependencies = [
  "if_chain 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.7.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -543,7 +540,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "dlmalloc"
 version = "0.0.0"
 dependencies = [
- "alloc 0.0.0",
  "compiler_builtins 0.0.0",
  "core 0.0.0",
 ]
@@ -1579,7 +1575,7 @@ version = "0.126.0"
 dependencies = [
  "cargo 0.27.0",
  "cargo_metadata 0.5.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "clippy_lints 0.0.191",
+ "clippy_lints 0.0.193",
  "env_logger 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "json 0.11.13 (registry+https://github.com/rust-lang/crates.io-index)",

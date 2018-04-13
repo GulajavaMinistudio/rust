@@ -38,6 +38,7 @@ use ty::subst::{Kind, Substs};
 use ty::ReprOptions;
 use ty::Instance;
 use traits;
+use traits::{Clause, Goal};
 use ty::{self, Ty, TypeAndMut};
 use ty::{TyS, TypeVariants, Slice};
 use ty::{AdtKind, AdtDef, ClosureSubsts, GeneratorInterior, Region, Const};
@@ -50,7 +51,7 @@ use ty::maps;
 use ty::steal::Steal;
 use ty::BindingMode;
 use ty::CanonicalTy;
-use util::nodemap::{NodeMap, DefIdSet, ItemLocalMap};
+use util::nodemap::{DefIdSet, ItemLocalMap};
 use util::nodemap::{FxHashMap, FxHashSet};
 use rustc_data_structures::accumulate_vec::AccumulateVec;
 use rustc_data_structures::stable_hasher::{HashStable, hash_stable_hashmap,
@@ -125,34 +126,40 @@ impl<'tcx> GlobalArenas<'tcx> {
     }
 }
 
+type InternedSet<'tcx, T> = Lock<FxHashSet<Interned<'tcx, T>>>;
+
 pub struct CtxtInterners<'tcx> {
     /// The arena that types, regions, etc are allocated from
     arena: &'tcx DroplessArena,
 
     /// Specifically use a speedy hash algorithm for these hash sets,
     /// they're accessed quite often.
-    type_: Lock<FxHashSet<Interned<'tcx, TyS<'tcx>>>>,
-    type_list: Lock<FxHashSet<Interned<'tcx, Slice<Ty<'tcx>>>>>,
-    substs: Lock<FxHashSet<Interned<'tcx, Substs<'tcx>>>>,
-    canonical_var_infos: Lock<FxHashSet<Interned<'tcx, Slice<CanonicalVarInfo>>>>,
-    region: Lock<FxHashSet<Interned<'tcx, RegionKind>>>,
-    existential_predicates: Lock<FxHashSet<Interned<'tcx, Slice<ExistentialPredicate<'tcx>>>>>,
-    predicates: Lock<FxHashSet<Interned<'tcx, Slice<Predicate<'tcx>>>>>,
-    const_: Lock<FxHashSet<Interned<'tcx, Const<'tcx>>>>,
+    type_: InternedSet<'tcx, TyS<'tcx>>,
+    type_list: InternedSet<'tcx, Slice<Ty<'tcx>>>,
+    substs: InternedSet<'tcx, Substs<'tcx>>,
+    canonical_var_infos: InternedSet<'tcx, Slice<CanonicalVarInfo>>,
+    region: InternedSet<'tcx, RegionKind>,
+    existential_predicates: InternedSet<'tcx, Slice<ExistentialPredicate<'tcx>>>,
+    predicates: InternedSet<'tcx, Slice<Predicate<'tcx>>>,
+    const_: InternedSet<'tcx, Const<'tcx>>,
+    clauses: InternedSet<'tcx, Slice<Clause<'tcx>>>,
+    goals: InternedSet<'tcx, Slice<Goal<'tcx>>>,
 }
 
 impl<'gcx: 'tcx, 'tcx> CtxtInterners<'tcx> {
     fn new(arena: &'tcx DroplessArena) -> CtxtInterners<'tcx> {
         CtxtInterners {
-            arena: arena,
-            type_: Lock::new(FxHashSet()),
-            type_list: Lock::new(FxHashSet()),
-            substs: Lock::new(FxHashSet()),
-            canonical_var_infos: Lock::new(FxHashSet()),
-            region: Lock::new(FxHashSet()),
-            existential_predicates: Lock::new(FxHashSet()),
-            predicates: Lock::new(FxHashSet()),
-            const_: Lock::new(FxHashSet()),
+            arena,
+            type_: Default::default(),
+            type_list: Default::default(),
+            substs: Default::default(),
+            region: Default::default(),
+            existential_predicates: Default::default(),
+            canonical_var_infos: Default::default(),
+            predicates: Default::default(),
+            const_: Default::default(),
+            clauses: Default::default(),
+            goals: Default::default(),
         }
     }
 
@@ -346,6 +353,12 @@ pub struct TypeckTables<'tcx> {
     /// method calls, including those of overloaded operators.
     type_dependent_defs: ItemLocalMap<Def>,
 
+    /// Resolved field indices for field accesses in expressions (`S { field }`, `obj.field`)
+    /// or patterns (`S { field }`). The index is often useful by itself, but to learn more
+    /// about the field you also need definition of the variant to which the field
+    /// belongs, but it may not exist if it's a tuple field (`tuple.0`).
+    field_indices: ItemLocalMap<usize>,
+
     /// Stores the canonicalized types provided by the user. See also `UserAssertTy` statement in
     /// MIR.
     user_provided_tys: ItemLocalMap<CanonicalTy<'tcx>>,
@@ -426,6 +439,7 @@ impl<'tcx> TypeckTables<'tcx> {
         TypeckTables {
             local_id_root,
             type_dependent_defs: ItemLocalMap(),
+            field_indices: ItemLocalMap(),
             user_provided_tys: ItemLocalMap(),
             node_types: ItemLocalMap(),
             node_substs: ItemLocalMap(),
@@ -465,6 +479,20 @@ impl<'tcx> TypeckTables<'tcx> {
         LocalTableInContextMut {
             local_id_root: self.local_id_root,
             data: &mut self.type_dependent_defs
+        }
+    }
+
+    pub fn field_indices(&self) -> LocalTableInContext<usize> {
+        LocalTableInContext {
+            local_id_root: self.local_id_root,
+            data: &self.field_indices
+        }
+    }
+
+    pub fn field_indices_mut(&mut self) -> LocalTableInContextMut<usize> {
+        LocalTableInContextMut {
+            local_id_root: self.local_id_root,
+            data: &mut self.field_indices
         }
     }
 
@@ -706,6 +734,7 @@ impl<'a, 'gcx> HashStable<StableHashingContext<'a>> for TypeckTables<'gcx> {
         let ty::TypeckTables {
             local_id_root,
             ref type_dependent_defs,
+            ref field_indices,
             ref user_provided_tys,
             ref node_types,
             ref node_substs,
@@ -726,6 +755,7 @@ impl<'a, 'gcx> HashStable<StableHashingContext<'a>> for TypeckTables<'gcx> {
 
         hcx.with_node_id_hashing_mode(NodeIdHashingMode::HashDefPath, |hcx| {
             type_dependent_defs.hash_stable(hcx, hasher);
+            field_indices.hash_stable(hcx, hasher);
             user_provided_tys.hash_stable(hcx, hasher);
             node_types.hash_stable(hcx, hasher);
             node_substs.hash_stable(hcx, hasher);
@@ -888,21 +918,11 @@ pub struct GlobalCtxt<'tcx> {
     /// Used to prevent layout from recursing too deeply.
     pub layout_depth: Cell<usize>,
 
-    /// Map from function to the `#[derive]` mode that it's defining. Only used
-    /// by `proc-macro` crates.
-    pub derive_macros: RefCell<NodeMap<Symbol>>,
-
     stability_interner: Lock<FxHashSet<&'tcx attr::Stability>>,
 
     pub interpret_interner: InterpretInterner<'tcx>,
 
     layout_interner: Lock<FxHashSet<&'tcx LayoutDetails>>,
-
-    /// A vector of every trait accessible in the whole crate
-    /// (i.e. including those from subcrates). This is used only for
-    /// error reporting, and so is lazily initialized and generally
-    /// shouldn't taint the common path (hence the RefCell).
-    pub all_traits: RefCell<Option<Vec<DefId>>>,
 
     /// A general purpose channel to throw data out the back towards LLVM worker
     /// threads.
@@ -1280,10 +1300,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             data_layout,
             layout_interner: Lock::new(FxHashSet()),
             layout_depth: Cell::new(0),
-            derive_macros: RefCell::new(NodeMap()),
             stability_interner: Lock::new(FxHashSet()),
             interpret_interner: Default::default(),
-            all_traits: RefCell::new(None),
             tx_to_llvm_workers: Lock::new(tx),
             output_filenames: Arc::new(output_filenames.clone()),
         };
@@ -2088,6 +2106,20 @@ impl<'tcx: 'lcx, 'lcx> Borrow<Const<'lcx>> for Interned<'tcx, Const<'tcx>> {
     }
 }
 
+impl<'tcx: 'lcx, 'lcx> Borrow<[Clause<'lcx>]>
+for Interned<'tcx, Slice<Clause<'tcx>>> {
+    fn borrow<'a>(&'a self) -> &'a [Clause<'lcx>] {
+        &self.0[..]
+    }
+}
+
+impl<'tcx: 'lcx, 'lcx> Borrow<[Goal<'lcx>]>
+for Interned<'tcx, Slice<Goal<'tcx>>> {
+    fn borrow<'a>(&'a self) -> &'a [Goal<'lcx>] {
+        &self.0[..]
+    }
+}
+
 macro_rules! intern_method {
     ($lt_tcx:tt, $name:ident: $method:ident($alloc:ty,
                                             $alloc_method:ident,
@@ -2185,7 +2217,9 @@ slice_interners!(
     existential_predicates: _intern_existential_predicates(ExistentialPredicate),
     predicates: _intern_predicates(Predicate),
     type_list: _intern_type_list(Ty),
-    substs: _intern_substs(Kind)
+    substs: _intern_substs(Kind),
+    clauses: _intern_clauses(Clause),
+    goals: _intern_goals(Goal)
 );
 
 // This isn't a perfect fit: CanonicalVarInfo slices are always
@@ -2490,6 +2524,22 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         }
     }
 
+    pub fn intern_clauses(self, ts: &[Clause<'tcx>]) -> &'tcx Slice<Clause<'tcx>> {
+        if ts.len() == 0 {
+            Slice::empty()
+        } else {
+            self._intern_clauses(ts)
+        }
+    }
+
+    pub fn intern_goals(self, ts: &[Goal<'tcx>]) -> &'tcx Slice<Goal<'tcx>> {
+        if ts.len() == 0 {
+            Slice::empty()
+        } else {
+            self._intern_goals(ts)
+        }
+    }
+
     pub fn mk_fn_sig<I>(self,
                         inputs: I,
                         output: I::Item,
@@ -2534,6 +2584,20 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                     -> &'tcx Substs<'tcx>
     {
         self.mk_substs(iter::once(s).chain(t.into_iter().cloned()).map(Kind::from))
+    }
+
+    pub fn mk_clauses<I: InternAs<[Clause<'tcx>],
+        &'tcx Slice<Clause<'tcx>>>>(self, iter: I) -> I::Output {
+        iter.intern_with(|xs| self.intern_clauses(xs))
+    }
+
+    pub fn mk_goals<I: InternAs<[Goal<'tcx>],
+        &'tcx Slice<Goal<'tcx>>>>(self, iter: I) -> I::Output {
+        iter.intern_with(|xs| self.intern_goals(xs))
+    }
+
+    pub fn mk_goal(self, goal: Goal<'tcx>) -> &'tcx Goal {
+        &self.mk_goals(iter::once(goal))[0]
     }
 
     pub fn lint_node<S: Into<MultiSpan>>(self,

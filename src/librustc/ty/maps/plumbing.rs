@@ -1007,6 +1007,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::GenericsOfItem => { force!(generics_of, def_id!()); }
         DepKind::PredicatesOfItem => { force!(predicates_of, def_id!()); }
         DepKind::InferredOutlivesOf => { force!(inferred_outlives_of, def_id!()); }
+        DepKind::InferredOutlivesCrate => { force!(inferred_outlives_crate, LOCAL_CRATE); }
         DepKind::SuperPredicatesOfItem => { force!(super_predicates_of, def_id!()); }
         DepKind::TraitDefOfItem => { force!(trait_def, def_id!()); }
         DepKind::AdtDefOfItem => { force!(adt_def, def_id!()); }
@@ -1124,6 +1125,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         }
         DepKind::MaybeUnusedExternCrates => { force!(maybe_unused_extern_crates, LOCAL_CRATE); }
         DepKind::StabilityIndex => { force!(stability_index, LOCAL_CRATE); }
+        DepKind::AllTraits => { force!(all_traits, LOCAL_CRATE); }
         DepKind::AllCrateNums => { force!(all_crate_nums, LOCAL_CRATE); }
         DepKind::ExportedSymbols => { force!(exported_symbols, krate!()); }
         DepKind::CollectAndPartitionTranslationItems => {

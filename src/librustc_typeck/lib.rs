@@ -76,12 +76,13 @@ This API is completely unstable and subject to change.
 #![feature(crate_visibility_modifier)]
 #![feature(from_ref)]
 #![feature(exhaustive_patterns)]
-#![feature(option_filter)]
 #![feature(quote)]
 #![feature(refcell_replace_swap)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(slice_patterns)]
+#![feature(slice_sort_by_cached_key)]
 #![feature(dyn_trait)]
+#![feature(underscore_lifetimes)]
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate syntax;
@@ -288,12 +289,10 @@ fn check_start_fn_ty<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 }
 
 fn check_for_entry_fn<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
-    if let Some((id, sp)) = *tcx.sess.entry_fn.borrow() {
-        match tcx.sess.entry_type.get() {
-            Some(config::EntryMain) => check_main_fn_ty(tcx, id, sp),
-            Some(config::EntryStart) => check_start_fn_ty(tcx, id, sp),
-            Some(config::EntryNone) => {}
-            None => bug!("entry function without a type")
+    if let Some((id, sp, entry_type)) = *tcx.sess.entry_fn.borrow() {
+        match entry_type {
+            config::EntryMain => check_main_fn_ty(tcx, id, sp),
+            config::EntryStart => check_start_fn_ty(tcx, id, sp),
         }
     }
 }

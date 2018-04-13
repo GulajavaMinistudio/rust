@@ -426,11 +426,17 @@ declare_features! (
     // Use `?` as the Kleene "at most one" operator
     (active, macro_at_most_once_rep, "1.25.0", Some(48075), None),
 
+    // Infer outlives requirements; RFC 2093
+    (active, infer_outlives_requirements, "1.26.0", Some(44493), None),
+
     // Multiple patterns with `|` in `if let` and `while let`
     (active, if_while_or_patterns, "1.26.0", Some(48215), None),
 
     // Parentheses in patterns
     (active, pattern_parentheses, "1.26.0", None, None),
+
+    // Allows `#[repr(packed)]` attribute on structs
+    (active, repr_packed, "1.26.0", Some(33158), None),
 
     // `use path as _;` and `extern crate c as _;`
     (active, underscore_imports, "1.26.0", Some(48216), None),
@@ -1020,6 +1026,12 @@ pub const BUILTIN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeG
                                  "never will be stable",
                                  cfg_fn!(rustc_attrs))),
 
+    // RFC #2093
+    ("infer_outlives_requirements", Normal, Gated(Stability::Unstable,
+                                   "infer_outlives_requirements",
+                                   "infer outlives requirements is an experimental feature",
+                                   cfg_fn!(infer_outlives_requirements))),
+
     ("wasm_custom_section", Whitelisted, Gated(Stability::Unstable,
                                  "wasm_custom_section",
                                  "attribute is currently unstable",
@@ -1439,11 +1451,12 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             }
         }
 
-        // allow attr_literals in #[repr(align(x))]
-        let mut is_repr_align = false;
+        // allow attr_literals in #[repr(align(x))] and #[repr(packed(n))]
+        let mut allow_attr_literal = false;
         if attr.path == "repr" {
             if let Some(content) = attr.meta_item_list() {
-                is_repr_align = content.iter().any(|c| c.check_name("align"));
+                allow_attr_literal = content.iter().any(
+                    |c| c.check_name("align") || c.check_name("packed"));
             }
         }
 
@@ -1451,7 +1464,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             return
         }
 
-        if !is_repr_align {
+        if !allow_attr_literal {
             let meta = panictry!(attr.parse_meta(self.context.parse_sess));
             if contains_novel_literal(&meta) {
                 gate_feature_post!(&self, attr_literals, attr.span,
@@ -1534,6 +1547,13 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                             gate_feature_post!(&self, repr_transparent, attr.span,
                                                "the `#[repr(transparent)]` attribute \
                                                is experimental");
+                        }
+                        if let Some((name, _)) = item.name_value_literal() {
+                            if name == "packed" {
+                                gate_feature_post!(&self, repr_packed, attr.span,
+                                                   "the `#[repr(packed(n))]` attribute \
+                                                   is experimental");
+                            }
                         }
                     }
                 }

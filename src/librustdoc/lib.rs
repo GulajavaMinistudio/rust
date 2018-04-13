@@ -19,8 +19,8 @@
 #![feature(box_syntax)]
 #![feature(fs_read_write)]
 #![feature(set_stdio)]
+#![feature(slice_sort_by_cached_key)]
 #![feature(test)]
-#![feature(unicode)]
 #![feature(vec_remove_item)]
 #![feature(entry_and_modify)]
 
@@ -41,7 +41,6 @@ extern crate serialize;
 #[macro_use] extern crate syntax;
 extern crate syntax_pos;
 extern crate test as testing;
-extern crate std_unicode;
 #[macro_use] extern crate log;
 extern crate rustc_errors as errors;
 extern crate pulldown_cmark;

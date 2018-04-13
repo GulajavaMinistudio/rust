@@ -155,6 +155,12 @@ impl<'tcx> QueryDescription<'tcx> for queries::crate_variances<'tcx> {
     }
 }
 
+impl<'tcx> QueryDescription<'tcx> for queries::inferred_outlives_crate<'tcx> {
+    fn describe(_tcx: TyCtxt, _: CrateNum) -> String {
+        format!("computing the inferred outlives predicates for items in this crate")
+    }
+}
+
 impl<'tcx> QueryDescription<'tcx> for queries::mir_shims<'tcx> {
     fn describe(tcx: TyCtxt, def: ty::InstanceDef<'tcx>) -> String {
         format!("generating MIR shim for `{}`",
@@ -583,6 +589,12 @@ impl<'tcx> QueryDescription<'tcx> for queries::maybe_unused_extern_crates<'tcx> 
 impl<'tcx> QueryDescription<'tcx> for queries::stability_index<'tcx> {
     fn describe(_tcx: TyCtxt, _: CrateNum) -> String {
         format!("calculating the stability index for the local crate")
+    }
+}
+
+impl<'tcx> QueryDescription<'tcx> for queries::all_traits<'tcx> {
+    fn describe(_tcx: TyCtxt, _: CrateNum) -> String {
+        format!("fetching all foreign and local traits")
     }
 }
 

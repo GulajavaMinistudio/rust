@@ -64,6 +64,7 @@ pub fn provide(providers: &mut Providers) {
         type_of,
         generics_of,
         predicates_of,
+        explicit_predicates_of,
         super_predicates_of,
         type_param_predicates,
         trait_def,
@@ -513,11 +514,11 @@ fn convert_struct_variant<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                     discr: ty::VariantDiscr,
                                     def: &hir::VariantData)
                                     -> ty::VariantDef {
-    let mut seen_fields: FxHashMap<ast::Name, Span> = FxHashMap();
+    let mut seen_fields: FxHashMap<ast::Ident, Span> = FxHashMap();
     let node_id = tcx.hir.as_local_node_id(did).unwrap();
     let fields = def.fields().iter().map(|f| {
         let fid = tcx.hir.local_def_id(f.id);
-        let dup_span = seen_fields.get(&f.name).cloned();
+        let dup_span = seen_fields.get(&f.name.to_ident()).cloned();
         if let Some(prev_span) = dup_span {
             struct_span_err!(tcx.sess, f.span, E0124,
                              "field `{}` is already declared",
@@ -526,7 +527,7 @@ fn convert_struct_variant<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 .span_label(prev_span, format!("`{}` first declared here", f.name))
                 .emit();
         } else {
-            seen_fields.insert(f.name, f.span);
+            seen_fields.insert(f.name.to_ident(), f.span);
         }
 
         ty::FieldDef {
@@ -1296,13 +1297,17 @@ fn predicates_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                            def_id: DefId)
                            -> ty::GenericPredicates<'tcx> {
     let explicit = explicit_predicates_of(tcx, def_id);
+    let predicates = if tcx.sess.features_untracked().infer_outlives_requirements {
+        [&explicit.predicates[..], &tcx.inferred_outlives_of(def_id)[..]].concat()
+    } else { explicit.predicates };
+
     ty::GenericPredicates {
         parent: explicit.parent,
-        predicates: [&explicit.predicates[..], &tcx.inferred_outlives_of(def_id)[..]].concat()
+        predicates: predicates,
     }
 }
 
-fn explicit_predicates_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+pub fn explicit_predicates_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                            def_id: DefId)
                            -> ty::GenericPredicates<'tcx> {
     use rustc::hir::map::*;

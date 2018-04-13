@@ -459,7 +459,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let is_proc_macro = tcx.sess.crate_types.borrow().contains(&CrateTypeProcMacro);
         let has_default_lib_allocator =
             attr::contains_name(tcx.hir.krate_attrs(), "default_lib_allocator");
-        let has_global_allocator = tcx.sess.has_global_allocator.get();
+        let has_global_allocator = *tcx.sess.has_global_allocator.get();
         let root = self.lazy(&CrateRoot {
             name: tcx.crate_name(LOCAL_CRATE),
             extra_filename: tcx.sess.opts.cg.extra_filename.clone(),
@@ -1414,7 +1414,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
         let mut all_impls: Vec<_> = visitor.impls.into_iter().collect();
 
         // Bring everything into deterministic order for hashing
-        all_impls.sort_unstable_by_key(|&(trait_def_id, _)| {
+        all_impls.sort_by_cached_key(|&(trait_def_id, _)| {
             tcx.def_path_hash(trait_def_id)
         });
 
@@ -1422,7 +1422,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
             .into_iter()
             .map(|(trait_def_id, mut impls)| {
                 // Bring everything into deterministic order for hashing
-                impls.sort_unstable_by_key(|&def_index| {
+                impls.sort_by_cached_key(|&def_index| {
                     tcx.hir.definitions().def_path_hash(def_index)
                 });
 

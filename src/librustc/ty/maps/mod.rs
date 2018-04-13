@@ -39,7 +39,7 @@ use traits::query::dropck_outlives::{DtorckConstraint, DropckOutlivesResult};
 use traits::query::normalize::NormalizationResult;
 use traits::specialization_graph;
 use traits::Clause;
-use ty::{self, CrateInherentImpls, ParamEnvAnd, Ty, TyCtxt};
+use ty::{self, CrateInherentImpls, ParamEnvAnd, Slice, Ty, TyCtxt};
 use ty::steal::Steal;
 use ty::subst::Substs;
 use util::nodemap::{DefIdSet, DefIdMap, ItemLocalSet};
@@ -102,6 +102,7 @@ define_maps! { <'tcx>
     /// associated generics and predicates.
     [] fn generics_of: GenericsOfItem(DefId) -> &'tcx ty::Generics,
     [] fn predicates_of: PredicatesOfItem(DefId) -> ty::GenericPredicates<'tcx>,
+    [] fn explicit_predicates_of: PredicatesOfItem(DefId) -> ty::GenericPredicates<'tcx>,
 
     /// Maps from the def-id of a trait to the list of
     /// super-predicates. This is a subset of the full list of
@@ -139,7 +140,11 @@ define_maps! { <'tcx>
     [] fn variances_of: ItemVariances(DefId) -> Lrc<Vec<ty::Variance>>,
 
     /// Maps from def-id of a type to its (inferred) outlives.
-    [] fn inferred_outlives_of: InferredOutlivesOf(DefId) -> Vec<ty::Predicate<'tcx>>,
+    [] fn inferred_outlives_of: InferredOutlivesOf(DefId) -> Lrc<Vec<ty::Predicate<'tcx>>>,
+
+    /// Maps from def-id of a type to its (inferred) outlives.
+    [] fn inferred_outlives_crate: InferredOutlivesCrate(CrateNum)
+        -> Lrc<ty::CratePredicatesMap<'tcx>>,
 
     /// Maps from an impl/trait def-id to a list of the def-ids of its items
     [] fn associated_item_def_ids: AssociatedItemDefIds(DefId) -> Lrc<Vec<DefId>>,
@@ -386,6 +391,11 @@ define_maps! { <'tcx>
     [] fn stability_index: stability_index_node(CrateNum) -> Lrc<stability::Index<'tcx>>,
     [] fn all_crate_nums: all_crate_nums_node(CrateNum) -> Lrc<Vec<CrateNum>>,
 
+    /// A vector of every trait accessible in the whole crate
+    /// (i.e. including those from subcrates). This is used only for
+    /// error reporting.
+    [] fn all_traits: all_traits_node(CrateNum) -> Lrc<Vec<DefId>>,
+
     [] fn exported_symbols: ExportedSymbols(CrateNum)
         -> Arc<Vec<(ExportedSymbol<'tcx>, SymbolExportLevel)>>,
     [] fn collect_and_partition_translation_items:
@@ -435,7 +445,7 @@ define_maps! { <'tcx>
 
     [] fn features_query: features_node(CrateNum) -> Lrc<feature_gate::Features>,
 
-    [] fn program_clauses_for: ProgramClausesFor(DefId) -> Lrc<Vec<Clause<'tcx>>>,
+    [] fn program_clauses_for: ProgramClausesFor(DefId) -> Lrc<&'tcx Slice<Clause<'tcx>>>,
 
     [] fn wasm_custom_sections: WasmCustomSections(CrateNum) -> Lrc<Vec<DefId>>,
     [] fn wasm_import_module_map: WasmImportModuleMap(CrateNum)
@@ -573,6 +583,10 @@ fn stability_index_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {
 
 fn all_crate_nums_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {
     DepConstructor::AllCrateNums
+}
+
+fn all_traits_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {
+    DepConstructor::AllTraits
 }
 
 fn collect_and_partition_translation_items_node<'tcx>(_: CrateNum) -> DepConstructor<'tcx> {

@@ -134,13 +134,14 @@ pub fn to_llvm_feature<'a>(sess: &Session, s: &'a str) -> &'a str {
         ("x86", "pclmulqdq") => "pclmul",
         ("x86", "rdrand") => "rdrnd",
         ("x86", "bmi1") => "bmi",
+        ("aarch64", "fp") => "fp-armv8",
         ("aarch64", "fp16") => "fullfp16",
         (_, s) => s,
     }
 }
 
 pub fn target_features(sess: &Session) -> Vec<Symbol> {
-    let target_machine = create_target_machine(sess);
+    let target_machine = create_target_machine(sess, true);
     target_feature_whitelist(sess)
         .iter()
         .filter(|feature| {
@@ -178,7 +179,7 @@ pub fn print_passes() {
 
 pub(crate) fn print(req: PrintRequest, sess: &Session) {
     require_inited();
-    let tm = create_target_machine(sess);
+    let tm = create_target_machine(sess, true);
     unsafe {
         match req {
             PrintRequest::TargetCPUs => llvm::LLVMRustPrintTargetCPUs(tm),

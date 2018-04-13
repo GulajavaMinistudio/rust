@@ -50,7 +50,7 @@ use std::vec::IntoIter;
 use std::mem;
 use syntax::ast::{self, DUMMY_NODE_ID, Name, Ident, NodeId};
 use syntax::attr;
-use syntax::ext::hygiene::{Mark, SyntaxContext};
+use syntax::ext::hygiene::Mark;
 use syntax::symbol::{Symbol, InternedString};
 use syntax_pos::{DUMMY_SP, Span};
 
@@ -956,6 +956,22 @@ pub enum Predicate<'tcx> {
     ConstEvaluatable(DefId, &'tcx Substs<'tcx>),
 }
 
+/// The crate outlives map is computed during typeck and contains the
+/// outlives of every item in the local crate. You should not use it
+/// directly, because to do so will make your pass dependent on the
+/// HIR of every item in the local crate. Instead, use
+/// `tcx.inferred_outlives_of()` to get the outlives for a *particular*
+/// item.
+pub struct CratePredicatesMap<'tcx> {
+    /// For each struct with outlive bounds, maps to a vector of the
+    /// predicate of its outlive bounds. If an item has no outlives
+    /// bounds, it will have no entry.
+    pub predicates: FxHashMap<DefId, Lrc<Vec<ty::Predicate<'tcx>>>>,
+
+    /// An empty vector, useful for cloning.
+    pub empty_predicate: Lrc<Vec<ty::Predicate<'tcx>>>,
+}
+
 impl<'tcx> AsRef<Predicate<'tcx>> for Predicate<'tcx> {
     fn as_ref(&self) -> &Predicate<'tcx> {
         self
@@ -1623,15 +1639,13 @@ bitflags! {
     #[derive(RustcEncodable, RustcDecodable, Default)]
     pub struct ReprFlags: u8 {
         const IS_C               = 1 << 0;
-        const IS_PACKED          = 1 << 1;
-        const IS_SIMD            = 1 << 2;
-        const IS_TRANSPARENT     = 1 << 3;
+        const IS_SIMD            = 1 << 1;
+        const IS_TRANSPARENT     = 1 << 2;
         // Internal only for now. If true, don't reorder fields.
-        const IS_LINEAR          = 1 << 4;
+        const IS_LINEAR          = 1 << 3;
 
         // Any of these flags being set prevent field reordering optimisation.
         const IS_UNOPTIMISABLE   = ReprFlags::IS_C.bits |
-                                   ReprFlags::IS_PACKED.bits |
                                    ReprFlags::IS_SIMD.bits |
                                    ReprFlags::IS_LINEAR.bits;
     }
@@ -1648,11 +1662,13 @@ impl_stable_hash_for!(struct ReprFlags {
 pub struct ReprOptions {
     pub int: Option<attr::IntType>,
     pub align: u32,
+    pub pack: u32,
     pub flags: ReprFlags,
 }
 
 impl_stable_hash_for!(struct ReprOptions {
     align,
+    pack,
     int,
     flags
 });
@@ -1662,11 +1678,19 @@ impl ReprOptions {
         let mut flags = ReprFlags::empty();
         let mut size = None;
         let mut max_align = 0;
+        let mut min_pack = 0;
         for attr in tcx.get_attrs(did).iter() {
             for r in attr::find_repr_attrs(tcx.sess.diagnostic(), attr) {
                 flags.insert(match r {
                     attr::ReprC => ReprFlags::IS_C,
-                    attr::ReprPacked => ReprFlags::IS_PACKED,
+                    attr::ReprPacked(pack) => {
+                        min_pack = if min_pack > 0 {
+                            cmp::min(pack, min_pack)
+                        } else {
+                            pack
+                        };
+                        ReprFlags::empty()
+                    },
                     attr::ReprTransparent => ReprFlags::IS_TRANSPARENT,
                     attr::ReprSimd => ReprFlags::IS_SIMD,
                     attr::ReprInt(i) => {
@@ -1685,7 +1709,7 @@ impl ReprOptions {
         if !tcx.consider_optimizing(|| format!("Reorder fields of {:?}", tcx.item_path_str(did))) {
             flags.insert(ReprFlags::IS_LINEAR);
         }
-        ReprOptions { int: size, align: max_align, flags: flags }
+        ReprOptions { int: size, align: max_align, pack: min_pack, flags: flags }
     }
 
     #[inline]
@@ -1693,7 +1717,7 @@ impl ReprOptions {
     #[inline]
     pub fn c(&self) -> bool { self.flags.contains(ReprFlags::IS_C) }
     #[inline]
-    pub fn packed(&self) -> bool { self.flags.contains(ReprFlags::IS_PACKED) }
+    pub fn packed(&self) -> bool { self.pack > 0 }
     #[inline]
     pub fn transparent(&self) -> bool { self.flags.contains(ReprFlags::IS_TRANSPARENT) }
     #[inline]
@@ -1708,6 +1732,12 @@ impl ReprOptions {
     /// single pointer.
     pub fn inhibit_enum_layout_opt(&self) -> bool {
         self.c() || self.int.is_some()
+    }
+
+    /// Returns true if this `#[repr()]` should inhibit struct field reordering
+    /// optimizations, such as with repr(C) or repr(packed(1)).
+    pub fn inhibit_struct_field_reordering_opt(&self) -> bool {
+        !(self.flags & ReprFlags::IS_UNOPTIMISABLE).is_empty() || (self.pack == 1)
     }
 }
 
@@ -2077,32 +2107,6 @@ impl<'a, 'gcx, 'tcx> AdtDef {
     }
 }
 
-impl<'a, 'gcx, 'tcx> VariantDef {
-    #[inline]
-    pub fn find_field_named(&self, name: ast::Name) -> Option<&FieldDef> {
-        self.index_of_field_named(name).map(|index| &self.fields[index])
-    }
-
-    pub fn index_of_field_named(&self, name: ast::Name) -> Option<usize> {
-        if let Some(index) = self.fields.iter().position(|f| f.name == name) {
-            return Some(index);
-        }
-        let mut ident = name.to_ident();
-        while ident.span.ctxt() != SyntaxContext::empty() {
-            ident.span.remove_mark();
-            if let Some(field) = self.fields.iter().position(|f| f.name.to_ident() == ident) {
-                return Some(field);
-            }
-        }
-        None
-    }
-
-    #[inline]
-    pub fn field_named(&self, name: ast::Name) -> &FieldDef {
-        self.find_field_named(name).unwrap()
-    }
-}
-
 impl<'a, 'gcx, 'tcx> FieldDef {
     pub fn ty(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>, subst: &Substs<'tcx>) -> Ty<'tcx> {
         tcx.type_of(self.did).subst(tcx, subst)
@@ -2367,6 +2371,17 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             container: ImplContainer(parent_def_id),
             method_has_self_argument: has_self
         }
+    }
+
+    pub fn field_index(self, node_id: NodeId, tables: &TypeckTables) -> usize {
+        let hir_id = self.hir.node_to_hir_id(node_id);
+        tables.field_indices().get(hir_id).cloned().expect("no index for a field")
+    }
+
+    pub fn find_field_index(self, ident: Ident, variant: &VariantDef) -> Option<usize> {
+        variant.fields.iter().position(|field| {
+            self.adjust_ident(ident.modern(), variant.did, DUMMY_NODE_ID).0 == field.name.to_ident()
+        })
     }
 
     pub fn associated_items(
