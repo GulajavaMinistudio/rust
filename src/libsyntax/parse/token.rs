@@ -527,8 +527,17 @@ impl Token {
         // all span information.
         //
         // As a result, some AST nodes are annotated with the token
-        // stream they came from. Attempt to extract these lossless
-        // token streams before we fall back to the stringification.
+        // stream they came from. Here we attempt to extract these
+        // lossless token streams before we fall back to the
+        // stringification.
+        //
+        // During early phases of the compiler, though, the AST could
+        // get modified directly (e.g. attributes added or removed) and
+        // the internal cache of tokens my not be invalidated or
+        // updated. Consequently if the "lossless" token stream
+        // disagrees with our actuall stringification (which has
+        // historically been much more battle-tested) then we go with
+        // the lossy stream anyway (losing span information).
         let mut tokens = None;
 
         match nt.0 {
@@ -555,17 +564,21 @@ impl Token {
             _ => {}
         }
 
-        tokens.unwrap_or_else(|| {
-            nt.1.force(|| {
-                // FIXME(jseyfried): Avoid this pretty-print + reparse hack
-                let source = pprust::token_to_string(self);
-                parse_stream_from_source_str(FileName::MacroExpansion, source, sess, Some(span))
-            })
-        })
+        let tokens_for_real = nt.1.force(|| {
+            // FIXME(#43081): Avoid this pretty-print + reparse hack
+            let source = pprust::token_to_string(self);
+            parse_stream_from_source_str(FileName::MacroExpansion, source, sess, Some(span))
+        });
+        if let Some(tokens) = tokens {
+            if tokens.eq_unspanned(&tokens_for_real) {
+                return tokens
+            }
+        }
+        return tokens_for_real
     }
 }
 
-#[derive(Clone, RustcEncodable, RustcDecodable, PartialEq, Eq, Hash)]
+#[derive(Clone, RustcEncodable, RustcDecodable, Eq, Hash)]
 /// For interpolation during macro expansion.
 pub enum Nonterminal {
     NtItem(P<ast::Item>),
@@ -589,6 +602,22 @@ pub enum Nonterminal {
     NtGenerics(ast::Generics),
     NtWhereClause(ast::WhereClause),
     NtArg(ast::Arg),
+}
+
+impl PartialEq for Nonterminal {
+    fn eq(&self, rhs: &Self) -> bool {
+        match (self, rhs) {
+            (NtIdent(ident_lhs, is_raw_lhs), NtIdent(ident_rhs, is_raw_rhs)) =>
+                ident_lhs == ident_rhs && is_raw_lhs == is_raw_rhs,
+            (NtLifetime(ident_lhs), NtLifetime(ident_rhs)) => ident_lhs == ident_rhs,
+            (NtTT(tt_lhs), NtTT(tt_rhs)) => tt_lhs == tt_rhs,
+            // FIXME: Assume that all "complex" nonterminal are not equal, we can't compare them
+            // correctly based on data from AST. This will prevent them from matching each other
+            // in macros. The comparison will become possible only when each nonterminal has an
+            // attached token stream from which it was parsed.
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for Nonterminal {

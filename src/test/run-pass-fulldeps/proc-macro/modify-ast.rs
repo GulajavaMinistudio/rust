@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,10 +7,31 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![feature(asm)]
+
+// aux-build:modify-ast.rs
+
+#![feature(proc_macro)]
+
+extern crate modify_ast;
+
+use modify_ast::*;
+
+#[derive(Foo)]
+pub struct MyStructc {
+    #[cfg_attr(my_cfg, foo)]
+    _a: i32,
+}
+
+macro_rules! a {
+    ($i:item) => ($i)
+}
+
+a! {
+    #[assert1]
+    pub fn foo() {}
+}
 
 fn main() {
-    let a;
-    asm!("nop" "nop"); //~ ERROR malformed inline assembly
-    asm!("nop" "nop" : "=r"(a)); //~ ERROR malformed inline assembly
+    let _a = MyStructc { _a: 0 };
+    foo();
 }
