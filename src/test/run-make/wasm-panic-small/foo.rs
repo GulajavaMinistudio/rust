@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: -Z parse-only
+#![crate_type = "cdylib"]
 
-// Test that we generate obsolete syntax errors around usages of `proc`.
+#[no_mangle]
+#[cfg(a)]
+pub fn foo() {
+    panic!("test");
+}
 
-fn foo(p: proc()) { } //~ ERROR expected type, found reserved keyword `proc`
+#[no_mangle]
+#[cfg(b)]
+pub fn foo() {
+    panic!("{}", 1);
+}
 
-fn bar() { proc() 1; } //~ ERROR expected expression, found reserved keyword `proc`
-
-fn main() { }
+#[no_mangle]
+#[cfg(c)]
+pub fn foo() {
+    panic!("{}", "a");
+}

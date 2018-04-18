@@ -44,10 +44,10 @@
 //!
 //! Once you are familiar with the contents of the standard library you may
 //! begin to find the verbosity of the prose distracting. At this stage in your
-//! development you may want to press the **[-]** button near the top of the
+//! development you may want to press the `[-]` button near the top of the
 //! page to collapse it into a more skimmable view.
 //!
-//! While you are looking at that **[-]** button also notice the **[src]**
+//! While you are looking at that `[-]` button also notice the `[src]`
 //! button. Rust's API documentation comes with the source code and you are
 //! encouraged to read it. The standard library source is generally high
 //! quality and a peek behind the curtains is often enlightening.
@@ -275,7 +275,6 @@
 #![feature(macro_reexport)]
 #![feature(macro_vis_matcher)]
 #![feature(needs_panic_runtime)]
-#![feature(nonnull_cast)]
 #![feature(exhaustive_patterns)]
 #![feature(nonzero)]
 #![feature(num_bits_bytes)]
@@ -292,6 +291,7 @@
 #![feature(rand)]
 #![feature(raw)]
 #![feature(rustc_attrs)]
+#![feature(std_internals)]
 #![feature(stdsimd)]
 #![feature(shrink_to)]
 #![feature(slice_bytes)]
@@ -525,7 +525,7 @@ mod coresimd {
 #[unstable(feature = "stdsimd", issue = "48556")]
 #[cfg(all(not(stage0), not(test)))]
 pub use stdsimd::simd;
-#[unstable(feature = "stdsimd", issue = "48556")]
+#[stable(feature = "simd_arch", since = "1.27.0")]
 #[cfg(all(not(stage0), not(test)))]
 pub use stdsimd::arch;
 

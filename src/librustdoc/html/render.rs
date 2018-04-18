@@ -107,7 +107,7 @@ pub struct SharedContext {
     /// This describes the layout of each page, and is not modified after
     /// creation of the context (contains info like the favicon and added html).
     pub layout: layout::Layout,
-    /// This flag indicates whether [src] links should be generated or not. If
+    /// This flag indicates whether `[src]` links should be generated or not. If
     /// the source files are present in the html rendering, then this will be
     /// `true`.
     pub include_sources: bool,
@@ -1728,7 +1728,9 @@ impl Context {
                 let mut dst = try_err!(File::create(&joint_dst), &joint_dst);
                 try_err!(dst.write_all(&buf), &joint_dst);
 
-                all.append(full_path(self, &item), &item_type);
+                if !self.render_redirect_pages {
+                    all.append(full_path(self, &item), &item_type);
+                }
                 // Redirect from a sane URL using the namespace to Rustdoc's
                 // URL for the page.
                 let redir_name = format!("{}.{}.html", name, item_type.name_space());
