@@ -10,7 +10,7 @@
 
 // #41719
 
-#![feature(use_extern_macros)]
+#![feature(use_extern_macros, proc_macro_path_invoc)]
 
 fn main() {
     enum Foo {}

@@ -4098,83 +4098,58 @@ pub enum FpCategory {
     Normal,
 }
 
-/// A built-in floating point number.
+// Technically private and only exposed for coretests:
 #[doc(hidden)]
-#[unstable(feature = "core_float",
-           reason = "stable interface is via `impl f{32,64}` in later crates",
-           issue = "32110")]
+#[unstable(feature = "float_internals",
+           reason = "internal routines only exposed for testing",
+           issue = "0")]
 pub trait Float: Sized {
     /// Type used by `to_bits` and `from_bits`.
-    #[stable(feature = "core_float_bits", since = "1.25.0")]
     type Bits;
 
     /// Returns `true` if this value is NaN and false otherwise.
-    #[stable(feature = "core", since = "1.6.0")]
     fn is_nan(self) -> bool;
+
     /// Returns `true` if this value is positive infinity or negative infinity and
     /// false otherwise.
-    #[stable(feature = "core", since = "1.6.0")]
     fn is_infinite(self) -> bool;
-    /// Returns `true` if this number is neither infinite nor NaN.
-    #[stable(feature = "core", since = "1.6.0")]
-    fn is_finite(self) -> bool;
-    /// Returns `true` if this number is neither zero, infinite, denormal, or NaN.
-    #[stable(feature = "core", since = "1.6.0")]
-    fn is_normal(self) -> bool;
-    /// Returns the category that this number falls into.
-    #[stable(feature = "core", since = "1.6.0")]
-    fn classify(self) -> FpCategory;
 
-    /// Computes the absolute value of `self`. Returns `Float::nan()` if the
-    /// number is `Float::nan()`.
-    #[stable(feature = "core", since = "1.6.0")]
-    fn abs(self) -> Self;
-    /// Returns a number that represents the sign of `self`.
-    ///
-    /// - `1.0` if the number is positive, `+0.0` or `Float::infinity()`
-    /// - `-1.0` if the number is negative, `-0.0` or `Float::neg_infinity()`
-    /// - `Float::nan()` if the number is `Float::nan()`
-    #[stable(feature = "core", since = "1.6.0")]
-    fn signum(self) -> Self;
+    /// Returns `true` if this number is neither infinite nor NaN.
+    fn is_finite(self) -> bool;
+
+    /// Returns `true` if this number is neither zero, infinite, denormal, or NaN.
+    fn is_normal(self) -> bool;
+
+    /// Returns the category that this number falls into.
+    fn classify(self) -> FpCategory;
 
     /// Returns `true` if `self` is positive, including `+0.0` and
     /// `Float::infinity()`.
-    #[stable(feature = "core", since = "1.6.0")]
     fn is_sign_positive(self) -> bool;
+
     /// Returns `true` if `self` is negative, including `-0.0` and
     /// `Float::neg_infinity()`.
-    #[stable(feature = "core", since = "1.6.0")]
     fn is_sign_negative(self) -> bool;
 
     /// Take the reciprocal (inverse) of a number, `1/x`.
-    #[stable(feature = "core", since = "1.6.0")]
     fn recip(self) -> Self;
 
-    /// Raise a number to an integer power.
-    ///
-    /// Using this function is generally faster than using `powf`
-    #[stable(feature = "core", since = "1.6.0")]
-    fn powi(self, n: i32) -> Self;
-
     /// Convert radians to degrees.
-    #[stable(feature = "deg_rad_conversions", since="1.7.0")]
     fn to_degrees(self) -> Self;
+
     /// Convert degrees to radians.
-    #[stable(feature = "deg_rad_conversions", since="1.7.0")]
     fn to_radians(self) -> Self;
 
     /// Returns the maximum of the two numbers.
-    #[stable(feature = "core_float_min_max", since="1.20.0")]
     fn max(self, other: Self) -> Self;
+
     /// Returns the minimum of the two numbers.
-    #[stable(feature = "core_float_min_max", since="1.20.0")]
     fn min(self, other: Self) -> Self;
 
     /// Raw transmutation to integer.
-    #[stable(feature = "core_float_bits", since="1.25.0")]
     fn to_bits(self) -> Self::Bits;
+
     /// Raw transmutation from integer.
-    #[stable(feature = "core_float_bits", since="1.25.0")]
     fn from_bits(v: Self::Bits) -> Self;
 }
 
@@ -4192,7 +4167,7 @@ macro_rules! from_str_radix_int_impl {
 from_str_radix_int_impl! { isize i8 i16 i32 i64 i128 usize u8 u16 u32 u64 u128 }
 
 /// The error type returned when a checked integral type conversion fails.
-#[stable(feature = "try_from", since = "1.26.0")]
+#[unstable(feature = "try_from", issue = "33417")]
 #[derive(Debug, Copy, Clone)]
 pub struct TryFromIntError(());
 
@@ -4207,14 +4182,14 @@ impl TryFromIntError {
     }
 }
 
-#[stable(feature = "try_from", since = "1.26.0")]
+#[unstable(feature = "try_from", issue = "33417")]
 impl fmt::Display for TryFromIntError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         self.__description().fmt(fmt)
     }
 }
 
-#[stable(feature = "try_from", since = "1.26.0")]
+#[unstable(feature = "try_from", issue = "33417")]
 impl From<!> for TryFromIntError {
     fn from(never: !) -> TryFromIntError {
         never
@@ -4224,7 +4199,7 @@ impl From<!> for TryFromIntError {
 // only negative bounds
 macro_rules! try_from_lower_bounded {
     ($source:ty, $($target:ty),*) => {$(
-        #[stable(feature = "try_from", since = "1.26.0")]
+        #[unstable(feature = "try_from", issue = "33417")]
         impl TryFrom<$source> for $target {
             type Error = TryFromIntError;
 
@@ -4243,7 +4218,7 @@ macro_rules! try_from_lower_bounded {
 // unsigned to signed (only positive bound)
 macro_rules! try_from_upper_bounded {
     ($source:ty, $($target:ty),*) => {$(
-        #[stable(feature = "try_from", since = "1.26.0")]
+        #[unstable(feature = "try_from", issue = "33417")]
         impl TryFrom<$source> for $target {
             type Error = TryFromIntError;
 
@@ -4262,7 +4237,7 @@ macro_rules! try_from_upper_bounded {
 // all other cases
 macro_rules! try_from_both_bounded {
     ($source:ty, $($target:ty),*) => {$(
-        #[stable(feature = "try_from", since = "1.26.0")]
+        #[unstable(feature = "try_from", issue = "33417")]
         impl TryFrom<$source> for $target {
             type Error = TryFromIntError;
 

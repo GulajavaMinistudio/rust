@@ -71,6 +71,7 @@
 #![feature(cfg_target_has_atomic)]
 #![feature(concat_idents)]
 #![feature(const_fn)]
+#![feature(core_float)]
 #![feature(custom_attribute)]
 #![feature(doc_cfg)]
 #![feature(doc_spotlight)]
@@ -82,6 +83,7 @@
 #![feature(iterator_repeat_with)]
 #![feature(lang_items)]
 #![feature(link_llvm_intrinsics)]
+#![feature(never_type)]
 #![feature(exhaustive_patterns)]
 #![feature(macro_at_most_once_rep)]
 #![feature(no_core)]
@@ -92,12 +94,15 @@
 #![feature(rustc_attrs)]
 #![feature(rustc_const_unstable)]
 #![feature(simd_ffi)]
+#![feature(core_slice_ext)]
+#![feature(core_str_ext)]
 #![feature(specialization)]
 #![feature(staged_api)]
 #![feature(stmt_expr_attributes)]
 #![feature(unboxed_closures)]
 #![feature(untagged_unions)]
 #![feature(unwind_attributes)]
+#![feature(doc_alias)]
 
 #![cfg_attr(not(stage0), feature(mmx_target_feature))]
 #![cfg_attr(not(stage0), feature(tbm_target_feature))]
@@ -228,7 +233,7 @@ macro_rules! test_v512 { ($item:item) => {}; }
 #[allow(unused_macros)]
 macro_rules! vector_impl { ($([$f:ident, $($args:tt)*]),*) => { $($f!($($args)*);)* } }
 #[path = "../stdsimd/coresimd/mod.rs"]
-#[allow(missing_docs, missing_debug_implementations, dead_code)]
+#[allow(missing_docs, missing_debug_implementations, dead_code, unused_imports)]
 #[unstable(feature = "stdsimd", issue = "48556")]
 #[cfg(not(stage0))] // allow changes to how stdsimd works in stage0
 mod coresimd;

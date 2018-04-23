@@ -329,6 +329,10 @@ pub struct Cache {
     // yet when its implementation methods are being indexed. Caches such methods
     // and their parent id here and indexes them at the end of crate parsing.
     orphan_impl_items: Vec<(DefId, clean::Item)>,
+
+    /// Aliases added through `#[doc(alias = "...")]`. Since a few items can have the same alias,
+    /// we need the alias element to have an array of items.
+    aliases: FxHashMap<String, Vec<IndexItem>>,
 }
 
 /// Temporary storage for data obtained during `RustdocVisitor::clean()`.
@@ -369,6 +373,7 @@ struct Sidebar<'a> { cx: &'a Context, item: &'a clean::Item, }
 
 /// Struct representing one entry in the JS search index. These are all emitted
 /// by hand to a large JS file at the end of cache-creation.
+#[derive(Debug)]
 struct IndexItem {
     ty: ItemType,
     name: String,
@@ -396,6 +401,7 @@ impl ToJson for IndexItem {
 }
 
 /// A type used for the search index.
+#[derive(Debug)]
 struct Type {
     name: Option<String>,
     generics: Option<Vec<String>>,
@@ -418,9 +424,10 @@ impl ToJson for Type {
 }
 
 /// Full type of functions/methods in the search index.
+#[derive(Debug)]
 struct IndexItemFunctionType {
     inputs: Vec<Type>,
-    output: Option<Type>
+    output: Option<Type>,
 }
 
 impl ToJson for IndexItemFunctionType {
@@ -609,6 +616,7 @@ pub fn run(mut krate: clean::Crate,
         owned_box_did,
         masked_crates: mem::replace(&mut krate.masked_crates, FxHashSet()),
         typarams: external_typarams,
+        aliases: FxHashMap(),
     };
 
     // Cache where all our extern crates are located
@@ -742,6 +750,8 @@ fn write_shared(cx: &Context,
 
     write(cx.dst.join(&format!("rustdoc{}.css", cx.shared.resource_suffix)),
           include_bytes!("static/rustdoc.css"))?;
+    write(cx.dst.join(&format!("settings{}.css", cx.shared.resource_suffix)),
+          include_bytes!("static/settings.css"))?;
 
     // To avoid "light.css" to be overwritten, we'll first run over the received themes and only
     // then we'll run over the "official" styles.
@@ -761,6 +771,8 @@ fn write_shared(cx: &Context,
 
     write(cx.dst.join(&format!("brush{}.svg", cx.shared.resource_suffix)),
           include_bytes!("static/brush.svg"))?;
+    write(cx.dst.join(&format!("wheel{}.svg", cx.shared.resource_suffix)),
+          include_bytes!("static/wheel.svg"))?;
     write(cx.dst.join(&format!("light{}.css", cx.shared.resource_suffix)),
           include_bytes!("static/themes/light.css"))?;
     themes.insert("light".to_owned());
@@ -794,8 +806,7 @@ themePicker.onclick = function() {{
         switchTheme(currentTheme, mainTheme, item);
     }};
     themes.appendChild(but);
-}});
-"#,
+}});"#,
                  themes.iter()
                        .map(|s| format!("\"{}\"", s))
                        .collect::<Vec<String>>()
@@ -804,6 +815,8 @@ themePicker.onclick = function() {{
 
     write(cx.dst.join(&format!("main{}.js", cx.shared.resource_suffix)),
                       include_bytes!("static/main.js"))?;
+    write(cx.dst.join(&format!("settings{}.js", cx.shared.resource_suffix)),
+                      include_bytes!("static/settings.js"))?;
 
     {
         let mut data = format!("var resourcesSuffix = \"{}\";\n",
@@ -847,8 +860,7 @@ themePicker.onclick = function() {{
     write(cx.dst.join("COPYRIGHT.txt"),
           include_bytes!("static/COPYRIGHT.txt"))?;
 
-    fn collect(path: &Path, krate: &str,
-               key: &str) -> io::Result<Vec<String>> {
+    fn collect(path: &Path, krate: &str, key: &str) -> io::Result<Vec<String>> {
         let mut ret = Vec::new();
         if path.exists() {
             for line in BufReader::new(File::open(path)?).lines() {
@@ -863,6 +875,40 @@ themePicker.onclick = function() {{
             }
         }
         Ok(ret)
+    }
+
+    fn show_item(item: &IndexItem, krate: &str) -> String {
+        format!("{{'crate':'{}','ty':{},'name':'{}','path':'{}'{}}}",
+                krate, item.ty as usize, item.name, item.path,
+                if let Some(p) = item.parent_idx {
+                    format!(",'parent':{}", p)
+                } else {
+                    String::new()
+                })
+    }
+
+    let dst = cx.dst.join("aliases.js");
+    {
+        let mut all_aliases = try_err!(collect(&dst, &krate.name, "ALIASES"), &dst);
+        let mut w = try_err!(File::create(&dst), &dst);
+        let mut output = String::with_capacity(100);
+        for (alias, items) in &cache.aliases {
+            if items.is_empty() {
+                continue
+            }
+            output.push_str(&format!("\"{}\":[{}],",
+                                     alias,
+                                     items.iter()
+                                          .map(|v| show_item(v, &krate.name))
+                                          .collect::<Vec<_>>()
+                                          .join(",")));
+        }
+        all_aliases.push(format!("ALIASES['{}'] = {{{}}};", krate.name, output));
+        all_aliases.sort();
+        try_err!(writeln!(&mut w, "var ALIASES = {{}};"), &dst);
+        for aliases in &all_aliases {
+            try_err!(writeln!(&mut w, "{}", aliases), &dst);
+        }
     }
 
     // Update the search index
@@ -1251,13 +1297,13 @@ impl DocFolder for Cache {
                 // `public_items` map, so we can skip inserting into the
                 // paths map if there was already an entry present and we're
                 // not a public item.
-                if
-                    !self.paths.contains_key(&item.def_id) ||
-                    self.access_levels.is_public(item.def_id)
+                if !self.paths.contains_key(&item.def_id) ||
+                   self.access_levels.is_public(item.def_id)
                 {
                     self.paths.insert(item.def_id,
                                       (self.stack.clone(), item.type_()));
                 }
+                self.add_aliases(&item);
             }
             // Link variants to their parent enum because pages aren't emitted
             // for each variant.
@@ -1268,6 +1314,7 @@ impl DocFolder for Cache {
             }
 
             clean::PrimitiveItem(..) if item.visibility.is_some() => {
+                self.add_aliases(&item);
                 self.paths.insert(item.def_id, (self.stack.clone(),
                                                 item.type_()));
             }
@@ -1369,6 +1416,36 @@ impl<'a> Cache {
         for param in &generics.params {
             if let clean::GenericParam::Type(ref typ) = *param {
                 self.typarams.insert(typ.did, typ.name.clone());
+            }
+        }
+    }
+
+    fn add_aliases(&mut self, item: &clean::Item) {
+        if item.def_id.index == CRATE_DEF_INDEX {
+            return
+        }
+        if let Some(ref item_name) = item.name {
+            let path = self.paths.get(&item.def_id)
+                                 .map(|p| p.0.join("::").to_string())
+                                 .unwrap_or("std".to_owned());
+            for alias in item.attrs.lists("doc")
+                                   .filter(|a| a.check_name("alias"))
+                                   .filter_map(|a| a.value_str()
+                                                    .map(|s| s.to_string().replace("\"", "")))
+                                   .filter(|v| !v.is_empty())
+                                   .collect::<FxHashSet<_>>()
+                                   .into_iter() {
+                self.aliases.entry(alias)
+                            .or_insert(Vec::with_capacity(1))
+                            .push(IndexItem {
+                                ty: item.type_(),
+                                name: item_name.to_string(),
+                                path: path.clone(),
+                                desc: String::new(),
+                                parent: None,
+                                parent_idx: None,
+                                search_type: get_index_search_type(&item),
+                            });
             }
         }
     }
@@ -1503,6 +1580,51 @@ impl fmt::Display for AllTypes {
     }
 }
 
+#[derive(Debug)]
+struct Settings<'a> {
+    // (id, explanation, default value)
+    settings: Vec<(&'static str, &'static str, bool)>,
+    root_path: &'a str,
+    suffix: &'a str,
+}
+
+impl<'a> Settings<'a> {
+    pub fn new(root_path: &'a str, suffix: &'a str) -> Settings<'a> {
+        Settings {
+            settings: vec![
+                ("item-declarations", "Auto-hide item declarations.", true),
+                ("item-attributes", "Auto-hide item attributes.", true),
+            ],
+            root_path,
+            suffix,
+        }
+    }
+}
+
+impl<'a> fmt::Display for Settings<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,
+"<h1 class='fqn'>\
+     <span class='in-band'>Rustdoc settings</span>\
+</h1>\
+<div class='settings'>{}</div>\
+<script src='{}settings{}.js'></script>",
+               self.settings.iter()
+                            .map(|(id, text, enabled)| {
+                                format!("<div class='setting-line'>\
+                                             <label class='toggle'>\
+                                                <input type='checkbox' id='{}' {}>\
+                                                <span class='slider'></span>\
+                                             </label>\
+                                             <div>{}</div>\
+                                         </div>", id, if *enabled { " checked" } else { "" }, text)
+                            })
+                            .collect::<String>(),
+               self.root_path,
+               self.suffix)
+    }
+}
+
 impl Context {
     /// String representation of how to get back to the root path of the 'doc/'
     /// folder in terms of a relative URL.
@@ -1546,6 +1668,8 @@ impl Context {
         };
         let final_file = self.dst.join(&krate.name)
                                  .join("all.html");
+        let settings_file = self.dst.join("settings.html");
+
         let crate_name = krate.name.clone();
         item.name = Some(krate.name);
 
@@ -1567,7 +1691,7 @@ impl Context {
         if !root_path.ends_with('/') {
             root_path.push('/');
         }
-        let page = layout::Page {
+        let mut page = layout::Page {
             title: "List of all items in this crate",
             css_class: "mod",
             root_path: "../",
@@ -1590,6 +1714,27 @@ impl Context {
                                 self.shared.css_file_extension.is_some(),
                                 &self.shared.themes),
                  &final_file);
+
+        // Generating settings page.
+        let settings = Settings::new("./", &self.shared.resource_suffix);
+        page.title = "Rustdoc settings";
+        page.description = "Settings of Rustdoc";
+        page.root_path = "./";
+
+        let mut w = BufWriter::new(try_err!(File::create(&settings_file), &settings_file));
+        let mut themes = self.shared.themes.clone();
+        let sidebar = "<p class='location'>Settings</p><div class='sidebar-elems'></div>";
+        themes.push(PathBuf::from("settings.css"));
+        let mut layout = self.shared.layout.clone();
+        layout.krate = String::new();
+        layout.logo = String::new();
+        layout.favicon = String::new();
+        try_err!(layout::render(&mut w, &layout,
+                                &page, &sidebar, &settings,
+                                self.shared.css_file_extension.is_some(),
+                                &themes),
+                 &settings_file);
+
         Ok(())
     }
 

@@ -252,7 +252,7 @@
 #![feature(collections_range)]
 #![feature(compiler_builtins_lib)]
 #![feature(const_fn)]
-#![feature(core_float)]
+#![cfg_attr(stage0, feature(core_float))]
 #![feature(core_intrinsics)]
 #![feature(dropck_eyepatch)]
 #![feature(exact_size_is_empty)]
@@ -260,6 +260,7 @@
 #![feature(fs_read_write)]
 #![feature(fixed_size_array)]
 #![feature(float_from_str_radix)]
+#![cfg_attr(stage0, feature(float_internals))]
 #![feature(fn_traits)]
 #![feature(fnbox)]
 #![cfg_attr(stage0, feature(generic_param_attrs))]
@@ -275,6 +276,7 @@
 #![feature(macro_reexport)]
 #![feature(macro_vis_matcher)]
 #![feature(needs_panic_runtime)]
+#![feature(never_type)]
 #![feature(exhaustive_patterns)]
 #![feature(nonzero)]
 #![feature(num_bits_bytes)]
@@ -306,6 +308,7 @@
 #![feature(test, rustc_private)]
 #![feature(thread_local)]
 #![feature(toowned_clone_into)]
+#![feature(try_from)]
 #![feature(try_reserve)]
 #![feature(unboxed_closures)]
 #![feature(untagged_unions)]
@@ -316,6 +319,7 @@
 #![feature(doc_spotlight)]
 #![cfg_attr(test, feature(update_panic_count))]
 #![cfg_attr(windows, feature(used))]
+#![feature(doc_alias)]
 
 #![default_lib_allocator]
 
@@ -478,7 +482,6 @@ pub mod path;
 pub mod process;
 pub mod sync;
 pub mod time;
-pub mod alloc;
 
 #[unstable(feature = "allocator_api", issue = "32838")]
 #[rustc_deprecated(since = "1.27.0", reason = "module renamed to `alloc`")]
@@ -491,6 +494,8 @@ pub mod heap {
 #[macro_use]
 mod sys_common;
 mod sys;
+
+pub mod alloc;
 
 // Private support modules
 mod panicking;

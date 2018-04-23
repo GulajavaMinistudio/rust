@@ -272,6 +272,9 @@ declare_features! (
     // Allows cfg(target_has_atomic = "...").
     (active, cfg_target_has_atomic, "1.9.0", Some(32976), None),
 
+    // The `!` type. Does not imply exhaustive_patterns (below) any more.
+    (active, never_type, "1.13.0", Some(35121), None),
+
     // Allows exhaustive pattern matching on types that contain uninhabited types.
     (active, exhaustive_patterns, "1.13.0", None, None),
 
@@ -451,6 +454,18 @@ declare_features! (
     (active, mmx_target_feature, "1.27.0", None, None),
     (active, sse4a_target_feature, "1.27.0", None, None),
     (active, tbm_target_feature, "1.27.0", None, None),
+
+    // Allows macro invocations of the form `#[foo::bar]`
+    (active, proc_macro_path_invoc, "1.27.0", None, None),
+
+    // Allows macro invocations on modules expressions and statements and
+    // procedural macros to expand to non-items.
+    (active, proc_macro_mod, "1.27.0", None, None),
+    (active, proc_macro_expr, "1.27.0", None, None),
+    (active, proc_macro_non_items, "1.27.0", None, None),
+
+    // #[doc(alias = "...")]
+    (active, doc_alias, "1.27.0", Some(50146), None),
 );
 
 declare_features! (
@@ -1446,6 +1461,10 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                     gate_feature_post!(&self, doc_spotlight, attr.span,
                         "#[doc(spotlight)] is experimental"
                     );
+                } else if content.iter().any(|c| c.check_name("alias")) {
+                    gate_feature_post!(&self, doc_alias, attr.span,
+                        "#[doc(alias = \"...\")] is experimental"
+                    );
                 }
             }
         }
@@ -1634,6 +1653,10 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         match ty.node {
             ast::TyKind::BareFn(ref bare_fn_ty) => {
                 self.check_abi(bare_fn_ty.abi, ty.span);
+            }
+            ast::TyKind::Never => {
+                gate_feature_post!(&self, never_type, ty.span,
+                                   "The `!` type is experimental");
             }
             ast::TyKind::TraitObject(_, ast::TraitObjectSyntax::Dyn) => {
                 gate_feature_post!(&self, dyn_trait, ty.span,
