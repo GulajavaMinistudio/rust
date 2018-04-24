@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,27 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-trait Foo {
-    const AMT: usize;
-}
-
-enum Bar<A, B> {
-    First(A),
-    Second(B),
-}
-
-impl<A: Foo, B: Foo> Foo for Bar<A, B> {
-    const AMT: usize = [A::AMT][(A::AMT > B::AMT) as usize];
-}
-
-impl Foo for u8 {
-    const AMT: usize = 1;
-}
-
-impl Foo for u16 {
-    const AMT: usize = 2;
-}
+#![feature(repeat_generic_slice)]
 
 fn main() {
-    println!("{}", <Bar<u16, u8> as Foo>::AMT); //~ E0080
+    assert_eq!([1, 2].repeat(2), vec![1, 2, 1, 2]);
+    assert_eq!([1, 2, 3, 4].repeat(0), vec![]);
+    assert_eq!([1, 2, 3, 4].repeat(1), vec![1, 2, 3, 4]);
+    assert_eq!([1, 2, 3, 4].repeat(3),
+               vec![1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4]);
 }
