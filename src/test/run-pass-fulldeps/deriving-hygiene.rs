@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-const A: [i32; 0] = [];
-const B: i32 = A[1];
-//~^ ERROR constant evaluation error
-//~| index out of bounds: the len is 0 but the index is 1
-//~| WARN this constant cannot be used
+#![feature(rustc_private)]
+extern crate serialize;
+
+pub const other: u8 = 1;
+pub const f: u8 = 1;
+pub const d: u8 = 1;
+pub const s: u8 = 1;
+pub const state: u8 = 1;
+pub const cmp: u8 = 1;
+
+#[derive(Ord,Eq,PartialOrd,PartialEq,Debug,Decodable,Encodable,Hash)]
+struct Foo {}
 
 fn main() {
-    let _ = B;
 }
