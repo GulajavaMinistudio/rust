@@ -20,7 +20,7 @@ pub use self::FunctionRetTy::*;
 pub use self::Visibility::*;
 
 use syntax;
-use syntax::abi::Abi;
+use rustc_target::spec::abi::Abi;
 use syntax::ast::{self, AttrStyle, Ident};
 use syntax::attr;
 use syntax::codemap::{dummy_spanned, Spanned};
@@ -120,7 +120,7 @@ impl<T: Clean<U>, U> Clean<Option<U>> for Option<T> {
 
 impl<T, U> Clean<U> for ty::Binder<T> where T: Clean<U> {
     fn clean(&self, cx: &DocContext) -> U {
-        self.0.clean(cx)
+        self.skip_binder().clean(cx)
     }
 }
 
@@ -1367,7 +1367,7 @@ impl TyParamBound {
     fn maybe_sized(cx: &DocContext) -> TyParamBound {
         let did = cx.tcx.require_lang_item(lang_items::SizedTraitLangItem);
         let empty = cx.tcx.intern_substs(&[]);
-        let path = external_path(cx, &cx.tcx.item_name(did),
+        let path = external_path(cx, &cx.tcx.item_name(did).as_str(),
             Some(did), false, vec![], empty);
         inline::record_extern_fqn(cx, did, TypeKind::Trait);
         TraitBound(PolyTrait {
@@ -1474,7 +1474,7 @@ impl<'a, 'tcx> Clean<TyParamBound> for (&'a ty::TraitRef<'tcx>, Vec<TypeBinding>
     fn clean(&self, cx: &DocContext) -> TyParamBound {
         let (trait_ref, ref bounds) = *self;
         inline::record_extern_fqn(cx, trait_ref.def_id, TypeKind::Trait);
-        let path = external_path(cx, &cx.tcx.item_name(trait_ref.def_id),
+        let path = external_path(cx, &cx.tcx.item_name(trait_ref.def_id).as_str(),
                                  Some(trait_ref.def_id), true, bounds.clone(), trait_ref.substs);
 
         debug!("ty::TraitRef\n  subst: {:?}\n", trait_ref.substs);
@@ -2801,7 +2801,7 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
                     AdtKind::Enum => TypeKind::Enum,
                 };
                 inline::record_extern_fqn(cx, did, kind);
-                let path = external_path(cx, &cx.tcx.item_name(did),
+                let path = external_path(cx, &cx.tcx.item_name(did).as_str(),
                                          None, false, vec![], substs);
                 ResolvedPath {
                     path,
@@ -2812,7 +2812,7 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
             }
             ty::TyForeign(did) => {
                 inline::record_extern_fqn(cx, did, TypeKind::Foreign);
-                let path = external_path(cx, &cx.tcx.item_name(did),
+                let path = external_path(cx, &cx.tcx.item_name(did).as_str(),
                                          None, false, vec![], Substs::empty());
                 ResolvedPath {
                     path: path,
@@ -2830,7 +2830,7 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
                     reg.clean(cx).map(|b| typarams.push(RegionBound(b)));
                     for did in obj.auto_traits() {
                         let empty = cx.tcx.intern_substs(&[]);
-                        let path = external_path(cx, &cx.tcx.item_name(did),
+                        let path = external_path(cx, &cx.tcx.item_name(did).as_str(),
                             Some(did), false, vec![], empty);
                         inline::record_extern_fqn(cx, did, TypeKind::Trait);
                         let bound = TraitBound(PolyTrait {
@@ -2846,15 +2846,15 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
                     }
 
                     let mut bindings = vec![];
-                    for ty::Binder(ref pb) in obj.projection_bounds() {
+                    for pb in obj.projection_bounds() {
                         bindings.push(TypeBinding {
-                            name: cx.tcx.associated_item(pb.item_def_id).name.clean(cx),
-                            ty: pb.ty.clean(cx)
+                            name: cx.tcx.associated_item(pb.item_def_id()).name.clean(cx),
+                            ty: pb.skip_binder().ty.clean(cx)
                         });
                     }
 
-                    let path = external_path(cx, &cx.tcx.item_name(did), Some(did),
-                        false, bindings, principal.0.substs);
+                    let path = external_path(cx, &cx.tcx.item_name(did).as_str(), Some(did),
+                        false, bindings, principal.skip_binder().substs);
                     ResolvedPath {
                         path,
                         typarams: Some(typarams),

@@ -19,8 +19,7 @@ use rustc::middle::lang_items;
 use rustc::mir;
 use rustc::session::CrateDisambiguator;
 use rustc::ty::{self, Ty, ReprOptions};
-use rustc_back::PanicStrategy;
-use rustc_back::target::TargetTriple;
+use rustc_target::spec::{PanicStrategy, TargetTriple};
 
 use rustc_serialize as serialize;
 use syntax::{ast, attr};
@@ -373,9 +372,10 @@ impl<'a, 'gcx> HashStable<StableHashingContext<'a>> for EntryKind<'gcx> {
             EntryKind::AssociatedType(associated_container) => {
                 associated_container.hash_stable(hcx, hasher);
             }
-            EntryKind::AssociatedConst(associated_container, qualif, _) => {
+            EntryKind::AssociatedConst(associated_container, qualif, ref const_data) => {
                 associated_container.hash_stable(hcx, hasher);
                 qualif.hash_stable(hcx, hasher);
+                const_data.hash_stable(hcx, hasher);
             }
         }
     }

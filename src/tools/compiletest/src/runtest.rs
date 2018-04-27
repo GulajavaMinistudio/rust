@@ -343,9 +343,11 @@ impl<'test> TestCx<'test> {
             "run-pass tests with expected warnings should be moved to ui/"
         );
 
-        let proc_res = self.exec_compiled_test();
-        if !proc_res.status.success() {
-            self.fatal_proc_rec("test run failed!", &proc_res);
+        if !self.props.skip_trans {
+            let proc_res = self.exec_compiled_test();
+            if !proc_res.status.success() {
+                self.fatal_proc_rec("test run failed!", &proc_res);
+            }
         }
     }
 
@@ -1166,6 +1168,8 @@ impl<'test> TestCx<'test> {
         for line in proc_res.stderr.lines() {
             if line.contains("error: internal compiler error") {
                 self.fatal_proc_rec("compiler encountered internal error", proc_res);
+            } else if line.contains(" panicked at ") {
+                self.fatal_proc_rec("compiler panicked", proc_res);
             }
         }
     }
@@ -1695,6 +1699,11 @@ impl<'test> TestCx<'test> {
             CodegenUnits => {
                 // do not use JSON output
             }
+        }
+
+        if self.props.skip_trans {
+            assert!(!self.props.compile_flags.iter().any(|s| s.starts_with("--emit")));
+            rustc.args(&["--emit", "metadata"]);
         }
 
         if !is_rustdoc {

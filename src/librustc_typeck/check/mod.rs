@@ -118,13 +118,13 @@ use std::fmt::Display;
 use std::mem::replace;
 use std::iter;
 use std::ops::{self, Deref};
-use syntax::abi::Abi;
+use rustc_target::spec::abi::Abi;
 use syntax::ast;
 use syntax::attr;
 use syntax::codemap::{original_sp, Spanned};
 use syntax::feature_gate::{GateIssue, emit_feature_err};
 use syntax::ptr::P;
-use syntax::symbol::{Symbol, InternedString, keywords};
+use syntax::symbol::{Symbol, LocalInternedString, keywords};
 use syntax::util::lev_distance::find_best_match_for_name;
 use syntax_pos::{self, BytePos, Span, MultiSpan};
 
@@ -1727,7 +1727,7 @@ impl<'a, 'gcx, 'tcx> AstConv<'gcx, 'tcx> for FnCtxt<'a, 'gcx, 'tcx> {
             predicates: self.param_env.caller_bounds.iter().filter(|predicate| {
                 match **predicate {
                     ty::Predicate::Trait(ref data) => {
-                        data.0.self_ty().is_param(index)
+                        data.skip_binder().self_ty().is_param(index)
                     }
                     _ => false
                 }
@@ -3172,7 +3172,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
     // Return an hint about the closest match in field names
     fn suggest_field_name(variant: &'tcx ty::VariantDef,
                           field: &Spanned<ast::Name>,
-                          skip: Vec<InternedString>)
+                          skip: Vec<LocalInternedString>)
                           -> Option<Symbol> {
         let name = field.node.as_str();
         let names = variant.fields.iter().filter_map(|field| {

@@ -22,7 +22,7 @@ use base;
 use builder::Builder;
 use callee;
 use common::{self, val_ty};
-use common::{C_bool, C_u8, C_i32, C_u32, C_u64, C_null, C_usize, C_uint, C_uint_big};
+use common::{C_bool, C_u8, C_i32, C_u32, C_u64, C_undef, C_null, C_usize, C_uint, C_uint_big};
 use consts;
 use monomorphize;
 use type_::Type;
@@ -267,11 +267,33 @@ impl<'a, 'tcx> FunctionCx<'a, 'tcx> {
                     }
                     mir::CastKind::Misc => {
                         assert!(cast.is_llvm_immediate());
+                        let ll_t_out = cast.immediate_llvm_type(bx.cx);
+                        if operand.layout.abi == layout::Abi::Uninhabited {
+                            return (bx, OperandRef {
+                                val: OperandValue::Immediate(C_undef(ll_t_out)),
+                                layout: cast,
+                            });
+                        }
                         let r_t_in = CastTy::from_ty(operand.layout.ty)
                             .expect("bad input type for cast");
                         let r_t_out = CastTy::from_ty(cast.ty).expect("bad output type for cast");
                         let ll_t_in = operand.layout.immediate_llvm_type(bx.cx);
-                        let ll_t_out = cast.immediate_llvm_type(bx.cx);
+                        match operand.layout.variants {
+                            layout::Variants::Single { index } => {
+                                if let Some(def) = operand.layout.ty.ty_adt_def() {
+                                    let discr_val = def
+                                        .discriminant_for_variant(bx.cx.tcx, index)
+                                        .val;
+                                    let discr = C_uint_big(ll_t_out, discr_val);
+                                    return (bx, OperandRef {
+                                        val: OperandValue::Immediate(discr),
+                                        layout: cast,
+                                    });
+                                }
+                            }
+                            layout::Variants::Tagged { .. } |
+                            layout::Variants::NicheFilling { .. } => {},
+                        }
                         let llval = operand.immediate();
 
                         let mut signed = false;
@@ -514,7 +536,6 @@ impl<'a, 'tcx> FunctionCx<'a, 'tcx> {
         let is_float = input_ty.is_fp();
         let is_signed = input_ty.is_signed();
         let is_nil = input_ty.is_nil();
-        let is_bool = input_ty.is_bool();
         match op {
             mir::BinOp::Add => if is_float {
                 bx.fadd(lhs, rhs)
@@ -564,15 +585,6 @@ impl<'a, 'tcx> FunctionCx<'a, 'tcx> {
                     lhs, rhs
                 )
             } else {
-                let (lhs, rhs) = if is_bool {
-                    // FIXME(#36856) -- extend the bools into `i8` because
-                    // LLVM's i1 comparisons are broken.
-                    (bx.zext(lhs, Type::i8(bx.cx)),
-                     bx.zext(rhs, Type::i8(bx.cx)))
-                } else {
-                    (lhs, rhs)
-                };
-
                 bx.icmp(
                     base::bin_op_to_icmp_predicate(op.to_hir_binop(), is_signed),
                     lhs, rhs

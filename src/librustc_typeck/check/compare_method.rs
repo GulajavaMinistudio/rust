@@ -234,9 +234,11 @@ fn compare_predicate_entailment<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         let mut selcx = traits::SelectionContext::new(&infcx);
 
         let impl_m_own_bounds = impl_m_predicates.instantiate_own(tcx, impl_to_skol_substs);
-        let (impl_m_own_bounds, _) = infcx.replace_late_bound_regions_with_fresh_var(impl_m_span,
-                                                       infer::HigherRankedType,
-                                                       &ty::Binder(impl_m_own_bounds.predicates));
+        let (impl_m_own_bounds, _) = infcx.replace_late_bound_regions_with_fresh_var(
+            impl_m_span,
+            infer::HigherRankedType,
+            &ty::Binder::bind(impl_m_own_bounds.predicates)
+        );
         for predicate in impl_m_own_bounds {
             let traits::Normalized { value: predicate, obligations } =
                 traits::normalize(&mut selcx, param_env, normalize_cause.clone(), &predicate);
@@ -270,7 +272,7 @@ fn compare_predicate_entailment<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                               impl_m_node_id,
                                               param_env,
                                               &impl_sig);
-        let impl_fty = tcx.mk_fn_ptr(ty::Binder(impl_sig));
+        let impl_fty = tcx.mk_fn_ptr(ty::Binder::bind(impl_sig));
         debug!("compare_impl_method: impl_fty={:?}", impl_fty);
 
         let trait_sig = tcx.liberate_late_bound_regions(
@@ -283,7 +285,7 @@ fn compare_predicate_entailment<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                               impl_m_node_id,
                                               param_env,
                                               &trait_sig);
-        let trait_fty = tcx.mk_fn_ptr(ty::Binder(trait_sig));
+        let trait_fty = tcx.mk_fn_ptr(ty::Binder::bind(trait_sig));
 
         debug!("compare_impl_method: trait_fty={:?}", trait_fty);
 
@@ -505,7 +507,7 @@ fn compare_self_type<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         tcx.infer_ctxt().enter(|infcx| {
             let self_arg_ty = tcx.liberate_late_bound_regions(
                 method.def_id,
-                &ty::Binder(self_arg_ty)
+                &ty::Binder::bind(self_arg_ty)
             );
             let can_eq_self = |ty| infcx.can_eq(param_env, untransformed_self_ty, ty).is_ok();
             match ExplicitSelf::determine(self_arg_ty, can_eq_self) {
@@ -730,8 +732,7 @@ fn compare_synthetic_generics<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         if impl_ty.synthetic != trait_ty.synthetic {
             let impl_node_id = tcx.hir.as_local_node_id(impl_ty.def_id).unwrap();
             let impl_span = tcx.hir.span(impl_node_id);
-            let trait_node_id = tcx.hir.as_local_node_id(trait_ty.def_id).unwrap();
-            let trait_span = tcx.hir.span(trait_node_id);
+            let trait_span = tcx.def_span(trait_ty.def_id);
             let mut err = struct_span_err!(tcx.sess,
                                            impl_span,
                                            E0643,

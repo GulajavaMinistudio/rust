@@ -40,6 +40,8 @@
                      "union",
                      "foreigntype"];
 
+    var search_input = document.getElementsByClassName('search-input')[0];
+
     // On the search screen, so you remain on the last tab you opened.
     //
     // 0 for "In Names"
@@ -411,8 +413,8 @@
         // but only if the input bar is empty. This avoid the obnoxious issue
         // where you start trying to do a search, and the index loads, and
         // suddenly your search is gone!
-        if (document.getElementsByClassName("search-input")[0].value === "") {
-            document.getElementsByClassName("search-input")[0].value = params.search || '';
+        if (search_input.value === "") {
+            search_input.value = params.search || '';
         }
 
         /**
@@ -1011,7 +1013,8 @@
                 'returned': sortResults(results_returned, true),
                 'others': sortResults(results),
             };
-            if (ALIASES[window.currentCrate][query.raw]) {
+            if (ALIASES && ALIASES[window.currentCrate] &&
+                    ALIASES[window.currentCrate][query.raw]) {
                 var aliases = ALIASES[window.currentCrate][query.raw];
                 for (var i = 0; i < aliases.length; ++i) {
                     ret['others'].unshift(aliases[i]);
@@ -1118,7 +1121,6 @@
                 });
             });
 
-            var search_input = document.getElementsByClassName('search-input')[0];
             search_input.onkeydown = function(e) {
                 // "actives" references the currently highlighted item in each search tab.
                 // Each array in "actives" represents a tab.
@@ -1169,7 +1171,7 @@
                     // Does nothing, it's just to avoid losing "focus" on the highlighted element.
                 } else if (e.which === 27) { // escape
                     removeClass(actives[currentTab][0], 'highlighted');
-                    document.getElementsByClassName('search-input')[0].value = '';
+                    search_input.value = '';
                     defocusSearchBar();
                 } else if (actives[currentTab].length > 0) {
                     removeClass(actives[currentTab][0], 'highlighted');
@@ -1185,6 +1187,44 @@
 
         function pathSplitter(path) {
             return '<span>' + path.replace(/::/g, '::</span><span>');
+        }
+
+        function buildHrefAndPath(item) {
+            var displayPath;
+            var href;
+            var type = itemTypes[item.ty];
+            var name = item.name;
+
+            if (type === 'mod') {
+                displayPath = item.path + '::';
+                href = rootPath + item.path.replace(/::/g, '/') + '/' +
+                       name + '/index.html';
+            } else if (type === "primitive") {
+                displayPath = "";
+                href = rootPath + item.path.replace(/::/g, '/') +
+                       '/' + type + '.' + name + '.html';
+            } else if (type === "externcrate") {
+                displayPath = "";
+                href = rootPath + name + '/index.html';
+            } else if (item.parent !== undefined) {
+                var myparent = item.parent;
+                var anchor = '#' + type + '.' + name;
+                var parentType = itemTypes[myparent.ty];
+                if (parentType === "primitive") {
+                    displayPath = myparent.name + '::';
+                } else {
+                    displayPath = item.path + '::' + myparent.name + '::';
+                }
+                href = rootPath + item.path.replace(/::/g, '/') +
+                       '/' + parentType +
+                       '.' + myparent.name +
+                       '.html' + anchor;
+            } else {
+                displayPath = item.path + '::';
+                href = rootPath + item.path.replace(/::/g, '/') +
+                       '/' + type + '.' + name + '.html';
+            }
+            return [displayPath, href];
         }
 
         function addTab(array, query, display) {
@@ -1206,40 +1246,13 @@
                         return;
                     }
 
-                    console.log(item);
                     shown.push(id_ty);
                     name = item.name;
                     type = itemTypes[item.ty];
 
-                    if (type === 'mod') {
-                        displayPath = item.path + '::';
-                        href = rootPath + item.path.replace(/::/g, '/') + '/' +
-                               name + '/index.html';
-                    } else if (type === "primitive") {
-                        displayPath = "";
-                        href = rootPath + item.path.replace(/::/g, '/') +
-                               '/' + type + '.' + name + '.html';
-                    } else if (type === "externcrate") {
-                        displayPath = "";
-                        href = rootPath + name + '/index.html';
-                    } else if (item.parent !== undefined) {
-                        var myparent = item.parent;
-                        var anchor = '#' + type + '.' + name;
-                        var parentType = itemTypes[myparent.ty];
-                        if (parentType === "primitive") {
-                            displayPath = myparent.name + '::';
-                        } else {
-                            displayPath = item.path + '::' + myparent.name + '::';
-                        }
-                        href = rootPath + item.path.replace(/::/g, '/') +
-                               '/' + parentType +
-                               '.' + myparent.name +
-                               '.html' + anchor;
-                    } else {
-                        displayPath = item.path + '::';
-                        href = rootPath + item.path.replace(/::/g, '/') +
-                               '/' + type + '.' + name + '.html';
-                    }
+                    var res = buildHrefAndPath(item);
+                    var href = res[1];
+                    var displayPath = res[0];
 
                     output += '<tr class="' + type + ' result"><td>' +
                               '<a href="' + href + '">' +
@@ -1268,7 +1281,17 @@
         }
 
         function showResults(results) {
-            var output, query = getQuery(document.getElementsByClassName('search-input')[0].value);
+            if (results['others'].length === 1 &&
+                getCurrentValue('rustdoc-go-to-only-result') === "true") {
+                var elem = document.createElement('a');
+                var res = buildHrefAndPath(results['others'][0]);
+                elem.href = res[1];
+                elem.style.display = 'none';
+                // For firefox, we need the element to be in the DOM so it can be clicked.
+                document.body.appendChild(elem);
+                elem.click();
+            }
+            var output, query = getQuery(search_input.value);
 
             currentResults = query.id;
             output = '<h1>Results for ' + escape(query.query) +
@@ -1375,14 +1398,13 @@
 
         function search(e) {
             var params = getQueryStringParams();
-            var search_input = document.getElementsByClassName('search-input')[0];
             var query = getQuery(search_input.value.trim());
 
             if (e) {
                 e.preventDefault();
             }
 
-            if (!query.query || query.id === currentResults) {
+            if (query.query.length === 0 || query.id === currentResults) {
                 if (query.query.length > 0) {
                     putBackSearch(search_input);
                 }
@@ -1468,9 +1490,6 @@
         function startSearch() {
             var searchTimeout;
             var callback = function() {
-                var search_input = document.getElementsByClassName('search-input');
-                if (search_input.length < 1) { return; }
-                search_input = search_input[0];
                 clearTimeout(searchTimeout);
                 if (search_input.value.length === 0) {
                     if (browserSupportsHistoryApi()) {
@@ -1488,7 +1507,6 @@
                     searchTimeout = setTimeout(search, 500);
                 }
             };
-            var search_input = document.getElementsByClassName("search-input")[0];
             search_input.onkeyup = callback;
             search_input.oninput = callback;
             document.getElementsByClassName("search-form")[0].onsubmit = function(e) {
@@ -1538,9 +1556,9 @@
                     // nothing there, which lets you really go back to a
                     // previous state with nothing in the bar.
                     if (params.search) {
-                        document.getElementsByClassName('search-input')[0].value = params.search;
+                        search_input.value = params.search;
                     } else {
-                        document.getElementsByClassName('search-input')[0].value = '';
+                        search_input.value = '';
                     }
                     // Some browsers fire 'onpopstate' for every page load
                     // (Chrome), while others fire the event only when actually
@@ -1726,6 +1744,9 @@
 
     function toggleAllDocs(pageId) {
         var toggle = document.getElementById("toggle-all-docs");
+        if (!toggle) {
+            return;
+        }
         if (hasClass(toggle, "will-expand")) {
             updateLocalStorage("rustdoc-collapse", "false");
             removeClass(toggle, "will-expand");
@@ -1950,7 +1971,28 @@
         return wrapper;
     }
 
-    onEach(document.getElementById('main').getElementsByClassName('docblock'), function(e) {
+    onEach(document.getElementsByClassName('docblock'), function(e) {
+        if (hasClass(e, 'autohide')) {
+            var wrap = e.previousElementSibling;
+            if (wrap && hasClass(wrap, 'toggle-wrapper')) {
+                var toggle = wrap.childNodes[0];
+                var extra = false;
+                if (e.childNodes[0].tagName === 'H3') {
+                    extra = true;
+                }
+                e.style.display = 'none';
+                addClass(wrap, 'collapsed');
+                onEach(toggle.getElementsByClassName('inner'), function(e) {
+                    e.innerHTML = labelForToggleButton(true);
+                });
+                onEach(toggle.getElementsByClassName('toggle-label'), function(e) {
+                    e.style.display = 'inline-block';
+                    if (extra === true) {
+                        i_e.innerHTML = " Show " + e.childNodes[0].innerHTML;
+                    }
+                });
+            }
+        }
         if (e.parentNode.id === "main") {
             var otherMessage;
             if (hasClass(e, "type-decl")) {
@@ -1962,28 +2004,6 @@
             }
         }
     });
-
-    onEach(document.getElementsByClassName('docblock'), function(e) {
-        if (hasClass(e, 'autohide')) {
-            var wrap = e.previousElementSibling;
-            if (wrap && hasClass(wrap, 'toggle-wrapper')) {
-                var toggle = wrap.childNodes[0];
-                if (e.childNodes[0].tagName === 'H3') {
-                    onEach(toggle.getElementsByClassName('toggle-label'), function(i_e) {
-                        i_e.innerHTML = " Show " + e.childNodes[0].innerHTML;
-                    });
-                }
-                e.style.display = 'none';
-                addClass(wrap, 'collapsed');
-                onEach(toggle.getElementsByClassName('inner'), function(e) {
-                    e.innerHTML = labelForToggleButton(true);
-                });
-                onEach(toggle.getElementsByClassName('toggle-label'), function(e) {
-                    e.style.display = 'inline-block';
-                });
-            }
-        }
-    })
 
     autoCollapseAllImpls(getPageId());
 
@@ -2087,8 +2107,6 @@
             }
         }
     }
-
-    var search_input = document.getElementsByClassName("search-input")[0];
 
     if (search_input) {
         search_input.onfocus = function() {

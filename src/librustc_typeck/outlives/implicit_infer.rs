@@ -23,7 +23,8 @@ use rustc::ty::{self, AdtKind, CratePredicatesMap, Region, RegionKind, ReprOptio
                 ToPolyTraitRef, ToPredicate, Ty, TyCtxt};
 use rustc::util::nodemap::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lrc;
-use syntax::{abi, ast};
+use rustc_target::spec::abi;
+use syntax::ast;
 use syntax_pos::{Span, DUMMY_SP};
 
 /// Infer predicates for the items in the crate.
@@ -258,7 +259,7 @@ fn check_explicit_predicates<'tcx>(
                 // where OutlivesPredicate<type1, region1> is the predicate
                 // we want to add.
                 ty::Predicate::TypeOutlives(poly) => {
-                    let predicate = poly.0.subst(tcx, substs);
+                    let predicate = poly.skip_binder().subst(tcx, substs);
                     insert_outlives_predicate(
                         tcx,
                         predicate.0.into(),
@@ -271,7 +272,7 @@ fn check_explicit_predicates<'tcx>(
                 // where OutlivesPredicate<region1, region2> is the predicate
                 // we want to add.
                 ty::Predicate::RegionOutlives(poly) => {
-                    let predicate = poly.0.subst(tcx, substs);
+                    let predicate = poly.skip_binder().subst(tcx, substs);
                     insert_outlives_predicate(
                         tcx,
                         predicate.0.into(),

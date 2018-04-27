@@ -76,7 +76,7 @@ pub trait MonoItemExt<'a, 'tcx>: fmt::Debug {
             MonoItem::GlobalAsm(node_id) => {
                 let def_id = tcx.hir.local_def_id(node_id);
                 ty::SymbolName {
-                    name: Symbol::intern(&format!("global_asm_{:?}", def_id)).as_str()
+                    name: Symbol::intern(&format!("global_asm_{:?}", def_id)).as_interned_str()
                 }
             }
         }
@@ -339,7 +339,7 @@ impl<'a, 'tcx> DefPathBasedNames<'a, 'tcx> {
                 }
 
                 let abi = sig.abi();
-                if abi != ::syntax::abi::Abi::Rust {
+                if abi != ::rustc_target::spec::abi::Abi::Rust {
                     output.push_str("extern \"");
                     output.push_str(abi.name());
                     output.push_str("\" ");

@@ -94,6 +94,7 @@ extern crate rustc_platform_intrinsics as intrinsics;
 extern crate rustc_const_math;
 extern crate rustc_data_structures;
 extern crate rustc_errors as errors;
+extern crate rustc_target;
 
 use rustc::hir;
 use rustc::lint;
@@ -111,7 +112,7 @@ use session::{CompileIncomplete, config};
 use util::common::time;
 
 use syntax::ast;
-use syntax::abi::Abi;
+use rustc_target::spec::abi::Abi;
 use syntax_pos::Span;
 
 use std::iter;
@@ -212,7 +213,7 @@ fn check_main_fn_ty<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 tcx.mk_nil()
             };
 
-            let se_ty = tcx.mk_fn_ptr(ty::Binder(
+            let se_ty = tcx.mk_fn_ptr(ty::Binder::bind(
                 tcx.mk_fn_sig(
                     iter::empty(),
                     expected_return_type,
@@ -261,7 +262,7 @@ fn check_start_fn_ty<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 _ => ()
             }
 
-            let se_ty = tcx.mk_fn_ptr(ty::Binder(
+            let se_ty = tcx.mk_fn_ptr(ty::Binder::bind(
                 tcx.mk_fn_sig(
                     [
                         tcx.types.isize,

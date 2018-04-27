@@ -224,7 +224,7 @@ impl<'a, 'tcx, 'rcx> AutoTraitFinder<'a, 'tcx, 'rcx> {
                     let name = if p.name == "" {
                         hir::LifetimeName::Static
                     } else {
-                        hir::LifetimeName::Name(Symbol::intern(&p.name))
+                        hir::LifetimeName::Name(p.name.as_symbol())
                     };
 
                     hir::Lifetime {
@@ -261,7 +261,7 @@ impl<'a, 'tcx, 'rcx> AutoTraitFinder<'a, 'tcx, 'rcx> {
                     span: DUMMY_SP,
                     def: Def::TyParam(param.def_id),
                     segments: HirVec::from_vec(vec![
-                        hir::PathSegment::from_name(Symbol::intern(&param.name))
+                        hir::PathSegment::from_name(param.name.as_symbol())
                     ]),
                 }),
             )),
@@ -286,7 +286,7 @@ impl<'a, 'tcx, 'rcx> AutoTraitFinder<'a, 'tcx, 'rcx> {
             substs: tcx.mk_substs_trait(ty, &[]),
         };
 
-        let trait_pred = ty::Binder(trait_ref);
+        let trait_pred = ty::Binder::bind(trait_ref);
 
         let bail_out = tcx.infer_ctxt().enter(|infcx| {
             let mut selcx = SelectionContext::with_negative(&infcx, true);
@@ -622,7 +622,7 @@ impl<'a, 'tcx, 'rcx> AutoTraitFinder<'a, 'tcx, 'rcx> {
 
         let mut already_visited = FxHashSet();
         let mut predicates = VecDeque::new();
-        predicates.push_back(ty::Binder(ty::TraitPredicate {
+        predicates.push_back(ty::Binder::bind(ty::TraitPredicate {
             trait_ref: ty::TraitRef {
                 def_id: trait_did,
                 substs: infcx.tcx.mk_substs_trait(ty, &[]),

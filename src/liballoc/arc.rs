@@ -60,7 +60,7 @@ const MAX_REFCOUNT: usize = (isize::MAX) as usize;
 /// ## Thread Safety
 ///
 /// Unlike [`Rc<T>`], `Arc<T>` uses atomic operations for its reference
-/// counting  This means that it is thread-safe. The disadvantage is that
+/// counting. This means that it is thread-safe. The disadvantage is that
 /// atomic operations are more expensive than ordinary memory accesses. If you
 /// are not sharing reference-counted values between threads, consider using
 /// [`Rc<T>`] for lower overhead. [`Rc<T>`] is a safe default, because the
@@ -566,7 +566,8 @@ impl<T: ?Sized> Arc<T> {
 
     fn from_box(v: Box<T>) -> Arc<T> {
         unsafe {
-            let bptr = Box::into_raw(v);
+            let box_unique = Box::into_unique(v);
+            let bptr = box_unique.as_ptr();
 
             let value_size = size_of_val(&*bptr);
             let ptr = Self::allocate_for_ptr(bptr);
@@ -578,7 +579,7 @@ impl<T: ?Sized> Arc<T> {
                 value_size);
 
             // Free the allocation without dropping its contents
-            box_free(bptr);
+            box_free(box_unique);
 
             Arc { ptr: NonNull::new_unchecked(ptr), phantom: PhantomData }
         }

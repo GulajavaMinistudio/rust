@@ -58,6 +58,7 @@
 #![feature(nonzero)]
 #![feature(proc_macro_internals)]
 #![feature(quote)]
+#![feature(optin_builtin_traits)]
 #![feature(refcell_replace_swap)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(slice_patterns)]
@@ -81,7 +82,7 @@ extern crate graphviz;
 #[macro_use] extern crate lazy_static;
 #[cfg(windows)]
 extern crate libc;
-extern crate rustc_back;
+extern crate rustc_target;
 #[macro_use] extern crate rustc_data_structures;
 extern crate serialize;
 extern crate rustc_const_math;

@@ -22,7 +22,7 @@ use util::captures::Captures;
 
 use std::iter;
 use std::cmp::Ordering;
-use syntax::abi;
+use rustc_target::spec::abi;
 use syntax::ast::{self, Name};
 use syntax::symbol::{keywords, InternedString};
 
@@ -345,7 +345,7 @@ impl<'tcx> ClosureSubsts<'tcx> {
     /// binder, but it never contains bound regions. Probably this
     /// function should be removed.
     pub fn generator_poly_sig(self, def_id: DefId, tcx: TyCtxt<'_, '_, '_>) -> PolyGenSig<'tcx> {
-        ty::Binder(self.generator_sig(def_id, tcx))
+        ty::Binder::dummy(self.generator_sig(def_id, tcx))
     }
 
     /// Return the "generator signature", which consists of its yield
@@ -504,13 +504,13 @@ impl<'tcx> Slice<ExistentialPredicate<'tcx>> {
 
 impl<'tcx> Binder<&'tcx Slice<ExistentialPredicate<'tcx>>> {
     pub fn principal(&self) -> Option<PolyExistentialTraitRef<'tcx>> {
-        self.skip_binder().principal().map(Binder)
+        self.skip_binder().principal().map(Binder::bind)
     }
 
     #[inline]
     pub fn projection_bounds<'a>(&'a self) ->
         impl Iterator<Item=PolyExistentialProjection<'tcx>> + 'a {
-        self.skip_binder().projection_bounds().map(Binder)
+        self.skip_binder().projection_bounds().map(Binder::bind)
     }
 
     #[inline]
@@ -520,7 +520,7 @@ impl<'tcx> Binder<&'tcx Slice<ExistentialPredicate<'tcx>>> {
 
     pub fn iter<'a>(&'a self)
         -> impl DoubleEndedIterator<Item=Binder<ExistentialPredicate<'tcx>>> + 'tcx {
-        self.skip_binder().iter().cloned().map(Binder)
+        self.skip_binder().iter().cloned().map(Binder::bind)
     }
 }
 
@@ -567,26 +567,16 @@ pub type PolyTraitRef<'tcx> = Binder<TraitRef<'tcx>>;
 
 impl<'tcx> PolyTraitRef<'tcx> {
     pub fn self_ty(&self) -> Ty<'tcx> {
-        self.0.self_ty()
+        self.skip_binder().self_ty()
     }
 
     pub fn def_id(&self) -> DefId {
-        self.0.def_id
-    }
-
-    pub fn substs(&self) -> &'tcx Substs<'tcx> {
-        // FIXME(#20664) every use of this fn is probably a bug, it should yield Binder<>
-        self.0.substs
-    }
-
-    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item=Ty<'tcx>> + 'a {
-        // FIXME(#20664) every use of this fn is probably a bug, it should yield Binder<>
-        self.0.input_types()
+        self.skip_binder().def_id
     }
 
     pub fn to_poly_trait_predicate(&self) -> ty::PolyTraitPredicate<'tcx> {
         // Note that we preserve binding levels
-        Binder(ty::TraitPredicate { trait_ref: self.0.clone() })
+        Binder(ty::TraitPredicate { trait_ref: self.skip_binder().clone() })
     }
 }
 
@@ -633,12 +623,7 @@ pub type PolyExistentialTraitRef<'tcx> = Binder<ExistentialTraitRef<'tcx>>;
 
 impl<'tcx> PolyExistentialTraitRef<'tcx> {
     pub fn def_id(&self) -> DefId {
-        self.0.def_id
-    }
-
-    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item=Ty<'tcx>> + 'a {
-        // FIXME(#20664) every use of this fn is probably a bug, it should yield Binder<>
-        self.0.input_types()
+        self.skip_binder().def_id
     }
 }
 
@@ -650,7 +635,7 @@ impl<'tcx> PolyExistentialTraitRef<'tcx> {
 /// type from `Binder<T>` to just `T` (see
 /// e.g. `liberate_late_bound_regions`).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
-pub struct Binder<T>(pub T);
+pub struct Binder<T>(T);
 
 impl<T> Binder<T> {
     /// Wraps `value` in a binder, asserting that `value` does not
@@ -661,6 +646,12 @@ impl<T> Binder<T> {
         where T: TypeFoldable<'tcx>
     {
         assert!(!value.has_escaping_regions());
+        Binder(value)
+    }
+
+    /// Wraps `value` in a binder, binding late-bound regions (if any).
+    pub fn bind<'tcx>(value: T) -> Binder<T>
+    {
         Binder(value)
     }
 
@@ -685,7 +676,7 @@ impl<T> Binder<T> {
     }
 
     pub fn as_ref(&self) -> Binder<&T> {
-        ty::Binder(&self.0)
+        Binder(&self.0)
     }
 
     pub fn map_bound_ref<F, U>(&self, f: F) -> Binder<U>
@@ -697,7 +688,7 @@ impl<T> Binder<T> {
     pub fn map_bound<F, U>(self, f: F) -> Binder<U>
         where F: FnOnce(T) -> U
     {
-        ty::Binder(f(self.0))
+        Binder(f(self.0))
     }
 
     /// Unwraps and returns the value within, but only if it contains
@@ -730,7 +721,7 @@ impl<T> Binder<T> {
     pub fn fuse<U,F,R>(self, u: Binder<U>, f: F) -> Binder<R>
         where F: FnOnce(T, U) -> R
     {
-        ty::Binder(f(self.0, u.0))
+        Binder(f(self.0, u.0))
     }
 
     /// Split the contents into two things that share the same binder
@@ -743,7 +734,7 @@ impl<T> Binder<T> {
         where F: FnOnce(T) -> (U, V)
     {
         let (u, v) = f(self.0);
-        (ty::Binder(u), ty::Binder(v))
+        (Binder(u), Binder(v))
     }
 }
 
@@ -839,7 +830,7 @@ pub type PolyFnSig<'tcx> = Binder<FnSig<'tcx>>;
 
 impl<'tcx> PolyFnSig<'tcx> {
     pub fn inputs(&self) -> Binder<&'tcx [Ty<'tcx>]> {
-        Binder(self.skip_binder().inputs())
+        self.map_bound_ref(|fn_sig| fn_sig.inputs())
     }
     pub fn input(&self, index: usize) -> ty::Binder<Ty<'tcx>> {
         self.map_bound_ref(|fn_sig| fn_sig.inputs()[index])
@@ -873,7 +864,7 @@ impl<'a, 'gcx, 'tcx> ParamTy {
     }
 
     pub fn for_self() -> ParamTy {
-        ParamTy::new(0, keywords::SelfType.name().as_str())
+        ParamTy::new(0, keywords::SelfType.name().as_interned_str())
     }
 
     pub fn for_def(def: &ty::TypeParameterDef) -> ParamTy {
@@ -885,8 +876,10 @@ impl<'a, 'gcx, 'tcx> ParamTy {
     }
 
     pub fn is_self(&self) -> bool {
-        if self.name == keywords::SelfType.name().as_str() {
-            assert_eq!(self.idx, 0);
+        // FIXME(#50125): Ignoring `Self` with `idx != 0` might lead to weird behavior elsewhere,
+        // but this should only be possible when using `-Z continue-parse-after-error` like
+        // `compile-fail/issue-36638.rs`.
+        if self.name == keywords::SelfType.name().as_str() && self.idx == 0 {
             true
         } else {
             false
@@ -1151,6 +1144,10 @@ impl<'a, 'tcx, 'gcx> PolyExistentialProjection<'tcx> {
     pub fn with_self_ty(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>, self_ty: Ty<'tcx>)
         -> ty::PolyProjectionPredicate<'tcx> {
         self.map_bound(|p| p.with_self_ty(tcx, self_ty))
+    }
+
+    pub fn item_def_id(&self) -> DefId {
+        return self.skip_binder().item_def_id;
     }
 }
 

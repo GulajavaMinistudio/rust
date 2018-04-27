@@ -17,7 +17,7 @@ use hir::def_id::{DefId, LOCAL_CRATE};
 use rustc::{infer, traits};
 use rustc::ty::{self, TyCtxt, TypeFoldable, Ty};
 use rustc::ty::adjustment::{Adjustment, Adjust, AllowTwoPhase, AutoBorrow, AutoBorrowMutability};
-use syntax::abi;
+use rustc_target::spec::abi;
 use syntax::symbol::Symbol;
 use syntax_pos::Span;
 
@@ -267,7 +267,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 // This is the "default" function signature, used in case of error.
                 // In that case, we check each argument against "error" in order to
                 // set up all the node type bindings.
-                (ty::Binder(self.tcx.mk_fn_sig(
+                (ty::Binder::bind(self.tcx.mk_fn_sig(
                     self.err_args(arg_exprs.len()).into_iter(),
                     self.tcx.types.err,
                     false,

@@ -41,7 +41,7 @@ pub use self::object_safety::ObjectSafetyViolation;
 pub use self::object_safety::MethodViolationCode;
 pub use self::on_unimplemented::{OnUnimplementedDirective, OnUnimplementedNote};
 pub use self::select::{EvaluationCache, SelectionContext, SelectionCache};
-pub use self::select::IntercrateAmbiguityCause;
+pub use self::select::{EvaluationResult, IntercrateAmbiguityCause, OverflowError};
 pub use self::specialize::{OverlapError, specialization_graph, translate_substs};
 pub use self::specialize::{SpecializesCache, find_associated_item};
 pub use self::engine::TraitEngine;
@@ -72,6 +72,19 @@ pub mod query;
 pub enum IntercrateMode {
     Issue43355,
     Fixed
+}
+
+// The mode that trait queries run in
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum TraitQueryMode {
+    // Standard/un-canonicalized queries get accurate
+    // spans etc. passed in and hence can do reasonable
+    // error reporting on their own.
+    Standard,
+    // Canonicalized queries get dummy spans and hence
+    // must generally propagate errors to
+    // pre-canonicalization callsites.
+    Canonical,
 }
 
 /// An `Obligation` represents some trait reference (e.g. `int:Eq`) for
@@ -349,6 +362,7 @@ pub enum SelectionError<'tcx> {
                                 ty::error::TypeError<'tcx>),
     TraitNotObjectSafe(DefId),
     ConstEvalFailure(ConstEvalErr<'tcx>),
+    Overflow,
 }
 
 pub struct FulfillmentError<'tcx> {
@@ -550,8 +564,7 @@ pub fn type_known_to_meet_bound<'a, 'gcx, 'tcx>(infcx: &InferCtxt<'a, 'gcx, 'tcx
         predicate: trait_ref.to_predicate(),
     };
 
-    let result = SelectionContext::new(infcx)
-        .evaluate_obligation_conservatively(&obligation);
+    let result = infcx.predicate_must_hold(&obligation);
     debug!("type_known_to_meet_ty={:?} bound={} => {:?}",
            ty, infcx.tcx.item_path_str(def_id), result);
 
@@ -855,16 +868,19 @@ fn vtable_methods<'a, 'tcx>(
 
                 // the method may have some early-bound lifetimes, add
                 // regions for those
-                let substs = Substs::for_item(tcx, def_id,
-                                              |_, _| tcx.types.re_erased,
-                                              |def, _| trait_ref.substs().type_for_def(def));
+                let substs = trait_ref.map_bound(|trait_ref| {
+                    Substs::for_item(
+                        tcx, def_id,
+                        |_, _| tcx.types.re_erased,
+                        |def, _| trait_ref.substs.type_for_def(def))
+                });
 
                 // the trait type may have higher-ranked lifetimes in it;
                 // so erase them if they appear, so that we get the type
                 // at some particular call site
                 let substs = tcx.normalize_erasing_late_bound_regions(
                     ty::ParamEnv::reveal_all(),
-                    &ty::Binder(substs),
+                    &substs
                 );
 
                 // It's possible that the method relies on where clauses that
@@ -997,7 +1013,7 @@ impl<'tcx> FulfillmentError<'tcx> {
 
 impl<'tcx> TraitObligation<'tcx> {
     fn self_ty(&self) -> ty::Binder<Ty<'tcx>> {
-        ty::Binder(self.predicate.skip_binder().self_ty())
+        self.predicate.map_bound(|p| p.self_ty())
     }
 }
 

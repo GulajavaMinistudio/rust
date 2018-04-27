@@ -34,7 +34,7 @@ use middle::resolve_lifetime::{self, ObjectLifetimeDefault};
 use middle::stability;
 use mir::{self, Mir, interpret};
 use mir::interpret::{Value, PrimVal};
-use ty::subst::{Kind, Substs};
+use ty::subst::{Kind, Substs, Subst};
 use ty::ReprOptions;
 use ty::Instance;
 use traits;
@@ -70,7 +70,7 @@ use std::ops::Deref;
 use std::iter;
 use std::sync::mpsc;
 use std::sync::Arc;
-use syntax::abi;
+use rustc_target::spec::abi;
 use syntax::ast::{self, NodeId};
 use syntax::attr;
 use syntax::codemap::MultiSpan;
@@ -1204,7 +1204,9 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                                   f: F) -> R
                                   where F: for<'b> FnOnce(TyCtxt<'b, 'tcx, 'tcx>) -> R
     {
-        let data_layout = TargetDataLayout::parse(s);
+        let data_layout = TargetDataLayout::parse(&s.target.target).unwrap_or_else(|err| {
+            s.fatal(&err);
+        });
         let interners = CtxtInterners::new(&arenas.interner);
         let common_types = CommonTypes::new(&interners);
         let dep_graph = hir.dep_graph.clone();
@@ -1562,6 +1564,7 @@ impl<'gcx: 'tcx, 'tcx> GlobalCtxt<'gcx> {
                 tcx,
                 query: icx.query.clone(),
                 layout_depth: icx.layout_depth,
+                task: icx.task,
             };
             ty::tls::enter_context(&new_icx, |new_icx| {
                 f(new_icx.tcx)
@@ -1741,6 +1744,7 @@ pub mod tls {
     use errors::{Diagnostic, TRACK_DIAGNOSTICS};
     use rustc_data_structures::OnDrop;
     use rustc_data_structures::sync::Lrc;
+    use dep_graph::OpenTask;
 
     /// This is the implicit state of rustc. It contains the current
     /// TyCtxt and query. It is updated when creating a local interner or
@@ -1759,6 +1763,10 @@ pub mod tls {
 
         /// Used to prevent layout from recursing too deeply.
         pub layout_depth: usize,
+
+        /// The current dep graph task. This is used to add dependencies to queries
+        /// when executing them
+        pub task: &'a OpenTask,
     }
 
     // A thread local value which stores a pointer to the current ImplicitCtxt
@@ -1845,6 +1853,7 @@ pub mod tls {
                 tcx,
                 query: None,
                 layout_depth: 0,
+                task: &OpenTask::Ignore,
             };
             enter_context(&icx, |_| {
                 f(tcx)
@@ -2319,7 +2328,15 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     pub fn mk_box(self, ty: Ty<'tcx>) -> Ty<'tcx> {
         let def_id = self.require_lang_item(lang_items::OwnedBoxLangItem);
         let adt_def = self.adt_def(def_id);
-        let substs = self.mk_substs(iter::once(Kind::from(ty)));
+        let generics = self.generics_of(def_id);
+        let mut substs = vec![Kind::from(ty)];
+        // Add defaults for other generic params if there are some.
+        for def in generics.types.iter().skip(1) {
+            assert!(def.has_default);
+            let ty = self.type_of(def.def_id).subst(self, &substs);
+            substs.push(ty.into());
+        }
+        let substs = self.mk_substs(substs.into_iter());
         self.mk_ty(TyAdt(adt_def, substs))
     }
 
@@ -2462,7 +2479,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     }
 
     pub fn mk_self_type(self) -> Ty<'tcx> {
-        self.mk_param(0, keywords::SelfType.name().as_str())
+        self.mk_param(0, keywords::SelfType.name().as_interned_str())
     }
 
     pub fn mk_param_from_def(self, def: &ty::TypeParameterDef) -> Ty<'tcx> {

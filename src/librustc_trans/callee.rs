@@ -26,7 +26,7 @@ use rustc::hir::def_id::DefId;
 use rustc::ty::{self, TypeFoldable};
 use rustc::ty::layout::LayoutOf;
 use rustc::ty::subst::Substs;
-use rustc_back::PanicStrategy;
+use rustc_target::spec::PanicStrategy;
 
 /// Translates a reference to a fn/method item, monomorphizing and
 /// inlining as it goes.
@@ -52,7 +52,7 @@ pub fn get_fn<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
         return llfn;
     }
 
-    let sym = tcx.symbol_name(instance);
+    let sym = tcx.symbol_name(instance).as_str();
     debug!("get_fn({:?}: {:?}) => {}", instance, fn_ty, sym);
 
     // Create a fn pointer with the substituted signature.

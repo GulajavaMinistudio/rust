@@ -74,7 +74,7 @@ use type_of::LayoutLlvmExt;
 use rustc::util::nodemap::{FxHashMap, FxHashSet, DefIdSet};
 use CrateInfo;
 use rustc_data_structures::sync::Lrc;
-use rustc_back::target::TargetTriple;
+use rustc_target::spec::TargetTriple;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -1037,7 +1037,7 @@ fn collect_and_partition_translation_items<'a, 'tcx>(
                 cgus.dedup();
                 for &(ref cgu_name, (linkage, _)) in cgus.iter() {
                     output.push_str(" ");
-                    output.push_str(&cgu_name);
+                    output.push_str(&cgu_name.as_str());
 
                     let linkage_abbrev = match linkage {
                         Linkage::External => "External",

@@ -13,7 +13,7 @@
 use intrinsics::{self, Intrinsic};
 use llvm;
 use llvm::{ValueRef};
-use abi::{Abi, FnType, PassMode};
+use abi::{Abi, FnType, LlvmType, PassMode};
 use mir::place::PlaceRef;
 use mir::operand::{OperandRef, OperandValue};
 use base::*;
@@ -87,7 +87,7 @@ fn get_simple_intrinsic(cx: &CodegenCx, name: &str) -> Option<ValueRef> {
 /// add them to librustc_trans/trans/context.rs
 pub fn trans_intrinsic_call<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
                                       callee_ty: Ty<'tcx>,
-                                      fn_ty: &FnType<'tcx>,
+                                      fn_ty: &FnType<'tcx, Ty<'tcx>>,
                                       args: &[OperandRef<'tcx>],
                                       llresult: ValueRef,
                                       span: Span) {
@@ -103,7 +103,7 @@ pub fn trans_intrinsic_call<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
     let sig = tcx.normalize_erasing_late_bound_regions(ty::ParamEnv::reveal_all(), &sig);
     let arg_tys = sig.inputs();
     let ret_ty = sig.output();
-    let name = &*tcx.item_name(def_id);
+    let name = &*tcx.item_name(def_id).as_str();
 
     let llret_ty = cx.layout_of(ret_ty).llvm_type(cx);
     let result = PlaceRef::new_sized(llresult, fn_ty.ret.layout, fn_ty.ret.layout.align);
@@ -958,7 +958,7 @@ fn gen_fn<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
                     output: Ty<'tcx>,
                     trans: &mut for<'b> FnMut(Builder<'b, 'tcx>))
                     -> ValueRef {
-    let rust_fn_ty = cx.tcx.mk_fn_ptr(ty::Binder(cx.tcx.mk_fn_sig(
+    let rust_fn_ty = cx.tcx.mk_fn_ptr(ty::Binder::bind(cx.tcx.mk_fn_sig(
         inputs.into_iter(),
         output,
         false,
@@ -985,7 +985,7 @@ fn get_rust_try_fn<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
     // Define the type up front for the signature of the rust_try function.
     let tcx = cx.tcx;
     let i8p = tcx.mk_mut_ptr(tcx.types.i8);
-    let fn_ty = tcx.mk_fn_ptr(ty::Binder(tcx.mk_fn_sig(
+    let fn_ty = tcx.mk_fn_ptr(ty::Binder::bind(tcx.mk_fn_sig(
         iter::once(i8p),
         tcx.mk_nil(),
         false,

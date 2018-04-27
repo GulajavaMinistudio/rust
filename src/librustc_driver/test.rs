@@ -31,7 +31,7 @@ use rustc::session::config::{OutputFilenames, OutputTypes};
 use rustc_data_structures::sync::{self, Lrc};
 use syntax;
 use syntax::ast;
-use syntax::abi::Abi;
+use rustc_target::spec::abi::Abi;
 use syntax::codemap::{CodeMap, FilePathMapping, FileName};
 use errors;
 use errors::emitter::Emitter;
@@ -284,7 +284,7 @@ impl<'a, 'gcx, 'tcx> Env<'a, 'gcx, 'tcx> {
     }
 
     pub fn t_fn(&self, input_tys: &[Ty<'tcx>], output_ty: Ty<'tcx>) -> Ty<'tcx> {
-        self.infcx.tcx.mk_fn_ptr(ty::Binder(self.infcx.tcx.mk_fn_sig(
+        self.infcx.tcx.mk_fn_ptr(ty::Binder::bind(self.infcx.tcx.mk_fn_sig(
             input_tys.iter().cloned(),
             output_ty,
             false,
@@ -303,11 +303,11 @@ impl<'a, 'gcx, 'tcx> Env<'a, 'gcx, 'tcx> {
 
     pub fn t_param(&self, index: u32) -> Ty<'tcx> {
         let name = format!("T{}", index);
-        self.infcx.tcx.mk_param(index, Symbol::intern(&name).as_str())
+        self.infcx.tcx.mk_param(index, Symbol::intern(&name).as_interned_str())
     }
 
     pub fn re_early_bound(&self, index: u32, name: &'static str) -> ty::Region<'tcx> {
-        let name = Symbol::intern(name).as_str();
+        let name = Symbol::intern(name).as_interned_str();
         self.infcx.tcx.mk_region(ty::ReEarlyBound(ty::EarlyBoundRegion {
             def_id: self.infcx.tcx.hir.local_def_id(ast::CRATE_NODE_ID),
             index,
