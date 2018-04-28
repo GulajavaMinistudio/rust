@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-trait Trait {}
-type A = Box<dyn Trait>; //~ ERROR `dyn Trait` syntax is unstable
+#![feature(nll)]
+
+struct WithDrop;
+
+impl Drop for WithDrop {
+    fn drop(&mut self) {}
+}
+
+fn reborrow_from_closure(r: &mut ()) -> &mut () {
+    let d = WithDrop;
+    (move || { d; &mut *r })()
+}
 
 fn main() {}

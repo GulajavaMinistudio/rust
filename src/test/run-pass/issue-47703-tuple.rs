@@ -1,4 +1,4 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::error::Error;
+#![feature(nll)]
 
-fn main() -> Result<(), Box<dyn Error>> {
-    Ok(())
+struct WithDrop;
+
+impl Drop for WithDrop {
+    fn drop(&mut self) {}
 }
+
+fn consume(x: (&mut (), WithDrop)) -> &mut () { x.0 }
+
+fn main() {}

@@ -8,8 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::error::Error;
+#![feature(stmt_expr_attributes)]
 
-fn main() -> Result<(), Box<dyn Error>> {
-    Ok(())
+pub fn main() {
+    let _x = #[inline(always)] || {};
+    let _y = #[inline(never)] || {};
+    let _z = #[inline] || {};
 }
