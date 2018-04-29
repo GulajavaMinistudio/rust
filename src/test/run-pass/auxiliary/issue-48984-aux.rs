@@ -8,19 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-pretty pretty-printing is unhygienic
+#![crate_type = "lib"]
+#![crate_name = "issue48984aux"]
 
-#![feature(decl_macro)]
-#![allow(unused)]
+pub trait Foo { type Item; }
 
-macro m($S:ident, $x:ident) {
-    $S { $x: 0 }
-}
-
-mod foo {
-    struct S { x: i32 }
-
-    fn f() { ::m!(S, x); }
-}
-
-fn main() {}
+pub trait Bar: Foo<Item=[u8;1]> {  }

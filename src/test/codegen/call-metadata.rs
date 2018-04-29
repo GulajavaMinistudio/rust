@@ -8,33 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:two_macros.rs
+// Checks that range metadata gets emitted on calls to functions returning a
+// scalar value.
 
-#![feature(use_extern_macros)]
+// compile-flags: -C no-prepopulate-passes
+// min-llvm-version 4.0
 
-extern crate two_macros;
 
-mod foo {
-    pub mod bar {
-        pub use two_macros::m;
-    }
+#![crate_type = "lib"]
+
+pub fn test() {
+    // CHECK: call i8 @some_true(), !range [[R0:![0-9]+]]
+    // CHECK: [[R0]] = !{i8 0, i8 3}
+    some_true();
 }
 
-fn f() {
-    use foo::*;
-    bar::m! { //~ ERROR ambiguous
-        mod bar { pub use two_macros::m; }
-    }
+#[no_mangle]
+fn some_true() -> Option<bool> {
+    Some(true)
 }
-
-pub mod baz {
-    pub use two_macros::m;
-}
-
-fn g() {
-    baz::m! { //~ ERROR ambiguous
-        mod baz { pub use two_macros::m; }
-    }
-}
-
-fn main() {}

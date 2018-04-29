@@ -8,19 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-pretty pretty-printing is unhygienic
+// aux-build:issue-48984-aux.rs
+extern crate issue48984aux;
+use issue48984aux::Bar;
 
-#![feature(decl_macro)]
-#![allow(unused)]
+fn do_thing<T: Bar>() { }
 
-macro m($S:ident, $x:ident) {
-    $S { $x: 0 }
-}
-
-mod foo {
-    struct S { x: i32 }
-
-    fn f() { ::m!(S, x); }
-}
-
-fn main() {}
+fn main() { }
