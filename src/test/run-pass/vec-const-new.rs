@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-enum Enum {
-    X = (1 << 500), //~ ERROR E0080
-    //~| shift left with overflow
-    Y = (1 / 0) //~ ERROR E0080
-    //~| const_err
-    //~| const_err
-    //~| const_err
-}
+// Test that Vec::new() can be used for constants
 
-fn main() {
-}
+#![feature(const_vec_new)]
+
+const MY_VEC: Vec<usize> = Vec::new();
+
+pub fn main() {}

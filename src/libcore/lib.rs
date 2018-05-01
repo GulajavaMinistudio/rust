@@ -76,7 +76,6 @@
 #![feature(doc_cfg)]
 #![feature(doc_spotlight)]
 #![feature(extern_types)]
-#![feature(fn_must_use)]
 #![feature(fundamental)]
 #![feature(intrinsics)]
 #![feature(iterator_flatten)]
@@ -103,6 +102,7 @@
 #![feature(untagged_unions)]
 #![feature(unwind_attributes)]
 #![feature(doc_alias)]
+#![feature(inclusive_range_methods)]
 
 #![cfg_attr(not(stage0), feature(mmx_target_feature))]
 #![cfg_attr(not(stage0), feature(tbm_target_feature))]
@@ -114,6 +114,7 @@
 
 #![cfg_attr(stage0, feature(target_feature))]
 #![cfg_attr(stage0, feature(cfg_target_feature))]
+#![cfg_attr(stage0, feature(fn_must_use))]
 
 #[prelude_import]
 #[allow(unused)]

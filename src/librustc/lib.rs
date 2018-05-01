@@ -69,7 +69,7 @@
 #![feature(trusted_len)]
 #![feature(catch_expr)]
 #![feature(test)]
-#![feature(inclusive_range_fields)]
+#![feature(inclusive_range_methods)]
 
 #![recursion_limit="512"]
 
@@ -85,7 +85,6 @@ extern crate libc;
 extern crate rustc_target;
 #[macro_use] extern crate rustc_data_structures;
 extern crate serialize;
-extern crate rustc_const_math;
 extern crate rustc_errors as errors;
 #[macro_use] extern crate log;
 #[macro_use] extern crate syntax;
