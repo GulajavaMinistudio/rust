@@ -17,7 +17,7 @@ use macros::{InvocationData, LegacyScope};
 use resolve_imports::ImportDirective;
 use resolve_imports::ImportDirectiveSubclass::{self, GlobImport, SingleImport};
 use {Module, ModuleData, ModuleKind, NameBinding, NameBindingKind, ToNameBinding};
-use {Resolver, ResolverArenas};
+use {PerNS, Resolver, ResolverArenas};
 use Namespace::{self, TypeNS, ValueNS, MacroNS};
 use {resolve_error, resolve_struct_error, ResolutionError};
 
@@ -71,7 +71,6 @@ impl<'a> ToNameBinding<'a> for (Def, ty::Visibility, Span, Mark) {
 struct LegacyMacroImports {
     import_all: Option<Span>,
     imports: Vec<(Name, Span)>,
-    reexports: Vec<(Name, Span)>,
 }
 
 impl<'a> Resolver<'a> {
@@ -175,7 +174,11 @@ impl<'a> Resolver<'a> {
                 let subclass = SingleImport {
                     target: ident,
                     source,
-                    result: self.per_ns(|_, _| Cell::new(Err(Undetermined))),
+                    result: PerNS {
+                        type_ns: Cell::new(Err(Undetermined)),
+                        value_ns: Cell::new(Err(Undetermined)),
+                        macro_ns: Cell::new(Err(Undetermined)),
+                    },
                     type_ns_only,
                 };
                 self.add_import_directive(
@@ -621,7 +624,7 @@ impl<'a> Resolver<'a> {
         let legacy_imports = self.legacy_macro_imports(&item.attrs);
         let mut used = legacy_imports != LegacyMacroImports::default();
 
-        // `#[macro_use]` and `#[macro_reexport]` are only allowed at the crate root.
+        // `#[macro_use]` is only allowed at the crate root.
         if self.current_module.parent.is_some() && used {
             span_err!(self.session, item.span, E0468,
                       "an `extern crate` loading macros must be at the crate root");
@@ -669,17 +672,6 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        for (name, span) in legacy_imports.reexports {
-            self.cstore.export_macros_untracked(module.def_id().unwrap().krate);
-            let ident = Ident::with_empty_ctxt(name);
-            let result = self.resolve_ident_in_module(module, ident, MacroNS, false, false, span);
-            if let Ok(binding) = result {
-                let (def, vis) = (binding.def(), binding.vis);
-                self.macro_exports.push(Export { ident, def, vis, span, is_import: true });
-            } else {
-                span_err!(self.session, span, E0470, "re-exported macro not found");
-            }
-        }
         used
     }
 
@@ -714,27 +706,12 @@ impl<'a> Resolver<'a> {
                 match attr.meta_item_list() {
                     Some(names) => for attr in names {
                         if let Some(word) = attr.word() {
-                            imports.imports.push((word.ident.name, attr.span()));
+                            imports.imports.push((word.name(), attr.span()));
                         } else {
                             span_err!(self.session, attr.span(), E0466, "bad macro import");
                         }
                     },
                     None => imports.import_all = Some(attr.span),
-                }
-            } else if attr.check_name("macro_reexport") {
-                let bad_macro_reexport = |this: &mut Self, span| {
-                    span_err!(this.session, span, E0467, "bad macro re-export");
-                };
-                if let Some(names) = attr.meta_item_list() {
-                    for attr in names {
-                        if let Some(word) = attr.word() {
-                            imports.reexports.push((word.ident.name, attr.span()));
-                        } else {
-                            bad_macro_reexport(self, attr.span());
-                        }
-                    }
-                } else {
-                    bad_macro_reexport(self, attr.span());
                 }
             }
         }

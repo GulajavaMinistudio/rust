@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![crate_type = "dylib"]
-#[macro_export]
-macro_rules! reexported {
-    () => ( 3 )
+// Scoped attributes should not trigger an unused attributes lint.
+
+#![feature(tool_attributes)]
+#![deny(unused_attributes)]
+
+fn main() {
+    #[rustfmt::skip]
+    foo ();
+}
+
+fn foo() {
+    assert!(true);
 }

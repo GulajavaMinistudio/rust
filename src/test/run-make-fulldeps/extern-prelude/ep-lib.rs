@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![crate_type = "dylib"]
+#![crate_type = "rlib"]
 
-// Since we load a serialized macro with all its attributes, accidentally
-// re-exporting a `#[macro_export] macro_rules!` is something of a concern!
-//
-// We avoid it at the moment only because of the order in which we do things.
+pub struct S;
 
-#[macro_use] #[no_link]
-extern crate macro_reexport_1;
+impl S {
+    pub fn external(&self) {}
+}

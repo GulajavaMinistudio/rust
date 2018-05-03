@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![no_std]
-#![feature(macro_reexport)]
-
-#[allow(unused_extern_crates)]
-#[macro_reexport]  //~ ERROR bad macro re-export
-extern crate std;
+fn main() {
+    #[rustfmt::skip] //~ ERROR scoped attribute `rustfmt::skip` is experimental
+    let x =
+        3;
+}

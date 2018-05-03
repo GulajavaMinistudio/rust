@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:macro_reexport_1.rs
+// Make sure that 'custom_attributes' feature does not allow scoped attributes.
 
-#![feature(macro_reexport)]
+#![feature(custom_attributes)]
 
-#[macro_reexport(reexported)]
-#[no_link]
-extern crate macro_reexport_1;
-
-fn main() {
-    assert_eq!(reexported!(), 3);
-    //~^ ERROR cannot find macro
-}
+#[foo::bar]
+//~^ ERROR scoped attribute `foo::bar` is experimental (see issue #44690) [E0658]
+//~^^ ERROR an unknown tool name found in scoped attribute: `foo::bar`. [E0694]
+fn main() {}

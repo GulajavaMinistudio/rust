@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![crate_type = "dylib"]
-#[macro_export]
-macro_rules! reexported {
-    () => ( 3 )
+// Extern prelude shadows standard library prelude
+
+#![feature(extern_prelude)]
+
+fn main() {
+    let x = Vec::new(0f32, ()); // OK
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:derive-a.rs
-// aux-build:derive-reexport.rs
-// ignore-stage1
+// Extern prelude names are not available by absolute paths
 
-#[macro_use]
-extern crate derive_reexport;
+#![feature(extern_prelude)]
 
-#[derive(Debug, PartialEq, A, Eq, Copy, Clone)]
-struct A;
+use ep_lib::S;
 
-fn main() {}
+fn main() {
+    let s = ::ep_lib::S;
+}

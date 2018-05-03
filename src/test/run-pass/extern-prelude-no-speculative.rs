@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-test not a test, auxiliary
+// compile-flags: --extern LooksLikeExternCrate=/path/to/nowhere
 
-#![feature(macro_reexport)]
+mod m {
+    pub struct LooksLikeExternCrate;
+}
 
-#[macro_reexport(A)]
-extern crate derive_a;
+fn main() {
+    // OK, speculative resolution for `unused_qualifications` doesn't try
+    // to resolve this as an extern crate and load that crate
+    let s = m::LooksLikeExternCrate {};
+}

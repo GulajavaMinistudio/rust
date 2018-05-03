@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that macro re-exports item are gated by `macro_reexport` feature gate.
+#![feature(tool_attributes)]
 
-// aux-build:macro_reexport_1.rs
-// gate-test-macro_reexport
+#![foo::bar] //~ ERROR an unknown tool name found in scoped attribute: `foo::bar`. [E0694]
 
-#![crate_type = "dylib"]
-
-#[macro_reexport(reexported)]
-//~^ ERROR macros re-exports are experimental and possibly buggy
-#[macro_use] #[no_link]
-extern crate macro_reexport_1;
+#[foo::bar] //~ ERROR an unknown tool name found in scoped attribute: `foo::bar`. [E0694]
+fn main() {}
