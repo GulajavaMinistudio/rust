@@ -46,7 +46,7 @@ use syntax::attr;
 use syntax::feature_gate::{AttributeGate, AttributeType, Stability, deprecated_attributes};
 use syntax_pos::{BytePos, Span, SyntaxContext};
 use syntax::symbol::keywords;
-use syntax::errors::DiagnosticBuilder;
+use syntax::errors::{Applicability, DiagnosticBuilder};
 
 use rustc::hir::{self, PatKind};
 use rustc::hir::intravisit::FnKind;
@@ -1300,7 +1300,19 @@ impl UnreachablePub {
             } else {
                 "pub(crate)"
             }.to_owned();
-            err.span_suggestion(pub_span, "consider restricting its visibility", replacement);
+            let app = if span.ctxt().outer().expn_info().is_none() {
+                // even if macros aren't involved the suggestion
+                // may be incorrect -- the user may have mistakenly
+                // hidden it behind a private module and this lint is
+                // a helpful way to catch that. However, we're trying
+                // not to change the nature of the code with this lint
+                // so it's marked as machine applicable.
+                Applicability::MachineApplicable
+            } else {
+                Applicability::MaybeIncorrect
+            };
+            err.span_suggestion_with_applicability(pub_span, "consider restricting its visibility",
+                                                   replacement, app);
             if exportable {
                 err.help("or consider exporting it for use by other crates");
             }
@@ -1506,5 +1518,68 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnusedBrokenConst {
             ),
             _ => {},
         }
+    }
+}
+
+declare_lint! {
+    pub UNNECESSARY_EXTERN_CRATE,
+    Allow,
+    "suggest removing `extern crate` for the 2018 edition"
+}
+
+pub struct ExternCrate(/* depth */ u32);
+
+impl ExternCrate {
+    pub fn new() -> Self {
+        ExternCrate(0)
+    }
+}
+
+impl LintPass for ExternCrate {
+    fn get_lints(&self) -> LintArray {
+        lint_array!(UNNECESSARY_EXTERN_CRATE)
+    }
+}
+
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ExternCrate {
+    fn check_item(&mut self, cx: &LateContext, it: &hir::Item) {
+        if let hir::ItemExternCrate(ref orig) =  it.node {
+            if it.attrs.iter().any(|a| a.check_name("macro_use")) {
+                return
+            }
+            let mut err = cx.struct_span_lint(UNNECESSARY_EXTERN_CRATE,
+                it.span, "`extern crate` is unnecessary in the new edition");
+            if it.vis == hir::Visibility::Public || self.0 > 1 || orig.is_some() {
+                let pub_ = if it.vis == hir::Visibility::Public {
+                    "pub "
+                } else {
+                    ""
+                };
+
+                let help = format!("use `{}use`", pub_);
+
+                if let Some(orig) = orig {
+                    err.span_suggestion(it.span, &help,
+                        format!("{}use {} as {}", pub_, orig, it.name));
+                } else {
+                    err.span_suggestion(it.span, &help,
+                        format!("{}use {}", pub_, it.name));
+                }
+            } else {
+                err.span_suggestion(it.span, "remove it", "".into());
+            }
+
+            err.emit();
+        }
+    }
+
+    fn check_mod(&mut self, _: &LateContext, _: &hir::Mod,
+                 _: Span, _: ast::NodeId) {
+        self.0 += 1;
+    }
+
+    fn check_mod_post(&mut self, _: &LateContext, _: &hir::Mod,
+                      _: Span, _: ast::NodeId) {
+        self.0 += 1;
     }
 }

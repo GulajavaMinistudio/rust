@@ -143,6 +143,7 @@ pub fn register_builtins(store: &mut lint::LintStore, sess: Option<&Session>) {
                           TypeLimits,
                           MissingDoc,
                           MissingDebugImplementations,
+                          ExternCrate,
                           );
 
     add_lint_group!(sess,
@@ -178,9 +179,10 @@ pub fn register_builtins(store: &mut lint::LintStore, sess: Option<&Session>) {
                     UNUSED_PARENS);
 
     add_lint_group!(sess,
-                    "rust_2018_idioms",
+                    "rust_2018_migration",
                     BARE_TRAIT_OBJECT,
-                    UNREACHABLE_PUB);
+                    UNREACHABLE_PUB,
+                    UNNECESSARY_EXTERN_CRATE);
 
     // Guidelines for creating a future incompatibility lint:
     //

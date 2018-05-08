@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: --edition=2018 -Zunstable-options
+// compile-flags: -Cmetadata=aux
 
-#![feature(extern_absolute_paths)]
+pub mod tree {
+    pub use tree;
+}
 
-use ycrate; //~ ERROR can't find crate for `ycrate`
-
-fn main() {}
+pub mod tree2 {
+    pub mod prelude {
+        pub use tree2;
+    }
+}
