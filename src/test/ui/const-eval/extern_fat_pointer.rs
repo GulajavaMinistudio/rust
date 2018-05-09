@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that Vec::new() can be used for constants
+// compile-pass
 
-#![feature(const_vec_new)]
+#![feature(extern_types)]
 
-const MY_VEC: Vec<usize> = Vec::new();
+extern {
+    type Opaque;
+}
 
-pub fn main() {}
+const FOO: *const u8 = &42 as *const _ as *const Opaque as *const u8;
+
+fn main() {
+    let _foo = FOO;
+}
