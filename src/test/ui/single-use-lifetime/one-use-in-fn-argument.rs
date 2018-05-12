@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,14 +7,15 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![deny(single_use_lifetime)]
- // Neither should issue a warning, as explicit lifetimes are mandatory in this case
-struct Foo<'x> { //~ ERROR lifetime name `'x` only used once
-    x: &'x u32
-}
 
-enum Bar<'x> { //~ ERROR lifetime name `'x` only used once
-    Variant(&'x u32)
+#![deny(single_use_lifetime)]
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
+// Test that we DO warn when lifetime name is used only
+// once in a fn argument.
+
+fn a<'a>(x: &'a u32) { //~ ERROR `'a` only used once
 }
 
 fn main() { }

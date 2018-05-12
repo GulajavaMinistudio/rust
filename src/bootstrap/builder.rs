@@ -111,27 +111,34 @@ struct StepDescription {
 }
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
-struct PathSet {
-    set: BTreeSet<PathBuf>,
+pub enum PathSet {
+    Set (BTreeSet<PathBuf>),
+    Suite (PathBuf)
 }
 
 impl PathSet {
     fn empty() -> PathSet {
-        PathSet { set: BTreeSet::new() }
+        PathSet::Set(BTreeSet::new())
     }
 
     fn one<P: Into<PathBuf>>(path: P) -> PathSet {
         let mut set = BTreeSet::new();
         set.insert(path.into());
-        PathSet { set }
+        PathSet::Set(set)
     }
 
     fn has(&self, needle: &Path) -> bool {
-        self.set.iter().any(|p| p.ends_with(needle))
+        match self {
+            PathSet::Set(set) => set.iter().any(|p| p.ends_with(needle)),
+            PathSet::Suite(_) => false
+        }
     }
 
     fn path(&self, builder: &Builder) -> PathBuf {
-        self.set.iter().next().unwrap_or(&builder.build.src).to_path_buf()
+        match self {
+            PathSet::Set(set) => set.iter().next().unwrap_or(&builder.build.src).to_path_buf(),
+            PathSet::Suite(path) => PathBuf::from(path)
+        }
     }
 }
 
@@ -203,7 +210,10 @@ impl StepDescription {
             for path in paths {
                 let mut attempted_run = false;
                 for (desc, should_run) in v.iter().zip(&should_runs) {
-                    if let Some(pathset) = should_run.pathset_for_path(path) {
+                    if let Some(suite) = should_run.is_suite_path(path) {
+                        attempted_run = true;
+                        desc.maybe_run(builder, suite);
+                    } else if let Some(pathset) = should_run.pathset_for_path(path) {
                         attempted_run = true;
                         desc.maybe_run(builder, pathset);
                     }
@@ -250,7 +260,7 @@ impl<'a> ShouldRun<'a> {
         for krate in self.builder.in_tree_crates(name) {
             set.insert(PathBuf::from(&krate.path));
         }
-        self.paths.insert(PathSet { set });
+        self.paths.insert(PathSet::Set(set));
         self
     }
 
@@ -268,9 +278,21 @@ impl<'a> ShouldRun<'a> {
 
     // multiple aliases for the same job
     pub fn paths(mut self, paths: &[&str]) -> Self {
-        self.paths.insert(PathSet {
-            set: paths.iter().map(PathBuf::from).collect(),
-        });
+        self.paths.insert(PathSet::Set(paths.iter().map(PathBuf::from).collect()));
+        self
+    }
+
+    pub fn is_suite_path(&self, path: &Path) -> Option<&PathSet> {
+        self.paths.iter().find(|pathset| {
+            match pathset {
+                PathSet::Suite(p) => path.starts_with(p),
+                PathSet::Set(_) => false
+            }
+        })
+    }
+
+    pub fn suite_path(mut self, suite: &str) -> Self {
+        self.paths.insert(PathSet::Suite(PathBuf::from(suite)));
         self
     }
 
@@ -372,8 +394,10 @@ impl<'a> Builder<'a> {
         }
         let mut help = String::from("Available paths:\n");
         for pathset in should_run.paths {
-            for path in pathset.set {
-                help.push_str(format!("    ./x.py {} {}\n", subcommand, path.display()).as_str());
+            if let PathSet::Set(set) = pathset{
+                set.iter().for_each(|path| help.push_str(
+                    format!("    ./x.py {} {}\n", subcommand, path.display()).as_str()
+                    ))
             }
         }
         Some(help)
@@ -403,6 +427,7 @@ impl<'a> Builder<'a> {
             graph: RefCell::new(Graph::new()),
             parent: Cell::new(None),
         };
+
 
         if kind == Kind::Dist {
             assert!(!builder.config.test_miri, "Do not distribute with miri enabled.\n\
@@ -665,6 +690,10 @@ impl<'a> Builder<'a> {
             cargo.env("RUSTC_CRT_STATIC", x.to_string());
         }
 
+        if let Some(x) = self.crt_static(compiler.host) {
+            cargo.env("RUSTC_HOST_CRT_STATIC", x.to_string());
+        }
+
         // Enable usage of unstable features
         cargo.env("RUSTC_BOOTSTRAP", "1");
         self.add_rust_test_threads(&mut cargo);
@@ -726,7 +755,11 @@ impl<'a> Builder<'a> {
         // the options through environment variables that are fetched and understood by both.
         //
         // FIXME: the guard against msvc shouldn't need to be here
-        if !target.contains("msvc") {
+        if target.contains("msvc") {
+            if let Some(ref cl) = self.config.llvm_clang_cl {
+                cargo.env("CC", cl).env("CXX", cl);
+            }
+        } else {
             let ccache = self.config.ccache.as_ref();
             let ccacheify = |s: &Path| {
                 let ccache = match ccache {

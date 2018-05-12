@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,10 +7,14 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![deny(single_use_lifetime)]
-// FIXME(#44752) -- this scenario should not be warned
-fn deref<'x>() -> &'x u32 { //~ ERROR lifetime name `'x` only used once
-    22
-}
 
-fn main() { }
+// exact-check
+
+const QUERY = 'pinbox::new';
+
+const EXPECTED = {
+    'others': [
+        { 'path': 'std::boxed::PinBox', 'name': 'new' },
+        { 'path': 'alloc::boxed::PinBox', 'name': 'new' },
+    ],
+};
