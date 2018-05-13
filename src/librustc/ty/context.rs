@@ -26,14 +26,12 @@ use lint::{self, Lint};
 use ich::{StableHashingContext, NodeIdHashingMode};
 use infer::canonical::{CanonicalVarInfo, CanonicalVarInfos};
 use infer::outlives::free_region_map::FreeRegionMap;
-use middle::const_val::ConstVal;
-use middle::cstore::{CrateStore, LinkMeta};
+use middle::cstore::{CrateStoreDyn, LinkMeta};
 use middle::cstore::EncodedMetadata;
 use middle::lang_items;
 use middle::resolve_lifetime::{self, ObjectLifetimeDefault};
 use middle::stability;
 use mir::{self, Mir, interpret};
-use mir::interpret::{Value, PrimVal};
 use ty::subst::{Kind, Substs, Subst};
 use ty::ReprOptions;
 use ty::Instance;
@@ -854,7 +852,7 @@ pub struct GlobalCtxt<'tcx> {
     global_arenas: &'tcx GlobalArenas<'tcx>,
     global_interners: CtxtInterners<'tcx>,
 
-    cstore: &'tcx dyn CrateStore,
+    cstore: &'tcx CrateStoreDyn,
 
     pub sess: &'tcx Session,
 
@@ -1131,7 +1129,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             return alloc_id;
         }
         // create an allocation that just contains these bytes
-        let alloc = interpret::Allocation::from_bytes(bytes);
+        let alloc = interpret::Allocation::from_byte_aligned_bytes(bytes);
         let alloc = self.intern_const_alloc(alloc);
 
         // the next unique id
@@ -1190,7 +1188,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     /// value (types, substs, etc.) can only be used while `ty::tls` has a valid
     /// reference to the context, to allow formatting values that need it.
     pub fn create_and_enter<F, R>(s: &'tcx Session,
-                                  cstore: &'tcx dyn CrateStore,
+                                  cstore: &'tcx CrateStoreDyn,
                                   local_providers: ty::maps::Providers<'tcx>,
                                   extern_providers: ty::maps::Providers<'tcx>,
                                   arenas: &'tcx AllArenas<'tcx>,
@@ -1802,9 +1800,11 @@ pub mod tls {
     /// in librustc otherwise. It is used to when diagnostic messages are
     /// emitted and stores them in the current query, if there is one.
     fn track_diagnostic(diagnostic: &Diagnostic) {
-        with_context(|context| {
-            if let Some(ref query) = context.query {
-                query.diagnostics.lock().push(diagnostic.clone());
+        with_context_opt(|icx| {
+            if let Some(icx) = icx {
+                if let Some(ref query) = icx.query {
+                    query.diagnostics.lock().push(diagnostic.clone());
+                }
             }
         })
     }
@@ -2366,10 +2366,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     }
 
     pub fn mk_array(self, ty: Ty<'tcx>, n: u64) -> Ty<'tcx> {
-        self.mk_ty(TyArray(ty, self.mk_const(ty::Const {
-            val: ConstVal::Value(Value::ByVal(PrimVal::Bytes(n.into()))),
-            ty: self.types.usize
-        })))
+        self.mk_ty(TyArray(ty, ty::Const::from_usize(self, n)))
     }
 
     pub fn mk_slice(self, ty: Ty<'tcx>) -> Ty<'tcx> {

@@ -16,7 +16,7 @@ use hir::map::{DefPathData, Node};
 use hir;
 use ich::NodeIdHashingMode;
 use middle::const_val::ConstVal;
-use traits;
+use traits::{self, ObligationCause};
 use ty::{self, Ty, TyCtxt, TypeFoldable};
 use ty::fold::TypeVisitor;
 use ty::subst::UnpackedKind;
@@ -25,7 +25,6 @@ use ty::TypeVariants::*;
 use ty::layout::{Integer, IntegerExt};
 use util::common::ErrorReported;
 use middle::lang_items;
-use mir::interpret::{Value, PrimVal};
 
 use rustc_data_structures::stable_hasher::{StableHasher, StableHasherResult,
                                            HashStable};
@@ -167,9 +166,9 @@ impl IntTypeExt for attr::IntType {
 }
 
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub enum CopyImplementationError<'tcx> {
-    InfrigingField(&'tcx ty::FieldDef),
+    InfrigingFields(Vec<&'tcx ty::FieldDef>),
     NotAnAdt,
     HasDestructor,
 }
@@ -192,7 +191,7 @@ pub enum Representability {
 impl<'tcx> ty::ParamEnv<'tcx> {
     pub fn can_type_implement_copy<'a>(self,
                                        tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                       self_type: Ty<'tcx>, span: Span)
+                                       self_type: Ty<'tcx>)
                                        -> Result<(), CopyImplementationError<'tcx>> {
         // FIXME: (@jroesch) float this code up
         tcx.infer_ctxt().enter(|infcx| {
@@ -208,22 +207,29 @@ impl<'tcx> ty::ParamEnv<'tcx> {
                 _ => return Err(CopyImplementationError::NotAnAdt),
             };
 
-            let field_implements_copy = |field: &ty::FieldDef| {
-                let cause = traits::ObligationCause::dummy();
-                match traits::fully_normalize(&infcx, cause, self, &field.ty(tcx, substs)) {
-                    Ok(ty) => !infcx.type_moves_by_default(self, ty, span),
-                    Err(..) => false,
-                }
-            };
-
+            let mut infringing = Vec::new();
             for variant in &adt.variants {
                 for field in &variant.fields {
-                    if !field_implements_copy(field) {
-                        return Err(CopyImplementationError::InfrigingField(field));
+                    let span = tcx.def_span(field.did);
+                    let ty = field.ty(tcx, substs);
+                    if ty.references_error() {
+                        continue;
                     }
+                    let cause = ObligationCause { span, ..ObligationCause::dummy() };
+                    let ctx = traits::FulfillmentContext::new();
+                    match traits::fully_normalize(&infcx, ctx, cause, self, &ty) {
+                        Ok(ty) => if infcx.type_moves_by_default(self, ty, span) {
+                            infringing.push(field);
+                        }
+                        Err(errors) => {
+                            infcx.report_fulfillment_errors(&errors, None, false);
+                        }
+                    };
                 }
             }
-
+            if !infringing.is_empty() {
+                return Err(CopyImplementationError::InfrigingFields(infringing));
+            }
             if adt.has_dtor(tcx) {
                 return Err(CopyImplementationError::HasDestructor);
             }
@@ -659,9 +665,8 @@ impl<'a, 'gcx, 'tcx, W> TypeVisitor<'tcx> for TypeIdHasher<'a, 'gcx, 'tcx, W>
             TyArray(_, n) => {
                 self.hash_discriminant_u8(&n.val);
                 match n.val {
-                    ConstVal::Value(Value::ByVal(PrimVal::Bytes(b))) => self.hash(b),
+                    ConstVal::Value(alloc) => self.hash(alloc),
                     ConstVal::Unevaluated(def_id, _) => self.def_id(def_id),
-                    _ => bug!("arrays should not have {:?} as length", n)
                 }
             }
             TyRawPtr(m) => self.hash(m.mutbl),
