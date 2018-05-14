@@ -647,7 +647,7 @@ fn check_matcher_core(sess: &ParseSess,
                     let msg = format!("invalid fragment specifier `{}`", bad_frag);
                     sess.span_diagnostic.struct_span_err(token.span(), &msg)
                         .help("valid fragment specifiers are `ident`, `block`, `stmt`, `expr`, \
-                              `pat`, `ty`, `path`, `meta`, `tt`, `item` and `vis`")
+                              `pat`, `ty`, `literal`, `path`, `meta`, `tt`, `item` and `vis`")
                         .emit();
                     // (This eliminates false positives and duplicates
                     // from error messages.)
@@ -784,6 +784,7 @@ fn frag_can_be_followed_by_any(frag: &str) -> bool {
         "item"     | // always terminated by `}` or `;`
         "block"    | // exactly one token tree
         "ident"    | // exactly one token tree
+        "literal"  | // exactly one token tree
         "meta"     | // exactly one token tree
         "lifetime" | // exactly one token tree
         "tt" =>   // exactly one token tree
@@ -850,6 +851,10 @@ fn is_in_follow(tok: &quoted::TokenTree, frag: &str) -> Result<bool, (String, &'
                 // being a single token, idents and lifetimes are harmless
                 Ok(true)
             },
+            "literal" => {
+                // literals may be of a single token, or two tokens (negative numbers)
+                Ok(true)
+            },
             "meta" | "tt" => {
                 // being either a single token or a delimited sequence, tt is
                 // harmless
@@ -873,7 +878,7 @@ fn is_in_follow(tok: &quoted::TokenTree, frag: &str) -> Result<bool, (String, &'
             _ => Err((format!("invalid fragment specifier `{}`", frag),
                      "valid fragment specifiers are `ident`, `block`, \
                       `stmt`, `expr`, `pat`, `ty`, `path`, `meta`, `tt`, \
-                      `item` and `vis`"))
+                      `literal`, `item` and `vis`"))
         }
     }
 }
@@ -899,14 +904,14 @@ fn is_legal_fragment_specifier(sess: &ParseSess,
                                frag_name: &str,
                                frag_span: Span) -> bool {
     match frag_name {
-        "item" | "block" | "stmt" | "expr" | "pat" |
+        "item" | "block" | "stmt" | "expr" | "pat" | "lifetime" |
         "path" | "ty" | "ident" | "meta" | "tt" | "" => true,
-        "lifetime" => {
-            if !features.macro_lifetime_matcher &&
+        "literal" => {
+            if !features.macro_literal_matcher &&
                !attr::contains_name(attrs, "allow_internal_unstable") {
-                let explain = feature_gate::EXPLAIN_LIFETIME_MATCHER;
+                let explain = feature_gate::EXPLAIN_LITERAL_MATCHER;
                 emit_feature_err(sess,
-                                 "macro_lifetime_matcher",
+                                 "macro_literal_matcher",
                                  frag_span,
                                  GateIssue::Language,
                                  explain);

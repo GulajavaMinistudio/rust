@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-macro_rules! foo {
-    ($l:lifetime) => {
-        fn f(arg: &$l str) -> &$l str {
-            arg
-        }
-    }
-}
+// Test that the :lifetime macro fragment cannot be used when macro_lifetime_matcher
+// feature gate is not used.
 
-pub fn main() {
-    foo!('static);
-    let x: &'static str = f("hi");
-    assert_eq!("hi", x);
+macro_rules! m { ($lt:literal) => {} }
+//~^ ERROR :literal fragment specifier is experimental and subject to change
+
+fn main() {
+    m!("some string literal");
 }
