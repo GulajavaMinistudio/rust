@@ -224,6 +224,7 @@ pub fn token_to_string(tok: &Token) -> String {
         token::Pound                => "#".to_string(),
         token::Dollar               => "$".to_string(),
         token::Question             => "?".to_string(),
+        token::SingleQuote          => "'".to_string(),
 
         /* Literals */
         token::Literal(lit, suf) => {
@@ -1791,7 +1792,7 @@ impl<'a> State<'a> {
                         self.print_else(e.as_ref().map(|e| &**e))
                     }
                     // "final else"
-                    ast::ExprKind::Block(ref b) => {
+                    ast::ExprKind::Block(ref b, _) => {
                         self.cbox(INDENT_UNIT - 1)?;
                         self.ibox(0)?;
                         self.s.word(" else ")?;
@@ -2181,7 +2182,11 @@ impl<'a> State<'a> {
                 // empty box to satisfy the close.
                 self.ibox(0)?;
             }
-            ast::ExprKind::Block(ref blk) => {
+            ast::ExprKind::Block(ref blk, opt_label) => {
+                if let Some(label) = opt_label {
+                    self.print_ident(label.ident)?;
+                    self.word_space(":")?;
+                }
                 // containing cbox, will be closed by print-block at }
                 self.cbox(INDENT_UNIT)?;
                 // head-box, will be closed by print-block after {
@@ -2694,7 +2699,12 @@ impl<'a> State<'a> {
         self.word_space("=>")?;
 
         match arm.body.node {
-            ast::ExprKind::Block(ref blk) => {
+            ast::ExprKind::Block(ref blk, opt_label) => {
+                if let Some(label) = opt_label {
+                    self.print_ident(label.ident)?;
+                    self.word_space(":")?;
+                }
+
                 // the block will close the pattern's ibox
                 self.print_block_unclosed_indent(blk, INDENT_UNIT)?;
 

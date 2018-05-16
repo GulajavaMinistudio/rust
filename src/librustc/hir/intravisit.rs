@@ -1015,7 +1015,10 @@ pub fn walk_expr<'v, V: Visitor<'v>>(visitor: &mut V, expression: &'v Expr) {
                              expression.span,
                              expression.id)
         }
-        ExprBlock(ref block) => visitor.visit_block(block),
+        ExprBlock(ref block, ref opt_label) => {
+            walk_list!(visitor, visit_label, opt_label);
+            visitor.visit_block(block);
+        }
         ExprAssign(ref left_hand_expression, ref right_hand_expression) => {
             visitor.visit_expr(right_hand_expression);
             visitor.visit_expr(left_hand_expression)
@@ -1039,10 +1042,8 @@ pub fn walk_expr<'v, V: Visitor<'v>>(visitor: &mut V, expression: &'v Expr) {
             if let Some(ref label) = destination.label {
                 visitor.visit_label(label);
                 match destination.target_id {
-                    ScopeTarget::Block(node_id) |
-                    ScopeTarget::Loop(LoopIdResult::Ok(node_id)) =>
-                        visitor.visit_def_mention(Def::Label(node_id)),
-                    ScopeTarget::Loop(LoopIdResult::Err(_)) => {},
+                    Ok(node_id) => visitor.visit_def_mention(Def::Label(node_id)),
+                    Err(_) => {},
                 };
             }
             walk_list!(visitor, visit_expr, opt_expr);
@@ -1051,10 +1052,8 @@ pub fn walk_expr<'v, V: Visitor<'v>>(visitor: &mut V, expression: &'v Expr) {
             if let Some(ref label) = destination.label {
                 visitor.visit_label(label);
                 match destination.target_id {
-                    ScopeTarget::Block(_) => bug!("can't `continue` to a non-loop block"),
-                    ScopeTarget::Loop(LoopIdResult::Ok(node_id)) =>
-                        visitor.visit_def_mention(Def::Label(node_id)),
-                    ScopeTarget::Loop(LoopIdResult::Err(_)) => {},
+                    Ok(node_id) => visitor.visit_def_mention(Def::Label(node_id)),
+                    Err(_) => {},
                 };
             }
         }

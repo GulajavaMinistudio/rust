@@ -589,7 +589,7 @@ impl_stable_hash_for!(enum hir::Expr_ {
     ExprLoop(body, label, loop_src),
     ExprMatch(matchee, arms, match_src),
     ExprClosure(capture_clause, decl, body_id, span, gen),
-    ExprBlock(blk),
+    ExprBlock(blk, label),
     ExprAssign(lhs, rhs),
     ExprAssignOp(op, lhs, rhs),
     ExprField(owner, field_name),
@@ -656,20 +656,10 @@ impl_stable_hash_for!(struct hir::Destination {
 
 impl_stable_hash_for_spanned!(ast::Ident);
 
-impl_stable_hash_for!(enum hir::LoopIdResult {
-    Ok(node_id),
-    Err(loop_id_error)
-});
-
 impl_stable_hash_for!(enum hir::LoopIdError {
     OutsideLoopScope,
     UnlabeledCfInWhileCondition,
     UnresolvedLabel
-});
-
-impl_stable_hash_for!(enum hir::ScopeTarget {
-    Block(node_id),
-    Loop(loop_id_result)
 });
 
 impl<'a> HashStable<StableHashingContext<'a>> for ast::Ident {
