@@ -388,7 +388,7 @@ extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
   Options.FunctionSections = FunctionSections;
 
   if (TrapUnreachable) {
-    // Tell LLVM to translate `unreachable` into an explicit trap instruction.
+    // Tell LLVM to codegen `unreachable` into an explicit trap instruction.
     // This limits the extent of possible undefined behavior in some cases, as
     // it prevents control flow from "falling through" into whatever code
     // happens to be laid out next in memory.
@@ -430,8 +430,9 @@ extern "C" void LLVMRustConfigurePassManagerBuilder(
     LLVMPassManagerBuilderRef PMBR, LLVMRustCodeGenOptLevel OptLevel,
     bool MergeFunctions, bool SLPVectorize, bool LoopVectorize, bool PrepareForThinLTO,
     const char* PGOGenPath, const char* PGOUsePath) {
-  // Ignore mergefunc for now as enabling it causes crashes.
-  // unwrap(PMBR)->MergeFunctions = MergeFunctions;
+#if LLVM_RUSTLLVM
+  unwrap(PMBR)->MergeFunctions = MergeFunctions;
+#endif
   unwrap(PMBR)->SLPVectorize = SLPVectorize;
   unwrap(PMBR)->OptLevel = fromRust(OptLevel);
   unwrap(PMBR)->LoopVectorize = LoopVectorize;

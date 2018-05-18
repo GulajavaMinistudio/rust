@@ -44,7 +44,7 @@ use syntax::ast::{self, CRATE_NODE_ID};
 use syntax::codemap::Spanned;
 use syntax::attr;
 use syntax::symbol::Symbol;
-use syntax_pos::{self, FileName, FileMap, Span, DUMMY_SP};
+use syntax_pos::{self, hygiene, FileName, FileMap, Span, DUMMY_SP};
 
 use rustc::hir::{self, PatKind};
 use rustc::hir::itemlikevisit::ItemLikeVisitor;
@@ -496,6 +496,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             hash: link_meta.crate_hash,
             disambiguator: tcx.sess.local_crate_disambiguator(),
             panic_strategy: tcx.sess.panic_strategy(),
+            edition: hygiene::default_edition(),
             has_global_allocator: has_global_allocator,
             has_default_lib_allocator: has_default_lib_allocator,
             plugin_registrar_fn: tcx.sess
@@ -868,7 +869,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
 
     fn metadata_output_only(&self) -> bool {
         // MIR optimisation can be skipped when we're just interested in the metadata.
-        !self.tcx.sess.opts.output_types.should_trans()
+        !self.tcx.sess.opts.output_types.should_codegen()
     }
 
     fn const_qualif(&self, mir: u8, body_id: hir::BodyId) -> ConstQualif {
@@ -930,7 +931,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
                 hir::ImplItemKind::Method(ref sig, _) => {
                     let generics = self.tcx.generics_of(def_id);
                     let needs_inline = (generics.requires_monomorphization(self.tcx) ||
-                                        tcx.trans_fn_attrs(def_id).requests_inline()) &&
+                                        tcx.codegen_fn_attrs(def_id).requests_inline()) &&
                                         !self.metadata_output_only();
                     let is_const_fn = sig.constness == hir::Constness::Const;
                     let always_encode_mir = self.tcx.sess.opts.debugging_opts.always_encode_mir;
@@ -1224,8 +1225,9 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
                 hir::ItemConst(..) => self.encode_optimized_mir(def_id),
                 hir::ItemFn(_, _, constness, _, ref generics, _) => {
                     let has_tps = generics.ty_params().next().is_some();
-                    let needs_inline = (has_tps || tcx.trans_fn_attrs(def_id).requests_inline()) &&
-                        !self.metadata_output_only();
+                    let needs_inline =
+                        (has_tps || tcx.codegen_fn_attrs(def_id).requests_inline()) &&
+                            !self.metadata_output_only();
                     let always_encode_mir = self.tcx.sess.opts.debugging_opts.always_encode_mir;
                     if needs_inline || constness == hir::Constness::Const || always_encode_mir {
                         self.encode_optimized_mir(def_id)

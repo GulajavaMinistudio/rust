@@ -27,7 +27,6 @@ use rustc::util::nodemap::{FxHashMap, FxHashSet};
 use syntax::ast::{Ident, Name, NodeId};
 use syntax::ext::base::Determinacy::{self, Determined, Undetermined};
 use syntax::ext::hygiene::Mark;
-use syntax::parse::token;
 use syntax::symbol::keywords;
 use syntax::util::lev_distance::find_best_match_for_name;
 use syntax_pos::Span;
@@ -640,6 +639,7 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
     fn finalize_import(&mut self, directive: &'b ImportDirective<'b>) -> Option<(Span, String)> {
         self.current_module = directive.parent;
         let ImportDirective { ref module_path, span, .. } = *directive;
+        let mut warn_if_binding_comes_from_local_crate = false;
 
         // FIXME: Last path segment is treated specially in import resolution, so extern crate
         // mode for absolute paths needs some special support for single-segment imports.
@@ -653,6 +653,9 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
                     return Some((directive.span,
                                  "cannot glob-import all possible crates".to_string()));
                 }
+                GlobImport { .. } if self.session.features_untracked().extern_absolute_paths => {
+                    self.lint_path_starts_with_module(directive.id, span);
+                }
                 SingleImport { source, target, .. } => {
                     let crate_root = if source.name == keywords::Crate.name() &&
                                         module_path[0].name != keywords::Extern.name() {
@@ -663,7 +666,7 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
                         } else {
                             Some(self.resolve_crate_root(source.span.ctxt().modern(), false))
                         }
-                    } else if is_extern && !token::is_path_segment_keyword(source) {
+                    } else if is_extern && !source.is_path_segment_keyword() {
                         let crate_id =
                             self.resolver.crate_loader.process_use_extern(
                                 source.name,
@@ -676,6 +679,7 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
                         self.populate_module_if_necessary(crate_root);
                         Some(crate_root)
                     } else {
+                        warn_if_binding_comes_from_local_crate = true;
                         None
                     };
 
@@ -710,8 +714,8 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
             }
             PathResult::Failed(span, msg, true) => {
                 let (mut self_path, mut self_result) = (module_path.clone(), None);
-                let is_special = |ident| token::is_path_segment_keyword(ident) &&
-                                         ident.name != keywords::CrateRoot.name();
+                let is_special = |ident: Ident| ident.is_path_segment_keyword() &&
+                                                ident.name != keywords::CrateRoot.name();
                 if !self_path.is_empty() && !is_special(self_path[0]) &&
                    !(self_path.len() > 1 && is_special(self_path[1])) {
                     self_path[0].name = keywords::SelfValue.name();
@@ -868,6 +872,26 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
                     .span_note(directive.span, &note_msg)
                     .emit();
             }
+        }
+
+        if warn_if_binding_comes_from_local_crate {
+            let mut warned = false;
+            self.per_ns(|this, ns| {
+                let binding = match result[ns].get().ok() {
+                    Some(b) => b,
+                    None => return
+                };
+                if let NameBindingKind::Import { directive: d, .. } = binding.kind {
+                    if let ImportDirectiveSubclass::ExternCrate(..) = d.subclass {
+                        return
+                    }
+                }
+                if warned {
+                    return
+                }
+                warned = true;
+                this.lint_path_starts_with_module(directive.id, span);
+            });
         }
 
         // Record what this import resolves to for later uses in documentation,

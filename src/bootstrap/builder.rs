@@ -584,15 +584,22 @@ impl<'a> Builder<'a> {
             cargo.env("RUST_CHECK", "1");
         }
 
-        // If we were invoked from `make` then that's already got a jobserver
-        // set up for us so no need to tell Cargo about jobs all over again.
-        if env::var_os("MAKEFLAGS").is_none() && env::var_os("MFLAGS").is_none() {
-             cargo.arg("-j").arg(self.jobs().to_string());
-        }
+        cargo.arg("-j").arg(self.jobs().to_string());
+        // Remove make-related flags to ensure Cargo can correctly set things up
+        cargo.env_remove("MAKEFLAGS");
+        cargo.env_remove("MFLAGS");
 
         // FIXME: Temporary fix for https://github.com/rust-lang/cargo/issues/3005
         // Force cargo to output binaries with disambiguating hashes in the name
-        cargo.env("__CARGO_DEFAULT_LIB_METADATA", &self.config.channel);
+        let metadata = if compiler.stage == 0 {
+            // Treat stage0 like special channel, whether it's a normal prior-
+            // release rustc or a local rebuild with the same version, so we
+            // never mix these libraries by accident.
+            "bootstrap"
+        } else {
+            &self.config.channel
+        };
+        cargo.env("__CARGO_DEFAULT_LIB_METADATA", &metadata);
 
         let stage;
         if compiler.stage == 0 && self.local_rebuild {
@@ -836,7 +843,7 @@ impl<'a> Builder<'a> {
         // default via `-ldylib=winapi_foo`. That is, they're linked with the
         // `dylib` type with a `winapi_` prefix (so the winapi ones don't
         // conflict with the system MinGW ones). This consequently means that
-        // the binaries we ship of things like rustc_trans (aka the rustc_trans
+        // the binaries we ship of things like rustc_codegen_llvm (aka the rustc_codegen_llvm
         // DLL) when linked against *again*, for example with procedural macros
         // or plugins, will trigger the propagation logic of `-ldylib`, passing
         // `-lwinapi_foo` to the linker again. This isn't actually available in
@@ -1453,6 +1460,7 @@ mod __test {
             rustc_args: vec![],
             fail_fast: true,
             doc_tests: DocTests::No,
+            bless: false,
         };
 
         let build = Build::new(config);

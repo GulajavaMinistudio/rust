@@ -46,7 +46,6 @@
 #![feature(core_intrinsics)]
 #![feature(drain_filter)]
 #![feature(entry_or_default)]
-#![cfg_attr(stage0, feature(dyn_trait))]
 #![feature(from_ref)]
 #![feature(fs_read_write)]
 #![feature(iterator_find_map)]
@@ -56,7 +55,6 @@
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]
 #![feature(non_exhaustive)]
-#![feature(nonzero)]
 #![feature(proc_macro_internals)]
 #![feature(quote)]
 #![feature(optin_builtin_traits)]
@@ -70,7 +68,6 @@
 #![feature(trusted_len)]
 #![feature(catch_expr)]
 #![feature(test)]
-#![feature(inclusive_range_methods)]
 
 #![recursion_limit="512"]
 
