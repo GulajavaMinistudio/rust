@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(align_offset)]
+// compile-flags: -Z borrowck=compare
+
+const ALL_THE_NUMS: [u32; 1] = [
+    1
+];
+
+#[inline(never)]
+fn array(i: usize) -> &'static u32 {
+    return &ALL_THE_NUMS[i];
+}
+
+#[inline(never)]
+fn tuple_field() -> &'static u32 {
+    &(42,).0
+}
 
 fn main() {
-    let x = 1 as *const u8;
-    assert_eq!(x.align_offset(8), 7);
+    assert_eq!(tuple_field().to_string(), "42");
+    assert_eq!(array(0).to_string(), "1");
 }

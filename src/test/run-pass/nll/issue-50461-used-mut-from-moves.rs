@@ -1,4 +1,4 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,18 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#include <stdint.h>
+#![feature(nll)]
+#![deny(unused_mut)]
 
-struct A {
-    A() { v = 1234; }
-    ~A() { v = 1; }
-    uint32_t v;
-};
+struct Foo {
+    pub value: i32
+}
 
-A a;
+fn use_foo_mut(mut foo: Foo) {
+    foo = foo;
+    println!("{}", foo.value);
+}
 
-extern "C" {
-    uint32_t get() {
-        return a.v;
-    }
+fn main() {
+    use_foo_mut(Foo { value: 413 });
 }
