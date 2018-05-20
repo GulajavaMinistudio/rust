@@ -1,4 +1,4 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that a macro can emit delimiters with nothing inside - `()`, `{}`
+#![allow(const_err)]
 
-// aux-build:hello_macro.rs
-// ignore-stage1
-
-#![feature(use_extern_macros, proc_macro_non_items, proc_macro_gen)]
-
-extern crate hello_macro;
+// error-pattern: attempt to divide by zero
 
 fn main() {
-    hello_macro::hello!();
+    let x = &(1 / (1 - 1));
 }

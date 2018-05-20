@@ -14,8 +14,6 @@
 // compile-flags: -O
 fn main() {
     println!("{}", 0u32 - 1);
-    //~^ WARN const_err
-    //~| WARN const_err
     let _x = 0u32 - 1;
     //~^ WARN const_err
     println!("{}", 1/(1-1));
