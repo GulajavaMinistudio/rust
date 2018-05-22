@@ -94,7 +94,7 @@ use rustc::infer::anon_types::AnonTypeDecl;
 use rustc::infer::type_variable::{TypeVariableOrigin};
 use rustc::middle::region;
 use rustc::mir::interpret::{GlobalId};
-use rustc::ty::subst::{Kind, UnpackedKind, Subst, Substs};
+use rustc::ty::subst::{UnpackedKind, Subst, Substs};
 use rustc::traits::{self, ObligationCause, ObligationCauseCode, TraitEngine};
 use rustc::ty::{self, Ty, TyCtxt, GenericParamDefKind, Visibility, ToPredicate};
 use rustc::ty::adjustment::{Adjust, Adjustment, AllowTwoPhase, AutoBorrow, AutoBorrowMutability};
@@ -116,7 +116,6 @@ use std::collections::hash_map::Entry;
 use std::cmp;
 use std::fmt::Display;
 use std::mem::replace;
-use std::iter;
 use std::ops::{self, Deref};
 use rustc_target::spec::abi::Abi;
 use syntax::ast;
@@ -787,20 +786,7 @@ fn primary_body_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                     None,
             }
         }
-        hir::map::NodeExpr(expr) => {
-            // FIXME(eddyb) Closures should have separate
-            // function definition IDs and expression IDs.
-            // Type-checking should not let closures get
-            // this far in a constant position.
-            // Assume that everything other than closures
-            // is a constant "initializer" expression.
-            match expr.node {
-                hir::ExprClosure(..) =>
-                    None,
-                _ =>
-                    Some((hir::BodyId { node_id: expr.id }, None)),
-            }
-        }
+        hir::map::NodeAnonConst(constant) => Some((constant.body, None)),
         _ => None,
     }
 }
@@ -1127,7 +1113,7 @@ fn check_fn<'a, 'gcx, 'tcx>(inherited: &'a Inherited<'a, 'gcx, 'tcx>,
             if id == fn_id {
                 match entry_type {
                     config::EntryMain => {
-                        let substs = fcx.tcx.mk_substs(iter::once(Kind::from(declared_ret_ty)));
+                        let substs = fcx.tcx.mk_substs_trait(declared_ret_ty, &[]);
                         let trait_ref = ty::TraitRef::new(term_id, substs);
                         let return_ty_span = decl.output.span();
                         let cause = traits::ObligationCause::new(
@@ -1674,8 +1660,8 @@ pub fn check_enum<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 
     for v in vs {
-        if let Some(e) = v.node.disr_expr {
-            tcx.typeck_tables_of(tcx.hir.local_def_id(e.node_id));
+        if let Some(ref e) = v.node.disr_expr {
+            tcx.typeck_tables_of(tcx.hir.local_def_id(e.id));
         }
     }
 
@@ -1686,11 +1672,11 @@ pub fn check_enum<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             let variant_i_node_id = tcx.hir.as_local_node_id(def.variants[i].did).unwrap();
             let variant_i = tcx.hir.expect_variant(variant_i_node_id);
             let i_span = match variant_i.node.disr_expr {
-                Some(expr) => tcx.hir.span(expr.node_id),
+                Some(ref expr) => tcx.hir.span(expr.id),
                 None => tcx.hir.span(variant_i_node_id)
             };
             let span = match v.node.disr_expr {
-                Some(expr) => tcx.hir.span(expr.node_id),
+                Some(ref expr) => tcx.hir.span(expr.id),
                 None => v.span
             };
             struct_span_err!(tcx.sess, span, E0081,
@@ -3975,8 +3961,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
               };
               tcx.mk_array(element_ty, args.len() as u64)
           }
-          hir::ExprRepeat(ref element, count) => {
-            let count_def_id = tcx.hir.body_owner_def_id(count);
+          hir::ExprRepeat(ref element, ref count) => {
+            let count_def_id = tcx.hir.local_def_id(count.id);
             let param_env = ty::ParamEnv::empty();
             let substs = Substs::identity_for_item(tcx.global_tcx(), count_def_id);
             let instance = ty::Instance::resolve(
@@ -4765,10 +4751,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             let mut i = param.index as usize;
 
             let segment = if i < fn_start {
-                if let GenericParamDefKind::Type(_) = param.kind {
+                if let GenericParamDefKind::Type {..} = param.kind {
                     // Handle Self first, so we can adjust the index to match the AST.
                     if has_self && i == 0 {
-                        return opt_self_ty.map(|ty| Kind::from(ty)).unwrap_or_else(|| {
+                        return opt_self_ty.map(|ty| ty.into()).unwrap_or_else(|| {
                             self.var_for_def(span, param)
                         });
                     }
@@ -4792,7 +4778,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         self.re_infer(span, Some(param)).unwrap().into()
                     }
                 }
-                GenericParamDefKind::Type(_) => {
+                GenericParamDefKind::Type {..} => {
                     let (types, infer_types) = segment.map_or((&[][..], true), |(s, _)| {
                         (s.parameters.as_ref().map_or(&[][..], |p| &p.types[..]), s.infer_types)
                     });
@@ -4803,7 +4789,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     }
 
                     let has_default = match param.kind {
-                        GenericParamDefKind::Type(ty) => ty.has_default,
+                        GenericParamDefKind::Type { has_default, .. } => has_default,
                         _ => unreachable!()
                     };
 
@@ -4939,9 +4925,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         GenericParamDefKind::Lifetime => {
                             lt_accepted += 1;
                         }
-                        GenericParamDefKind::Type(ty) => {
+                        GenericParamDefKind::Type { has_default, .. } => {
                             ty_params.accepted += 1;
-                            if !ty.has_default {
+                            if !has_default {
                                 ty_params.required += 1;
                             }
                         }
@@ -5038,12 +5024,12 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         let segment = segment.map(|(path_segment, generics)| {
             let explicit = !path_segment.infer_types;
             let impl_trait = generics.params.iter().any(|param| {
-                if let ty::GenericParamDefKind::Type(ty) = param.kind {
-                    if let Some(hir::SyntheticTyParamKind::ImplTrait) = ty.synthetic {
-                        return true;
-                    }
+                match param.kind {
+                    ty::GenericParamDefKind::Type {
+                        synthetic: Some(hir::SyntheticTyParamKind::ImplTrait), ..
+                    } => true,
+                    _ => false,
                 }
-                false
             });
 
             if explicit && impl_trait {

@@ -1316,8 +1316,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
     dep_info_omit_d_target: bool = (false, parse_bool, [TRACKED],
         "in dep-info output, omit targets for tracking dependencies of the dep-info files \
          themselves"),
-    suggestion_applicability: bool = (false, parse_bool, [UNTRACKED],
-        "include machine-applicability of suggestions in JSON output"),
     unpretty: Option<String> = (None, parse_unpretty, [UNTRACKED],
         "Present the input source, unstable (and less-pretty) variants;
         valid types are any of the types for `--pretty`, as well as:
@@ -2020,27 +2018,15 @@ pub fn build_session_options_and_crate_config(
             }
             OptLevel::Default
         } else {
-            match (
-                cg.opt_level.as_ref().map(String::as_ref),
-                nightly_options::is_nightly_build(),
-            ) {
-                (None, _) => OptLevel::No,
-                (Some("0"), _) => OptLevel::No,
-                (Some("1"), _) => OptLevel::Less,
-                (Some("2"), _) => OptLevel::Default,
-                (Some("3"), _) => OptLevel::Aggressive,
-                (Some("s"), true) => OptLevel::Size,
-                (Some("z"), true) => OptLevel::SizeMin,
-                (Some("s"), false) | (Some("z"), false) => {
-                    early_error(
-                        error_format,
-                        &format!(
-                            "the optimizations s or z are only \
-                             accepted on the nightly compiler"
-                        ),
-                    );
-                }
-                (Some(arg), _) => {
+            match cg.opt_level.as_ref().map(String::as_ref) {
+                None => OptLevel::No,
+                Some("0") => OptLevel::No,
+                Some("1") => OptLevel::Less,
+                Some("2") => OptLevel::Default,
+                Some("3") => OptLevel::Aggressive,
+                Some("s") => OptLevel::Size,
+                Some("z") => OptLevel::SizeMin,
+                Some(arg) => {
                     early_error(
                         error_format,
                         &format!(
