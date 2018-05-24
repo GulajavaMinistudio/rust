@@ -33,13 +33,13 @@ pub mod foo {
     use {Bar as SomethingElse, main};
     //~^ ERROR absolute
     //~| WARN this was previously accepted
-    //~| ERROR absolute
-    //~| WARN this was previously accepted
 
     use crate::{Bar as SomethingElse2, main as another_main};
 
     pub fn test() {
     }
+
+    pub trait SomeTrait { }
 }
 
 use bar::Bar;
@@ -58,6 +58,10 @@ mod baz {
     //~^ ERROR absolute
     //~| WARN this was previously accepted
 }
+
+impl ::foo::SomeTrait for u32 { }
+//~^ ERROR absolute
+//~| WARN this was previously accepted
 
 fn main() {
     let x = ::bar::Bar;
