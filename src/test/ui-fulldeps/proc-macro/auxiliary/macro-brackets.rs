@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::fmt::Display;
+// no-prefer-dynamic
 
-fn foo(f: impl Display + Clone) -> String {
-    wants_debug(f);
-    wants_display(f);
-    wants_clone(f);
-}
+#![crate_type = "proc-macro"]
+#![feature(proc_macro)]
 
-fn wants_debug(g: impl Debug) { } //~ ERROR cannot find
-fn wants_display(g: impl Debug) { } //~ ERROR cannot find
-fn wants_clone(g: impl Clone) { }
+extern crate proc_macro;
+use proc_macro::*;
 
-fn main() {
+#[proc_macro_attribute]
+pub fn doit(_: TokenStream, input: TokenStream) -> TokenStream {
+    input.into_iter().collect()
 }

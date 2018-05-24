@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::fmt::Display;
+// aux-build:macro-brackets.rs
 
-fn foo(f: impl Display + Clone) -> String {
-    wants_debug(f);
-    wants_display(f);
-    wants_clone(f);
+#![feature(proc_macro)]
+
+extern crate macro_brackets as bar;
+use bar::doit;
+
+macro_rules! id {
+    ($($t:tt)*) => ($($t)*)
 }
 
-fn wants_debug(g: impl Debug) { } //~ ERROR cannot find
-fn wants_display(g: impl Debug) { } //~ ERROR cannot find
-fn wants_clone(g: impl Clone) { }
+#[doit]
+id![static X: u32 = 'a';]; //~ ERROR: mismatched types
 
-fn main() {
-}
+
+fn main() {}

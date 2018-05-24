@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::fmt::Display;
+// run-pass
+// aux-build:edition-lint-paths.rs
+// run-rustfix
 
-fn foo(f: impl Display + Clone) -> String {
-    wants_debug(f);
-    wants_display(f);
-    wants_clone(f);
-}
+// The "normal case". Ideally we would remove the `extern crate` here,
+// but we don't.
 
-fn wants_debug(g: impl Debug) { } //~ ERROR cannot find
-fn wants_display(g: impl Debug) { } //~ ERROR cannot find
-fn wants_clone(g: impl Clone) { }
+#![feature(rust_2018_preview)]
+#![deny(absolute_path_not_starting_with_crate)]
+
+extern crate edition_lint_paths;
+
+use edition_lint_paths::foo;
 
 fn main() {
+    foo();
 }
+
