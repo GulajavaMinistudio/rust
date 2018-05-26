@@ -10,7 +10,7 @@ mod value;
 
 pub use self::error::{EvalError, EvalResult, EvalErrorKind, AssertMessage};
 
-pub use self::value::{PrimVal, PrimValKind, Value, Pointer, ConstValue};
+pub use self::value::{Scalar, Value, ConstValue};
 
 use std::fmt;
 use mir;
@@ -109,19 +109,26 @@ pub trait PointerArithmetic: layout::HasDataLayout {
 impl<T: layout::HasDataLayout> PointerArithmetic for T {}
 
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, RustcEncodable, RustcDecodable, Hash)]
-pub struct MemoryPointer {
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, RustcEncodable, RustcDecodable, Hash)]
+pub struct Pointer {
     pub alloc_id: AllocId,
     pub offset: Size,
 }
 
-impl<'tcx> MemoryPointer {
+/// Produces a `Pointer` which points to the beginning of the Allocation
+impl From<AllocId> for Pointer {
+    fn from(alloc_id: AllocId) -> Self {
+        Pointer::new(alloc_id, Size::ZERO)
+    }
+}
+
+impl<'tcx> Pointer {
     pub fn new(alloc_id: AllocId, offset: Size) -> Self {
-        MemoryPointer { alloc_id, offset }
+        Pointer { alloc_id, offset }
     }
 
     pub(crate) fn wrapping_signed_offset<C: HasDataLayout>(self, i: i64, cx: C) -> Self {
-        MemoryPointer::new(
+        Pointer::new(
             self.alloc_id,
             Size::from_bytes(cx.data_layout().wrapping_signed_offset(self.offset.bytes(), i)),
         )
@@ -129,11 +136,11 @@ impl<'tcx> MemoryPointer {
 
     pub fn overflowing_signed_offset<C: HasDataLayout>(self, i: i128, cx: C) -> (Self, bool) {
         let (res, over) = cx.data_layout().overflowing_signed_offset(self.offset.bytes(), i);
-        (MemoryPointer::new(self.alloc_id, Size::from_bytes(res)), over)
+        (Pointer::new(self.alloc_id, Size::from_bytes(res)), over)
     }
 
     pub(crate) fn signed_offset<C: HasDataLayout>(self, i: i64, cx: C) -> EvalResult<'tcx, Self> {
-        Ok(MemoryPointer::new(
+        Ok(Pointer::new(
             self.alloc_id,
             Size::from_bytes(cx.data_layout().signed_offset(self.offset.bytes(), i)?),
         ))
@@ -141,11 +148,11 @@ impl<'tcx> MemoryPointer {
 
     pub fn overflowing_offset<C: HasDataLayout>(self, i: Size, cx: C) -> (Self, bool) {
         let (res, over) = cx.data_layout().overflowing_offset(self.offset.bytes(), i.bytes());
-        (MemoryPointer::new(self.alloc_id, Size::from_bytes(res)), over)
+        (Pointer::new(self.alloc_id, Size::from_bytes(res)), over)
     }
 
     pub fn offset<C: HasDataLayout>(self, i: Size, cx: C) -> EvalResult<'tcx, Self> {
-        Ok(MemoryPointer::new(
+        Ok(Pointer::new(
             self.alloc_id,
             Size::from_bytes(cx.data_layout().offset(self.offset.bytes(), i.bytes())?),
         ))
@@ -335,7 +342,7 @@ impl<'tcx, M: fmt::Debug + Eq + Hash + Clone> AllocMap<'tcx, M> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct Allocation {
     /// The actual bytes of the allocation.
     /// Note that the bytes of a pointer represent the offset of the pointer
@@ -355,7 +362,7 @@ pub struct Allocation {
 
 impl Allocation {
     pub fn from_bytes(slice: &[u8], align: Align) -> Self {
-        let mut undef_mask = UndefMask::new(Size::from_bytes(0));
+        let mut undef_mask = UndefMask::new(Size::ZERO);
         undef_mask.grow(Size::from_bytes(slice.len() as u64), true);
         Self {
             bytes: slice.to_owned(),
@@ -384,7 +391,7 @@ impl Allocation {
 
 impl<'tcx> ::serialize::UseSpecializedDecodable for &'tcx Allocation {}
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct Relocations(SortedMap<Size, AllocId>);
 
 impl Relocations {
@@ -455,7 +462,7 @@ pub fn read_target_uint(endianness: layout::Endian, mut source: &[u8]) -> Result
 type Block = u64;
 const BLOCK_SIZE: u64 = 64;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct UndefMask {
     blocks: Vec<Block>,
     len: Size,
@@ -467,7 +474,7 @@ impl UndefMask {
     pub fn new(size: Size) -> Self {
         let mut m = UndefMask {
             blocks: vec![],
-            len: Size::from_bytes(0),
+            len: Size::ZERO,
         };
         m.grow(size, false);
         m

@@ -8,13 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-tidy-linelength
+#![feature(rustc_attrs)]
+#![feature(infer_outlives_requirements)]
 
-// Needs an explicit where clause stating outlives condition. RFC 2093
-
-// Associated type <Iterator>::Item  needs to outlives lifetime 'a.
-struct Foo<'a, T: Iterator> {
-    bar: &'a T::Item //~ Error the associated type `<T as std::iter::Iterator>::Item` may not live long enough [E0309]
+#[rustc_outlives]
+enum Foo<'a, U> { //~ ERROR 15:1: 17:2: rustc_outlives
+    One(Bar<'a, U>)
 }
 
-fn main() { }
+struct Bar<'x, T> where T: 'x {
+    x: &'x (),
+    y: T,
+}
+
+fn main() {}
+

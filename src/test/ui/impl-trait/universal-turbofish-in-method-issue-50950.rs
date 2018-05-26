@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-pass
-
-#![feature(infer_outlives_requirements)]
-// Outlives requirementes are inferred (RFC 2093)
-
-// reference: infer T: 'a
-struct RefFoo<'a, T> {
-    bar: &'a [T]
+use std::any::Any;
+pub struct EventHandler {
 }
 
+impl EventHandler
+{
+    pub fn handle_event<T: Any>(&mut self, _efunc: impl FnMut(T)) {}
+}
 
-fn main() {}
+struct TestEvent(i32);
 
+fn main() {
+    let mut evt = EventHandler {};
+    evt.handle_event::<TestEvent, fn(TestEvent)>(|_evt| {
+        //~^ ERROR cannot provide explicit type parameters
+    });
+}

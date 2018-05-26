@@ -22,7 +22,8 @@ use std::ops::{RangeBounds, Bound, Index, IndexMut};
 /// stores data in a more compact way. It also supports accessing contiguous
 /// ranges of elements as a slice, and slices of already sorted elements can be
 /// inserted efficiently.
-#[derive(Clone, PartialEq, Eq, Hash, Default, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug, RustcEncodable,
+         RustcDecodable)]
 pub struct SortedMap<K: Ord, V> {
     data: Vec<(K,V)>
 }
@@ -214,7 +215,7 @@ impl<K: Ord, V> SortedMap<K, V> {
     fn range_slice_indices<R>(&self, range: R) -> (usize, usize)
         where R: RangeBounds<K>
     {
-        let start = match range.start() {
+        let start = match range.start_bound() {
             Bound::Included(ref k) => {
                 match self.lookup_index_for(k) {
                     Ok(index) | Err(index) => index
@@ -229,7 +230,7 @@ impl<K: Ord, V> SortedMap<K, V> {
             Bound::Unbounded => 0,
         };
 
-        let end = match range.end() {
+        let end = match range.end_bound() {
             Bound::Included(ref k) => {
                 match self.lookup_index_for(k) {
                     Ok(index) => index + 1,

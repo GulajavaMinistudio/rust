@@ -68,6 +68,7 @@
 #![feature(trusted_len)]
 #![feature(catch_expr)]
 #![feature(test)]
+#![feature(in_band_lifetimes)]
 
 #![recursion_limit="512"]
 
@@ -89,6 +90,7 @@ extern crate rustc_errors as errors;
 extern crate syntax_pos;
 extern crate jobserver;
 extern crate proc_macro;
+extern crate chalk_engine;
 
 extern crate serialize as rustc_serialize; // used by deriving
 

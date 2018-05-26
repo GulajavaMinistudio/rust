@@ -8,23 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-test
-// compile-pass
-
+#![feature(rustc_attrs)]
 #![feature(infer_outlives_requirements)]
-// Outlives requirementes are inferred (RFC 2093)
+#![feature(untagged_unions)]
+#![allow(unions_with_drop_fields)]
 
-trait MakeRef<'a> {
-    type Type;
+
+#[rustc_outlives]
+union Foo<'b, U> { //~ ERROR 18:1: 20:2: rustc_outlives
+    bar: Bar<'b, U>
 }
-impl<'a, T> MakeRef<'a> for Vec<T>
-where T: 'a,
-{
-    type Type = &'a T;
-}
-// explicit-impl: T: 'a
-struct Foo<'a, T> {
-    foo: <Vec<T> as MakeRef<'a>>::Type,
+
+union Bar<'a, T> where T: 'a {
+    x: &'a (),
+    y: T,
 }
 
 fn main() {}
+

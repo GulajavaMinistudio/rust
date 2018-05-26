@@ -1,4 +1,4 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Needs an explicit where clause stating outlives condition. (RFC 2093)
-
-// Lifetime 'b needs to outlive lifetime 'a
-struct Foo<'a,'b,T> {
-    x: &'a &'b T //~ ERROR reference has a longer lifetime than the data it references [E0491]
-}
+//compile-pass
 
 fn main() {}
 
+static FOO: u32 = 42;
+
+union Foo {
+    f: Float,
+    r: &'static u32,
+}
+
+#[cfg(target_pointer_width="64")]
+type Float = f64;
+
+#[cfg(target_pointer_width="32")]
+type Float = f32;
+
+static BAR: Float = unsafe { Foo { r: &FOO }.f };

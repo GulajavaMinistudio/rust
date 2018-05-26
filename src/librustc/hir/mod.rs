@@ -598,6 +598,18 @@ pub struct WhereClause {
     pub predicates: HirVec<WherePredicate>,
 }
 
+impl WhereClause {
+    pub fn span(&self) -> Option<Span> {
+        self.predicates.iter().map(|predicate| predicate.span())
+            .fold(None, |acc, i| match (acc, i) {
+                (None, i) => Some(i),
+                (Some(acc), i) => {
+                    Some(acc.to(i))
+                }
+            })
+    }
+}
+
 /// A single predicate in a `where` clause
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub enum WherePredicate {
@@ -930,7 +942,7 @@ pub enum PatKind {
     Slice(HirVec<P<Pat>>, Option<P<Pat>>, HirVec<P<Pat>>),
 }
 
-#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
 pub enum Mutability {
     MutMutable,
     MutImmutable,
@@ -1523,7 +1535,7 @@ pub struct Destination {
     pub target_id: Result<NodeId, LoopIdError>,
 }
 
-#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
 pub enum GeneratorMovability {
     Static,
     Movable,
@@ -1775,7 +1787,7 @@ pub enum IsAuto {
     No
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq,PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub enum Unsafety {
     Unsafe,
     Normal,

@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Needs an explicit where clause stating outlives condition. (RFC 2093)
+#![feature(dyn_trait)]
+#![feature(rustc_attrs)]
+#![feature(infer_outlives_requirements)]
 
-// Type U needs to outlive lifetime 'b.
-struct Foo<'b, U> {
-    bar: Bar<'b, U> //~ Error the parameter type `U` may not live long enough [E0309]
+trait Trait<'x, 's, T> where T: 'x,
+      's: {
 }
 
-struct Bar<'a, T> where T: 'a {
-    x: &'a (),
-    y: T,
+#[rustc_outlives]
+struct Foo<'a, 'b, A> //~ ERROR 20:1: 23:2: rustc_outlives
+{
+    foo: Box<dyn Trait<'a, 'b, A>>
 }
 
-fn main() { }
+fn main() {}

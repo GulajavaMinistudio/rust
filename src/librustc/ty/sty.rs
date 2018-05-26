@@ -17,9 +17,9 @@ use middle::region;
 use rustc_data_structures::indexed_vec::Idx;
 use ty::subst::{Substs, Subst, Kind, UnpackedKind};
 use ty::{self, AdtDef, TypeFlags, Ty, TyCtxt, TypeFoldable};
-use ty::{Slice, TyS};
+use ty::{Slice, TyS, ParamEnvAnd, ParamEnv};
 use util::captures::Captures;
-use mir::interpret::{PrimVal, MemoryPointer, Value, ConstValue};
+use mir::interpret::{Scalar, Pointer, Value, ConstValue};
 
 use std::iter;
 use std::cmp::Ordering;
@@ -34,7 +34,7 @@ use hir;
 use self::InferTy::*;
 use self::TypeVariants::*;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct TypeAndMut<'tcx> {
     pub ty: Ty<'tcx>,
     pub mutbl: hir::Mutability,
@@ -80,7 +80,7 @@ impl BoundRegion {
 
 /// NB: If you change this, you'll probably want to change the corresponding
 /// AST structure in libsyntax/ast.rs as well.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub enum TypeVariants<'tcx> {
     /// The primitive boolean type. Written as `bool`.
     TyBool,
@@ -268,7 +268,7 @@ pub enum TypeVariants<'tcx> {
 ///
 /// It'd be nice to split this struct into ClosureSubsts and
 /// GeneratorSubsts, I believe. -nmatsakis
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct ClosureSubsts<'tcx> {
     /// Lifetime and type parameters from the enclosing function,
     /// concatenated with the types of the upvars.
@@ -351,7 +351,7 @@ impl<'tcx> ClosureSubsts<'tcx> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct GeneratorSubsts<'tcx> {
     pub substs: &'tcx Substs<'tcx>,
 }
@@ -484,7 +484,7 @@ impl<'tcx> UpvarSubsts<'tcx> {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub enum ExistentialPredicate<'tcx> {
     /// e.g. Iterator
     Trait(ExistentialTraitRef<'tcx>),
@@ -660,7 +660,7 @@ impl<'tcx> PolyTraitRef<'tcx> {
 ///
 /// The substitutions don't include the erased `Self`, only trait
 /// type and lifetime parameters (`[X, Y]` and `['a, 'b]` above).
-#[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct ExistentialTraitRef<'tcx> {
     pub def_id: DefId,
     pub substs: &'tcx Substs<'tcx>,
@@ -728,7 +728,7 @@ impl<'tcx> PolyExistentialTraitRef<'tcx> {
 /// erase, or otherwise "discharge" these bound regions, we change the
 /// type from `Binder<T>` to just `T` (see
 /// e.g. `liberate_late_bound_regions`).
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct Binder<T>(T);
 
 impl<T> Binder<T> {
@@ -834,7 +834,7 @@ impl<T> Binder<T> {
 
 /// Represents the projection of an associated type. In explicit UFCS
 /// form this would be written `<T as Trait<..>>::N`.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct ProjectionTy<'tcx> {
     /// The parameters of the associated item.
     pub substs: &'tcx Substs<'tcx>,
@@ -902,7 +902,7 @@ impl<'tcx> PolyGenSig<'tcx> {
 /// - `inputs` is the list of arguments and their modes.
 /// - `output` is the return type.
 /// - `variadic` indicates whether this is a variadic function. (only true for foreign fns)
-#[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct FnSig<'tcx> {
     pub inputs_and_output: &'tcx Slice<Ty<'tcx>>,
     pub variadic: bool,
@@ -946,7 +946,7 @@ impl<'tcx> PolyFnSig<'tcx> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct ParamTy {
     pub idx: u32,
     pub name: InternedString,
@@ -1148,17 +1148,17 @@ pub struct EarlyBoundRegion {
     pub name: InternedString,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct TyVid {
     pub index: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct IntVid {
     pub index: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct FloatVid {
     pub index: u32,
 }
@@ -1169,7 +1169,7 @@ newtype_index!(RegionVid
         DEBUG_FORMAT = custom,
     });
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub enum InferTy {
     TyVar(TyVid),
     IntVar(IntVid),
@@ -1189,7 +1189,7 @@ pub enum InferTy {
 newtype_index!(CanonicalVar);
 
 /// A `ProjectionPredicate` for an `ExistentialTraitRef`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, RustcEncodable, RustcDecodable)]
 pub struct ExistentialProjection<'tcx> {
     pub item_def_id: DefId,
     pub substs: &'tcx Substs<'tcx>,
@@ -1758,7 +1758,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
 }
 
 /// Typed constant value.
-#[derive(Copy, Clone, Debug, Hash, RustcEncodable, RustcDecodable, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Hash, RustcEncodable, RustcDecodable, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Const<'tcx> {
     pub ty: Ty<'tcx>,
 
@@ -1809,51 +1809,64 @@ impl<'tcx> Const<'tcx> {
     }
 
     #[inline]
-    pub fn from_primval(
+    pub fn from_scalar(
         tcx: TyCtxt<'_, '_, 'tcx>,
-        val: PrimVal,
+        val: Scalar,
         ty: Ty<'tcx>,
     ) -> &'tcx Self {
-        Self::from_const_value(tcx, ConstValue::from_primval(val), ty)
+        Self::from_const_value(tcx, ConstValue::from_scalar(val), ty)
     }
 
     #[inline]
     pub fn from_bits(
         tcx: TyCtxt<'_, '_, 'tcx>,
-        val: u128,
-        ty: Ty<'tcx>,
+        bits: u128,
+        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
     ) -> &'tcx Self {
-        Self::from_primval(tcx, PrimVal::Bytes(val), ty)
+        let ty = tcx.lift_to_global(&ty).unwrap();
+        let size = tcx.layout_of(ty).unwrap_or_else(|e| {
+            panic!("could not compute layout for {:?}: {:?}", ty, e)
+        }).size;
+        let shift = 128 - size.bits();
+        let truncated = (bits << shift) >> shift;
+        assert_eq!(truncated, bits, "from_bits called with untruncated value");
+        Self::from_scalar(tcx, Scalar::Bits { bits, defined: size.bits() as u8 }, ty.value)
     }
 
     #[inline]
     pub fn zero_sized(tcx: TyCtxt<'_, '_, 'tcx>, ty: Ty<'tcx>) -> &'tcx Self {
-        Self::from_primval(tcx, PrimVal::Undef, ty)
+        Self::from_scalar(tcx, Scalar::undef(), ty)
     }
 
     #[inline]
     pub fn from_bool(tcx: TyCtxt<'_, '_, 'tcx>, v: bool) -> &'tcx Self {
-        Self::from_bits(tcx, v as u128, tcx.types.bool)
+        Self::from_bits(tcx, v as u128, ParamEnv::empty().and(tcx.types.bool))
     }
 
     #[inline]
     pub fn from_usize(tcx: TyCtxt<'_, '_, 'tcx>, n: u64) -> &'tcx Self {
-        Self::from_bits(tcx, n as u128, tcx.types.usize)
+        Self::from_bits(tcx, n as u128, ParamEnv::empty().and(tcx.types.usize))
     }
 
     #[inline]
-    pub fn to_bits(&self, ty: Ty<'_>) -> Option<u128> {
-        if self.ty != ty {
+    pub fn to_bits(
+        &self,
+        tcx: TyCtxt<'_, '_, 'tcx>,
+        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
+    ) -> Option<u128> {
+        if self.ty != ty.value {
             return None;
         }
+        let ty = tcx.lift_to_global(&ty).unwrap();
+        let size = tcx.layout_of(ty).ok()?.size;
         match self.val {
-            ConstVal::Value(val) => val.to_bits(),
+            ConstVal::Value(val) => val.to_bits(size),
             _ => None,
         }
     }
 
     #[inline]
-    pub fn to_ptr(&self) -> Option<MemoryPointer> {
+    pub fn to_ptr(&self) -> Option<Pointer> {
         match self.val {
             ConstVal::Value(val) => val.to_ptr(),
             _ => None,
@@ -1869,25 +1882,31 @@ impl<'tcx> Const<'tcx> {
     }
 
     #[inline]
-    pub fn to_primval(&self) -> Option<PrimVal> {
+    pub fn to_scalar(&self) -> Option<Scalar> {
         match self.val {
-            ConstVal::Value(val) => val.to_primval(),
+            ConstVal::Value(val) => val.to_scalar(),
             _ => None,
         }
     }
 
     #[inline]
-    pub fn assert_bits(&self, ty: Ty<'_>) -> Option<u128> {
-        assert_eq!(self.ty, ty);
+    pub fn assert_bits(
+        &self,
+        tcx: TyCtxt<'_, '_, '_>,
+        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
+    ) -> Option<u128> {
+        assert_eq!(self.ty, ty.value);
+        let ty = tcx.lift_to_global(&ty).unwrap();
+        let size = tcx.layout_of(ty).ok()?.size;
         match self.val {
-            ConstVal::Value(val) => val.to_bits(),
+            ConstVal::Value(val) => val.to_bits(size),
             _ => None,
         }
     }
 
     #[inline]
     pub fn assert_bool(&self, tcx: TyCtxt<'_, '_, '_>) -> Option<bool> {
-        self.assert_bits(tcx.types.bool).and_then(|v| match v {
+        self.assert_bits(tcx, ParamEnv::empty().and(tcx.types.bool)).and_then(|v| match v {
             0 => Some(false),
             1 => Some(true),
             _ => None,
@@ -1896,14 +1915,18 @@ impl<'tcx> Const<'tcx> {
 
     #[inline]
     pub fn assert_usize(&self, tcx: TyCtxt<'_, '_, '_>) -> Option<u64> {
-        self.assert_bits(tcx.types.usize).map(|v| v as u64)
+        self.assert_bits(tcx, ParamEnv::empty().and(tcx.types.usize)).map(|v| v as u64)
     }
 
     #[inline]
-    pub fn unwrap_bits(&self, ty: Ty<'_>) -> u128 {
-        match self.assert_bits(ty) {
+    pub fn unwrap_bits(
+        &self,
+        tcx: TyCtxt<'_, '_, '_>,
+        ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
+    ) -> u128 {
+        match self.assert_bits(tcx, ty) {
             Some(val) => val,
-            None => bug!("expected bits of {}, got {:#?}", ty, self),
+            None => bug!("expected bits of {}, got {:#?}", ty.value, self),
         }
     }
 
