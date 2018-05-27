@@ -2839,6 +2839,17 @@ impl<'a> Parser<'a> {
                 let (span, e) = self.interpolated_or_expr_span(e)?;
                 (lo.to(span), ExprKind::AddrOf(m, e))
             }
+            token::Ident(..) if self.token.is_keyword(keywords::In) => {
+                self.bump();
+                let place = self.parse_expr_res(
+                    Restrictions::NO_STRUCT_LITERAL,
+                    None,
+                )?;
+                let blk = self.parse_block()?;
+                let span = blk.span;
+                let blk_expr = self.mk_expr(span, ExprKind::Block(blk, None), ThinVec::new());
+                (lo.to(span), ExprKind::ObsoleteInPlace(place, blk_expr))
+            }
             token::Ident(..) if self.token.is_keyword(keywords::Box) => {
                 self.bump();
                 let e = self.parse_prefix_expr(None);
@@ -3042,6 +3053,8 @@ impl<'a> Parser<'a> {
                 }
                 AssocOp::Assign =>
                     self.mk_expr(span, ExprKind::Assign(lhs, rhs), ThinVec::new()),
+                AssocOp::ObsoleteInPlace =>
+                    self.mk_expr(span, ExprKind::ObsoleteInPlace(lhs, rhs), ThinVec::new()),
                 AssocOp::AssignOp(k) => {
                     let aop = match k {
                         token::Plus =>    BinOpKind::Add,
@@ -6054,7 +6067,7 @@ impl<'a> Parser<'a> {
             self.directory.path.to_mut().push(&path.as_str());
             self.directory.ownership = DirectoryOwnership::Owned { relative: None };
         } else {
-            self.directory.path.to_mut().push(&id.name.as_str());
+            self.directory.path.to_mut().push(&id.as_str());
         }
     }
 
@@ -6075,7 +6088,7 @@ impl<'a> Parser<'a> {
         // `./<id>.rs` and `./<id>/mod.rs`.
         let relative_prefix_string;
         let relative_prefix = if let Some(ident) = relative {
-            relative_prefix_string = format!("{}{}", ident.name.as_str(), path::MAIN_SEPARATOR);
+            relative_prefix_string = format!("{}{}", ident.as_str(), path::MAIN_SEPARATOR);
             &relative_prefix_string
         } else {
             ""
