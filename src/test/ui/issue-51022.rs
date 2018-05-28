@@ -8,14 +8,5 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// run-rustfix
-
-#![allow(dead_code)]
-
-struct S {
-    x: u8
-    /// The id of the parent core
-    y: u8,
-}
-//~^^^ ERROR found a documentation comment that doesn't document anything
-fn main() {}
+fn main<'a>() { }
+    //~^ ERROR `main` function is not allowed to have lifetime parameters [E0131]

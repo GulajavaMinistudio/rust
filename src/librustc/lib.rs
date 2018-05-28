@@ -54,6 +54,7 @@
 #![feature(macro_vis_matcher)]
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]
+#![feature(extern_types)]
 #![feature(non_exhaustive)]
 #![feature(proc_macro_internals)]
 #![feature(quote)]
@@ -69,6 +70,7 @@
 #![feature(catch_expr)]
 #![feature(test)]
 #![feature(in_band_lifetimes)]
+#![feature(macro_at_most_once_rep)]
 
 #![recursion_limit="512"]
 

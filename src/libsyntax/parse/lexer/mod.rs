@@ -11,7 +11,7 @@
 use ast::{self, Ident};
 use syntax_pos::{self, BytePos, CharPos, Pos, Span, NO_EXPANSION};
 use codemap::{CodeMap, FilePathMapping};
-use errors::{FatalError, DiagnosticBuilder};
+use errors::{Applicability, FatalError, DiagnosticBuilder};
 use parse::{token, ParseSess};
 use str::char_at;
 use symbol::{Symbol, keywords};
@@ -1075,9 +1075,18 @@ impl<'a> StringReader<'a> {
                 self.bump();
             }
             if self.scan_digits(10, 10) == 0 {
-                self.err_span_(self.pos,
-                               self.next_pos,
-                               "expected at least one digit in exponent")
+                let mut err = self.struct_span_fatal(
+                    self.pos, self.next_pos,
+                    "expected at least one digit in exponent"
+                );
+                if let Some(ch) = self.ch {
+                    // check for e.g. Unicode minus '−' (Issue #49746)
+                    if unicode_chars::check_for_substitution(self, ch, &mut err) {
+                        self.bump();
+                        self.scan_digits(10, 10);
+                    }
+                }
+                err.emit();
             }
         }
     }
@@ -1370,11 +1379,12 @@ impl<'a> StringReader<'a> {
                             self.sess.span_diagnostic
                                 .struct_span_err(span,
                                                  "character literal may only contain one codepoint")
-                                .span_suggestion(span,
-                                                 "if you meant to write a `str` literal, \
-                                                  use double quotes",
-                                                 format!("\"{}\"", &self.src[start..end]))
-                                .emit();
+                                .span_suggestion_with_applicability(
+                                    span,
+                                    "if you meant to write a `str` literal, use double quotes",
+                                    format!("\"{}\"", &self.src[start..end]),
+                                    Applicability::MachineApplicable
+                                ).emit();
                             return Ok(token::Literal(token::Str_(Symbol::intern("??")), None))
                         }
                         if self.ch_is('\n') || self.is_eof() || self.ch_is('/') {
