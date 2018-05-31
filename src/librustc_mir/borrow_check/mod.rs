@@ -198,7 +198,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     let borrow_set = Rc::new(BorrowSet::build(tcx, mir));
 
     // If we are in non-lexical mode, compute the non-lexical lifetimes.
-    let (regioncx, opt_closure_req) = nll::compute_regions(
+    let (regioncx, polonius_output, opt_closure_req) = nll::compute_regions(
         infcx,
         def_id,
         free_regions,
@@ -259,6 +259,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
         flow_uninits,
         flow_move_outs,
         flow_ever_inits,
+        polonius_output,
     );
 
     mbcx.analyze_results(&mut state); // entry point for DataflowResultsConsumer
@@ -291,7 +292,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     debug!("mbcx.used_mut: {:?}", mbcx.used_mut);
 
     for local in mbcx.mir.mut_vars_and_args_iter().filter(|local| !mbcx.used_mut.contains(local)) {
-        if let ClearCrossCrate::Set(ref vsi) = mbcx.mir.visibility_scope_info {
+        if let ClearCrossCrate::Set(ref vsi) = mbcx.mir.source_scope_local_data {
             let local_decl = &mbcx.mir.local_decls[local];
 
             // Skip implicit `self` argument for closures
@@ -305,13 +306,13 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
                 None => continue,
             }
 
-            let source_info = local_decl.source_info;
-            let mut_span = tcx.sess.codemap().span_until_non_whitespace(source_info.span);
+            let span = local_decl.source_info.span;
+            let mut_span = tcx.sess.codemap().span_until_non_whitespace(span);
 
             tcx.struct_span_lint_node(
                 UNUSED_MUT,
-                vsi[local_decl.syntactic_scope].lint_root,
-                source_info.span,
+                vsi[local_decl.source_info.scope].lint_root,
+                span,
                 "variable does not need to be mutable"
             )
             .span_suggestion_short(mut_span, "remove this `mut`", "".to_owned())
@@ -421,6 +422,14 @@ impl<'cx, 'gcx, 'tcx> DataflowResultsConsumer<'cx, 'tcx> for MirBorrowckCtxt<'cx
                     JustWrite,
                     flow_state,
                 );
+            }
+            StatementKind::ReadForMatch(ref place) => {
+                self.access_place(ContextKind::ReadForMatch.new(location),
+                                  (place, span),
+                                  (Deep, Read(ReadKind::Borrow(BorrowKind::Shared))),
+                                  LocalMutationIsAllowed::No,
+                                  flow_state,
+                                  );
             }
             StatementKind::SetDiscriminant {
                 ref place,
@@ -936,6 +945,8 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         let mut error_reported = false;
         let tcx = self.tcx;
         let mir = self.mir;
+        let location_table = &LocationTable::new(mir);
+        let location = location_table.start_index(context.loc);
         let borrow_set = self.borrow_set.clone();
         each_borrow_involving_path(
             self,
@@ -944,7 +955,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
             context,
             (sd, place_span.0),
             &borrow_set,
-            flow_state.borrows_in_scope(),
+            flow_state.borrows_in_scope(location),
             |this, borrow_index, borrow|
             match (rw, borrow.kind) {
                 // Obviously an activation is compatible with its own
@@ -1686,14 +1697,16 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         );
         let mut error_reported = false;
         match kind {
-            Reservation(WriteKind::MutableBorrow(BorrowKind::Unique))
-            | Write(WriteKind::MutableBorrow(BorrowKind::Unique)) => {
-                if let Err(_place_err) = self.is_mutable(place, LocalMutationIsAllowed::Yes) {
-                    span_bug!(span, "&unique borrow for {:?} should not fail", place);
-                }
-            }
-            Reservation(WriteKind::MutableBorrow(BorrowKind::Mut { .. }))
-            | Write(WriteKind::MutableBorrow(BorrowKind::Mut { .. })) => {
+            Reservation(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Unique))
+            | Reservation(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Mut { .. }))
+            | Write(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Unique))
+            | Write(WriteKind::MutableBorrow(borrow_kind @ BorrowKind::Mut { .. })) =>
+            {
+                let is_local_mutation_allowed = match borrow_kind {
+                    BorrowKind::Unique => LocalMutationIsAllowed::Yes,
+                    BorrowKind::Mut { .. } => is_local_mutation_allowed,
+                    BorrowKind::Shared => unreachable!(),
+                };
                 match self.is_mutable(place, is_local_mutation_allowed) {
                     Ok(root_place) => self.add_used_mut(root_place, flow_state),
                     Err(place_err) => {
@@ -2087,6 +2100,7 @@ enum ContextKind {
     CallDest,
     Assert,
     Yield,
+    ReadForMatch,
     StorageDead,
 }
 

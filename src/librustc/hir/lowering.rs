@@ -594,6 +594,18 @@ impl<'a> LoweringContext<'a> {
         span.with_ctxt(SyntaxContext::empty().apply_mark(mark))
     }
 
+    fn with_anonymous_lifetime_mode<R>(
+        &mut self,
+        anonymous_lifetime_mode: AnonymousLifetimeMode,
+        op: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let old_anonymous_lifetime_mode = self.anonymous_lifetime_mode;
+        self.anonymous_lifetime_mode = anonymous_lifetime_mode;
+        let result = op(self);
+        self.anonymous_lifetime_mode = old_anonymous_lifetime_mode;
+        result
+    }
+
     /// Creates a new hir::GenericParam for every new lifetime and
     /// type parameter encountered while evaluating `f`. Definitions
     /// are created with the parent provided. If no `parent_id` is
@@ -1021,17 +1033,22 @@ impl<'a> LoweringContext<'a> {
                     _ => None,
                 }),
                 |this| {
-                    hir::TyBareFn(P(hir::BareFnTy {
-                        generic_params: this.lower_generic_params(
-                            &f.generic_params,
-                            &NodeMap(),
-                            ImplTraitContext::Disallowed,
-                        ),
-                        unsafety: this.lower_unsafety(f.unsafety),
-                        abi: f.abi,
-                        decl: this.lower_fn_decl(&f.decl, None, false),
-                        arg_names: this.lower_fn_args_to_names(&f.decl),
-                    }))
+                    this.with_anonymous_lifetime_mode(
+                        AnonymousLifetimeMode::PassThrough,
+                        |this| {
+                            hir::TyBareFn(P(hir::BareFnTy {
+                                generic_params: this.lower_generic_params(
+                                    &f.generic_params,
+                                    &NodeMap(),
+                                    ImplTraitContext::Disallowed,
+                                ),
+                                unsafety: this.lower_unsafety(f.unsafety),
+                                abi: f.abi,
+                                decl: this.lower_fn_decl(&f.decl, None, false),
+                                arg_names: this.lower_fn_args_to_names(&f.decl),
+                            }))
+                        },
+                    )
                 },
             ),
             TyKind::Never => hir::TyNever,
@@ -1214,7 +1231,13 @@ impl<'a> LoweringContext<'a> {
                 if let &hir::Ty_::TyBareFn(_) = &t.node {
                     let old_collect_elided_lifetimes = self.collect_elided_lifetimes;
                     self.collect_elided_lifetimes = false;
+
+                    // Record the "stack height" of `for<'a>` lifetime bindings
+                    // to be able to later fully undo their introduction.
+                    let old_len = self.currently_bound_lifetimes.len();
                     hir::intravisit::walk_ty(self, t);
+                    self.currently_bound_lifetimes.truncate(old_len);
+
                     self.collect_elided_lifetimes = old_collect_elided_lifetimes;
                 } else {
                     hir::intravisit::walk_ty(self, t);
@@ -1223,28 +1246,25 @@ impl<'a> LoweringContext<'a> {
 
             fn visit_poly_trait_ref(
                 &mut self,
-                polytr: &'v hir::PolyTraitRef,
-                _: hir::TraitBoundModifier,
+                trait_ref: &'v hir::PolyTraitRef,
+                modifier: hir::TraitBoundModifier,
             ) {
+                // Record the "stack height" of `for<'a>` lifetime bindings
+                // to be able to later fully undo their introduction.
                 let old_len = self.currently_bound_lifetimes.len();
+                hir::intravisit::walk_poly_trait_ref(self, trait_ref, modifier);
+                self.currently_bound_lifetimes.truncate(old_len);
+            }
 
+            fn visit_generic_param(&mut self, param: &'v hir::GenericParam) {
                 // Record the introduction of 'a in `for<'a> ...`
-                for param in &polytr.bound_generic_params {
-                    if let hir::GenericParam::Lifetime(ref lt_def) = *param {
-                        // Introduce lifetimes one at a time so that we can handle
-                        // cases like `fn foo<'d>() -> impl for<'a, 'b: 'a, 'c: 'b + 'd>`
-                        self.currently_bound_lifetimes.push(lt_def.lifetime.name);
-
-                        // Visit the lifetime bounds
-                        for lt_bound in &lt_def.bounds {
-                            self.visit_lifetime(&lt_bound);
-                        }
-                    }
+                if let hir::GenericParam::Lifetime(ref lt_def) = *param {
+                    // Introduce lifetimes one at a time so that we can handle
+                    // cases like `fn foo<'d>() -> impl for<'a, 'b: 'a, 'c: 'b + 'd>`
+                    self.currently_bound_lifetimes.push(lt_def.lifetime.name);
                 }
 
-                hir::intravisit::walk_trait_ref(self, &polytr.trait_ref);
-
-                self.currently_bound_lifetimes.truncate(old_len);
+                hir::intravisit::walk_generic_param(self, param);
             }
 
             fn visit_lifetime(&mut self, lifetime: &'v hir::Lifetime) {
@@ -1620,44 +1640,54 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         data: &ParenthesizedParameterData,
     ) -> (hir::PathParameters, bool) {
-        const DISALLOWED: ImplTraitContext = ImplTraitContext::Disallowed;
-        let &ParenthesizedParameterData {
-            ref inputs,
-            ref output,
-            span,
-        } = data;
-        let inputs = inputs
-            .iter()
-            .map(|ty| self.lower_ty(ty, DISALLOWED))
-            .collect();
-        let mk_tup = |this: &mut Self, tys, span| {
-            let LoweredNodeId { node_id, hir_id } = this.next_id();
-            P(hir::Ty {
-                node: hir::TyTup(tys),
-                id: node_id,
-                hir_id,
-                span,
-            })
-        };
+        // Switch to `PassThrough` mode for anonymous lifetimes: this
+        // means that we permit things like `&Ref<T>`, where `Ref` has
+        // a hidden lifetime parameter. This is needed for backwards
+        // compatibility, even in contexts like an impl header where
+        // we generally don't permit such things (see #51008).
+        self.with_anonymous_lifetime_mode(
+            AnonymousLifetimeMode::PassThrough,
+            |this| {
+                const DISALLOWED: ImplTraitContext = ImplTraitContext::Disallowed;
+                let &ParenthesizedParameterData {
+                    ref inputs,
+                    ref output,
+                    span,
+                } = data;
+                let inputs = inputs
+                    .iter()
+                    .map(|ty| this.lower_ty(ty, DISALLOWED))
+                    .collect();
+                let mk_tup = |this: &mut Self, tys, span| {
+                    let LoweredNodeId { node_id, hir_id } = this.next_id();
+                    P(hir::Ty {
+                        node: hir::TyTup(tys),
+                        id: node_id,
+                        hir_id,
+                        span,
+                    })
+                };
 
-        (
-            hir::PathParameters {
-                lifetimes: hir::HirVec::new(),
-                types: hir_vec![mk_tup(self, inputs, span)],
-                bindings: hir_vec![
-                    hir::TypeBinding {
-                        id: self.next_id().node_id,
-                        name: Symbol::intern(FN_OUTPUT_NAME),
-                        ty: output
-                            .as_ref()
-                            .map(|ty| self.lower_ty(&ty, DISALLOWED))
-                            .unwrap_or_else(|| mk_tup(self, hir::HirVec::new(), span)),
-                        span: output.as_ref().map_or(span, |ty| ty.span),
-                    }
-                ],
-                parenthesized: true,
-            },
-            false,
+                (
+                    hir::PathParameters {
+                        lifetimes: hir::HirVec::new(),
+                        types: hir_vec![mk_tup(this, inputs, span)],
+                        bindings: hir_vec![
+                            hir::TypeBinding {
+                                id: this.next_id().node_id,
+                                name: Symbol::intern(FN_OUTPUT_NAME),
+                                ty: output
+                                    .as_ref()
+                                    .map(|ty| this.lower_ty(&ty, DISALLOWED))
+                                    .unwrap_or_else(|| mk_tup(this, hir::HirVec::new(), span)),
+                                span: output.as_ref().map_or(span, |ty| ty.span),
+                            }
+                        ],
+                        parenthesized: true,
+                    },
+                    false,
+                )
+            }
         )
     }
 
