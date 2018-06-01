@@ -8,12 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: --error-format=short
+#![feature(core_intrinsics)]
 
-fn foo(_: u32) {}
+use std::intrinsics;
+
+const SWAPPED_U8: u8 = unsafe { intrinsics::bswap(0x12_u8) };
+const SWAPPED_U16: u16 = unsafe { intrinsics::bswap(0x12_34_u16) };
+const SWAPPED_I32: i32 = unsafe { intrinsics::bswap(0x12_34_56_78_i32) };
 
 fn main() {
-    foo("Bonjour".to_owned());
-    let x = 0u32;
-    x.salut();
+    assert_eq!(SWAPPED_U8, 0x12);
+    assert_eq!(SWAPPED_U16, 0x34_12);
+    assert_eq!(SWAPPED_I32, 0x78_56_34_12);
 }

@@ -8,23 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::num::NonZeroU32;
-use std::u32;
+// Regression test for #51117 in borrowck interaction with match
+// default bindings. The borrow of `*bar` created by `baz` was failing
+// to register as a conflict with `bar.take()`.
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct NodeIndex {
-    index: NonZeroU32,
-}
-
-impl NodeIndex {
-    #[inline]
-    pub fn new(value: usize) -> NodeIndex {
-        assert!(value < (u32::MAX as usize));
-        NodeIndex { index: NonZeroU32::new((value as u32) + 1).unwrap() }
-    }
-
-    #[inline]
-    pub fn get(self) -> usize {
-        (self.index.get() - 1) as usize
+fn main() {
+    let mut foo = Some("foo".to_string());
+    let bar = &mut foo;
+    match bar {
+        Some(baz) => {
+            bar.take(); //~ ERROR cannot borrow
+            drop(baz);
+        },
+        None => unreachable!(),
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: --error-format=short
+#![feature(extern_prelude, lang_items, start, alloc)]
+#![no_std]
 
-fn foo(_: u32) {}
+extern crate std as other;
 
-fn main() {
-    foo("Bonjour".to_owned());
-    let x = 0u32;
-    x.salut();
+mod foo {
+    pub fn test() {
+        let x = core::cmp::min(2, 3);
+        assert_eq!(x, 2);
+    }
+}
+
+#[start]
+fn start(_argc: isize, _argv: *const *const u8) -> isize {
+    foo::test();
+    0
 }
