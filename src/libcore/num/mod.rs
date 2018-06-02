@@ -2313,7 +2313,7 @@ Basic usage:
 ```
 ", $Feature, "assert_eq!((", stringify!($SelfT), "::max_value() - 2).checked_add(1), ",
 "Some(", stringify!($SelfT), "::max_value() - 1));
-assert_eq!((", stringify!($SelfT), "::max_value() - 2).checked_add(3),None);", $EndFeature, "
+assert_eq!((", stringify!($SelfT), "::max_value() - 2).checked_add(3), None);", $EndFeature, "
 ```"),
             #[stable(feature = "rust1", since = "1.0.0")]
             #[inline]
@@ -4453,6 +4453,20 @@ macro_rules! impl_from {
         }
     }
 }
+
+// Bool -> Any
+impl_from! { bool, u8, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, u16, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, u32, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, u64, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, u128, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, usize, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, i8, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, i16, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, i32, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, i64, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, i128, #[stable(feature = "from_bool", since = "1.28.0")] }
+impl_from! { bool, isize, #[stable(feature = "from_bool", since = "1.28.0")] }
 
 // Unsigned -> Unsigned
 impl_from! { u8, u16, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }

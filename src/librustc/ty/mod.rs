@@ -270,7 +270,7 @@ impl Visibility {
     pub fn from_hir(visibility: &hir::Visibility, id: NodeId, tcx: TyCtxt) -> Self {
         match *visibility {
             hir::Public => Visibility::Public,
-            hir::Visibility::Crate => Visibility::Restricted(DefId::local(CRATE_DEF_INDEX)),
+            hir::Visibility::Crate(_) => Visibility::Restricted(DefId::local(CRATE_DEF_INDEX)),
             hir::Visibility::Restricted { ref path, .. } => match path.def {
                 // If there is no resolution, `resolve` will have already reported an error, so
                 // assume that the visibility is public to avoid reporting more privacy errors.
@@ -616,6 +616,8 @@ pub struct Slice<T> {
     data: [T; 0],
     opaque: OpaqueSliceContents,
 }
+
+unsafe impl<T: Sync> Sync for Slice<T> {}
 
 impl<T: Copy> Slice<T> {
     #[inline]
