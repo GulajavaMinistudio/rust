@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// no-prefer-dynamic
-// ignore-stage1
+#include <stdint.h>
 
-#![crate_type = "proc-macro"]
+struct A {
+    A() { v = 1234; }
+    ~A() { v = 1; }
+    uint32_t v;
+};
 
-extern crate proc_macro;
+A a;
 
-use proc_macro::TokenStream;
-
-#[proc_macro_derive(Foo)]
-pub fn foo(input: TokenStream) -> TokenStream {
-    input
+extern "C" {
+    uint32_t get() {
+        return a.v;
+    }
 }

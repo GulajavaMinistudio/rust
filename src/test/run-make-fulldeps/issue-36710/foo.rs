@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// no-prefer-dynamic
-// ignore-stage1
+// Tests that linking to C++ code with global destructors works.
 
-#![crate_type = "proc-macro"]
+extern { fn get() -> u32; }
 
-extern crate proc_macro;
-
-use proc_macro::TokenStream;
-
-#[proc_macro_derive(Foo)]
-pub fn foo(input: TokenStream) -> TokenStream {
-    input
+fn main() {
+    let i = unsafe { get() };
+    assert_eq!(i, 1234);
 }
