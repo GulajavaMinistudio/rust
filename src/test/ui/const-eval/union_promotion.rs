@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,18 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// note-pattern: first defined in crate `std`.
+#![allow(const_err)]
 
-// Test for issue #31788 and E0152
-
-#![feature(lang_items)]
-
-use std::panic::PanicInfo;
-
-#[lang = "panic_impl"]
-fn panic_impl(info: &PanicInfo) -> ! {
-//~^ ERROR: duplicate lang item found: `panic_impl`.
-    loop {}
+union Foo {
+    a: &'static u32,
+    b: usize,
 }
 
-fn main() {}
+fn main() {
+    let x: &'static bool = &unsafe { //~ borrowed value does not live long enough
+        Foo { a: &1 }.b == Foo { a: &2 }.b
+    };
+}

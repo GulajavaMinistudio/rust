@@ -691,41 +691,6 @@ impl<T> [T] {
         Chunks { v: self, chunk_size: chunk_size }
     }
 
-    /// Returns an iterator over `chunk_size` elements of the slice at a
-    /// time. The chunks are slices and do not overlap. If `chunk_size` does
-    /// not divide the length of the slice, then the last up to `chunk_size-1`
-    /// elements will be omitted.
-    ///
-    /// Due to each chunk having exactly `chunk_size` elements, the compiler
-    /// can often optimize the resulting code better than in the case of
-    /// [`chunks`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `chunk_size` is 0.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(exact_chunks)]
-    ///
-    /// let slice = ['l', 'o', 'r', 'e', 'm'];
-    /// let mut iter = slice.exact_chunks(2);
-    /// assert_eq!(iter.next().unwrap(), &['l', 'o']);
-    /// assert_eq!(iter.next().unwrap(), &['r', 'e']);
-    /// assert!(iter.next().is_none());
-    /// ```
-    ///
-    /// [`chunks`]: #method.chunks
-    #[unstable(feature = "exact_chunks", issue = "47115")]
-    #[inline]
-    pub fn exact_chunks(&self, chunk_size: usize) -> ExactChunks<T> {
-        assert!(chunk_size != 0);
-        let rem = self.len() % chunk_size;
-        let len = self.len() - rem;
-        ExactChunks { v: &self[..len], chunk_size: chunk_size}
-    }
-
     /// Returns an iterator over `chunk_size` elements of the slice at a time.
     /// The chunks are mutable slices, and do not overlap. If `chunk_size` does
     /// not divide the length of the slice, then the last chunk will not
@@ -759,6 +724,41 @@ impl<T> [T] {
     pub fn chunks_mut(&mut self, chunk_size: usize) -> ChunksMut<T> {
         assert!(chunk_size != 0);
         ChunksMut { v: self, chunk_size: chunk_size }
+    }
+
+    /// Returns an iterator over `chunk_size` elements of the slice at a
+    /// time. The chunks are slices and do not overlap. If `chunk_size` does
+    /// not divide the length of the slice, then the last up to `chunk_size-1`
+    /// elements will be omitted.
+    ///
+    /// Due to each chunk having exactly `chunk_size` elements, the compiler
+    /// can often optimize the resulting code better than in the case of
+    /// [`chunks`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(exact_chunks)]
+    ///
+    /// let slice = ['l', 'o', 'r', 'e', 'm'];
+    /// let mut iter = slice.exact_chunks(2);
+    /// assert_eq!(iter.next().unwrap(), &['l', 'o']);
+    /// assert_eq!(iter.next().unwrap(), &['r', 'e']);
+    /// assert!(iter.next().is_none());
+    /// ```
+    ///
+    /// [`chunks`]: #method.chunks
+    #[unstable(feature = "exact_chunks", issue = "47115")]
+    #[inline]
+    pub fn exact_chunks(&self, chunk_size: usize) -> ExactChunks<T> {
+        assert!(chunk_size != 0);
+        let rem = self.len() % chunk_size;
+        let len = self.len() - rem;
+        ExactChunks { v: &self[..len], chunk_size: chunk_size}
     }
 
     /// Returns an iterator over `chunk_size` elements of the slice at a time.
@@ -2541,6 +2541,12 @@ macro_rules! iterator {
                 accum
             }
         }
+
+        #[stable(feature = "fused", since = "1.26.0")]
+        impl<'a, T> FusedIterator for $name<'a, T> {}
+
+        #[unstable(feature = "trusted_len", issue = "37572")]
+        unsafe impl<'a, T> TrustedLen for $name<'a, T> {}
     }
 }
 
@@ -2667,12 +2673,6 @@ impl<'a, T> ExactSizeIterator for Iter<'a, T> {
     }
 }
 
-#[stable(feature = "fused", since = "1.26.0")]
-impl<'a, T> FusedIterator for Iter<'a, T> {}
-
-#[unstable(feature = "trusted_len", issue = "37572")]
-unsafe impl<'a, T> TrustedLen for Iter<'a, T> {}
-
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T> Clone for Iter<'a, T> {
     fn clone(&self) -> Iter<'a, T> { Iter { ptr: self.ptr, end: self.end, _marker: self._marker } }
@@ -2734,9 +2734,7 @@ impl<'a, T> IterMut<'a, T> {
     /// View the underlying data as a subslice of the original data.
     ///
     /// To avoid creating `&mut` references that alias, this is forced
-    /// to consume the iterator. Consider using the `Slice` and
-    /// `SliceMut` implementations for obtaining slices with more
-    /// restricted lifetimes that do not consume the iterator.
+    /// to consume the iterator.
     ///
     /// # Examples
     ///
@@ -2794,13 +2792,6 @@ impl<'a, T> ExactSizeIterator for IterMut<'a, T> {
         self.ptr == self.end
     }
 }
-
-#[stable(feature = "fused", since = "1.26.0")]
-impl<'a, T> FusedIterator for IterMut<'a, T> {}
-
-#[unstable(feature = "trusted_len", issue = "37572")]
-unsafe impl<'a, T> TrustedLen for IterMut<'a, T> {}
-
 
 // Return the number of elements of `T` from `start` to `end`.
 // Return the arithmetic difference if `T` is zero size.
@@ -3399,6 +3390,9 @@ impl<'a, T> DoubleEndedIterator for Windows<'a, T> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T> ExactSizeIterator for Windows<'a, T> {}
 
+#[unstable(feature = "trusted_len", issue = "37572")]
+unsafe impl<'a, T> TrustedLen for Windows<'a, T> {}
+
 #[stable(feature = "fused", since = "1.26.0")]
 impl<'a, T> FusedIterator for Windows<'a, T> {}
 
@@ -3518,6 +3512,9 @@ impl<'a, T> DoubleEndedIterator for Chunks<'a, T> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T> ExactSizeIterator for Chunks<'a, T> {}
 
+#[unstable(feature = "trusted_len", issue = "37572")]
+unsafe impl<'a, T> TrustedLen for Chunks<'a, T> {}
+
 #[stable(feature = "fused", since = "1.26.0")]
 impl<'a, T> FusedIterator for Chunks<'a, T> {}
 
@@ -3634,6 +3631,9 @@ impl<'a, T> DoubleEndedIterator for ChunksMut<'a, T> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T> ExactSizeIterator for ChunksMut<'a, T> {}
 
+#[unstable(feature = "trusted_len", issue = "37572")]
+unsafe impl<'a, T> TrustedLen for ChunksMut<'a, T> {}
+
 #[stable(feature = "fused", since = "1.26.0")]
 impl<'a, T> FusedIterator for ChunksMut<'a, T> {}
 
@@ -3744,6 +3744,9 @@ impl<'a, T> ExactSizeIterator for ExactChunks<'a, T> {
     }
 }
 
+#[unstable(feature = "trusted_len", issue = "37572")]
+unsafe impl<'a, T> TrustedLen for ExactChunks<'a, T> {}
+
 #[unstable(feature = "exact_chunks", issue = "47115")]
 impl<'a, T> FusedIterator for ExactChunks<'a, T> {}
 
@@ -3840,6 +3843,9 @@ impl<'a, T> ExactSizeIterator for ExactChunksMut<'a, T> {
         self.v.is_empty()
     }
 }
+
+#[unstable(feature = "trusted_len", issue = "37572")]
+unsafe impl<'a, T> TrustedLen for ExactChunksMut<'a, T> {}
 
 #[unstable(feature = "exact_chunks", issue = "47115")]
 impl<'a, T> FusedIterator for ExactChunksMut<'a, T> {}
