@@ -261,6 +261,7 @@
 #![feature(float_from_str_radix)]
 #![feature(fn_traits)]
 #![feature(fnbox)]
+#![feature(futures_api)]
 #![feature(hashmap_internals)]
 #![feature(heap_api)]
 #![feature(int_error_internals)]
@@ -282,6 +283,7 @@
 #![feature(panic_internals)]
 #![feature(panic_unwind)]
 #![feature(peek)]
+#![feature(pin)]
 #![feature(placement_new_protocol)]
 #![feature(prelude_import)]
 #![feature(ptr_internals)]
@@ -316,6 +318,7 @@
 #![cfg_attr(test, feature(update_panic_count))]
 #![cfg_attr(windows, feature(used))]
 #![feature(doc_alias)]
+#![feature(doc_keyword)]
 #![feature(float_internals)]
 #![feature(panic_info_message)]
 #![cfg_attr(not(stage0), feature(panic_implementation))]
@@ -458,6 +461,20 @@ pub use core::char;
 pub use core::u128;
 #[stable(feature = "core_hint", since = "1.27.0")]
 pub use core::hint;
+
+#[unstable(feature = "futures_api",
+           reason = "futures in libcore are unstable",
+           issue = "50547")]
+pub mod task {
+    //! Types and Traits for working with asynchronous tasks.
+    pub use core::task::*;
+    pub use alloc_crate::task::*;
+}
+
+#[unstable(feature = "futures_api",
+           reason = "futures in libcore are unstable",
+           issue = "50547")]
+pub use core::future;
 
 pub mod f32;
 pub mod f64;
