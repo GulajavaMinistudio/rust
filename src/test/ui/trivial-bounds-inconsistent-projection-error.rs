@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,26 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-mod foo {
-    type T = ();
-    struct S1(pub(in foo) (), pub(T), pub(crate) (), pub(((), T)));
-    struct S2(pub((foo)) ());
-    //~^ ERROR expected `,`, found `(`
-    //~| ERROR cannot find type `foo` in this scope
+#![feature(trivial_bounds)]
+#![allow(unused)]
+
+struct B;
+
+trait A {
+    type X;
+    fn get_x() -> Self::X;
 }
+
+impl A for B {
+    type X = u8;
+    fn get_x() -> u8 { 0 }
+}
+
+fn global_bound_is_hidden() -> u8
+where
+    B: A<X = i32>
+{
+    B::get_x() //~ ERROR
+}
+
+fn main () {}

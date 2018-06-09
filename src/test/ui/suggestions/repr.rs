@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-macro_rules! define_struct {
-    ($t:ty) => {
-        struct S1(pub $t);
-        struct S2(pub (in foo) ());
-        struct S3(pub $t ());
-        //~^ ERROR expected `,`, found `(`
-    }
-}
+// compile-pass
 
-mod foo {
-    define_struct! { (foo) }
-}
+#[repr]
+//^ WARN `repr` attribute must have a hint
+struct _A {}
+
+#[repr = "B"]
+//^ WARN `repr` attribute isn't configurable with a literal
+struct _B {}
+
+#[repr = "C"]
+//^ WARN `repr` attribute isn't configurable with a literal
+struct _C {}
+
+#[repr(C)]
+struct _D {}
+
+fn main() {}
