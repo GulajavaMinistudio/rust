@@ -239,6 +239,7 @@
 #![feature(allow_internal_unsafe)]
 #![feature(allow_internal_unstable)]
 #![feature(align_offset)]
+#![feature(arbitrary_self_types)]
 #![feature(array_error_internals)]
 #![feature(ascii_ctype)]
 #![feature(asm)]
@@ -263,7 +264,6 @@
 #![feature(fnbox)]
 #![feature(futures_api)]
 #![feature(hashmap_internals)]
-#![feature(heap_api)]
 #![feature(int_error_internals)]
 #![feature(integer_atomics)]
 #![feature(into_cow)]
@@ -467,7 +467,9 @@ pub use core::hint;
            issue = "50547")]
 pub mod task {
     //! Types and Traits for working with asynchronous tasks.
+    #[doc(inline)]
     pub use core::task::*;
+    #[doc(inline)]
     pub use alloc_crate::task::*;
 }
 
@@ -496,13 +498,6 @@ pub mod path;
 pub mod process;
 pub mod sync;
 pub mod time;
-
-#[unstable(feature = "allocator_api", issue = "32838")]
-#[rustc_deprecated(since = "1.27.0", reason = "module renamed to `alloc`")]
-/// Use the `alloc` module instead.
-pub mod heap {
-    pub use alloc::*;
-}
 
 // Platform-abstraction modules
 #[macro_use]
