@@ -760,7 +760,7 @@ impl<'a> Parser<'a> {
         err
     }
 
-    fn parse_ident(&mut self) -> PResult<'a, ast::Ident> {
+    pub fn parse_ident(&mut self) -> PResult<'a, ast::Ident> {
         self.parse_ident_common(true)
     }
 
@@ -1022,7 +1022,7 @@ impl<'a> Parser<'a> {
     /// Parse a sequence, including the closing delimiter. The function
     /// f must consume tokens until reaching the next separator or
     /// closing bracket.
-    crate fn parse_seq_to_end<T, F>(&mut self,
+    pub fn parse_seq_to_end<T, F>(&mut self,
                                   ket: &token::Token,
                                   sep: SeqSep,
                                   f: F)
@@ -1198,7 +1198,7 @@ impl<'a> Parser<'a> {
     pub fn fatal(&self, m: &str) -> DiagnosticBuilder<'a> {
         self.sess.span_diagnostic.struct_span_fatal(self.span, m)
     }
-    fn span_fatal<S: Into<MultiSpan>>(&self, sp: S, m: &str) -> DiagnosticBuilder<'a> {
+    pub fn span_fatal<S: Into<MultiSpan>>(&self, sp: S, m: &str) -> DiagnosticBuilder<'a> {
         self.sess.span_diagnostic.struct_span_fatal(sp, m)
     }
     fn span_fatal_err<S: Into<MultiSpan>>(&self, sp: S, err: Error) -> DiagnosticBuilder<'a> {
@@ -1886,7 +1886,7 @@ impl<'a> Parser<'a> {
     /// `a::b::C::<D>` (with disambiguator)
     /// `Fn(Args)` (without disambiguator)
     /// `Fn::(Args)` (with disambiguator)
-    crate fn parse_path(&mut self, style: PathStyle) -> PResult<'a, ast::Path> {
+    pub fn parse_path(&mut self, style: PathStyle) -> PResult<'a, ast::Path> {
         self.parse_path_common(style, true)
     }
 
@@ -2469,7 +2469,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a block or unsafe block
-    fn parse_block_expr(&mut self, opt_label: Option<Label>,
+    pub fn parse_block_expr(&mut self, opt_label: Option<Label>,
                             lo: Span, blk_mode: BlockCheckMode,
                             outer_attrs: ThinVec<Attribute>)
                             -> PResult<'a, P<Expr>> {
