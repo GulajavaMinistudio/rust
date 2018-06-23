@@ -294,7 +294,7 @@ fn char_lit(lit: &str, diag: Option<(Span, &Handler)>) -> (char, isize) {
 
 /// Parse a string representing a string literal into its final form. Does
 /// unescaping.
-fn str_lit(lit: &str, diag: Option<(Span, &Handler)>) -> String {
+pub fn str_lit(lit: &str, diag: Option<(Span, &Handler)>) -> String {
     debug!("str_lit: given {}", lit.escape_default());
     let mut res = String::with_capacity(lit.len());
 
@@ -928,12 +928,15 @@ mod tests {
                                     output: ast::FunctionRetTy::Default(sp(15, 15)),
                                     variadic: false
                                 }),
-                                        ast::Unsafety::Normal,
-                                        Spanned {
-                                            span: sp(0,2),
-                                            node: ast::Constness::NotConst,
+                                        ast::FnHeader {
+                                            unsafety: ast::Unsafety::Normal,
+                                            asyncness: ast::IsAsync::NotAsync,
+                                            constness: Spanned {
+                                                span: sp(0,2),
+                                                node: ast::Constness::NotConst,
+                                            },
+                                            abi: Abi::Rust,
                                         },
-                                        Abi::Rust,
                                         ast::Generics{
                                             params: Vec::new(),
                                             where_clause: ast::WhereClause {
