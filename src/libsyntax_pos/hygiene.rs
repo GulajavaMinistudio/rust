@@ -496,6 +496,9 @@ pub struct ExpnInfo {
     /// Whether the macro is allowed to use `unsafe` internally
     /// even if the user crate has `#![forbid(unsafe_code)]`.
     pub allow_internal_unsafe: bool,
+    /// Enables the macro helper hack (`ident!(...)` -> `$crate::ident!(...)`)
+    /// for a given macro.
+    pub local_inner_macros: bool,
     /// Edition of the crate in which the macro is defined.
     pub edition: Edition,
 }
@@ -540,7 +543,7 @@ impl CompilerDesugaringKind {
             CompilerDesugaringKind::DotFill => "...",
             CompilerDesugaringKind::QuestionMark => "?",
             CompilerDesugaringKind::Catch => "do catch",
-            CompilerDesugaringKind::ExistentialReturnType => "existental type",
+            CompilerDesugaringKind::ExistentialReturnType => "existential type",
         })
     }
 }

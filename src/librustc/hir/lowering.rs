@@ -616,6 +616,7 @@ impl<'a> LoweringContext<'a> {
             format: codemap::CompilerDesugaring(reason),
             allow_internal_unstable: true,
             allow_internal_unsafe: false,
+            local_inner_macros: false,
             edition: codemap::hygiene::default_edition(),
         });
         span.with_ctxt(SyntaxContext::empty().apply_mark(mark))
@@ -1074,11 +1075,15 @@ impl<'a> LoweringContext<'a> {
                         -> hir::GenericArg {
         match arg {
             ast::GenericArg::Lifetime(lt) => GenericArg::Lifetime(self.lower_lifetime(&lt)),
-            ast::GenericArg::Type(ty) => GenericArg::Type(self.lower_ty(&ty, itctx)),
+            ast::GenericArg::Type(ty) => GenericArg::Type(self.lower_ty_direct(&ty, itctx)),
         }
     }
 
     fn lower_ty(&mut self, t: &Ty, itctx: ImplTraitContext) -> P<hir::Ty> {
+        P(self.lower_ty_direct(t, itctx))
+    }
+
+    fn lower_ty_direct(&mut self, t: &Ty, itctx: ImplTraitContext) -> hir::Ty {
         let kind = match t.node {
             TyKind::Infer => hir::TyInfer,
             TyKind::Err => hir::TyErr,
@@ -1115,10 +1120,10 @@ impl<'a> LoweringContext<'a> {
             ),
             TyKind::Never => hir::TyNever,
             TyKind::Tup(ref tys) => {
-                hir::TyTup(tys.iter().map(|ty| self.lower_ty(ty, itctx)).collect())
+                hir::TyTup(tys.iter().map(|ty| self.lower_ty_direct(ty, itctx)).collect())
             }
             TyKind::Paren(ref ty) => {
-                return self.lower_ty(ty, itctx);
+                return self.lower_ty_direct(ty, itctx);
             }
             TyKind::Path(ref qself, ref path) => {
                 let id = self.lower_node_id(t.id);
@@ -1228,12 +1233,12 @@ impl<'a> LoweringContext<'a> {
         };
 
         let LoweredNodeId { node_id, hir_id } = self.lower_node_id(t.id);
-        P(hir::Ty {
+        hir::Ty {
             id: node_id,
             node: kind,
             span: t.span,
             hir_id,
-        })
+        }
     }
 
     fn lower_existential_impl_trait(
@@ -1636,7 +1641,7 @@ impl<'a> LoweringContext<'a> {
             // e.g. `Vec` in `Vec::new` or `<I as Iterator>::Item` in
             // `<I as Iterator>::Item::default`.
             let new_id = self.next_id();
-            self.ty_path(new_id, p.span, hir::QPath::Resolved(qself, path))
+            P(self.ty_path(new_id, p.span, hir::QPath::Resolved(qself, path)))
         };
 
         // Anything after the base path are associated "extensions",
@@ -1667,7 +1672,7 @@ impl<'a> LoweringContext<'a> {
 
             // Wrap the associated extension in another type node.
             let new_id = self.next_id();
-            ty = self.ty_path(new_id, p.span, qpath);
+            ty = P(self.ty_path(new_id, p.span, qpath));
         }
 
         // Should've returned in the for loop above.
@@ -1802,10 +1807,10 @@ impl<'a> LoweringContext<'a> {
             |this| {
                 const DISALLOWED: ImplTraitContext = ImplTraitContext::Disallowed;
                 let &ParenthesisedArgs { ref inputs, ref output, span } = data;
-                let inputs = inputs.iter().map(|ty| this.lower_ty(ty, DISALLOWED)).collect();
+                let inputs = inputs.iter().map(|ty| this.lower_ty_direct(ty, DISALLOWED)).collect();
                 let mk_tup = |this: &mut Self, tys, span| {
                     let LoweredNodeId { node_id, hir_id } = this.next_id();
-                    P(hir::Ty { node: hir::TyTup(tys), id: node_id, hir_id, span })
+                    hir::Ty { node: hir::TyTup(tys), id: node_id, hir_id, span }
                 };
 
                 (
@@ -1818,7 +1823,7 @@ impl<'a> LoweringContext<'a> {
                                 ty: output
                                     .as_ref()
                                     .map(|ty| this.lower_ty(&ty, DISALLOWED))
-                                    .unwrap_or_else(|| mk_tup(this, hir::HirVec::new(), span)),
+                                    .unwrap_or_else(|| P(mk_tup(this, hir::HirVec::new(), span))),
                                 span: output.as_ref().map_or(span, |ty| ty.span),
                             }
                         ],
@@ -1894,9 +1899,9 @@ impl<'a> LoweringContext<'a> {
             .iter()
             .map(|arg| {
                 if let Some(def_id) = fn_def_id {
-                    self.lower_ty(&arg.ty, ImplTraitContext::Universal(def_id))
+                    self.lower_ty_direct(&arg.ty, ImplTraitContext::Universal(def_id))
                 } else {
-                    self.lower_ty(&arg.ty, ImplTraitContext::Disallowed)
+                    self.lower_ty_direct(&arg.ty, ImplTraitContext::Disallowed)
                 }
             })
             .collect::<HirVec<_>>();
@@ -1936,7 +1941,7 @@ impl<'a> LoweringContext<'a> {
     // fn_def_id: DefId of the parent function. Used to create child impl trait definition.
     fn lower_async_fn_ret_ty(
         &mut self,
-        inputs: &[P<hir::Ty>],
+        inputs: &[hir::Ty],
         output: &FunctionRetTy,
         fn_def_id: DefId,
     ) -> hir::FunctionRetTy {
@@ -3356,7 +3361,7 @@ impl<'a> LoweringContext<'a> {
             PatKind::Ref(ref inner, mutbl) => {
                 hir::PatKind::Ref(self.lower_pat(inner), self.lower_mutability(mutbl))
             }
-            PatKind::Range(ref e1, ref e2, ref end) => hir::PatKind::Range(
+            PatKind::Range(ref e1, ref e2, Spanned { node: ref end, .. }) => hir::PatKind::Range(
                 P(self.lower_expr(e1)),
                 P(self.lower_expr(e2)),
                 self.lower_range_end(end),
@@ -3536,12 +3541,22 @@ impl<'a> LoweringContext<'a> {
                         this.expr_block(block, ThinVec::new())
                     })
                 })
-            },
+            }
             ExprKind::Closure(
-                capture_clause, asyncness, movability, ref decl, ref body, fn_decl_span) =>
-            {
-                self.with_new_scopes(|this| {
-                    if let IsAsync::Async(async_closure_node_id) = asyncness {
+                capture_clause, asyncness, movability, ref decl, ref body, fn_decl_span
+            ) => {
+                if let IsAsync::Async(async_closure_node_id) = asyncness {
+                    let outer_decl = FnDecl {
+                        inputs: decl.inputs.clone(),
+                        output: FunctionRetTy::Default(fn_decl_span),
+                        variadic: false,
+                    };
+                    // We need to lower the declaration outside the new scope, because we
+                    // have to conserve the state of being inside a loop condition for the
+                    // closure argument types.
+                    let fn_decl = self.lower_fn_decl(&outer_decl, None, false, false);
+
+                    self.with_new_scopes(|this| {
                         // FIXME(cramertj) allow `async` non-`move` closures with
                         if capture_clause == CaptureBy::Ref &&
                             !decl.inputs.is_empty()
@@ -3561,11 +3576,6 @@ impl<'a> LoweringContext<'a> {
 
                         // Transform `async |x: u8| -> X { ... }` into
                         // `|x: u8| future_from_generator(|| -> X { ... })`
-                        let outer_decl = FnDecl {
-                            inputs: decl.inputs.clone(),
-                            output: FunctionRetTy::Default(fn_decl_span),
-                            variadic: false,
-                        };
                         let body_id = this.lower_body(Some(&outer_decl), |this| {
                             let async_ret_ty = if let FunctionRetTy::Ty(ty) = &decl.output {
                                 Some(&**ty)
@@ -3579,12 +3589,17 @@ impl<'a> LoweringContext<'a> {
                         });
                         hir::ExprClosure(
                             this.lower_capture_clause(capture_clause),
-                            this.lower_fn_decl(&outer_decl, None, false, false),
+                            fn_decl,
                             body_id,
                             fn_decl_span,
                             None,
                         )
-                    } else {
+                    })
+                } else {
+                    // Lower outside new scope to preserve `is_in_loop_condition`.
+                    let fn_decl = self.lower_fn_decl(decl, None, false, false);
+
+                    self.with_new_scopes(|this| {
                         let mut is_generator = false;
                         let body_id = this.lower_body(Some(decl), |this| {
                             let e = this.lower_expr(body);
@@ -3618,13 +3633,13 @@ impl<'a> LoweringContext<'a> {
                         };
                         hir::ExprClosure(
                             this.lower_capture_clause(capture_clause),
-                            this.lower_fn_decl(decl, None, false, false),
+                            fn_decl,
                             body_id,
                             fn_decl_span,
                             generator_option,
                         )
-                    }
-                })
+                    })
+                }
             }
             ExprKind::Block(ref blk, opt_label) => {
                 hir::ExprBlock(self.lower_block(blk,
@@ -3651,7 +3666,7 @@ impl<'a> LoweringContext<'a> {
                 let e1 = self.lower_expr(e1);
                 let e2 = self.lower_expr(e2);
                 let ty_path = P(self.std_path(span, &["ops", "RangeInclusive"], None, false));
-                let ty = self.ty_path(id, span, hir::QPath::Resolved(None, ty_path));
+                let ty = P(self.ty_path(id, span, hir::QPath::Resolved(None, ty_path)));
                 let new_seg = P(hir::PathSegment::from_name(Symbol::intern("new")));
                 let new_path = hir::QPath::TypeRelative(ty, new_seg);
                 let new = P(self.expr(span, hir::ExprPath(new_path), ThinVec::new()));
@@ -4539,7 +4554,7 @@ impl<'a> LoweringContext<'a> {
             .resolve_str_path(span, self.crate_root, components, params, is_value)
     }
 
-    fn ty_path(&mut self, id: LoweredNodeId, span: Span, qpath: hir::QPath) -> P<hir::Ty> {
+    fn ty_path(&mut self, id: LoweredNodeId, span: Span, qpath: hir::QPath) -> hir::Ty {
         let mut id = id;
         let node = match qpath {
             hir::QPath::Resolved(None, path) => {
@@ -4564,12 +4579,12 @@ impl<'a> LoweringContext<'a> {
             }
             _ => hir::TyPath(qpath),
         };
-        P(hir::Ty {
+        hir::Ty {
             id: id.node_id,
             hir_id: id.hir_id,
             node,
             span,
-        })
+        }
     }
 
     /// Invoked to create the lifetime argument for a type `&T`
