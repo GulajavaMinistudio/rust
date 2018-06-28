@@ -1031,6 +1031,7 @@ impl<'b, 'a, 'v> RootCollector<'b, 'a, 'v> {
             MonoItemCollectionMode::Lazy => {
                 self.entry_fn == Some(def_id) ||
                 self.tcx.is_reachable_non_generic(def_id) ||
+                self.tcx.is_weak_lang_item(def_id) ||
                 self.tcx.codegen_fn_attrs(def_id).flags.contains(
                     CodegenFnAttrFlags::RUSTC_STD_INTERNAL_SYMBOL)
             }
@@ -1115,10 +1116,10 @@ fn create_mono_items_for_default_impls<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             if let Some(trait_ref) = tcx.impl_trait_ref(impl_def_id) {
                 let overridden_methods: FxHashSet<_> =
                     impl_item_refs.iter()
-                                  .map(|iiref| iiref.name)
+                                  .map(|iiref| iiref.ident.modern())
                                   .collect();
                 for method in tcx.provided_trait_methods(trait_ref.def_id) {
-                    if overridden_methods.contains(&method.name) {
+                    if overridden_methods.contains(&method.ident.modern()) {
                         continue;
                     }
 

@@ -76,7 +76,37 @@ fn mir_borrowck<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId) -> BorrowC
     let input_mir = tcx.mir_validated(def_id);
     debug!("run query mir_borrowck: {}", tcx.item_path_str(def_id));
 
-    if !tcx.has_attr(def_id, "rustc_mir_borrowck") && !tcx.use_mir_borrowck() {
+    let mut return_early;
+
+    // Return early if we are not supposed to use MIR borrow checker for this function.
+    return_early = !tcx.has_attr(def_id, "rustc_mir_borrowck") && !tcx.use_mir_borrowck();
+
+    if tcx.is_struct_constructor(def_id) {
+        // We are not borrow checking the automatically generated struct constructors
+        // because we want to accept structs such as this (taken from the `linked-hash-map`
+        // crate):
+        // ```rust
+        // struct Qey<Q: ?Sized>(Q);
+        // ```
+        // MIR of this struct constructor looks something like this:
+        // ```rust
+        // fn Qey(_1: Q) -> Qey<Q>{
+        //     let mut _0: Qey<Q>;                  // return place
+        //
+        //     bb0: {
+        //         (_0.0: Q) = move _1;             // bb0[0]: scope 0 at src/main.rs:1:1: 1:26
+        //         return;                          // bb0[1]: scope 0 at src/main.rs:1:1: 1:26
+        //     }
+        // }
+        // ```
+        // The problem here is that `(_0.0: Q) = move _1;` is valid only if `Q` is
+        // of statically known size, which is not known to be true because of the
+        // `Q: ?Sized` constraint. However, it is true because the constructor can be
+        // called only when `Q` is of statically known size.
+        return_early = true;
+    }
+
+    if return_early {
         return BorrowCheckResult {
             closure_requirements: None,
             used_mut_upvars: SmallVec::new(),
@@ -245,6 +275,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
         mir_def_id: def_id,
         move_data: &mdpe.move_data,
         param_env: param_env,
+        location_table,
         movable_generator,
         locals_are_invalidated_at_exit: match tcx.hir.body_owner_kind(id) {
             hir::BodyOwnerKind::Const | hir::BodyOwnerKind::Static(_) => false,
@@ -332,6 +363,11 @@ pub struct MirBorrowckCtxt<'cx, 'gcx: 'tcx, 'tcx: 'cx> {
     mir: &'cx Mir<'tcx>,
     mir_def_id: DefId,
     move_data: &'cx MoveData<'tcx>,
+
+    /// Map from MIR `Location` to `LocationIndex`; created
+    /// when MIR borrowck begins.
+    location_table: &'cx LocationTable,
+
     param_env: ParamEnv<'gcx>,
     movable_generator: bool,
     /// This keeps track of whether local variables are free-ed when the function
@@ -946,8 +982,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         let mut error_reported = false;
         let tcx = self.tcx;
         let mir = self.mir;
-        let location_table = &LocationTable::new(mir);
-        let location = location_table.start_index(context.loc);
+        let location = self.location_table.start_index(context.loc);
         let borrow_set = self.borrow_set.clone();
         each_borrow_involving_path(
             self,

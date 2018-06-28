@@ -14,6 +14,7 @@ use rustc::hir::map::definitions::DefPathData;
 use rustc::hir::{self, ImplPolarity};
 use rustc::traits::{Clause, Clauses, DomainGoal, Goal, PolyDomainGoal, ProgramClause,
                     WhereClause, FromEnv, WellFormed};
+use rustc::ty::query::Providers;
 use rustc::ty::subst::Substs;
 use rustc::ty::{self, Slice, TyCtxt};
 use rustc_data_structures::fx::FxHashSet;
@@ -21,6 +22,14 @@ use std::mem;
 use syntax::ast;
 
 use std::iter;
+
+crate fn provide(p: &mut Providers) {
+    *p = Providers {
+        program_clauses_for,
+        program_clauses_for_env,
+        ..*p
+    };
+}
 
 crate trait Lower<T> {
     /// Lower a rustc construct (e.g. `ty::TraitPredicate`) to a chalk-like type.
@@ -408,7 +417,7 @@ pub fn program_clauses_for_associated_type_value<'a, 'tcx>(
     let hypotheses = vec![trait_implemented];
 
     // `<A0 as Trait<A1..An>>::AssocType<Pn+1..Pm>`
-    let projection_ty = ty::ProjectionTy::from_ref_and_name(tcx, trait_ref, item.name);
+    let projection_ty = ty::ProjectionTy::from_ref_and_name(tcx, trait_ref, item.ident);
 
     // `Normalize(<A0 as Trait<A1..An>>::AssocType<Pn+1..Pm> -> T)`
     let normalize_goal = DomainGoal::Normalize(ty::ProjectionPredicate { projection_ty, ty });

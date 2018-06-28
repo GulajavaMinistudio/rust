@@ -14,12 +14,9 @@
 
 use infer::{InferCtxt, InferOk};
 use infer::at::At;
-use infer::canonical::{Canonical, Canonicalize, QueryResult};
 use middle::const_val::ConstVal;
 use mir::interpret::GlobalId;
-use rustc_data_structures::sync::Lrc;
 use traits::{Obligation, ObligationCause, PredicateObligation, Reveal};
-use traits::query::CanonicalProjectionGoal;
 use traits::project::Normalized;
 use ty::{self, Ty, TyCtxt};
 use ty::fold::{TypeFoldable, TypeFolder};
@@ -124,10 +121,10 @@ impl<'cx, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for QueryNormalizer<'cx, 'gcx, 'tcx
                         let concrete_ty = generic_ty.subst(self.tcx(), substs);
                         self.anon_depth += 1;
                         if concrete_ty == ty {
-                            println!("generic_ty: {:#?}", generic_ty);
-                            println!("substs {:#?}", substs);
+                            bug!("infinite recursion generic_ty: {:#?}, substs: {:#?}, \
+                                  concrete_ty: {:#?}, ty: {:#?}", generic_ty, substs, concrete_ty,
+                                  ty);
                         }
-                        assert_ne!(concrete_ty, ty, "infinite recursion");
                         let folded_ty = self.fold_ty(concrete_ty);
                         self.anon_depth -= 1;
                         folded_ty
@@ -163,7 +160,7 @@ impl<'cx, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for QueryNormalizer<'cx, 'gcx, 'tcx
                             return ty;
                         }
 
-                        match self.infcx.instantiate_query_result(
+                        match self.infcx.instantiate_query_result_and_region_obligations(
                             self.cause,
                             self.param_env,
                             &orig_values,
@@ -248,29 +245,6 @@ BraceStructLiftImpl! {
     impl<'a, 'tcx> Lift<'tcx> for NormalizationResult<'a> {
         type Lifted = NormalizationResult<'tcx>;
         normalized_ty
-    }
-}
-
-impl<'gcx: 'tcx, 'tcx> Canonicalize<'gcx, 'tcx> for ty::ParamEnvAnd<'tcx, ty::ProjectionTy<'tcx>> {
-    type Canonicalized = CanonicalProjectionGoal<'gcx>;
-
-    fn intern(
-        _gcx: TyCtxt<'_, 'gcx, 'gcx>,
-        value: Canonical<'gcx, Self::Lifted>,
-    ) -> Self::Canonicalized {
-        value
-    }
-}
-
-impl<'gcx: 'tcx, 'tcx> Canonicalize<'gcx, 'tcx> for QueryResult<'tcx, NormalizationResult<'tcx>> {
-    // we ought to intern this, but I'm too lazy just now
-    type Canonicalized = Lrc<Canonical<'gcx, QueryResult<'gcx, NormalizationResult<'gcx>>>>;
-
-    fn intern(
-        _gcx: TyCtxt<'_, 'gcx, 'gcx>,
-        value: Canonical<'gcx, Self::Lifted>,
-    ) -> Self::Canonicalized {
-        Lrc::new(value)
     }
 }
 
