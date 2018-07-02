@@ -374,10 +374,8 @@ pub enum DefPathData {
     StructCtor,
     /// A constant expression (see {ast,hir}::AnonConst).
     AnonConst,
-    /// An `impl Trait` type node in argument position.
-    UniversalImplTrait,
-    /// An `impl Trait` type node in return position.
-    ExistentialImplTrait,
+    /// An `impl Trait` type node
+    ImplTrait,
 
     /// GlobalMetaData identifies a piece of crate metadata that is global to
     /// a whole crate (as opposed to just one item). GlobalMetaData components
@@ -486,12 +484,7 @@ impl Definitions {
     #[inline]
     pub fn opt_span(&self, def_id: DefId) -> Option<Span> {
         if def_id.krate == LOCAL_CRATE {
-            let span = self.def_index_to_span.get(&def_id.index).cloned().unwrap_or(DUMMY_SP);
-            if span != DUMMY_SP {
-                Some(span)
-            } else {
-                None
-            }
+            self.def_index_to_span.get(&def_id.index).cloned()
         } else {
             None
         }
@@ -588,8 +581,8 @@ impl Definitions {
             self.opaque_expansions_that_defined.insert(index, expansion);
         }
 
-        // The span is added if it isn't DUMMY_SP
-        if span != DUMMY_SP {
+        // The span is added if it isn't dummy
+        if !span.is_dummy() {
             self.def_index_to_span.insert(index, span);
         }
 
@@ -641,8 +634,7 @@ impl DefPathData {
             ClosureExpr |
             StructCtor |
             AnonConst |
-            ExistentialImplTrait |
-            UniversalImplTrait => None
+            ImplTrait => None
         }
     }
 
@@ -672,8 +664,7 @@ impl DefPathData {
             ClosureExpr => "{{closure}}",
             StructCtor => "{{constructor}}",
             AnonConst => "{{constant}}",
-            ExistentialImplTrait => "{{exist-impl-Trait}}",
-            UniversalImplTrait => "{{univ-impl-Trait}}",
+            ImplTrait => "{{impl-Trait}}",
         };
 
         Symbol::intern(s).as_interned_str()

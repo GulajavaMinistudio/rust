@@ -43,7 +43,7 @@ use ast::{BinOpKind, UnOp};
 use ast::{RangeEnd, RangeSyntax};
 use {ast, attr};
 use codemap::{self, CodeMap, Spanned, respan};
-use syntax_pos::{self, Span, MultiSpan, BytePos, FileName, DUMMY_SP, edition::Edition};
+use syntax_pos::{self, Span, MultiSpan, BytePos, FileName, edition::Edition};
 use errors::{self, Applicability, DiagnosticBuilder};
 use parse::{self, SeqSep, classify, token};
 use parse::lexer::TokenAndSpan;
@@ -567,7 +567,7 @@ impl<'a> Parser<'a> {
 
         if let Some(directory) = directory {
             parser.directory = directory;
-        } else if !parser.span.source_equal(&DUMMY_SP) {
+        } else if !parser.span.is_dummy() {
             if let FileName::Real(mut path) = sess.codemap().span_to_unmapped_path(parser.span) {
                 path.pop();
                 parser.directory.path = Cow::from(path);
@@ -584,7 +584,7 @@ impl<'a> Parser<'a> {
         } else {
             self.token_cursor.next()
         };
-        if next.sp == syntax_pos::DUMMY_SP {
+        if next.sp.is_dummy() {
             // Tweak the location for better diagnostics, but keep syntactic context intact.
             next.sp = self.prev_span.with_ctxt(next.sp.ctxt());
         }
@@ -1299,7 +1299,10 @@ impl<'a> Parser<'a> {
     /// Parse asyncness: `async` or nothing
     fn parse_asyncness(&mut self) -> IsAsync {
         if self.eat_keyword(keywords::Async) {
-            IsAsync::Async(ast::DUMMY_NODE_ID)
+            IsAsync::Async {
+                closure_id: ast::DUMMY_NODE_ID,
+                return_impl_trait_id: ast::DUMMY_NODE_ID,
+            }
         } else {
             IsAsync::NotAsync
         }
@@ -1537,7 +1540,7 @@ impl<'a> Parser<'a> {
             // Always parse bounds greedily for better error recovery.
             let bounds = self.parse_generic_bounds()?;
             impl_dyn_multi = bounds.len() > 1 || self.prev_token_kind == PrevTokenKind::Plus;
-            TyKind::ImplTrait(bounds)
+            TyKind::ImplTrait(ast::DUMMY_NODE_ID, bounds)
         } else if self.check_keyword(keywords::Dyn) &&
                   self.look_ahead(1, |t| t.can_begin_bound() &&
                                          !can_continue_type_after_non_fn_ident(t)) {
@@ -3279,10 +3282,8 @@ impl<'a> Parser<'a> {
         } else {
             Movability::Movable
         };
-        let asyncness = if self.span.edition() >= Edition::Edition2018
-            && self.eat_keyword(keywords::Async)
-        {
-            IsAsync::Async(ast::DUMMY_NODE_ID)
+        let asyncness = if self.span.edition() >= Edition::Edition2018 {
+            self.parse_asyncness()
         } else {
             IsAsync::NotAsync
         };
@@ -6137,7 +6138,7 @@ impl<'a> Parser<'a> {
             return Err(err);
         }
 
-        let hi = if self.span == syntax_pos::DUMMY_SP {
+        let hi = if self.span.is_dummy() {
             inner_lo
         } else {
             self.prev_span
@@ -6368,7 +6369,7 @@ impl<'a> Parser<'a> {
                 }
                 let mut err = self.diagnostic().struct_span_err(id_sp,
                     "cannot declare a new module at this location");
-                if id_sp != syntax_pos::DUMMY_SP {
+                if !id_sp.is_dummy() {
                     let src_path = self.sess.codemap().span_to_filename(id_sp);
                     if let FileName::Real(src_path) = src_path {
                         if let Some(stem) = src_path.file_stem() {
@@ -6798,7 +6799,10 @@ impl<'a> Parser<'a> {
             let fn_span = self.prev_span;
             let (ident, item_, extra_attrs) =
                 self.parse_item_fn(unsafety,
-                                   IsAsync::Async(ast::DUMMY_NODE_ID),
+                                   IsAsync::Async {
+                                       closure_id: ast::DUMMY_NODE_ID,
+                                       return_impl_trait_id: ast::DUMMY_NODE_ID,
+                                   },
                                    respan(fn_span, Constness::NotConst),
                                    Abi::Rust)?;
             let prev_span = self.prev_span;

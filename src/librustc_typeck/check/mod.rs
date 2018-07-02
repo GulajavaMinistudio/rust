@@ -116,6 +116,7 @@ use rustc_data_structures::sync::Lrc;
 use std::collections::hash_map::Entry;
 use std::cmp;
 use std::fmt::Display;
+use std::iter;
 use std::mem::replace;
 use std::ops::{self, Deref};
 use rustc_target::spec::abi::Abi;
@@ -4539,9 +4540,31 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                             cause_span: Span,
                                             blk_id: ast::NodeId) {
         self.suggest_missing_semicolon(err, expression, expected, cause_span);
-
         if let Some((fn_decl, can_suggest)) = self.get_fn_decl(blk_id) {
             self.suggest_missing_return_type(err, &fn_decl, expected, found, can_suggest);
+        }
+        self.suggest_ref_or_into(err, expression, expected, found);
+    }
+
+    pub fn suggest_ref_or_into(
+        &self,
+        err: &mut DiagnosticBuilder<'tcx>,
+        expr: &hir::Expr,
+        expected: Ty<'tcx>,
+        found: Ty<'tcx>,
+    ) {
+        if let Some((sp, msg, suggestion)) = self.check_ref(expr, found, expected) {
+            err.span_suggestion(sp, msg, suggestion);
+        } else if !self.check_for_cast(err, expr, found, expected) {
+            let methods = self.get_conversion_methods(expr.span, expected, found);
+            if let Ok(expr_text) = self.sess().codemap().span_to_snippet(expr.span) {
+                let suggestions = iter::repeat(expr_text).zip(methods.iter())
+                    .map(|(receiver, method)| format!("{}.{}()", receiver, method.ident))
+                    .collect::<Vec<_>>();
+                if !suggestions.is_empty() {
+                    err.span_suggestions(expr.span, "try using a conversion method", suggestions);
+                }
+            }
         }
     }
 
@@ -4602,21 +4625,23 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                    can_suggest: bool) {
         // Only suggest changing the return type for methods that
         // haven't set a return type at all (and aren't `fn main()` or an impl).
-        match (&fn_decl.output, found.is_suggestable(), can_suggest) {
-            (&hir::FunctionRetTy::DefaultReturn(span), true, true) => {
+        match (&fn_decl.output, found.is_suggestable(), can_suggest, expected.is_nil()) {
+            (&hir::FunctionRetTy::DefaultReturn(span), true, true, true) => {
                 err.span_suggestion(span,
                                     "try adding a return type",
                                     format!("-> {} ",
                                             self.resolve_type_vars_with_obligations(found)));
             }
-            (&hir::FunctionRetTy::DefaultReturn(span), false, true) => {
+            (&hir::FunctionRetTy::DefaultReturn(span), false, true, true) => {
                 err.span_label(span, "possibly return type missing here?");
             }
-            (&hir::FunctionRetTy::DefaultReturn(span), _, _) => {
+            (&hir::FunctionRetTy::DefaultReturn(span), _, false, true) => {
                 // `fn main()` must return `()`, do not suggest changing return type
                 err.span_label(span, "expected `()` because of default return type");
             }
-            (&hir::FunctionRetTy::Return(ref ty), _, _) => {
+            // expectation was caused by something else, not the default return
+            (&hir::FunctionRetTy::DefaultReturn(_), _, _, false) => {}
+            (&hir::FunctionRetTy::Return(ref ty), _, _, _) => {
                 // Only point to return type if the expected type is the return type, as if they
                 // are not, the expectation must have been caused by something else.
                 debug!("suggest_missing_return_type: return type {:?} node {:?}", ty, ty.node);

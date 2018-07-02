@@ -10,7 +10,7 @@
 
 use hir::def_id::DefId;
 use hir::map::definitions::DefPathData;
-use middle::const_val::ConstVal;
+use mir::interpret::ConstValue;
 use middle::region::{self, BlockRemainder};
 use ty::subst::{self, Subst};
 use ty::{BrAnon, BrEnv, BrFresh, BrNamed};
@@ -291,8 +291,7 @@ impl PrintContext {
                     DefPathData::Field(_) |
                     DefPathData::StructCtor |
                     DefPathData::AnonConst |
-                    DefPathData::ExistentialImplTrait |
-                    DefPathData::UniversalImplTrait |
+                    DefPathData::ImplTrait |
                     DefPathData::GlobalMetaData(_) => {
                         // if we're making a symbol for something, there ought
                         // to be a value or type-def or something in there
@@ -1195,12 +1194,12 @@ define_print! {
                 TyArray(ty, sz) => {
                     print!(f, cx, write("["), print(ty), write("; "))?;
                     match sz.val {
-                        ConstVal::Value(..) => ty::tls::with(|tcx| {
-                            write!(f, "{}", sz.unwrap_usize(tcx))
-                        })?,
-                        ConstVal::Unevaluated(_def_id, _substs) => {
+                        ConstValue::Unevaluated(_def_id, _substs) => {
                             write!(f, "_")?;
                         }
+                        _ => ty::tls::with(|tcx| {
+                            write!(f, "{}", sz.unwrap_usize(tcx))
+                        })?,
                     }
                     write!(f, "]")
                 }

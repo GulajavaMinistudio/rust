@@ -12,7 +12,6 @@
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
        html_root_url = "https://doc.rust-lang.org/nightly/")]
 #![feature(custom_attribute)]
-#![cfg_attr(stage0, feature(macro_lifetime_matcher))]
 #![allow(unused_attributes)]
 
 #![recursion_limit="256"]
@@ -1157,7 +1156,7 @@ fn escape(s: String) -> String {
 // Helper function to determine if a span came from a
 // macro expansion or syntax extension.
 fn generated_code(span: Span) -> bool {
-    span.ctxt() != NO_EXPANSION || span == DUMMY_SP
+    span.ctxt() != NO_EXPANSION || span.is_dummy()
 }
 
 // DefId::index is a newtype and so the JSON serialisation is ugly. Therefore

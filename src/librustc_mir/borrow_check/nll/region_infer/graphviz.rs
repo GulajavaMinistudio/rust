@@ -17,6 +17,8 @@ use rustc_data_structures::indexed_vec::Idx;
 use std::borrow::Cow;
 use std::io::{self, Write};
 use super::*;
+use borrow_check::nll::constraint_set::OutlivesConstraint;
+
 
 impl<'tcx> RegionInferenceContext<'tcx> {
     /// Write out the region constraint graph.
@@ -42,7 +44,7 @@ impl<'this, 'tcx> dot::Labeller<'this> for RegionInferenceContext<'tcx> {
         dot::LabelText::LabelStr(format!("{:?}", n).into_cow())
     }
     fn edge_label(&'this self, e: &OutlivesConstraint) -> dot::LabelText<'this> {
-        dot::LabelText::LabelStr(format!("{:?}", e.point).into_cow())
+        dot::LabelText::LabelStr(format!("{:?}", e.locations).into_cow())
     }
 }
 

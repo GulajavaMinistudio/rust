@@ -49,7 +49,6 @@
 #![feature(fs_read_write)]
 #![feature(iterator_find_map)]
 #![cfg_attr(windows, feature(libc))]
-#![cfg_attr(stage0, feature(macro_lifetime_matcher))]
 #![feature(macro_vis_matcher)]
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]
@@ -132,7 +131,6 @@ pub mod middle {
     pub mod allocator;
     pub mod borrowck;
     pub mod expr_use_visitor;
-    pub mod const_val;
     pub mod cstore;
     pub mod dataflow;
     pub mod dead;
