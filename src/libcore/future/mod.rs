@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z borrowck=mir
+#![unstable(feature = "futures_api",
+            reason = "futures in libcore are unstable",
+            issue = "50547")]
 
-fn f(y: Box<isize>) {
-    *y = 5; //[ast]~ ERROR cannot assign
-            //[mir]~^ ERROR cannot assign
-}
+//! Asynchronous values.
 
-fn g() {
-    let _frob = |q: Box<isize>| { *q = 2; }; //[ast]~ ERROR cannot assign
-    //[mir]~^ ERROR cannot assign
-}
+mod future;
+pub use self::future::Future;
 
-fn main() {}
+mod future_obj;
+pub use self::future_obj::{FutureObj, LocalFutureObj, UnsafeFutureObj};

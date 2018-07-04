@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// revisions: ast mir
-//[mir]compile-flags: -Z borrowck=mir
+// compile-flags: --test -D unnameable_test_functions
 
-fn f(y: Box<isize>) {
-    *y = 5; //[ast]~ ERROR cannot assign
-            //[mir]~^ ERROR cannot assign
+#[test]
+fn foo() {
+    #[test] //~ ERROR cannot test inner function [unnameable_test_functions]
+    fn bar() {}
+    bar();
 }
 
-fn g() {
-    let _frob = |q: Box<isize>| { *q = 2; }; //[ast]~ ERROR cannot assign
-    //[mir]~^ ERROR cannot assign
+mod x {
+    #[test]
+    fn foo() {
+        #[test] //~ ERROR cannot test inner function [unnameable_test_functions]
+        fn bar() {}
+        bar();
+    }
 }
 
 fn main() {}

@@ -25,8 +25,5 @@ pub use self::executor::{
 mod poll;
 pub use self::poll::Poll;
 
-mod task;
-pub use self::task::{TaskObj, LocalTaskObj, UnsafeTask};
-
 mod wake;
 pub use self::wake::{Waker, LocalWaker, UnsafeWake};
