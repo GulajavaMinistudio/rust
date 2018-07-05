@@ -8,17 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    |_:  [_; return || {}] | {};
-    //~^ ERROR return statement outside of function body
+// Check that generators respect the muatability of their upvars.
 
-    [(); return || {}];
-    //~^ ERROR return statement outside of function body
+#![feature(generators, nll)]
 
-    [(); return |ice| {}];
-    //~^ ERROR return statement outside of function body
-
-    [(); return while let Some(n) = Some(0) {}];
-    //~^ ERROR return statement outside of function body
-    //~^^ ERROR irrefutable while-let pattern
+fn mutate_upvar() {
+    let x = 0;
+    move || {
+        x = 1;
+        //~^ ERROR
+        yield;
+    };
 }
+
+fn main() {}

@@ -8,17 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    |_:  [_; return || {}] | {};
-    //~^ ERROR return statement outside of function body
+// Check that capturing a mutable reference by move and assigning to its
+// referent doesn't make the unused mut lint think that it is mutable.
 
-    [(); return || {}];
-    //~^ ERROR return statement outside of function body
+#![feature(nll)]
+#![deny(unused_mut)]
 
-    [(); return |ice| {}];
-    //~^ ERROR return statement outside of function body
-
-    [(); return while let Some(n) = Some(0) {}];
-    //~^ ERROR return statement outside of function body
-    //~^^ ERROR irrefutable while-let pattern
+fn mutable_upvar() {
+    let mut x = &mut 0;
+    //~^ ERROR
+    move || {
+        *x = 1;
+    };
 }
+
+fn main() {}

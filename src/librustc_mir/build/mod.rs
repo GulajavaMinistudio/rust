@@ -541,13 +541,14 @@ fn construct_fn<'a, 'gcx, 'tcx, A>(hir: Cx<'a, 'gcx, 'tcx>,
                 if let hir::PatKind::Binding(_, _, ident, _) = pat.node {
                     decl.debug_name = ident.name;
 
-                    let bm = *hir.tables.pat_binding_modes()
-                                        .get(pat.hir_id)
-                                        .expect("missing binding mode");
-                    if bm == ty::BindByValue(hir::MutMutable) {
-                        decl.mutability = Mutability::Mut;
+                    if let Some(&bm) = hir.tables.pat_binding_modes().get(pat.hir_id) {
+                        if bm == ty::BindByValue(hir::MutMutable) {
+                            decl.mutability = Mutability::Mut;
+                        } else {
+                            decl.mutability = Mutability::Not;
+                        }
                     } else {
-                        decl.mutability = Mutability::Not;
+                        tcx.sess.delay_span_bug(pat.span, "missing binding mode");
                     }
                 }
             }
@@ -672,11 +673,18 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
     {
         // Allocate locals for the function arguments
         for &ArgInfo(ty, _, pattern, _) in arguments.iter() {
-            // If this is a simple binding pattern, give the local a nice name for debuginfo.
+            // If this is a simple binding pattern, give the local a name for
+            // debuginfo and so that error reporting knows that this is a user
+            // variable. For any other pattern the pattern introduces new
+            // variables which will be named instead.
             let mut name = None;
             if let Some(pat) = pattern {
-                if let hir::PatKind::Binding(_, _, ident, _) = pat.node {
-                    name = Some(ident.name);
+                match pat.node {
+                    hir::PatKind::Binding(hir::BindingAnnotation::Unannotated, _, ident, _)
+                    | hir::PatKind::Binding(hir::BindingAnnotation::Mutable, _, ident, _) => {
+                        name = Some(ident.name);
+                    }
+                    _ => (),
                 }
             }
 
