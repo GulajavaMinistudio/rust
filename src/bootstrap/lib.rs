@@ -115,6 +115,7 @@
 
 #![deny(warnings)]
 #![feature(core_intrinsics)]
+#![feature(drain_filter)]
 
 #[macro_use]
 extern crate build_helper;
@@ -177,7 +178,7 @@ mod toolstate;
 #[cfg(windows)]
 mod job;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "haiku")))]
 mod job {
     use libc;
 
@@ -188,7 +189,7 @@ mod job {
     }
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(any(target_os = "haiku", not(any(unix, windows))))]
 mod job {
     pub unsafe fn setup(_build: &mut ::Build) {
     }
@@ -328,16 +329,23 @@ pub enum Mode {
     /// Build codegen libraries, placing output in the "stageN-codegen" directory
     Codegen,
 
-    /// Build some tools, placing output in the "stageN-tools" directory.
+    /// Build some tools, placing output in the "stageN-tools" directory. The
+    /// "other" here is for miscellaneous sets of tools that are built using the
+    /// bootstrap compiler in its entirety (target libraries and all).
+    /// Typically these tools compile with stable Rust.
+    ToolBootstrap,
+
+    /// Compile a tool which uses all libraries we compile (up to rustc).
+    /// Doesn't use the stage0 compiler libraries like "other", and includes
+    /// tools like rustdoc, cargo, rls, etc.
     ToolStd,
-    ToolTest,
     ToolRustc,
 }
 
 impl Mode {
     pub fn is_tool(&self) -> bool {
         match self {
-            Mode::ToolStd | Mode::ToolTest | Mode::ToolRustc => true,
+            Mode::ToolBootstrap | Mode::ToolRustc | Mode::ToolStd => true,
             _ => false
         }
     }
@@ -547,7 +555,9 @@ impl Build {
             Mode::Test => "-test",
             Mode::Codegen => "-rustc",
             Mode::Rustc => "-rustc",
-            Mode::ToolStd | Mode::ToolTest | Mode::ToolRustc => "-tools",
+            Mode::ToolBootstrap => "-bootstrap-tools",
+            Mode::ToolStd => "-tools",
+            Mode::ToolRustc => "-tools",
         };
         self.out.join(&*compiler.host)
                 .join(format!("stage{}{}", compiler.stage, suffix))
@@ -656,8 +666,12 @@ impl Build {
 
     /// Returns the libdir of the snapshot compiler.
     fn rustc_snapshot_libdir(&self) -> PathBuf {
+        self.rustc_snapshot_sysroot().join(libdir(&self.config.build))
+    }
+
+    /// Returns the sysroot of the snapshot compiler.
+    fn rustc_snapshot_sysroot(&self) -> &Path {
         self.initial_rustc.parent().unwrap().parent().unwrap()
-            .join(libdir(&self.config.build))
     }
 
     /// Runs a command, printing out nice contextual information if it fails.

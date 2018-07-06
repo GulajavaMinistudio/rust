@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(safe_extern_statics, warnings)]
+#![feature(rustc_attrs)]
+#![feature(infer_outlives_requirements)]
 
-extern {
-    pub static symbol: ();
+#[rustc_outlives]
+struct Foo<'a, T> { //~ ERROR 15:1: 17:2: rustc_outlives
+    bar: std::slice::IterMut<'a, T>
 }
-static CRASH: () = symbol;
-//~^ ERROR could not evaluate static initializer
-//~| tried to read from foreign (extern) static
 
 fn main() {}
+

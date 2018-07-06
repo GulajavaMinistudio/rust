@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,23 +11,23 @@
 use spec::{LinkerFlavor, Target, TargetResult};
 
 pub fn target() -> TargetResult {
-    let mut base = super::haiku_base::opts();
-    base.cpu = "x86-64".to_string();
+    let mut base = super::linux_musl_base::opts();
+    base.cpu = "ppc64le".to_string();
+    base.pre_link_args.get_mut(&LinkerFlavor::Gcc).unwrap().push("-m64".to_string());
     base.max_atomic_width = Some(64);
-    base.pre_link_args.insert(LinkerFlavor::Gcc, vec!["-m64".to_string()]);
-    base.stack_probes = true;
-    // This option is required to build executables on Haiku x86_64
-    base.position_independent_executables = true;
+
+    // see #36994
+    base.exe_allocation_crate = None;
 
     Ok(Target {
-        llvm_target: "x86_64-unknown-haiku".to_string(),
+        llvm_target: "powerpc64le-unknown-linux-musl".to_string(),
         target_endian: "little".to_string(),
         target_pointer_width: "64".to_string(),
         target_c_int_width: "32".to_string(),
-        data_layout: "e-m:e-i64:64-f80:128-n8:16:32:64-S128".to_string(),
-        arch: "x86_64".to_string(),
-        target_os: "haiku".to_string(),
-        target_env: "".to_string(),
+        data_layout: "e-m:e-i64:64-n32:64".to_string(),
+        arch: "powerpc64".to_string(),
+        target_os: "linux".to_string(),
+        target_env: "musl".to_string(),
         target_vendor: "unknown".to_string(),
         linker_flavor: LinkerFlavor::Gcc,
         options: base,

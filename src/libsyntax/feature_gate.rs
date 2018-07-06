@@ -421,7 +421,7 @@ declare_features! (
     (active, wasm_custom_section, "1.26.0", Some(51088), None),
 
     // The #![wasm_import_module] attribute
-    (active, wasm_import_module, "1.26.0", Some(51088), None),
+    (active, wasm_import_module, "1.26.0", Some(52090), None),
 
     // Allows keywords to be escaped for use as identifiers
     (active, raw_identifiers, "1.26.0", Some(48589), None),
@@ -458,6 +458,8 @@ declare_features! (
 
     // Scoped attributes
     (active, tool_attributes, "1.25.0", Some(44690), None),
+    // Scoped lints
+    (active, tool_lints, "1.28.0", Some(44690), None),
 
     // allow irrefutable patterns in if-let and while-let statements (RFC 2086)
     (active, irrefutable_let_patterns, "1.27.0", Some(44495), None),
