@@ -80,7 +80,7 @@ fn mir_borrowck<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId) -> BorrowC
     let mut return_early;
 
     // Return early if we are not supposed to use MIR borrow checker for this function.
-    return_early = !tcx.has_attr(def_id, "rustc_mir_borrowck") && !tcx.use_mir_borrowck();
+    return_early = !tcx.has_attr(def_id, "rustc_mir") && !tcx.use_mir_borrowck();
 
     if tcx.is_struct_constructor(def_id) {
         // We are not borrow checking the automatically generated struct constructors
@@ -128,6 +128,8 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     input_mir: &Mir<'gcx>,
     def_id: DefId,
 ) -> BorrowCheckResult<'gcx> {
+    debug!("do_mir_borrowck(def_id = {:?})", def_id);
+
     let tcx = infcx.tcx;
     let attributes = tcx.get_attrs(def_id);
     let param_env = tcx.param_env(def_id);
@@ -319,10 +321,14 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
         }
     }
 
-    BorrowCheckResult {
+    let result = BorrowCheckResult {
         closure_requirements: opt_closure_req,
         used_mut_upvars: mbcx.used_mut_upvars,
-    }
+    };
+
+    debug!("do_mir_borrowck: result = {:#?}", result);
+
+    result
 }
 
 #[allow(dead_code)]
