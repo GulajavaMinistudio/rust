@@ -582,8 +582,8 @@ impl<'a, 'tcx> FnTypeExt<'a, 'tcx> for FnType<'tcx, Ty<'tcx>> {
                 PassMode::Ignore => continue,
                 PassMode::Direct(_) => arg.layout.immediate_llvm_type(cx),
                 PassMode::Pair(..) => {
-                    llargument_tys.push(arg.layout.scalar_pair_element_llvm_type(cx, 0));
-                    llargument_tys.push(arg.layout.scalar_pair_element_llvm_type(cx, 1));
+                    llargument_tys.push(arg.layout.scalar_pair_element_llvm_type(cx, 0, true));
+                    llargument_tys.push(arg.layout.scalar_pair_element_llvm_type(cx, 1, true));
                     continue;
                 }
                 PassMode::Cast(cast) => cast.llvm_type(cx),
@@ -666,11 +666,7 @@ impl<'a, 'tcx> FnTypeExt<'a, 'tcx> for FnType<'tcx, Ty<'tcx>> {
                 layout::Int(..) if !scalar.is_bool() => {
                     let range = scalar.valid_range_exclusive(bx.cx);
                     if range.start != range.end {
-                        // FIXME(nox): This causes very weird type errors about
-                        // SHL operators in constants in stage 2 with LLVM 3.9.
-                        if unsafe { llvm::LLVMRustVersionMajor() >= 4 } {
-                            bx.range_metadata(callsite, range);
-                        }
+                        bx.range_metadata(callsite, range);
                     }
                 }
                 _ => {}

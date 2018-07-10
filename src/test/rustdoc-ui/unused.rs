@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:dylib.rs
+// compile-pass
 
-extern crate dylib;
+// This test purpose is to check that unused_imports lint isn't fired
+// by rustdoc. Why would it? Because when rustdoc is running, it uses
+// "everybody-loops" which replaces parts of code with "loop {}" to get
+// huge performance improvements.
 
-fn main() {
-    dylib::foo(1);
+#![deny(unused_imports)]
+
+use std::fs::File;
+
+pub fn f() {
+    let _: File;
 }
