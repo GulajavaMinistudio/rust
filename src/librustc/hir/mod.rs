@@ -402,6 +402,15 @@ pub enum GenericArg {
     Type(Ty),
 }
 
+impl GenericArg {
+    pub fn span(&self) -> Span {
+        match self {
+            GenericArg::Lifetime(l) => l.span,
+            GenericArg::Type(t) => t.span,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub struct GenericArgs {
     /// The generic arguments for this path segment.
@@ -2259,6 +2268,7 @@ pub struct CodegenFnAttrs {
     pub export_name: Option<Symbol>,
     pub target_features: Vec<Symbol>,
     pub linkage: Option<Linkage>,
+    pub wasm_custom_section: Option<Symbol>,
 }
 
 bitflags! {
@@ -2283,6 +2293,7 @@ impl CodegenFnAttrs {
             export_name: None,
             target_features: vec![],
             linkage: None,
+            wasm_custom_section: None,
         }
     }
 
