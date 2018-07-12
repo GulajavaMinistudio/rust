@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(core_intrinsics)]
+// aux-build:custom-attr-only-one-derive.rs
 
-use std::intrinsics::{init};
+#![feature(rust_2018_preview)]
 
-// Test that the `forget` and `init` intrinsics are really unsafe
-pub fn main() {
-    let stuff = init::<isize>(); //~ ERROR call to unsafe function requires unsafe
+#[macro_use]
+extern crate custom_attr_only_one_derive;
+
+#[derive(Bar, Foo)]
+#[custom = "test"]
+pub enum A {
+    B,
+    C,
 }
+
+fn main() {}

@@ -24,7 +24,7 @@ use syntax::errors::DiagnosticBuilder;
 use syntax::ext::base::{self, Annotatable, Determinacy, MultiModifier, MultiDecorator};
 use syntax::ext::base::{MacroKind, SyntaxExtension, Resolver as SyntaxResolver};
 use syntax::ext::expand::{self, AstFragment, AstFragmentKind, Invocation, InvocationKind};
-use syntax::ext::hygiene::{self, Mark, Transparency};
+use syntax::ext::hygiene::{self, Mark};
 use syntax::ext::placeholders::placeholder;
 use syntax::ext::tt::macro_rules;
 use syntax::feature_gate::{self, emit_feature_err, GateIssue};
@@ -331,13 +331,8 @@ impl<'a> base::Resolver for Resolver<'a> {
 
         self.unused_macros.remove(&def_id);
         let ext = self.get_macro(def);
-        if ext.is_modern() {
-            let transparency =
-                if ext.is_transparent() { Transparency::Transparent } else { Transparency::Opaque };
-            invoc.expansion_data.mark.set_transparency(transparency);
-        } else if def_id.krate == BUILTIN_MACROS_CRATE {
-            invoc.expansion_data.mark.set_is_builtin(true);
-        }
+        invoc.expansion_data.mark.set_default_transparency(ext.default_transparency());
+        invoc.expansion_data.mark.set_is_builtin(def_id.krate == BUILTIN_MACROS_CRATE);
         Ok(Some(ext))
     }
 
@@ -390,6 +385,22 @@ impl<'a> Resolver<'a> {
             Err(Determinacy::Determined) => {}
         }
 
+        // Ok at this point we've determined that the `attr` above doesn't
+        // actually resolve at this time, so we may want to report an error.
+        // It could be the case, though, that `attr` won't ever resolve! If
+        // there's a custom derive that could be used it might declare `attr` as
+        // a custom attribute accepted by the derive. In this case we don't want
+        // to report this particular invocation as unresolved, but rather we'd
+        // want to move on to the next invocation.
+        //
+        // This loop here looks through all of the derive annotations in scope
+        // and tries to resolve them. If they themselves successfully resolve
+        // *and* the resolve mentions that this attribute's name is a registered
+        // custom attribute then we flag this attribute as known and update
+        // `invoc` above to point to the next invocation.
+        //
+        // By then returning `Undetermined` we should continue resolution to
+        // resolve the next attribute.
         let attr_name = match path.segments.len() {
             1 => path.segments[0].ident.name,
             _ => return Err(determinacy),
@@ -411,8 +422,8 @@ impl<'a> Resolver<'a> {
                             attrs.push(inert_attr);
                             attrs
                         });
+                        return Err(Determinacy::Undetermined)
                     }
-                    return Err(Determinacy::Undetermined);
                 },
                 Err(Determinacy::Undetermined) => determinacy = Determinacy::Undetermined,
                 Err(Determinacy::Determined) => {}

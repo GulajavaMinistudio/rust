@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,20 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-pretty pretty-printing is unhygienic
+// no-prefer-dynamic
 
-#![feature(decl_macro)]
+#![crate_type = "proc-macro"]
 
-macro m($t:ty, $e:expr) {
-    mod foo {
-        #[allow(unused)]
-        struct S;
-        pub(super) fn f(_: $t) {}
-    }
-    foo::f($e);
+extern crate proc_macro;
+
+use proc_macro::TokenStream;
+
+#[proc_macro_derive(Foo)]
+pub fn foo(a: TokenStream) -> TokenStream {
+    "".parse().unwrap()
 }
 
-fn main() {
-    struct S;
-    m!(S, S);
+#[proc_macro_derive(Bar, attributes(custom))]
+pub fn bar(a: TokenStream) -> TokenStream {
+    "".parse().unwrap()
 }
