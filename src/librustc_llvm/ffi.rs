@@ -55,6 +55,7 @@ pub enum CallConv {
     X86_64_Win64 = 79,
     X86_VectorCall = 80,
     X86_Intr = 83,
+    AmdGpuKernel = 91,
 }
 
 /// LLVMRustLinkage
@@ -349,6 +350,10 @@ pub enum ThinLTOData {}
 
 /// LLVMRustThinLTOBuffer
 pub enum ThinLTOBuffer {}
+
+// LLVMRustModuleNameCallback
+pub type ThinLTOModuleNameCallback =
+    unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char);
 
 /// LLVMRustThinLTOModule
 #[repr(C)]
@@ -1778,6 +1783,11 @@ extern "C" {
         Data: *const ThinLTOData,
         Module: ModuleRef,
     ) -> bool;
+    pub fn LLVMRustGetThinLTOModuleImports(
+        Data: *const ThinLTOData,
+        ModuleNameCallback: ThinLTOModuleNameCallback,
+        CallbackPayload: *mut c_void,
+    );
     pub fn LLVMRustFreeThinLTOData(Data: *mut ThinLTOData);
     pub fn LLVMRustParseBitcodeForThinLTO(
         Context: ContextRef,
