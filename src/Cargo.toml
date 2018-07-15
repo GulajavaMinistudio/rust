@@ -40,8 +40,8 @@ members = [
   "tools/rls/test_data/workspace_symbol",
 ]
 
-# Curiously, libtest will segfault if compiled with opt-level=3
-# with some versions of XCode: https://github.com/rust-lang/rust/issues/50867
+# Curiously, LLVM 7.0 will segfault if compiled with opt-level=3
+# See issue https://github.com/rust-lang/rust/issues/52378
 [profile.release]
 opt-level = 2
 [profile.bench]
@@ -71,5 +71,4 @@ cargo = { path = "tools/cargo" }
 rustfmt-nightly = { path = "tools/rustfmt" }
 
 [patch."https://github.com/rust-lang-nursery/rust-clippy"]
-clippy = { path = "tools/clippy" }
 clippy_lints = { path = "tools/clippy/clippy_lints" }
