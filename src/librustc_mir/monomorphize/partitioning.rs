@@ -104,7 +104,7 @@
 
 use monomorphize::collector::InliningMap;
 use rustc::dep_graph::WorkProductId;
-use rustc::hir::def_id::{DefId, LOCAL_CRATE};
+use rustc::hir::def_id::DefId;
 use rustc::hir::map::DefPathData;
 use rustc::mir::mono::{Linkage, Visibility};
 use rustc::middle::exported_symbols::SymbolExportLevel;
@@ -114,7 +114,7 @@ use rustc::util::nodemap::{FxHashMap, FxHashSet};
 use std::collections::hash_map::Entry;
 use std::cmp;
 use syntax::ast::NodeId;
-use syntax::symbol::InternedString;
+use syntax::symbol::{Symbol, InternedString};
 use rustc::mir::mono::MonoItem;
 use monomorphize::item::{MonoItemExt, InstantiationMode};
 
@@ -180,8 +180,7 @@ pub trait CodegenUnitExt<'tcx> {
                         }
                     }
                 }
-                MonoItem::Static(def_id) |
-                MonoItem::CustomSection(def_id) => {
+                MonoItem::Static(def_id) => {
                     tcx.hir.as_local_node_id(def_id)
                 }
                 MonoItem::GlobalAsm(node_id) => {
@@ -204,8 +203,15 @@ impl<'tcx> CodegenUnitExt<'tcx> for CodegenUnit<'tcx> {
 
 // Anything we can't find a proper codegen unit for goes into this.
 fn fallback_cgu_name(tcx: TyCtxt) -> InternedString {
-    CodegenUnit::build_cgu_name(tcx, LOCAL_CRATE, &["fallback"], Some("cgu"))
+    const FALLBACK_CODEGEN_UNIT: &'static str = "__rustc_fallback_codegen_unit";
+
+    if tcx.sess.opts.debugging_opts.human_readable_cgu_names {
+        Symbol::intern(FALLBACK_CODEGEN_UNIT).as_interned_str()
+    } else {
+        Symbol::intern(&CodegenUnit::mangle_name(FALLBACK_CODEGEN_UNIT)).as_interned_str()
+    }
 }
+
 
 pub fn partition<'a, 'tcx, I>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                               mono_items: I,
@@ -217,7 +223,8 @@ pub fn partition<'a, 'tcx, I>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     // In the first step, we place all regular monomorphizations into their
     // respective 'home' codegen unit. Regular monomorphizations are all
     // functions and statics defined in the local crate.
-    let mut initial_partitioning = place_root_mono_items(tcx, mono_items);
+    let mut initial_partitioning = place_root_mono_items(tcx,
+                                                                mono_items);
 
     initial_partitioning.codegen_units.iter_mut().for_each(|cgu| cgu.estimate_size(&tcx));
 
@@ -226,7 +233,7 @@ pub fn partition<'a, 'tcx, I>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     // If the partitioning should produce a fixed count of codegen units, merge
     // until that count is reached.
     if let PartitioningStrategy::FixedUnitCount(count) = strategy {
-        merge_codegen_units(tcx, &mut initial_partitioning, count);
+        merge_codegen_units(&mut initial_partitioning, count, &tcx.crate_name.as_str());
 
         debug_dump(tcx, "POST MERGING:", initial_partitioning.codegen_units.iter());
     }
@@ -320,7 +327,7 @@ fn place_root_mono_items<'a, 'tcx, I>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         };
 
         let codegen_unit = codegen_units.entry(codegen_unit_name.clone())
-                                        .or_insert_with(make_codegen_unit);
+                                            .or_insert_with(make_codegen_unit);
 
         let mut can_be_internalized = true;
         let default_visibility = |id: DefId, is_generic: bool| {
@@ -442,9 +449,6 @@ fn place_root_mono_items<'a, 'tcx, I>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                         };
                         (Linkage::External, visibility)
                     }
-                    MonoItem::CustomSection(..) => {
-                        (Linkage::External, Visibility::Hidden)
-                    }
                     MonoItem::GlobalAsm(node_id) => {
                         let def_id = tcx.hir.local_def_id(node_id);
                         let visibility = if tcx.is_reachable_non_generic(def_id) {
@@ -483,9 +487,9 @@ fn place_root_mono_items<'a, 'tcx, I>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 }
 
-fn merge_codegen_units<'tcx>(tcx: TyCtxt<'_, 'tcx, 'tcx>,
-                             initial_partitioning: &mut PreInliningPartitioning<'tcx>,
-                             target_cgu_count: usize) {
+fn merge_codegen_units<'tcx>(initial_partitioning: &mut PreInliningPartitioning<'tcx>,
+                             target_cgu_count: usize,
+                             crate_name: &str) {
     assert!(target_cgu_count >= 1);
     let codegen_units = &mut initial_partitioning.codegen_units;
 
@@ -514,7 +518,7 @@ fn merge_codegen_units<'tcx>(tcx: TyCtxt<'_, 'tcx, 'tcx>,
     }
 
     for (index, cgu) in codegen_units.iter_mut().enumerate() {
-        cgu.set_name(numbered_codegen_unit_name(tcx, index));
+        cgu.set_name(numbered_codegen_unit_name(crate_name, index));
     }
 }
 
@@ -710,7 +714,6 @@ fn characteristic_def_id_of_mono_item<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             Some(def_id)
         }
         MonoItem::Static(def_id) => Some(def_id),
-        MonoItem::CustomSection(def_id) => Some(def_id),
         MonoItem::GlobalAsm(node_id) => Some(tcx.hir.local_def_id(node_id)),
     }
 }
@@ -719,26 +722,42 @@ fn compute_codegen_unit_name<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                        def_id: DefId,
                                        volatile: bool)
                                        -> InternedString {
+    // Unfortunately we cannot just use the `ty::item_path` infrastructure here
+    // because we need paths to modules and the DefIds of those are not
+    // available anymore for external items.
+    let mut cgu_name = String::with_capacity(64);
+
     let def_path = tcx.def_path(def_id);
+    cgu_name.push_str(&tcx.crate_name(def_path.krate).as_str());
 
-    let components = def_path.data.iter().take_while(|part| {
-        match part.data {
-            DefPathData::Module(..) => true,
-            _ => false,
-        }
-    }).map(|part| part.data.as_interned_str());
+    for part in tcx.def_path(def_id)
+                   .data
+                   .iter()
+                   .take_while(|part| {
+                        match part.data {
+                            DefPathData::Module(..) => true,
+                            _ => false,
+                        }
+                    }) {
+        cgu_name.push_str("-");
+        cgu_name.push_str(&part.data.as_interned_str().as_str());
+    }
 
-    let volatile_suffix = if volatile {
-        Some("volatile")
+    if volatile {
+        cgu_name.push_str(".volatile");
+    }
+
+    let cgu_name = if tcx.sess.opts.debugging_opts.human_readable_cgu_names {
+        cgu_name
     } else {
-        None
+        CodegenUnit::mangle_name(&cgu_name)
     };
 
-    CodegenUnit::build_cgu_name(tcx, def_path.krate, components, volatile_suffix)
+    Symbol::intern(&cgu_name[..]).as_interned_str()
 }
 
-fn numbered_codegen_unit_name(tcx: TyCtxt, index: usize) -> InternedString {
-    CodegenUnit::build_cgu_name_no_mangle(tcx, LOCAL_CRATE, &["cgu"], Some(index))
+fn numbered_codegen_unit_name(crate_name: &str, index: usize) -> InternedString {
+    Symbol::intern(&format!("{}{}", crate_name, index)).as_interned_str()
 }
 
 fn debug_dump<'a, 'b, 'tcx, I>(tcx: TyCtxt<'a, 'tcx, 'tcx>,

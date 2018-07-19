@@ -459,6 +459,7 @@ impl<'a> Builder<'a> {
                 dist::Cargo,
                 dist::Rls,
                 dist::Rustfmt,
+                dist::Clippy,
                 dist::LlvmTools,
                 dist::Extended,
                 dist::HashSign
@@ -469,6 +470,7 @@ impl<'a> Builder<'a> {
                 install::Cargo,
                 install::Rls,
                 install::Rustfmt,
+                install::Clippy,
                 install::Analysis,
                 install::Src,
                 install::Rustc
@@ -825,7 +827,7 @@ impl<'a> Builder<'a> {
             cargo.env("RUSTC_ERROR_FORMAT", error_format);
         }
         if cmd != "build" && cmd != "check" && want_rustdoc {
-            cargo.env("RUSTDOC_LIBDIR", &libdir);
+            cargo.env("RUSTDOC_LIBDIR", self.sysroot_libdir(compiler, self.config.build));
         }
 
         if mode.is_tool() {
@@ -903,10 +905,7 @@ impl<'a> Builder<'a> {
                 .env("RUSTC_SNAPSHOT_LIBDIR", self.rustc_libdir(compiler));
         }
 
-        // Ignore incremental modes except for stage0, since we're
-        // not guaranteeing correctness across builds if the compiler
-        // is changing under your feet.`
-        if self.config.incremental && compiler.stage == 0 {
+        if self.config.incremental {
             cargo.env("CARGO_INCREMENTAL", "1");
         }
 

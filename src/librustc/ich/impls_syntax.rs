@@ -98,7 +98,8 @@ impl_stable_hash_for!(enum ::syntax::ast::AsmDialect {
 impl_stable_hash_for!(enum ::syntax::ext::base::MacroKind {
     Bang,
     Attr,
-    Derive
+    Derive,
+    ProcMacroStub,
 });
 
 
@@ -411,6 +412,7 @@ impl_stable_hash_for!(enum ::syntax_pos::hygiene::CompilerDesugaringKind {
     DotFill,
     QuestionMark,
     ExistentialReturnType,
+    ForLoop,
     Catch
 });
 

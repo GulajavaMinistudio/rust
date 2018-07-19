@@ -29,11 +29,10 @@ use super::ModuleCodegen;
 use super::ModuleKind;
 
 use abi;
-use back::{link, lto};
+use back::link;
 use back::write::{self, OngoingCodegen, create_target_machine};
 use llvm::{ContextRef, ModuleRef, ValueRef, Vector, get_param};
 use llvm;
-use libc::c_uint;
 use metadata;
 use rustc::hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc::middle::lang_items::StartFnLangItem;
@@ -87,8 +86,7 @@ use std::sync::mpsc;
 use syntax_pos::Span;
 use syntax_pos::symbol::InternedString;
 use syntax::attr;
-use rustc::hir;
-use syntax::ast;
+use rustc::hir::{self, CodegenFnAttrs};
 
 use mir::operand::OperandValue;
 
@@ -124,16 +122,16 @@ impl<'a, 'tcx> Drop for StatRecorder<'a, 'tcx> {
     }
 }
 
-pub fn bin_op_to_icmp_predicate(op: hir::BinOp_,
+pub fn bin_op_to_icmp_predicate(op: hir::BinOpKind,
                                 signed: bool)
                                 -> llvm::IntPredicate {
     match op {
-        hir::BiEq => llvm::IntEQ,
-        hir::BiNe => llvm::IntNE,
-        hir::BiLt => if signed { llvm::IntSLT } else { llvm::IntULT },
-        hir::BiLe => if signed { llvm::IntSLE } else { llvm::IntULE },
-        hir::BiGt => if signed { llvm::IntSGT } else { llvm::IntUGT },
-        hir::BiGe => if signed { llvm::IntSGE } else { llvm::IntUGE },
+        hir::BinOpKind::Eq => llvm::IntEQ,
+        hir::BinOpKind::Ne => llvm::IntNE,
+        hir::BinOpKind::Lt => if signed { llvm::IntSLT } else { llvm::IntULT },
+        hir::BinOpKind::Le => if signed { llvm::IntSLE } else { llvm::IntULE },
+        hir::BinOpKind::Gt => if signed { llvm::IntSGT } else { llvm::IntUGT },
+        hir::BinOpKind::Ge => if signed { llvm::IntSGE } else { llvm::IntUGE },
         op => {
             bug!("comparison_op_to_icmp_predicate: expected comparison operator, \
                   found {:?}",
@@ -142,14 +140,14 @@ pub fn bin_op_to_icmp_predicate(op: hir::BinOp_,
     }
 }
 
-pub fn bin_op_to_fcmp_predicate(op: hir::BinOp_) -> llvm::RealPredicate {
+pub fn bin_op_to_fcmp_predicate(op: hir::BinOpKind) -> llvm::RealPredicate {
     match op {
-        hir::BiEq => llvm::RealOEQ,
-        hir::BiNe => llvm::RealUNE,
-        hir::BiLt => llvm::RealOLT,
-        hir::BiLe => llvm::RealOLE,
-        hir::BiGt => llvm::RealOGT,
-        hir::BiGe => llvm::RealOGE,
+        hir::BinOpKind::Eq => llvm::RealOEQ,
+        hir::BinOpKind::Ne => llvm::RealUNE,
+        hir::BinOpKind::Lt => llvm::RealOLT,
+        hir::BinOpKind::Le => llvm::RealOLE,
+        hir::BinOpKind::Gt => llvm::RealOGT,
+        hir::BinOpKind::Ge => llvm::RealOGE,
         op => {
             bug!("comparison_op_to_fcmp_predicate: expected comparison operator, \
                   found {:?}",
@@ -164,7 +162,7 @@ pub fn compare_simd_types<'a, 'tcx>(
     rhs: ValueRef,
     t: Ty<'tcx>,
     ret_ty: Type,
-    op: hir::BinOp_
+    op: hir::BinOpKind
 ) -> ValueRef {
     let signed = match t.sty {
         ty::TyFloat(_) => {
@@ -332,12 +330,12 @@ pub fn coerce_unsized_into<'a, 'tcx>(bx: &Builder<'a, 'tcx>,
 }
 
 pub fn cast_shift_expr_rhs(
-    cx: &Builder, op: hir::BinOp_, lhs: ValueRef, rhs: ValueRef
+    cx: &Builder, op: hir::BinOpKind, lhs: ValueRef, rhs: ValueRef
 ) -> ValueRef {
     cast_shift_rhs(op, lhs, rhs, |a, b| cx.trunc(a, b), |a, b| cx.zext(a, b))
 }
 
-fn cast_shift_rhs<F, G>(op: hir::BinOp_,
+fn cast_shift_rhs<F, G>(op: hir::BinOpKind,
                         lhs: ValueRef,
                         rhs: ValueRef,
                         trunc: F,
@@ -513,17 +511,14 @@ pub fn codegen_instance<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>, instance: Instance<'
     mir::codegen_mir(cx, lldecl, &mir, instance, sig);
 }
 
-pub fn set_link_section(cx: &CodegenCx,
-                        llval: ValueRef,
-                        attrs: &[ast::Attribute]) {
-    if let Some(sect) = attr::first_attr_value_str_by_name(attrs, "link_section") {
-        if contains_null(&sect.as_str()) {
-            cx.sess().fatal(&format!("Illegal null byte in link_section value: `{}`", &sect));
-        }
-        unsafe {
-            let buf = CString::new(sect.as_str().as_bytes()).unwrap();
-            llvm::LLVMSetSection(llval, buf.as_ptr());
-        }
+pub fn set_link_section(llval: ValueRef, attrs: &CodegenFnAttrs) {
+    let sect = match attrs.link_section {
+        Some(name) => name,
+        None => return,
+    };
+    unsafe {
+        let buf = CString::new(sect.as_str().as_bytes()).unwrap();
+        llvm::LLVMSetSection(llval, buf.as_ptr());
     }
 }
 
@@ -611,10 +606,6 @@ fn maybe_create_entry_wrapper(cx: &CodegenCx) {
         let result = bx.call(start_fn, &args, None);
         bx.ret(bx.intcast(result, Type::c_int(cx), true));
     }
-}
-
-fn contains_null(s: &str) -> bool {
-    s.bytes().any(|b| b == 0)
 }
 
 fn write_metadata<'a, 'gcx>(tcx: TyCtxt<'a, 'gcx, 'gcx>,
@@ -739,18 +730,15 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let link_meta = link::build_link_meta(crate_hash);
 
     // Codegen the metadata.
-    let metadata_cgu_name = CodegenUnit::build_cgu_name(tcx,
-                                                        LOCAL_CRATE,
-                                                        &["crate"],
-                                                        Some("metadata")).as_str()
-                                                                         .to_string();
+    let llmod_id = "metadata";
     let (metadata_llcx, metadata_llmod, metadata) =
         time(tcx.sess, "write metadata", || {
-            write_metadata(tcx, &metadata_cgu_name, &link_meta)
+            write_metadata(tcx, llmod_id, &link_meta)
         });
 
     let metadata_module = ModuleCodegen {
-        name: metadata_cgu_name,
+        name: link::METADATA_MODULE_NAME.to_string(),
+        llmod_id: llmod_id.to_string(),
         source: ModuleSource::Codegened(ModuleLlvm {
             llcx: metadata_llcx,
             llmod: metadata_llmod,
@@ -813,30 +801,26 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
     // Codegen an allocator shim, if any
     let allocator_module = if let Some(kind) = *tcx.sess.allocator_kind.get() {
-        let llmod_id = CodegenUnit::build_cgu_name(tcx,
-                                                   LOCAL_CRATE,
-                                                   &["crate"],
-                                                   Some("allocator")).as_str()
-                                                                     .to_string();
-        let (llcx, llmod) = unsafe {
-            context::create_context_and_module(tcx.sess, &llmod_id)
-        };
-        let modules = ModuleLlvm {
-            llmod,
-            llcx,
-            tm: create_target_machine(tcx.sess, false),
-        };
-        time(tcx.sess, "write allocator module", || {
-            unsafe {
+        unsafe {
+            let llmod_id = "allocator";
+            let (llcx, llmod) =
+                context::create_context_and_module(tcx.sess, llmod_id);
+            let modules = ModuleLlvm {
+                llmod,
+                llcx,
+                tm: create_target_machine(tcx.sess, false),
+            };
+            time(tcx.sess, "write allocator module", || {
                 allocator::codegen(tcx, &modules, kind)
-            }
-        });
+            });
 
-        Some(ModuleCodegen {
-            name: llmod_id,
-            source: ModuleSource::Codegened(modules),
-            kind: ModuleKind::Allocator,
-        })
+            Some(ModuleCodegen {
+                name: link::ALLOCATOR_MODULE_NAME.to_string(),
+                llmod_id: llmod_id.to_string(),
+                source: ModuleSource::Codegened(modules),
+                kind: ModuleKind::Allocator,
+            })
+        }
     } else {
         None
     };
@@ -879,10 +863,21 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 // succeed it means that none of the dependencies has changed
                 // and we can safely re-use.
                 if let Some(dep_node_index) = tcx.dep_graph.try_mark_green(tcx, dep_node) {
+                    // Append ".rs" to LLVM module identifier.
+                    //
+                    // LLVM code generator emits a ".file filename" directive
+                    // for ELF backends. Value of the "filename" is set as the
+                    // LLVM module identifier.  Due to a LLVM MC bug[1], LLVM
+                    // crashes if the module identifier is same as other symbols
+                    // such as a function name in the module.
+                    // 1. http://llvm.org/bugs/show_bug.cgi?id=11479
+                    let llmod_id = format!("{}.rs", cgu.name());
+
                     let module = ModuleCodegen {
                         name: cgu.name().to_string(),
                         source: ModuleSource::Preexisting(buf),
                         kind: ModuleKind::Regular,
+                        llmod_id,
                     };
                     tcx.dep_graph.mark_loaded_from_cache(dep_node_index, true);
                     write::submit_codegened_module_to_llvm(tcx, module, 0);
@@ -1191,8 +1186,21 @@ fn compile_codegen_unit<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     {
         let cgu_name = cgu.name().to_string();
 
+        // Append ".rs" to LLVM module identifier.
+        //
+        // LLVM code generator emits a ".file filename" directive
+        // for ELF backends. Value of the "filename" is set as the
+        // LLVM module identifier.  Due to a LLVM MC bug[1], LLVM
+        // crashes if the module identifier is same as other symbols
+        // such as a function name in the module.
+        // 1. http://llvm.org/bugs/show_bug.cgi?id=11479
+        let llmod_id = format!("{}-{}.rs",
+                               cgu.name(),
+                               tcx.crate_disambiguator(LOCAL_CRATE)
+                                   .to_fingerprint().to_hex());
+
         // Instantiate monomorphizations without filling out definitions yet...
-        let cx = CodegenCx::new(tcx, cgu);
+        let cx = CodegenCx::new(tcx, cgu, &llmod_id);
         let module = {
             let mono_items = cx.codegen_unit
                                  .items_in_deterministic_order(cx.tcx);
@@ -1250,6 +1258,7 @@ fn compile_codegen_unit<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 name: cgu_name,
                 source: ModuleSource::Codegened(llvm_module),
                 kind: ModuleKind::Regular,
+                llmod_id,
             }
         };
 
@@ -1351,64 +1360,3 @@ mod temp_stable_hash_impls {
         }
     }
 }
-
-#[allow(unused)]
-fn load_thin_lto_imports(sess: &Session) -> lto::ThinLTOImports {
-    let path = rustc_incremental::in_incr_comp_dir_sess(
-        sess,
-        lto::THIN_LTO_IMPORTS_INCR_COMP_FILE_NAME
-    );
-
-    if !path.exists() {
-        return lto::ThinLTOImports::new();
-    }
-
-    match lto::ThinLTOImports::load_from_file(&path) {
-        Ok(imports) => imports,
-        Err(e) => {
-            let msg = format!("Error while trying to load ThinLTO import data \
-                               for incremental compilation: {}", e);
-            sess.fatal(&msg)
-        }
-    }
-}
-
-pub fn define_custom_section(cx: &CodegenCx, def_id: DefId) {
-    use rustc::mir::interpret::GlobalId;
-
-    assert!(cx.tcx.sess.opts.target_triple.triple().starts_with("wasm32"));
-
-    info!("loading wasm section {:?}", def_id);
-
-    let section = cx.tcx.codegen_fn_attrs(def_id).wasm_custom_section.unwrap();
-
-    let instance = ty::Instance::mono(cx.tcx, def_id);
-    let cid = GlobalId {
-        instance,
-        promoted: None
-    };
-    let param_env = ty::ParamEnv::reveal_all();
-    let val = cx.tcx.const_eval(param_env.and(cid)).unwrap();
-    let alloc = cx.tcx.const_value_to_allocation(val);
-
-    unsafe {
-        let section = llvm::LLVMMDStringInContext(
-            cx.llcx,
-            section.as_str().as_ptr() as *const _,
-            section.as_str().len() as c_uint,
-        );
-        let alloc = llvm::LLVMMDStringInContext(
-            cx.llcx,
-            alloc.bytes.as_ptr() as *const _,
-            alloc.bytes.len() as c_uint,
-        );
-        let data = [section, alloc];
-        let meta = llvm::LLVMMDNodeInContext(cx.llcx, data.as_ptr(), 2);
-        llvm::LLVMAddNamedMetadataOperand(
-            cx.llmod,
-            "wasm.custom_sections\0".as_ptr() as *const _,
-            meta,
-        );
-    }
-}
-

@@ -1170,12 +1170,10 @@ impl<'test> TestCx<'test> {
     }
 
     fn check_no_compiler_crash(&self, proc_res: &ProcRes) {
-        for line in proc_res.stderr.lines() {
-            if line.contains("error: internal compiler error") {
-                self.fatal_proc_rec("compiler encountered internal error", proc_res);
-            } else if line.contains(" panicked at ") {
-                self.fatal_proc_rec("compiler panicked", proc_res);
-            }
+        match proc_res.status.code() {
+            Some(101) => self.fatal_proc_rec("compiler encountered internal error", proc_res),
+            None => self.fatal_proc_rec("compiler terminated by signal", proc_res),
+            _ => (),
         }
     }
 
@@ -2209,12 +2207,12 @@ impl<'test> TestCx<'test> {
             .stdout
             .lines()
             .filter(|line| line.starts_with(PREFIX))
-            .map(|line| str_to_mono_item(line, true))
+            .map(str_to_mono_item)
             .collect();
 
         let expected: Vec<MonoItem> = errors::load_errors(&self.testpaths.file, None)
             .iter()
-            .map(|e| str_to_mono_item(&e.msg[..], false))
+            .map(|e| str_to_mono_item(&e.msg[..]))
             .collect();
 
         let mut missing = Vec::new();
@@ -2299,14 +2297,14 @@ impl<'test> TestCx<'test> {
         }
 
         // [MONO_ITEM] name [@@ (cgu)+]
-        fn str_to_mono_item(s: &str, cgu_has_crate_disambiguator: bool) -> MonoItem {
+        fn str_to_mono_item(s: &str) -> MonoItem {
             let s = if s.starts_with(PREFIX) {
                 (&s[PREFIX.len()..]).trim()
             } else {
                 s.trim()
             };
 
-            let full_string = format!("{}{}", PREFIX, s);
+            let full_string = format!("{}{}", PREFIX, s.trim().to_owned());
 
             let parts: Vec<&str> = s
                 .split(CGU_MARKER)
@@ -2323,13 +2321,7 @@ impl<'test> TestCx<'test> {
                     .split(' ')
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .map(|s| {
-                        if cgu_has_crate_disambiguator {
-                            remove_crate_disambiguator_from_cgu(s)
-                        } else {
-                            s.to_string()
-                        }
-                    })
+                    .map(str::to_owned)
                     .collect()
             } else {
                 HashSet::new()
@@ -2353,23 +2345,6 @@ impl<'test> TestCx<'test> {
             }
 
             string
-        }
-
-        fn remove_crate_disambiguator_from_cgu(cgu: &str) -> String {
-            // The first '.' is the start of the crate disambiguator
-            let disambiguator_start = cgu.find('.')
-                .expect("Could not find start of crate disambiguator in CGU spec");
-
-            // The first non-alphanumeric character is the end of the disambiguator
-            let disambiguator_end = cgu[disambiguator_start + 1 ..]
-                .find(|c| !char::is_alphanumeric(c))
-                .expect("Could not find end of crate disambiguator in CGU spec")
-                + disambiguator_start + 1;
-
-            let mut result = cgu[0 .. disambiguator_start].to_string();
-            result.push_str(&cgu[disambiguator_end ..]);
-
-            result
         }
     }
 
