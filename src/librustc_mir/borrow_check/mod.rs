@@ -34,7 +34,7 @@ use std::rc::Rc;
 use syntax_pos::Span;
 
 use dataflow::indexes::BorrowIndex;
-use dataflow::move_paths::{HasMoveData, LookupResult, MoveData, MovePathIndex};
+use dataflow::move_paths::{HasMoveData, LookupResult, MoveData, MoveError, MovePathIndex};
 use dataflow::Borrows;
 use dataflow::DataflowResultsConsumer;
 use dataflow::FlowAtLocation;
@@ -148,13 +148,11 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     let mir = &mir; // no further changes
     let location_table = &LocationTable::new(mir);
 
-    let move_data: MoveData<'tcx> = match MoveData::gather_moves(mir, tcx) {
-        Ok(move_data) => move_data,
-        Err((move_data, move_errors)) => {
-            move_errors::report_move_errors(&mir, tcx, move_errors, &move_data);
-            move_data
-        }
-    };
+    let (move_data, move_errors): (MoveData<'tcx>, Option<Vec<MoveError<'tcx>>>) =
+        match MoveData::gather_moves(mir, tcx) {
+            Ok(move_data) => (move_data, None),
+            Err((move_data, move_errors)) => (move_data, Some(move_errors)),
+        };
 
     let mdpe = MoveDataParamEnv {
         move_data: move_data,
@@ -271,6 +269,9 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
         polonius_output,
     );
 
+    if let Some(errors) = move_errors {
+        mbcx.report_move_errors(errors);
+    }
     mbcx.analyze_results(&mut state); // entry point for DataflowResultsConsumer
 
     // For each non-user used mutable variable, check if it's been assigned from
@@ -1213,7 +1214,8 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                                 }
                                 Operand::Move(ref place @ Place::Projection(_))
                                 | Operand::Copy(ref place @ Place::Projection(_)) => {
-                                    if let Some(field) = self.is_upvar_field_projection(place) {
+                                    if let Some(field) = place.is_upvar_field_projection(
+                                            self.mir, &self.tcx) {
                                         self.used_mut_upvars.push(field);
                                     }
                                 }
@@ -1802,7 +1804,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                 place: place @ Place::Projection(_),
                 is_local_mutation_allowed: _,
             } => {
-                if let Some(field) = self.is_upvar_field_projection(&place) {
+                if let Some(field) = place.is_upvar_field_projection(self.mir, &self.tcx) {
                     self.used_mut_upvars.push(field);
                 }
             }
@@ -1865,7 +1867,8 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                                     // Mutably borrowed data is mutable, but only if we have a
                                     // unique path to the `&mut`
                                     hir::MutMutable => {
-                                        let mode = match self.is_upvar_field_projection(&proj.base)
+                                        let mode = match place.is_upvar_field_projection(
+                                            self.mir, &self.tcx)
                                         {
                                             Some(field)
                                                 if {
@@ -1910,7 +1913,9 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                     | ProjectionElem::ConstantIndex { .. }
                     | ProjectionElem::Subslice { .. }
                     | ProjectionElem::Downcast(..) => {
-                        if let Some(field) = self.is_upvar_field_projection(place) {
+                        let upvar_field_projection = place.is_upvar_field_projection(
+                            self.mir, &self.tcx);
+                        if let Some(field) = upvar_field_projection {
                             let decl = &self.mir.upvar_decls[field.index()];
                             debug!(
                                 "decl.mutability={:?} local_mutation_is_allowed={:?} place={:?}",
@@ -1962,28 +1967,6 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                     }
                 }
             }
-        }
-    }
-
-    /// If this is a field projection, and the field is being projected from a closure type,
-    /// then returns the index of the field being projected. Note that this closure will always
-    /// be `self` in the current MIR, because that is the only time we directly access the fields
-    /// of a closure type.
-    fn is_upvar_field_projection(&self, place: &Place<'tcx>) -> Option<Field> {
-        match *place {
-            Place::Projection(ref proj) => match proj.elem {
-                ProjectionElem::Field(field, _ty) => {
-                    let base_ty = proj.base.ty(self.mir, self.tcx).to_ty(self.tcx);
-
-                    if  base_ty.is_closure() || base_ty.is_generator() {
-                        Some(field)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-            _ => None,
         }
     }
 }

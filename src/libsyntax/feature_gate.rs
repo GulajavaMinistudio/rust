@@ -129,6 +129,7 @@ declare_features! (
     // rustc internal, for now:
     (active, intrinsics, "1.0.0", None, None),
     (active, lang_items, "1.0.0", None, None),
+    (active, format_args_nl, "1.29.0", None, None),
 
     (active, link_llvm_intrinsics, "1.0.0", Some(29602), None),
     (active, linkage, "1.0.0", Some(29603), None),
@@ -686,7 +687,8 @@ pub fn deprecated_attributes() -> Vec<&'static (&'static str, AttributeType, Att
 }
 
 pub fn is_builtin_attr(attr: &ast::Attribute) -> bool {
-    BUILTIN_ATTRIBUTES.iter().any(|&(builtin_name, _, _)| attr.check_name(builtin_name))
+    BUILTIN_ATTRIBUTES.iter().any(|&(builtin_name, _, _)| attr.check_name(builtin_name)) ||
+    attr.name().as_str().starts_with("rustc_")
 }
 
 // Attributes that have a special meaning to rustc or rustdoc
@@ -1319,6 +1321,9 @@ pub const EXPLAIN_LOG_SYNTAX: &'static str =
 
 pub const EXPLAIN_CONCAT_IDENTS: &'static str =
     "`concat_idents` is not stable enough for use and is subject to change";
+
+pub const EXPLAIN_FORMAT_ARGS_NL: &'static str =
+    "`format_args_nl` is only for internal language use and is subject to change";
 
 pub const EXPLAIN_TRACE_MACROS: &'static str =
     "`trace_macros` is not stable enough for use and is subject to change";

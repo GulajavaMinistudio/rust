@@ -7,13 +7,21 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![allow(warnings)]
-#![allow(unused_variables, dead_code, unused, bad_style)]
-#![deny(elided_lifetimes_in_paths)]
 
-struct Foo<'a> { x: &'a u32 }
-fn foo(x: &Foo) {
-    //~^ ERROR: hidden lifetime parameters are deprecated, try `Foo<'_>`
+// compile-flags: -O
+// only-x86_64
+
+#![crate_type = "lib"]
+
+use std::mem::swap;
+
+type RGB48 = [u16; 3];
+
+// CHECK-LABEL: @swap_rgb48
+#[no_mangle]
+pub fn swap_rgb48(x: &mut RGB48, y: &mut RGB48) {
+// CHECK-NOT: alloca
+// CHECK: load i48
+// CHECK: store i48
+    swap(x, y)
 }
-
-fn main() {}
