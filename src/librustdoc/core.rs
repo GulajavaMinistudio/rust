@@ -162,6 +162,7 @@ pub fn new_handler(error_format: ErrorOutputType, codemap: Option<Lrc<codemap::C
         errors::HandlerFlags {
             can_emit_warnings: true,
             treat_err_as_bug: false,
+            report_delayed_bugs: false,
             external_macro_backtrace: false,
             ..Default::default()
         },
@@ -361,9 +362,9 @@ pub fn run_core(search_paths: SearchPaths,
             };
 
             let send_trait = if crate_name == Some("core".to_string()) {
-                clean::get_trait_def_id(&tcx, &["marker", "Send"], true)
+                clean::path_to_def_local(&tcx, &["marker", "Send"])
             } else {
-                clean::get_trait_def_id(&tcx, &["core", "marker", "Send"], false)
+                clean::path_to_def(&tcx, &["core", "marker", "Send"])
             };
 
             let ctxt = DocContext {
@@ -389,7 +390,7 @@ pub fn run_core(search_paths: SearchPaths,
             debug!("crate: {:?}", tcx.hir.krate());
 
             let krate = {
-                let mut v = RustdocVisitor::new(&*cstore, &ctxt);
+                let mut v = RustdocVisitor::new(&ctxt);
                 v.visit(tcx.hir.krate());
                 v.clean(&ctxt)
             };

@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,12 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that `?` macro Kleene operator can not be used when the `macro_at_most_once_rep` feature
-// gate is not used.
+// no-prefer-dynamic
 
-macro_rules! m { ($(a)?) => {} }
-//~^ ERROR using the `?` macro Kleene operator for "at most one" repetition is unstable
+#![crate_type = "proc-macro"]
 
-fn main() {
-    m!();
+extern crate proc_macro;
+
+use proc_macro::*;
+
+#[proc_macro_attribute]
+pub fn foo(_: TokenStream, item: TokenStream) -> TokenStream {
+    item.into_iter().collect()
 }

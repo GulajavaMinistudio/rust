@@ -53,8 +53,8 @@ pub struct Borrows<'a, 'gcx: 'tcx, 'tcx: 'a> {
     _nonlexical_regioncx: Rc<RegionInferenceContext<'tcx>>,
 }
 
-fn precompute_borrows_out_of_scope<'a, 'tcx>(
-    mir: &'a Mir<'tcx>,
+fn precompute_borrows_out_of_scope<'tcx>(
+    mir: &Mir<'tcx>,
     regioncx: &Rc<RegionInferenceContext<'tcx>>,
     borrows_out_of_scope_at_location: &mut FxHashMap<Location, Vec<BorrowIndex>>,
     borrow_index: BorrowIndex,
@@ -259,6 +259,7 @@ impl<'a, 'gcx, 'tcx> BitDenotation for Borrows<'a, 'gcx, 'tcx> {
                     // Issue #46746: Two-phase borrows handles
                     // stmts of form `Tmp = &mut Borrow` ...
                     match lhs {
+                        Place::Promoted(_) |
                         Place::Local(..) | Place::Static(..) => {} // okay
                         Place::Projection(..) => {
                             // ... can assign into projections,

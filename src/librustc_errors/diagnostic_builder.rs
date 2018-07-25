@@ -88,6 +88,18 @@ impl<'a> DiagnosticBuilder<'a> {
         self.cancel();
     }
 
+    /// Buffers the diagnostic for later emission.
+    pub fn buffer(self, buffered_diagnostics: &mut Vec<Diagnostic>) {
+        // We need to use `ptr::read` because `DiagnosticBuilder`
+        // implements `Drop`.
+        let diagnostic;
+        unsafe {
+            diagnostic = ::std::ptr::read(&self.diagnostic);
+            ::std::mem::forget(self);
+        };
+        buffered_diagnostics.push(diagnostic);
+    }
+
     pub fn is_error(&self) -> bool {
         match self.level {
             Level::Bug |
@@ -132,7 +144,7 @@ impl<'a> DiagnosticBuilder<'a> {
     /// locally in whichever way makes the most sense.
     pub fn delay_as_bug(&mut self) {
         self.level = Level::Bug;
-        *self.handler.delayed_span_bug.borrow_mut() = Some(self.diagnostic.clone());
+        self.handler.delay_as_bug(self.diagnostic.clone());
         self.cancel();
     }
 
