@@ -1,4 +1,4 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use clean;
-use fold::DocFolder;
-use passes::ImportStripper;
+// compile-pass
 
-pub fn strip_priv_imports(krate: clean::Crate)  -> clean::Crate {
-    ImportStripper.fold_crate(krate)
+#![feature(existential_type)]
+
+use std::fmt::Debug;
+
+fn main() {
+    existential type Existential: Debug;
+
+    fn f() -> Existential {}
+    println!("{:?}", f());
 }
