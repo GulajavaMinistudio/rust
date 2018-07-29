@@ -14,8 +14,6 @@
 //!
 //! This API is completely unstable and subject to change.
 
-#![deny(bare_trait_objects)]
-
 #![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
       html_root_url = "https://doc.rust-lang.org/nightly/")]
@@ -1229,10 +1227,7 @@ Available lint options:
     fn sort_lint_groups(lints: Vec<(&'static str, Vec<lint::LintId>, bool)>)
                         -> Vec<(&'static str, Vec<lint::LintId>)> {
         let mut lints: Vec<_> = lints.into_iter().map(|(x, y, _)| (x, y)).collect();
-        lints.sort_by(|&(x, _): &(&'static str, Vec<lint::LintId>),
-                       &(y, _): &(&'static str, Vec<lint::LintId>)| {
-            x.cmp(y)
-        });
+        lints.sort_by_key(|ref l| l.0);
         lints
     }
 

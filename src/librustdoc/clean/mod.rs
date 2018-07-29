@@ -375,7 +375,7 @@ impl fmt::Debug for Item {
 
         let fake = MAX_DEF_ID.with(|m| m.borrow().get(&self.def_id.krate)
                                    .map(|id| self.def_id >= *id).unwrap_or(false));
-        let def_id: &fmt::Debug = if fake { &"**FAKE**" } else { &self.def_id };
+        let def_id: &dyn fmt::Debug = if fake { &"**FAKE**" } else { &self.def_id };
 
         fmt.debug_struct("Item")
             .field("source", &self.source)
@@ -1549,7 +1549,6 @@ impl GenericBound {
     }
 
     fn get_trait_type(&self) -> Option<Type> {
-
         if let GenericBound::TraitBound(PolyTrait { ref trait_, .. }, _) = *self {
             return Some(trait_.clone());
         }
@@ -3880,6 +3879,7 @@ pub struct Impl {
     pub items: Vec<Item>,
     pub polarity: Option<ImplPolarity>,
     pub synthetic: bool,
+    pub blanket_impl: Option<Type>,
 }
 
 pub fn get_auto_traits_with_node_id(cx: &DocContext, id: ast::NodeId, name: String) -> Vec<Item> {
@@ -3947,6 +3947,7 @@ impl Clean<Vec<Item>> for doctree::Impl {
                 items,
                 polarity: Some(self.polarity.clean(cx)),
                 synthetic: false,
+                blanket_impl: None,
             })
         });
         ret

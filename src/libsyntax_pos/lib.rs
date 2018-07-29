@@ -14,8 +14,6 @@
 //!
 //! This API is completely unstable and subject to change.
 
-#![deny(bare_trait_objects)]
-
 #![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
       html_root_url = "https://doc.rust-lang.org/nightly/")]
@@ -634,15 +632,14 @@ impl MultiSpan {
     /// `SpanLabel` instances with empty labels.
     pub fn span_labels(&self) -> Vec<SpanLabel> {
         let is_primary = |span| self.primary_spans.contains(&span);
-        let mut span_labels = vec![];
 
-        for &(span, ref label) in &self.span_labels {
-            span_labels.push(SpanLabel {
+        let mut span_labels = self.span_labels.iter().map(|&(span, ref label)|
+            SpanLabel {
                 span,
                 is_primary: is_primary(span),
                 label: Some(label.clone())
-            });
-        }
+            }
+        ).collect::<Vec<_>>();
 
         for &span in &self.primary_spans {
             if !span_labels.iter().any(|sl| sl.span == span) {

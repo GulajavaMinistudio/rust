@@ -36,8 +36,6 @@
 //!
 //! This API is completely unstable and subject to change.
 
-#![deny(bare_trait_objects)]
-
 #![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
        html_root_url = "https://doc.rust-lang.org/nightly/")]
@@ -69,6 +67,7 @@
 #![feature(trusted_len)]
 #![feature(vec_remove_item)]
 #![feature(catch_expr)]
+#![feature(step_trait)]
 #![feature(integer_atomics)]
 #![feature(test)]
 #![feature(in_band_lifetimes)]

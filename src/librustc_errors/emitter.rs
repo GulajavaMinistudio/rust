@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::io::prelude::*;
 use std::io;
 use std::collections::HashMap;
-use std::cmp::min;
+use std::cmp::{min, Reverse};
 use termcolor::{StandardStream, ColorChoice, ColorSpec, BufferWriter};
 use termcolor::{WriteColor, Color, Buffer};
 use unicode_width;
@@ -265,9 +265,7 @@ impl EmitterWriter {
         }
 
         // Find overlapping multiline annotations, put them at different depths
-        multiline_annotations.sort_by(|a, b| {
-            (a.1.line_start, a.1.line_end).cmp(&(b.1.line_start, b.1.line_end))
-        });
+        multiline_annotations.sort_by_key(|&(_, ref ml)| (ml.line_start, ml.line_end));
         for item in multiline_annotations.clone() {
             let ann = item.1;
             for item in multiline_annotations.iter_mut() {
@@ -403,7 +401,7 @@ impl EmitterWriter {
         // otherwise the lines would end up needing to go over a message.
 
         let mut annotations = line.annotations.clone();
-        annotations.sort_by(|a,b| b.start_col.cmp(&a.start_col));
+        annotations.sort_by_key(|a| Reverse(a.start_col));
 
         // First, figure out where each label will be positioned.
         //
@@ -751,7 +749,7 @@ impl EmitterWriter {
         max
     }
 
-    fn get_max_line_num(&mut self, span: &MultiSpan, children: &Vec<SubDiagnostic>) -> usize {
+    fn get_max_line_num(&mut self, span: &MultiSpan, children: &[SubDiagnostic]) -> usize {
         let mut max = 0;
 
         let primary = self.get_multispan_max_line_num(span);
@@ -956,7 +954,7 @@ impl EmitterWriter {
 
     fn emit_message_default(&mut self,
                             msp: &MultiSpan,
-                            msg: &Vec<(String, Style)>,
+                            msg: &[(String, Style)],
                             code: &Option<DiagnosticId>,
                             level: &Level,
                             max_line_num_len: usize,
@@ -1319,10 +1317,10 @@ impl EmitterWriter {
 
     fn emit_messages_default(&mut self,
                              level: &Level,
-                             message: &Vec<(String, Style)>,
+                             message: &[(String, Style)],
                              code: &Option<DiagnosticId>,
                              span: &MultiSpan,
-                             children: &Vec<SubDiagnostic>,
+                             children: &[SubDiagnostic],
                              suggestions: &[CodeSuggestion]) {
         let max_line_num_len = if self.ui_testing {
             ANONYMIZED_LINE_NUM.len()
@@ -1435,7 +1433,7 @@ fn overlaps(a1: &Annotation, a2: &Annotation, padding: usize) -> bool {
     num_overlap(a1.start_col, a1.end_col + padding, a2.start_col, a2.end_col, false)
 }
 
-fn emit_to_destination(rendered_buffer: &Vec<Vec<StyledString>>,
+fn emit_to_destination(rendered_buffer: &[Vec<StyledString>],
                        lvl: &Level,
                        dst: &mut Destination,
                        short_message: bool)

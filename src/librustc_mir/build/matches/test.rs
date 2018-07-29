@@ -149,7 +149,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
     pub fn add_variants_to_switch<'pat>(&mut self,
                                         test_place: &Place<'tcx>,
                                         candidate: &Candidate<'pat, 'tcx>,
-                                        variants: &mut BitVector)
+                                        variants: &mut BitVector<usize>)
                                         -> bool
     {
         let match_pair = match candidate.match_pairs.iter().find(|mp| mp.place == *test_place) {
@@ -631,6 +631,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             bindings: candidate.bindings.clone(),
             guard: candidate.guard.clone(),
             arm_index: candidate.arm_index,
+            pat_index: candidate.pat_index,
             pre_binding_block: candidate.pre_binding_block,
             next_candidate_pre_binding_block: candidate.next_candidate_pre_binding_block,
         }
@@ -694,6 +695,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             bindings: candidate.bindings.clone(),
             guard: candidate.guard.clone(),
             arm_index: candidate.arm_index,
+            pat_index: candidate.pat_index,
             pre_binding_block: candidate.pre_binding_block,
             next_candidate_pre_binding_block: candidate.next_candidate_pre_binding_block,
         }

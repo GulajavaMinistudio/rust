@@ -48,7 +48,7 @@ use syntax_pos::{DUMMY_SP, Span};
 
 impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
     pub fn report_fulfillment_errors(&self,
-                                     errors: &Vec<FulfillmentError<'tcx>>,
+                                     errors: &[FulfillmentError<'tcx>],
                                      body_id: Option<hir::BodyId>,
                                      fallback_has_occurred: bool) {
         #[derive(Debug)]
@@ -1015,7 +1015,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
     ) -> DiagnosticBuilder<'tcx> {
         let kind = if is_closure { "closure" } else { "function" };
 
-        let args_str = |arguments: &Vec<ArgKind>, other: &Vec<ArgKind>| {
+        let args_str = |arguments: &[ArgKind], other: &[ArgKind]| {
             let arg_length = arguments.len();
             let distinct = match &other[..] {
                 &[ArgKind::Tuple(..)] => true,
@@ -1049,6 +1049,30 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
         if let Some(found_span) = found_span {
             err.span_label(found_span, format!("takes {}", found_str));
+
+            // Suggest to take and ignore the arguments with expected_args_length `_`s if
+            // found arguments is empty (assume the user just wants to ignore args in this case).
+            // For example, if `expected_args_length` is 2, suggest `|_, _|`.
+            if found_args.is_empty() && is_closure {
+                let mut underscores = "_".repeat(expected_args.len())
+                                      .split("")
+                                      .filter(|s| !s.is_empty())
+                                      .collect::<Vec<_>>()
+                                      .join(", ");
+                err.span_suggestion_with_applicability(
+                    found_span,
+                    &format!(
+                        "consider changing the closure to take and ignore the expected argument{}",
+                        if expected_args.len() < 2 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    ),
+                    format!("|{}|", underscores),
+                    Applicability::MachineApplicable,
+                );
+            }
 
             if let &[ArgKind::Tuple(_, ref fields)] = &found_args[..] {
                 if fields.len() == expected_args.len() {

@@ -14,7 +14,7 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-use common::{self, Config, Mode};
+use common::{self, CompareMode, Config, Mode};
 use util;
 
 use extract_gdb_version;
@@ -416,7 +416,7 @@ impl TestProps {
     }
 }
 
-fn iter_header(testfile: &Path, cfg: Option<&str>, it: &mut FnMut(&str)) {
+fn iter_header(testfile: &Path, cfg: Option<&str>, it: &mut dyn FnMut(&str)) {
     if testfile.is_dir() {
         return;
     }
@@ -608,7 +608,12 @@ impl Config {
                     common::DebugInfoLldb => name == "lldb",
                     common::Pretty => name == "pretty",
                     _ => false,
-                } || (self.target != self.host && name == "cross-compile")
+                } || (self.target != self.host && name == "cross-compile") ||
+                match self.compare_mode {
+                    Some(CompareMode::Nll) => name == "compare-mode-nll",
+                    Some(CompareMode::Polonius) => name == "compare-mode-polonius",
+                    None => false,
+                }
         } else {
             false
         }

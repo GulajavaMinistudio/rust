@@ -68,7 +68,7 @@ pub struct GroupedMoveErrors<'tcx> {
     move_to_places: Vec<MovePlace<'tcx>>
 }
 
-fn report_move_errors<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>, errors: &Vec<MoveError<'tcx>>) {
+fn report_move_errors<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>, errors: &[MoveError<'tcx>]) {
     let grouped_errors = group_errors_with_same_origin(errors);
     for error in &grouped_errors {
         let mut err = report_cannot_move_out_of(bccx, error.move_from.clone());
@@ -99,10 +99,11 @@ fn report_move_errors<'a, 'tcx>(bccx: &BorrowckCtxt<'a, 'tcx>, errors: &Vec<Move
                            "captured outer variable");
         }
         err.emit();
+        bccx.signal_error();
     }
 }
 
-fn group_errors_with_same_origin<'tcx>(errors: &Vec<MoveError<'tcx>>)
+fn group_errors_with_same_origin<'tcx>(errors: &[MoveError<'tcx>])
                                        -> Vec<GroupedMoveErrors<'tcx>> {
     let mut grouped_errors = Vec::new();
     for error in errors {
