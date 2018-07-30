@@ -96,7 +96,6 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fmt::{self, Display};
 use std::io::{self, Read, Write};
-use std::iter::repeat;
 use std::mem;
 use std::panic;
 use std::path::{PathBuf, Path};
@@ -531,7 +530,7 @@ fn run_compiler_with_pool<'a>(
     if let Some(err) = input_err {
         // Immediately stop compilation if there was an issue reading
         // the input (for example if the input stream is not UTF-8).
-        sess.err(&format!("{}", err));
+        sess.err(&err.to_string());
         return (Err(CompileIncomplete::Stopped), Some(sess));
     }
 
@@ -1111,7 +1110,7 @@ impl RustcDefaultCalls {
                         cfgs.push(if let Some(value) = value {
                             format!("{}=\"{}\"", name, value)
                         } else {
-                            format!("{}", name)
+                            name.to_string()
                         });
                     }
 
@@ -1176,7 +1175,7 @@ fn usage(verbose: bool, include_unstable_options: bool) {
     for option in groups.iter().filter(|x| include_unstable_options || x.is_stable()) {
         (option.apply)(&mut options);
     }
-    let message = format!("Usage: rustc [OPTIONS] INPUT");
+    let message = "Usage: rustc [OPTIONS] INPUT".to_string();
     let nightly_help = if nightly_options::is_nightly_build() {
         "\n    -Z help             Print internal options for debugging rustc"
     } else {
@@ -1227,7 +1226,7 @@ Available lint options:
     fn sort_lint_groups(lints: Vec<(&'static str, Vec<lint::LintId>, bool)>)
                         -> Vec<(&'static str, Vec<lint::LintId>)> {
         let mut lints: Vec<_> = lints.into_iter().map(|(x, y, _)| (x, y)).collect();
-        lints.sort_by_key(|ref l| l.0);
+        lints.sort_by_key(|l| l.0);
         lints
     }
 
@@ -1251,9 +1250,7 @@ Available lint options:
                              .max()
                              .unwrap_or(0);
     let padded = |x: &str| {
-        let mut s = repeat(" ")
-                        .take(max_name_len - x.chars().count())
-                        .collect::<String>();
+        let mut s = " ".repeat(max_name_len - x.chars().count());
         s.push_str(x);
         s
     };
@@ -1285,9 +1282,7 @@ Available lint options:
                                         .unwrap_or(0));
 
     let padded = |x: &str| {
-        let mut s = repeat(" ")
-                        .take(max_name_len - x.chars().count())
-                        .collect::<String>();
+        let mut s = " ".repeat(max_name_len - x.chars().count());
         s.push_str(x);
         s
     };
@@ -1593,10 +1588,7 @@ pub fn in_rustc_thread<F, R>(f: F) -> Result<R, Box<dyn Any + Send>>
 /// debugging, since some ICEs only happens with non-default compiler flags
 /// (and the users don't always report them).
 fn extra_compiler_flags() -> Option<(Vec<String>, bool)> {
-    let mut args = Vec::new();
-    for arg in env::args_os() {
-        args.push(arg.to_string_lossy().to_string());
-    }
+    let args = env::args_os().map(|arg| arg.to_string_lossy().to_string()).collect::<Vec<_>>();
 
     // Avoid printing help because of empty args. This can suggest the compiler
     // itself is not the program root (consider RLS).

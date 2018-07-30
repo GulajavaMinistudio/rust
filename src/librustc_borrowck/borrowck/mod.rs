@@ -697,7 +697,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                 let mut err = self.cannot_act_on_moved_value(use_span,
                                                              verb,
                                                              msg,
-                                                             Some(format!("{}", nl)),
+                                                             Some(nl.to_string()),
                                                              Origin::Ast);
                 let need_note = match lp.ty.sty {
                     ty::TypeVariants::TyClosure(id, _) => {
@@ -1314,7 +1314,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
         let suggestion =
             match self.tcx.sess.codemap().span_to_snippet(err.span) {
                 Ok(string) => format!("move {}", string),
-                Err(_) => format!("move |<args>| <body>")
+                Err(_) => "move |<args>| <body>".to_string()
             };
 
         self.cannot_capture_in_long_lived_closure(err.span,

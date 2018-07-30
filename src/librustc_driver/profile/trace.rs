@@ -62,7 +62,7 @@ pub fn html_of_effect(eff: &Effect) -> (String, String) {
     match *eff {
         Effect::TimeBegin(ref msg) => {
             (msg.clone(),
-             format!("time-begin"))
+             "time-begin".to_string())
         },
         Effect::TaskBegin(ref key) => {
             let cons = cons_of_key(key);
@@ -91,20 +91,20 @@ fn html_of_duration(_start: &Instant, dur: &Duration) -> (String, String) {
 
 fn html_of_fraction(frac: f64) -> (String, String) {
     let css = {
-        if       frac > 0.50  { format!("frac-50") }
-        else if  frac > 0.40  { format!("frac-40") }
-        else if  frac > 0.30  { format!("frac-30") }
-        else if  frac > 0.20  { format!("frac-20") }
-        else if  frac > 0.10  { format!("frac-10") }
-        else if  frac > 0.05  { format!("frac-05") }
-        else if  frac > 0.02  { format!("frac-02") }
-        else if  frac > 0.01  { format!("frac-01") }
-        else if  frac > 0.001 { format!("frac-001") }
-        else                  { format!("frac-0") }
+        if       frac > 0.50  { "frac-50".to_string() }
+        else if  frac > 0.40  { "frac-40".to_string() }
+        else if  frac > 0.30  { "frac-30".to_string() }
+        else if  frac > 0.20  { "frac-20".to_string() }
+        else if  frac > 0.10  { "frac-10".to_string() }
+        else if  frac > 0.05  { "frac-05".to_string() }
+        else if  frac > 0.02  { "frac-02".to_string() }
+        else if  frac > 0.01  { "frac-01".to_string() }
+        else if  frac > 0.001 { "frac-001".to_string() }
+        else                  { "frac-0".to_string() }
     };
     let percent = frac * 100.0;
     if percent > 0.1 { (format!("{:.1}%", percent), css) }
-    else { (format!("< 0.1%", ), css) }
+    else { ("< 0.1%".to_string(), css) }
 }
 
 fn total_duration(traces: &[Rec]) -> Duration {
@@ -204,11 +204,10 @@ pub fn write_counts(count_file: &mut File, counts: &mut HashMap<String,QueryMetr
     use rustc::util::common::duration_to_secs_str;
     use std::cmp::Reverse;
 
-    let mut data = vec![];
-    for (ref cons, ref qm) in counts.iter() {
-        data.push((cons.clone(), qm.count.clone(), qm.dur_total.clone(), qm.dur_self.clone()));
-    };
-    data.sort_by_key(|&k| Reverse(k.3));
+    let mut data = counts.iter().map(|(ref cons, ref qm)|
+        (cons.clone(), qm.count.clone(), qm.dur_total.clone(), qm.dur_self.clone())
+    ).collect::<Vec<_>>();
+    data.sort_by_key(|k| Reverse(k.3));
     for (cons, count, dur_total, dur_self) in data {
         write!(count_file, "{}, {}, {}, {}\n",
                cons, count,

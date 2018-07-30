@@ -11,7 +11,4 @@
 static FOO: i32 = [][0];
 //~^ ERROR E0080
 
-fn main() {
-    let array = [std::env::args().len()];
-    array[1]; //~ ERROR index out of bounds
-}
+fn main() {}

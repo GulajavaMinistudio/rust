@@ -269,7 +269,7 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver,
             err
         }
         ResolutionError::VariableNotBoundInPattern(binding_error) => {
-            let target_sp = binding_error.target.iter().map(|x| *x).collect::<Vec<_>>();
+            let target_sp = binding_error.target.iter().cloned().collect::<Vec<_>>();
             let msp = MultiSpan::from_spans(target_sp.clone());
             let msg = format!("variable `{}` is not bound in all patterns", binding_error.name);
             let mut err = resolver.session.struct_span_err_with_code(
@@ -280,7 +280,7 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver,
             for sp in target_sp {
                 err.span_label(sp, format!("pattern doesn't bind `{}`", binding_error.name));
             }
-            let origin_sp = binding_error.origin.iter().map(|x| *x).collect::<Vec<_>>();
+            let origin_sp = binding_error.origin.iter().cloned();
             for sp in origin_sp {
                 err.span_label(sp, "variable not in all patterns");
             }
@@ -397,7 +397,8 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver,
             let mut err = struct_span_err!(resolver.session, span, E0128,
                                            "type parameters with a default cannot use \
                                             forward declared identifiers");
-            err.span_label(span, format!("defaulted type parameters cannot be forward declared"));
+            err.span_label(
+                span, "defaulted type parameters cannot be forward declared".to_string());
             err
         }
     }
@@ -2890,16 +2891,16 @@ impl<'a> Resolver<'a> {
                 let item_str = path[path.len() - 1];
                 let item_span = path[path.len() - 1].span;
                 let (mod_prefix, mod_str) = if path.len() == 1 {
-                    (format!(""), format!("this scope"))
+                    (String::new(), "this scope".to_string())
                 } else if path.len() == 2 && path[0].name == keywords::CrateRoot.name() {
-                    (format!(""), format!("the crate root"))
+                    (String::new(), "the crate root".to_string())
                 } else {
                     let mod_path = &path[..path.len() - 1];
                     let mod_prefix = match this.resolve_path(mod_path, Some(TypeNS),
                                                              false, span, CrateLint::No) {
                         PathResult::Module(module) => module.def(),
                         _ => None,
-                    }.map_or(format!(""), |def| format!("{} ", def.kind_name()));
+                    }.map_or(String::new(), |def| format!("{} ", def.kind_name()));
                     (mod_prefix, format!("`{}`", names_to_string(mod_path)))
                 };
                 (format!("cannot find {} `{}` in {}{}", expected, item_str, mod_prefix, mod_str),
@@ -3457,7 +3458,7 @@ impl<'a> Resolver<'a> {
                     path[0].name != keywords::CrateRoot.name() ||
                name == keywords::Crate.name() && path.len() == 1 {
                 let name_str = if name == keywords::CrateRoot.name() {
-                    format!("crate root")
+                    "crate root".to_string()
                 } else {
                     format!("`{}`", name)
                 };
@@ -3831,9 +3832,9 @@ impl<'a> Resolver<'a> {
             }
             // Add primitive types to the mix
             if filter_fn(Def::PrimTy(TyBool)) {
-                for (name, _) in &self.primitive_type_table.primitive_types {
-                    names.push(*name);
-                }
+                names.extend(
+                    self.primitive_type_table.primitive_types.iter().map(|(name, _)| name)
+                )
             }
         } else {
             // Search in module.
