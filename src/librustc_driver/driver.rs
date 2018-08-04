@@ -20,11 +20,11 @@ use rustc::session::config::{self, Input, OutputFilenames, OutputType};
 use rustc::session::search_paths::PathKind;
 use rustc::lint;
 use rustc::middle::{self, reachable, resolve_lifetime, stability};
-use rustc::middle::cstore::CrateStoreDyn;
 use rustc::middle::privacy::AccessLevels;
 use rustc::ty::{self, AllArenas, Resolutions, TyCtxt};
 use rustc::traits;
 use rustc::util::common::{install_panic_hook, time, ErrorReported};
+use rustc::util::profiling::ProfileCategory;
 use rustc_allocator as allocator;
 use rustc_borrowck as borrowck;
 use rustc_incremental;
@@ -352,6 +352,14 @@ pub fn compile_input(
         sess.print_perf_stats();
     }
 
+    if sess.opts.debugging_opts.self_profile {
+        sess.print_profiler_results();
+
+        if sess.opts.debugging_opts.profile_json {
+            sess.save_json_results();
+        }
+    }
+
     controller_entry_point!(
         compilation_done,
         sess,
@@ -475,7 +483,7 @@ impl<'a> ::CompilerCalls<'a> for CompileController<'a> {
         codegen_backend: &dyn (::CodegenBackend),
         matches: &::getopts::Matches,
         sess: &Session,
-        cstore: &dyn (::CrateStore),
+        cstore: &CStore,
         input: &Input,
         odir: &Option<PathBuf>,
         ofile: &Option<PathBuf>,
@@ -667,6 +675,7 @@ pub fn phase_1_parse_input<'a>(
         profile::begin(sess);
     }
 
+    sess.profiler(|p| p.start_activity(ProfileCategory::Parsing));
     let krate = time(sess, "parsing", || match *input {
         Input::File(ref file) => parse::parse_crate_from_file(file, &sess.parse_sess),
         Input::Str {
@@ -674,6 +683,7 @@ pub fn phase_1_parse_input<'a>(
             ref name,
         } => parse::parse_crate_from_source_str(name.clone(), input.clone(), &sess.parse_sess),
     })?;
+    sess.profiler(|p| p.end_activity(ProfileCategory::Parsing));
 
     sess.diagnostic().set_continue_after_error(true);
 
@@ -717,9 +727,9 @@ pub struct ExpansionResult {
     pub hir_forest: hir_map::Forest,
 }
 
-pub struct InnerExpansionResult<'a> {
+pub struct InnerExpansionResult<'a, 'b: 'a> {
     pub expanded_crate: ast::Crate,
-    pub resolver: Resolver<'a>,
+    pub resolver: Resolver<'a, 'b>,
     pub hir_forest: hir_map::Forest,
 }
 
@@ -795,7 +805,7 @@ where
 
 /// Same as phase_2_configure_and_expand, but doesn't let you keep the resolver
 /// around
-pub fn phase_2_configure_and_expand_inner<'a, F>(
+pub fn phase_2_configure_and_expand_inner<'a, 'b: 'a, F>(
     sess: &'a Session,
     cstore: &'a CStore,
     mut krate: ast::Crate,
@@ -804,9 +814,9 @@ pub fn phase_2_configure_and_expand_inner<'a, F>(
     addl_plugins: Option<Vec<String>>,
     make_glob_map: MakeGlobMap,
     resolver_arenas: &'a ResolverArenas<'a>,
-    crate_loader: &'a mut CrateLoader,
+    crate_loader: &'a mut CrateLoader<'b>,
     after_expand: F,
-) -> Result<InnerExpansionResult<'a>, CompileIncomplete>
+) -> Result<InnerExpansionResult<'a, 'b>, CompileIncomplete>
 where
     F: FnOnce(&ast::Crate) -> CompileResult,
 {
@@ -944,6 +954,7 @@ where
     syntax_ext::register_builtins(&mut resolver, syntax_exts, sess.features_untracked().quote);
 
     // Expand all macros
+    sess.profiler(|p| p.start_activity(ProfileCategory::Expansion));
     krate = time(sess, "expansion", || {
         // Windows dlls do not have rpaths, so they don't know how to find their
         // dependencies. It's up to us to tell the system where to find all the
@@ -1021,6 +1032,7 @@ where
         }
         krate
     });
+    sess.profiler(|p| p.end_activity(ProfileCategory::Expansion));
 
     krate = time(sess, "maybe building test harness", || {
         syntax::test::modify_for_testing(
@@ -1196,7 +1208,7 @@ pub fn phase_3_run_analysis_passes<'tcx, F, R>(
     codegen_backend: &dyn CodegenBackend,
     control: &CompileController,
     sess: &'tcx Session,
-    cstore: &'tcx CrateStoreDyn,
+    cstore: &'tcx CStore,
     hir_map: hir_map::Map<'tcx>,
     mut analysis: ty::CrateAnalysis,
     resolutions: Resolutions,
@@ -1350,7 +1362,9 @@ pub fn phase_4_codegen<'a, 'tcx>(
         ::rustc::middle::dependency_format::calculate(tcx)
     });
 
+    tcx.sess.profiler(|p| p.start_activity(ProfileCategory::Codegen));
     let codegen = time(tcx.sess, "codegen", move || codegen_backend.codegen_crate(tcx, rx));
+    tcx.sess.profiler(|p| p.end_activity(ProfileCategory::Codegen));
     if tcx.sess.profile_queries() {
         profile::dump(&tcx.sess, "profile_queries".to_string())
     }

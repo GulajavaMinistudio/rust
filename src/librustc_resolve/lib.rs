@@ -26,6 +26,7 @@ extern crate arena;
 #[macro_use]
 extern crate rustc;
 extern crate rustc_data_structures;
+extern crate rustc_metadata;
 
 pub use rustc::hir::def::{Namespace, PerNS};
 
@@ -34,7 +35,7 @@ use self::RibKind::*;
 
 use rustc::hir::map::{Definitions, DefCollector};
 use rustc::hir::{self, PrimTy, TyBool, TyChar, TyFloat, TyInt, TyUint, TyStr};
-use rustc::middle::cstore::{CrateStore, CrateLoader};
+use rustc::middle::cstore::CrateStore;
 use rustc::session::Session;
 use rustc::lint;
 use rustc::hir::def::*;
@@ -43,6 +44,9 @@ use rustc::hir::def_id::{CRATE_DEF_INDEX, LOCAL_CRATE, DefId};
 use rustc::ty;
 use rustc::hir::{Freevar, FreevarMap, TraitCandidate, TraitMap, GlobMap};
 use rustc::util::nodemap::{NodeMap, NodeSet, FxHashMap, FxHashSet, DefIdMap};
+
+use rustc_metadata::creader::CrateLoader;
+use rustc_metadata::cstore::CStore;
 
 use syntax::codemap::CodeMap;
 use syntax::ext::hygiene::{Mark, Transparency, SyntaxContext};
@@ -85,6 +89,10 @@ mod macros;
 mod check_unused;
 mod build_reduced_graph;
 mod resolve_imports;
+
+fn is_known_tool(name: Name) -> bool {
+    ["clippy", "rustfmt"].contains(&&*name.as_str())
+}
 
 /// A free importable items suggested in case of resolution failure.
 struct ImportSuggestion {
@@ -200,15 +208,10 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver,
                         err.span_label(typaram_span, "type variable from outer function");
                     }
                 },
-                Def::Mod(..) | Def::Struct(..) | Def::Union(..) | Def::Enum(..) | Def::Variant(..) |
-                Def::Trait(..) | Def::TyAlias(..) | Def::TyForeign(..) | Def::TraitAlias(..) |
-                Def::AssociatedTy(..) | Def::PrimTy(..) | Def::Fn(..) | Def::Const(..) |
-                Def::Static(..) | Def::StructCtor(..) | Def::VariantCtor(..) | Def::Method(..) |
-                Def::AssociatedConst(..) | Def::Local(..) | Def::Upvar(..) | Def::Label(..) |
-                Def::Existential(..) | Def::AssociatedExistential(..) |
-                Def::Macro(..) | Def::GlobalAsm(..) | Def::Err =>
+                _ => {
                     bug!("TypeParametersFromOuterFunction should only be used with Def::SelfTy or \
                          Def::TyParam")
+                }
             }
 
             // Try to retrieve the span of the function signature and generate a new message with
@@ -688,7 +691,7 @@ impl<'tcx> Visitor<'tcx> for UsePlacementFinder {
 }
 
 /// This thing walks the whole crate in DFS manner, visiting each item, resolving names as it goes.
-impl<'a, 'tcx> Visitor<'tcx> for Resolver<'a> {
+impl<'a, 'tcx, 'cl> Visitor<'tcx> for Resolver<'a, 'cl> {
     fn visit_item(&mut self, item: &'tcx Item) {
         self.resolve_item(item);
     }
@@ -1177,7 +1180,7 @@ impl<'a> NameBinding<'a> {
         }
     }
 
-    fn get_macro(&self, resolver: &mut Resolver<'a>) -> Lrc<SyntaxExtension> {
+    fn get_macro<'b: 'a>(&self, resolver: &mut Resolver<'a, 'b>) -> Lrc<SyntaxExtension> {
         resolver.get_macro(self.def_ignoring_ambiguity())
     }
 
@@ -1292,9 +1295,9 @@ impl PrimitiveTypeTable {
 /// The main resolver class.
 ///
 /// This is the visitor that walks the whole crate.
-pub struct Resolver<'a> {
+pub struct Resolver<'a, 'b: 'a> {
     session: &'a Session,
-    cstore: &'a dyn CrateStore,
+    cstore: &'a CStore,
 
     pub definitions: Definitions,
 
@@ -1390,7 +1393,7 @@ pub struct Resolver<'a> {
     /// true if `#![feature(use_extern_macros)]`
     use_extern_macros: bool,
 
-    crate_loader: &'a mut dyn CrateLoader,
+    crate_loader: &'a mut CrateLoader<'b>,
     macro_names: FxHashSet<Ident>,
     macro_prelude: FxHashMap<Name, &'a NameBinding<'a>>,
     pub all_macros: FxHashMap<Name, Def>,
@@ -1474,7 +1477,7 @@ impl<'a> ResolverArenas<'a> {
     }
 }
 
-impl<'a, 'b: 'a> ty::DefIdTree for &'a Resolver<'b> {
+impl<'a, 'b: 'a, 'cl: 'b> ty::DefIdTree for &'a Resolver<'b, 'cl> {
     fn parent(self, id: DefId) -> Option<DefId> {
         match id.krate {
             LOCAL_CRATE => self.definitions.def_key(id.index).parent,
@@ -1485,7 +1488,7 @@ impl<'a, 'b: 'a> ty::DefIdTree for &'a Resolver<'b> {
 
 /// This interface is used through the AST→HIR step, to embed full paths into the HIR. After that
 /// the resolver is no longer needed as all the relevant information is inline.
-impl<'a> hir::lowering::Resolver for Resolver<'a> {
+impl<'a, 'cl> hir::lowering::Resolver for Resolver<'a, 'cl> {
     fn resolve_hir_path(&mut self, path: &mut hir::Path, is_value: bool) {
         self.resolve_hir_path_cb(path, is_value,
                                  |resolver, span, error| resolve_error(resolver, span, error))
@@ -1538,7 +1541,7 @@ impl<'a> hir::lowering::Resolver for Resolver<'a> {
     }
 }
 
-impl<'a> Resolver<'a> {
+impl<'a, 'crateloader> Resolver<'a, 'crateloader> {
     /// Rustdoc uses this to resolve things in a recoverable way. ResolutionError<'a>
     /// isn't something that can be returned because it can't be made to live that long,
     /// and also it's a private type. Fortunately rustdoc doesn't need to know the error,
@@ -1604,15 +1607,15 @@ impl<'a> Resolver<'a> {
     }
 }
 
-impl<'a> Resolver<'a> {
+impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
     pub fn new(session: &'a Session,
-               cstore: &'a dyn CrateStore,
+               cstore: &'a CStore,
                krate: &Crate,
                crate_name: &str,
                make_glob_map: MakeGlobMap,
-               crate_loader: &'a mut dyn CrateLoader,
+               crate_loader: &'a mut CrateLoader<'crateloader>,
                arenas: &'a ResolverArenas<'a>)
-               -> Resolver<'a> {
+               -> Resolver<'a, 'crateloader> {
         let root_def_id = DefId::local(CRATE_DEF_INDEX);
         let root_module_kind = ModuleKind::Def(Def::Mod(root_def_id), keywords::Invalid.name());
         let graph_root = arenas.alloc_module(ModuleData {
@@ -1711,9 +1714,7 @@ impl<'a> Resolver<'a> {
                 vis: ty::Visibility::Public,
             }),
 
-            // The `proc_macro` and `decl_macro` features imply `use_extern_macros`
-            use_extern_macros:
-                features.use_extern_macros || features.decl_macro,
+            use_extern_macros: features.use_extern_macros(),
 
             crate_loader,
             macro_names: FxHashSet(),
@@ -1846,6 +1847,7 @@ impl<'a> Resolver<'a> {
                                       path_span: Span)
                                       -> Option<LexicalScopeBinding<'a>> {
         let record_used = record_used_id.is_some();
+        assert!(ns == TypeNS  || ns == ValueNS);
         if ns == TypeNS {
             ident.span = if ident.name == keywords::SelfType.name() {
                 // FIXME(jseyfried) improve `Self` hygiene
@@ -1922,8 +1924,9 @@ impl<'a> Resolver<'a> {
                     return Some(LexicalScopeBinding::Item(binding))
                 }
                 _ if poisoned.is_some() => break,
-                Err(Undetermined) => return None,
-                Err(Determined) => {}
+                Err(Determined) => continue,
+                Err(Undetermined) =>
+                    span_bug!(ident.span, "undetermined resolution during main resolution pass"),
             }
         }
 
@@ -1942,6 +1945,11 @@ impl<'a> Resolver<'a> {
                 self.populate_module_if_necessary(crate_root);
 
                 let binding = (crate_root, ty::Visibility::Public,
+                               ident.span, Mark::root()).to_name_binding(self.arenas);
+                return Some(LexicalScopeBinding::Item(binding));
+            }
+            if ns == TypeNS && is_known_tool(ident.name) {
+                let binding = (Def::ToolMod, ty::Visibility::Public,
                                ident.span, Mark::root()).to_name_binding(self.arenas);
                 return Some(LexicalScopeBinding::Item(binding));
             }
@@ -3505,6 +3513,8 @@ impl<'a> Resolver<'a> {
                     let maybe_assoc = opt_ns != Some(MacroNS) && PathSource::Type.is_expected(def);
                     if let Some(next_module) = binding.module() {
                         module = Some(next_module);
+                    } else if def == Def::ToolMod && i + 1 != path.len() {
+                        return PathResult::NonModule(PathResolution::new(Def::NonMacroAttr))
                     } else if def == Def::Err {
                         return PathResult::NonModule(err_path_resolution());
                     } else if opt_ns.is_some() && (is_last || maybe_assoc) {

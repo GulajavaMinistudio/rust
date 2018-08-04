@@ -8,11 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Make sure that 'custom_attributes' feature does not allow scoped attributes.
+#![feature(rustc_attrs)]
 
-#![feature(custom_attributes)]
+// This test checks that a failure occurs with NLL but does not fail with the
+// legacy AST output. Check issue-49824.nll.stderr for expected compilation error
+// output under NLL and #49824 for more information.
 
-#[foo::bar]
-//~^ ERROR scoped attribute `foo::bar` is experimental (see issue #44690) [E0658]
-//~^^ ERROR an unknown tool name found in scoped attribute: `foo::bar`. [E0694]
-fn main() {}
+#[rustc_error]
+fn main() {
+    //~^ compilation successful
+    let mut x = 0;
+    || {
+        || {
+            let _y = &mut x;
+        }
+    };
+}

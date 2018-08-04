@@ -15,6 +15,7 @@ use codemap::{ExpnInfo, MacroBang, MacroAttribute, dummy_spanned, respan};
 use config::{is_test_or_bench, StripUnconfigured};
 use errors::{Applicability, FatalError};
 use ext::base::*;
+use ext::build::AstBuilder;
 use ext::derive::{add_derived_markers, collect_derives};
 use ext::hygiene::{self, Mark, SyntaxContext};
 use ext::placeholders::{placeholder, PlaceholderExpander};
@@ -36,7 +37,7 @@ use visit::{self, Visitor};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
-use std::mem;
+use std::{iter, mem};
 use std::rc::Rc;
 use std::path::PathBuf;
 
@@ -238,6 +239,15 @@ impl Invocation {
         match self.kind {
             InvocationKind::Bang { span, .. } => span,
             InvocationKind::Attr { attr: Some(ref attr), .. } => attr.span,
+            InvocationKind::Attr { attr: None, .. } => DUMMY_SP,
+            InvocationKind::Derive { ref path, .. } => path.span,
+        }
+    }
+
+    pub fn path_span(&self) -> Span {
+        match self.kind {
+            InvocationKind::Bang { ref mac, .. } => mac.node.path.span,
+            InvocationKind::Attr { attr: Some(ref attr), .. } => attr.path.span,
             InvocationKind::Attr { attr: None, .. } => DUMMY_SP,
             InvocationKind::Derive { ref path, .. } => path.span,
         }
@@ -474,6 +484,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 cx: self.cx,
                 invocations: Vec::new(),
                 monotonic: self.monotonic,
+                tests_nameable: true,
             };
             (fragment.fold_with(&mut collector), collector.invocations)
         };
@@ -566,6 +577,11 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         });
 
         match *ext {
+            NonMacroAttr => {
+                attr::mark_known(&attr);
+                let item = item.map_attrs(|mut attrs| { attrs.push(attr); attrs });
+                Some(invoc.fragment_kind.expect_from_annotatables(iter::once(item)))
+            }
             MultiModifier(ref mac) => {
                 let meta = attr.parse_meta(self.cx.parse_sess)
                                .map_err(|mut e| { e.emit(); }).ok()?;
@@ -810,7 +826,8 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 }
             }
 
-            MultiDecorator(..) | MultiModifier(..) | AttrProcMacro(..) => {
+            MultiDecorator(..) | MultiModifier(..) |
+            AttrProcMacro(..) | SyntaxExtension::NonMacroAttr => {
                 self.cx.span_err(path.span,
                                  &format!("`{}` can only be used in attributes", path));
                 self.cx.trace_macros_diag();
@@ -1049,6 +1066,11 @@ struct InvocationCollector<'a, 'b: 'a> {
     cfg: StripUnconfigured<'a>,
     invocations: Vec<Invocation>,
     monotonic: bool,
+
+    /// Test functions need to be nameable. Tests inside functions or in other
+    /// unnameable locations need to be ignored. `tests_nameable` tracks whether
+    /// any test functions found in the current context would be nameable.
+    tests_nameable: bool,
 }
 
 impl<'a, 'b> InvocationCollector<'a, 'b> {
@@ -1064,6 +1086,20 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
             },
         });
         placeholder(fragment_kind, NodeId::placeholder_from_mark(mark))
+    }
+
+    /// Folds the item allowing tests to be expanded because they are still nameable.
+    /// This should probably only be called with module items
+    fn fold_nameable(&mut self, item: P<ast::Item>) -> SmallVector<P<ast::Item>> {
+        fold::noop_fold_item(item, self)
+    }
+
+    /// Folds the item but doesn't allow tests to occur within it
+    fn fold_unnameable(&mut self, item: P<ast::Item>) -> SmallVector<P<ast::Item>> {
+        let was_nameable = mem::replace(&mut self.tests_nameable, false);
+        let items = fold::noop_fold_item(item, self);
+        self.tests_nameable = was_nameable;
+        items
     }
 
     fn collect_bang(&mut self, mac: ast::Mac, span: Span, kind: AstFragmentKind) -> AstFragment {
@@ -1306,7 +1342,7 @@ impl<'a, 'b> Folder for InvocationCollector<'a, 'b> {
             }
             ast::ItemKind::Mod(ast::Mod { inner, .. }) => {
                 if item.ident == keywords::Invalid.ident() {
-                    return noop_fold_item(item, self);
+                    return self.fold_nameable(item);
                 }
 
                 let orig_directory_ownership = self.cx.current_expansion.directory_ownership;
@@ -1346,22 +1382,58 @@ impl<'a, 'b> Folder for InvocationCollector<'a, 'b> {
 
                 let orig_module =
                     mem::replace(&mut self.cx.current_expansion.module, Rc::new(module));
-                let result = noop_fold_item(item, self);
+                let result = self.fold_nameable(item);
                 self.cx.current_expansion.module = orig_module;
                 self.cx.current_expansion.directory_ownership = orig_directory_ownership;
                 result
             }
             // Ensure that test functions are accessible from the test harness.
+            // #[test] fn foo() {}
+            // becomes:
+            // #[test] pub fn foo_gensym(){}
+            // #[allow(unused)]
+            // use foo_gensym as foo;
             ast::ItemKind::Fn(..) if self.cx.ecfg.should_test => {
-                if item.attrs.iter().any(|attr| is_test_or_bench(attr)) {
+                if self.tests_nameable && item.attrs.iter().any(|attr| is_test_or_bench(attr)) {
+                    let orig_ident = item.ident;
+                    let orig_vis   = item.vis.clone();
+
+                    // Publicize the item under gensymed name to avoid pollution
                     item = item.map(|mut item| {
                         item.vis = respan(item.vis.span, ast::VisibilityKind::Public);
+                        item.ident = item.ident.gensym();
                         item
                     });
+
+                    // Use the gensymed name under the item's original visibility
+                    let mut use_item = self.cx.item_use_simple_(
+                        item.ident.span,
+                        orig_vis,
+                        Some(orig_ident),
+                        self.cx.path(item.ident.span,
+                            vec![keywords::SelfValue.ident(), item.ident]));
+
+                    // #[allow(unused)] because the test function probably isn't being referenced
+                    use_item = use_item.map(|mut ui| {
+                        ui.attrs.push(
+                            self.cx.attribute(DUMMY_SP, attr::mk_list_item(DUMMY_SP,
+                                Ident::from_str("allow"), vec![
+                                    attr::mk_nested_word_item(Ident::from_str("unused"))
+                                ]
+                            ))
+                        );
+
+                        ui
+                    });
+
+                    SmallVector::many(
+                        self.fold_unnameable(item).into_iter()
+                            .chain(self.fold_unnameable(use_item)))
+                } else {
+                    self.fold_unnameable(item)
                 }
-                noop_fold_item(item, self)
             }
-            _ => noop_fold_item(item, self),
+            _ => self.fold_unnameable(item),
         }
     }
 
@@ -1612,12 +1684,15 @@ impl<'feat> ExpansionConfig<'feat> {
         fn enable_allow_internal_unstable = allow_internal_unstable,
         fn enable_custom_derive = custom_derive,
         fn enable_format_args_nl = format_args_nl,
-        fn use_extern_macros_enabled = use_extern_macros,
         fn macros_in_extern_enabled = macros_in_extern,
         fn proc_macro_mod = proc_macro_mod,
         fn proc_macro_gen = proc_macro_gen,
         fn proc_macro_expr = proc_macro_expr,
         fn proc_macro_non_items = proc_macro_non_items,
+    }
+
+    pub fn use_extern_macros_enabled(&self) -> bool {
+        self.features.map_or(false, |features| features.use_extern_macros())
     }
 }
 

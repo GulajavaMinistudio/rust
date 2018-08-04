@@ -18,7 +18,7 @@ use build::{GuardFrame, GuardFrameLocal, LocalsForNode};
 use build::ForGuard::{self, OutsideGuard, RefWithinGuard, ValWithinGuard};
 use build::scope::{CachedBlock, DropKind};
 use rustc_data_structures::fx::FxHashMap;
-use rustc_data_structures::bitvec::BitVector;
+use rustc_data_structures::bitvec::BitArray;
 use rustc::ty::{self, Ty};
 use rustc::mir::*;
 use rustc::hir;
@@ -496,7 +496,7 @@ enum TestKind<'tcx> {
     // test the branches of enum
     Switch {
         adt_def: &'tcx ty::AdtDef,
-        variants: BitVector<usize>,
+        variants: BitArray<usize>,
     },
 
     // test the branches of enum
@@ -1213,11 +1213,17 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         let locals = if has_guard.0 && tcx.all_pat_vars_are_implicit_refs_within_guards() {
             let mut vals_for_guard = Vec::with_capacity(num_patterns);
             for _ in 0..num_patterns {
-                let val_for_guard_idx =  self.local_decls.push(local.clone());
+                let val_for_guard_idx = self.local_decls.push(LocalDecl {
+                    // This variable isn't mutated but has a name, so has to be
+                    // immutable to avoid the unused mut lint.
+                    mutability: Mutability::Not,
+                    ..local.clone()
+                });
                 vals_for_guard.push(val_for_guard_idx);
             }
             let ref_for_guard = self.local_decls.push(LocalDecl::<'tcx> {
-                mutability,
+                // See previous comment.
+                mutability: Mutability::Not,
                 ty: tcx.mk_imm_ref(tcx.types.re_empty, var_ty),
                 name: Some(name),
                 source_info,
