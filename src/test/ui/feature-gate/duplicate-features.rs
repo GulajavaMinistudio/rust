@@ -7,14 +7,13 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![allow(warnings)]
 
-#![feature(in_band_lifetimes)]
+#![allow(stable_features)]
 
-trait MyTrait<'a> { }
+#![feature(rust1)]
+#![feature(rust1)] //~ ERROR the feature `rust1` has already been declared
 
-impl MyTrait for u32 {
-    //~^ ERROR missing lifetime specifier
-}
+#![feature(if_let)]
+#![feature(if_let)] //~ ERROR the feature `if_let` has already been declared
 
 fn main() {}

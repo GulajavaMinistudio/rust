@@ -25,6 +25,7 @@
 use self::AttributeType::*;
 use self::AttributeGate::*;
 
+use rustc_data_structures::fx::FxHashMap;
 use rustc_target::spec::abi::Abi;
 use ast::{self, NodeId, PatKind, RangeEnd};
 use attr;
@@ -59,8 +60,8 @@ macro_rules! declare_features {
         /// A set of features to be used by later passes.
         #[derive(Clone)]
         pub struct Features {
-            /// `#![feature]` attrs for stable language features, for error reporting
-            pub declared_stable_lang_features: Vec<(Symbol, Span)>,
+            /// `#![feature]` attrs for language features, for error reporting
+            pub declared_lang_features: Vec<(Symbol, Span, Option<Symbol>)>,
             /// `#![feature]` attrs for non-language (library) features
             pub declared_lib_features: Vec<(Symbol, Span)>,
             $(pub $feature: bool),+
@@ -69,7 +70,7 @@ macro_rules! declare_features {
         impl Features {
             pub fn new() -> Features {
                 Features {
-                    declared_stable_lang_features: Vec::new(),
+                    declared_lang_features: Vec::new(),
                     declared_lib_features: Vec::new(),
                     $($feature: false),+
                 }
@@ -139,7 +140,6 @@ declare_features! (
     (active, link_llvm_intrinsics, "1.0.0", Some(29602), None),
     (active, linkage, "1.0.0", Some(29603), None),
     (active, quote, "1.0.0", Some(29601), None),
-
 
     // rustc internal
     (active, rustc_diagnostic_macros, "1.0.0", None, None),
@@ -322,7 +322,6 @@ declare_features! (
     // `extern "x86-interrupt" fn()`
     (active, abi_x86_interrupt, "1.17.0", Some(40180), None),
 
-
     // Allows the `catch {...}` expression
     (active, catch_expr, "1.17.0", Some(31436), Some(Edition::Edition2018)),
 
@@ -381,7 +380,7 @@ declare_features! (
     (active, crate_in_paths, "1.23.0", Some(45477), Some(Edition::Edition2018)),
 
     // In-band lifetime bindings (e.g. `fn foo(x: &'a u8) -> &'a u8`)
-    (active, in_band_lifetimes, "1.23.0", Some(44524), Some(Edition::Edition2018)),
+    (active, in_band_lifetimes, "1.23.0", Some(44524), None),
 
     // generic associated types (RFC 1598)
     (active, generic_associated_types, "1.23.0", Some(44265), None),
@@ -482,6 +481,10 @@ declare_features! (
     (active, alloc_error_handler, "1.29.0", Some(51540), None),
 
     (active, abi_amdgpu_kernel, "1.29.0", Some(51575), None),
+
+    // impl<I:Iterator> Iterator for &mut Iterator
+    // impl Debug for Foo<'_>
+    (active, impl_header_lifetime_elision, "1.30.0", Some(15872), Some(Edition::Edition2018)),
 );
 
 declare_features! (
@@ -1220,10 +1223,6 @@ pub fn check_attribute(attr: &ast::Attribute, parse_sess: &ParseSess, features: 
     cx.check_attribute(attr, true);
 }
 
-pub fn find_lang_feature_accepted_version(feature: &str) -> Option<&'static str> {
-    ACCEPTED_FEATURES.iter().find(|t| t.0 == feature).map(|t| t.1)
-}
-
 fn find_lang_feature_issue(feature: &str) -> Option<u32> {
     if let Some(info) = ACTIVE_FEATURES.iter().find(|t| t.0 == feature) {
         let issue = info.2;
@@ -1906,10 +1905,13 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
 
     let mut feature_checker = FeatureChecker::default();
 
-    for &(.., f_edition, set) in ACTIVE_FEATURES.iter() {
+    let mut edition_enabled_features = FxHashMap();
+
+    for &(name, .., f_edition, set) in ACTIVE_FEATURES.iter() {
         if let Some(f_edition) = f_edition {
             if f_edition <= crate_edition {
                 set(&mut features, DUMMY_SP);
+                edition_enabled_features.insert(Symbol::intern(name), crate_edition);
             }
         }
     }
@@ -1937,9 +1939,40 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
                 continue
             };
 
+            if let Some(edition) = ALL_EDITIONS.iter().find(|e| name == e.feature_name()) {
+                if *edition <= crate_edition {
+                    continue
+                }
+
+                for &(name, .., f_edition, set) in ACTIVE_FEATURES.iter() {
+                    if let Some(f_edition) = f_edition {
+                        if f_edition <= *edition {
+                            // FIXME(Manishearth) there is currently no way to set
+                            // lib features by edition
+                            set(&mut features, DUMMY_SP);
+                            edition_enabled_features.insert(Symbol::intern(name), *edition);
+                        }
+                    }
+                }
+
+                continue
+            }
+
             if let Some((.., set)) = ACTIVE_FEATURES.iter().find(|f| name == f.0) {
-                set(&mut features, mi.span);
-                feature_checker.collect(&features, mi.span);
+                if let Some(edition) = edition_enabled_features.get(&name) {
+                    struct_span_warn!(
+                        span_handler,
+                        mi.span,
+                        E0705,
+                        "the feature `{}` is included in the Rust {} edition",
+                        name,
+                        edition,
+                    ).emit();
+                } else {
+                    set(&mut features, mi.span);
+                    feature_checker.collect(&features, mi.span);
+                    features.declared_lang_features.push((name, mi.span, None));
+                }
                 continue
             }
 
@@ -1950,26 +1983,9 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
                 continue
             }
 
-            if ACCEPTED_FEATURES.iter().any(|f| name == f.0) {
-                features.declared_stable_lang_features.push((name, mi.span));
-                continue
-            }
-
-            if let Some(edition) = ALL_EDITIONS.iter().find(|e| name == e.feature_name()) {
-                if *edition <= crate_edition {
-                    continue
-                }
-
-                for &(.., f_edition, set) in ACTIVE_FEATURES.iter() {
-                    if let Some(f_edition) = f_edition {
-                        if *edition >= f_edition {
-                            // FIXME(Manishearth) there is currently no way to set
-                            // lib features by edition
-                            set(&mut features, DUMMY_SP);
-                        }
-                    }
-                }
-
+            if let Some((_, since, ..)) = ACCEPTED_FEATURES.iter().find(|f| name == f.0) {
+                let since = Some(Symbol::intern(since));
+                features.declared_lang_features.push((name, mi.span, since));
                 continue
             }
 

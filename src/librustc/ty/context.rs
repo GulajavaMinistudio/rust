@@ -14,8 +14,8 @@ use dep_graph::DepGraph;
 use dep_graph::{DepNode, DepConstructor};
 use errors::DiagnosticBuilder;
 use session::Session;
-use session::config::{BorrowckMode, OutputFilenames, OptLevel};
-use session::config::CrateType::*;
+use session::config::{BorrowckMode, OutputFilenames};
+use session::config::CrateType;
 use middle;
 use hir::{TraitCandidate, HirId, ItemLocalId};
 use hir::def::{Def, Export};
@@ -1192,6 +1192,10 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         self.sess.consider_optimizing(&cname, msg)
     }
 
+    pub fn lib_features(self) -> Lrc<middle::lib_features::LibFeatures> {
+        self.get_lib_features(LOCAL_CRATE)
+    }
+
     pub fn lang_items(self) -> Lrc<middle::lang_items::LanguageItems> {
         self.get_lang_items(LOCAL_CRATE)
     }
@@ -1470,35 +1474,17 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     }
 
     #[inline]
-    pub fn share_generics(self) -> bool {
-        match self.sess.opts.debugging_opts.share_generics {
-            Some(setting) => setting,
-            None => {
-                self.sess.opts.incremental.is_some() ||
-                match self.sess.opts.optimize {
-                    OptLevel::No   |
-                    OptLevel::Less |
-                    OptLevel::Size |
-                    OptLevel::SizeMin => true,
-                    OptLevel::Default    |
-                    OptLevel::Aggressive => false,
-                }
-            }
-        }
-    }
-
-    #[inline]
     pub fn local_crate_exports_generics(self) -> bool {
-        debug_assert!(self.share_generics());
+        debug_assert!(self.sess.opts.share_generics());
 
         self.sess.crate_types.borrow().iter().any(|crate_type| {
             match crate_type {
-                CrateTypeExecutable |
-                CrateTypeStaticlib  |
-                CrateTypeProcMacro  |
-                CrateTypeCdylib     => false,
-                CrateTypeRlib       |
-                CrateTypeDylib      => true,
+                CrateType::Executable |
+                CrateType::Staticlib  |
+                CrateType::ProcMacro  |
+                CrateType::Cdylib     => false,
+                CrateType::Rlib       |
+                CrateType::Dylib      => true,
             }
         })
     }
@@ -2858,17 +2844,13 @@ pub fn provide(providers: &mut ty::query::Providers) {
         assert_eq!(id, LOCAL_CRATE);
         tcx.crate_name
     };
+    providers.get_lib_features = |tcx, id| {
+        assert_eq!(id, LOCAL_CRATE);
+        Lrc::new(middle::lib_features::collect(tcx))
+    };
     providers.get_lang_items = |tcx, id| {
         assert_eq!(id, LOCAL_CRATE);
-        // FIXME(#42293) Right now we insert a `with_ignore` node in the dep
-        // graph here to ignore the fact that `get_lang_items` below depends on
-        // the entire crate.  For now this'll prevent false positives of
-        // recompiling too much when anything changes.
-        //
-        // Once red/green incremental compilation lands we should be able to
-        // remove this because while the crate changes often the lint level map
-        // will change rarely.
-        tcx.dep_graph.with_ignore(|| Lrc::new(middle::lang_items::collect(tcx)))
+        Lrc::new(middle::lang_items::collect(tcx))
     };
     providers.freevars = |tcx, id| tcx.gcx.freevars.get(&id).cloned();
     providers.maybe_unused_trait_import = |tcx, id| {

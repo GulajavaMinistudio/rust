@@ -45,8 +45,6 @@
 #![feature(const_fn)]
 #![feature(core_intrinsics)]
 #![feature(drain_filter)]
-#![feature(from_ref)]
-#![feature(fs_read_write)]
 #![feature(iterator_find_map)]
 #![cfg_attr(windows, feature(libc))]
 #![feature(macro_vis_matcher)]
@@ -70,9 +68,9 @@
 #![feature(step_trait)]
 #![feature(integer_atomics)]
 #![feature(test)]
+#![cfg_attr(not(stage0), feature(impl_header_lifetime_elision))]
 #![feature(in_band_lifetimes)]
 #![feature(macro_at_most_once_rep)]
-#![feature(inclusive_range_methods)]
 #![feature(crate_in_paths)]
 
 #![recursion_limit="512"]
@@ -141,6 +139,7 @@ pub mod middle {
     pub mod exported_symbols;
     pub mod free_region;
     pub mod intrinsicck;
+    pub mod lib_features;
     pub mod lang_items;
     pub mod liveness;
     pub mod mem_categorization;

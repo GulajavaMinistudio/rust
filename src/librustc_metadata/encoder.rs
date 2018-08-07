@@ -28,7 +28,7 @@ use rustc::traits::specialization_graph;
 use rustc::ty::{self, Ty, TyCtxt, ReprOptions, SymbolName};
 use rustc::ty::codec::{self as ty_codec, TyEncoder};
 
-use rustc::session::config::{self, CrateTypeProcMacro};
+use rustc::session::config::{self, CrateType};
 use rustc::util::nodemap::FxHashMap;
 
 use rustc_data_structures::stable_hasher::StableHasher;
@@ -394,6 +394,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             ());
         let dep_bytes = self.position() - i;
 
+        // Encode the lib features.
+        i = self.position();
+        let lib_features = self.tracked(IsolatedEncoder::encode_lib_features, ());
+        let lib_feature_bytes = self.position() - i;
+
         // Encode the language items.
         i = self.position();
         let lang_items = self.tracked(IsolatedEncoder::encode_lang_items, ());
@@ -478,7 +483,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
         let attrs = tcx.hir.krate_attrs();
         let link_meta = self.link_meta;
-        let is_proc_macro = tcx.sess.crate_types.borrow().contains(&CrateTypeProcMacro);
+        let is_proc_macro = tcx.sess.crate_types.borrow().contains(&CrateType::ProcMacro);
         let has_default_lib_allocator = attr::contains_name(&attrs, "default_lib_allocator");
         let has_global_allocator = *tcx.sess.has_global_allocator.get();
 
@@ -513,6 +518,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
             crate_deps,
             dylib_dependency_formats,
+            lib_features,
             lang_items,
             lang_items_missing,
             native_libraries,
@@ -537,6 +543,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
             println!("metadata stats:");
             println!("             dep bytes: {}", dep_bytes);
+            println!("     lib feature bytes: {}", lib_feature_bytes);
             println!("       lang item bytes: {}", lang_item_bytes);
             println!("          native bytes: {}", native_lib_bytes);
             println!("         codemap bytes: {}", codemap_bytes);
@@ -1456,6 +1463,12 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
         self.lazy_seq_ref(deps.iter().map(|&(_, ref dep)| dep))
     }
 
+    fn encode_lib_features(&mut self, _: ()) -> LazySeq<(ast::Name, Option<ast::Name>)> {
+        let tcx = self.tcx;
+        let lib_features = tcx.lib_features();
+        self.lazy_seq(lib_features.to_vec())
+    }
+
     fn encode_lang_items(&mut self, _: ()) -> LazySeq<(DefIndex, usize)> {
         let tcx = self.tcx;
         let lang_items = tcx.lang_items();
@@ -1542,7 +1555,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
     }
 
     fn encode_dylib_dependency_formats(&mut self, _: ()) -> LazySeq<Option<LinkagePreference>> {
-        match self.tcx.sess.dependency_formats.borrow().get(&config::CrateTypeDylib) {
+        match self.tcx.sess.dependency_formats.borrow().get(&config::CrateType::Dylib) {
             Some(arr) => {
                 self.lazy_seq(arr.iter().map(|slot| {
                     match *slot {
