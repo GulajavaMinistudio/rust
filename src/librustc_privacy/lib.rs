@@ -12,6 +12,7 @@
        html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
        html_root_url = "https://doc.rust-lang.org/nightly/")]
 
+#![cfg_attr(not(stage0), feature(nll))]
 #![feature(rustc_diagnostic_macros)]
 
 #![recursion_limit="256"]
@@ -815,7 +816,7 @@ impl<'a, 'tcx> Visitor<'tcx> for TypePrivacyVisitor<'a, 'tcx> {
     // we prohibit access to private statics from other crates, this allows to give
     // more code internal visibility at link time. (Access to private functions
     // is already prohibited by type privacy for function types.)
-    fn visit_qpath(&mut self, qpath: &'tcx hir::QPath, id: ast::NodeId, span: Span) {
+    fn visit_qpath(&mut self, qpath: &'tcx hir::QPath, id: hir::HirId, span: Span) {
         let def = match *qpath {
             hir::QPath::Resolved(_, ref path) => match path.def {
                 Def::Method(..) | Def::AssociatedConst(..) |
@@ -823,8 +824,7 @@ impl<'a, 'tcx> Visitor<'tcx> for TypePrivacyVisitor<'a, 'tcx> {
                 _ => None,
             }
             hir::QPath::TypeRelative(..) => {
-                let hir_id = self.tcx.hir.node_to_hir_id(id);
-                self.tables.type_dependent_defs().get(hir_id).cloned()
+                self.tables.type_dependent_defs().get(id).cloned()
             }
         };
         if let Some(def) = def {

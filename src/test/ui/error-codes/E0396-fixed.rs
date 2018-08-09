@@ -8,18 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:attr_proc_macro.rs
-// ignore-tidy-linelength
+#![feature(const_raw_ptr_deref)]
 
-#![feature(use_extern_macros, custom_attribute)]
-//~^ ERROR Cannot use `#![feature(use_extern_macros)]` and `#![feature(custom_attribute)] at the same time
+const REG_ADDR: *const u8 = 0x5f3759df as *const u8;
 
-extern crate attr_proc_macro;
-use attr_proc_macro::attr_proc_macro;
-
-#[attr_proc_macro]
-fn foo() {}
+const VALUE: u8 = unsafe { *REG_ADDR };
+//~^ ERROR this constant cannot be used
 
 fn main() {
-    foo();
 }

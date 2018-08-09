@@ -66,16 +66,22 @@ pub fn addr_of_mut(
     cx: &CodegenCx<'ll, '_>,
     cv: &'ll Value,
     align: Align,
-    kind: &str,
+    kind: Option<&str>,
 ) -> &'ll Value {
     unsafe {
-        let name = cx.generate_local_symbol_name(kind);
-        let gv = declare::define_global(cx, &name[..], val_ty(cv)).unwrap_or_else(||{
-            bug!("symbol `{}` is already defined", name);
-        });
+        let gv = match kind {
+            Some(kind) if !cx.tcx.sess.fewer_names() => {
+                let name = cx.generate_local_symbol_name(kind);
+                let gv = declare::define_global(cx, &name[..], val_ty(cv)).unwrap_or_else(||{
+                    bug!("symbol `{}` is already defined", name);
+                });
+                llvm::LLVMRustSetLinkage(gv, llvm::Linkage::PrivateLinkage);
+                gv
+            },
+            _ => declare::define_private_global(cx, val_ty(cv)),
+        };
         llvm::LLVMSetInitializer(gv, cv);
         set_global_alignment(cx, gv, align);
-        llvm::LLVMRustSetLinkage(gv, llvm::Linkage::PrivateLinkage);
         SetUnnamedAddr(gv, true);
         gv
     }
@@ -85,7 +91,7 @@ pub fn addr_of(
     cx: &CodegenCx<'ll, '_>,
     cv: &'ll Value,
     align: Align,
-    kind: &str,
+    kind: Option<&str>,
 ) -> &'ll Value {
     if let Some(&gv) = cx.const_globals.borrow().get(&cv) {
         unsafe {
@@ -183,7 +189,20 @@ pub fn get_static(cx: &CodegenCx<'ll, '_>, def_id: DefId) -> &'ll Value {
             llvm::set_thread_local_mode(g, cx.tls_model);
         }
 
-        if cx.use_dll_storage_attrs && !cx.tcx.is_foreign_item(def_id) {
+        let needs_dll_storage_attr =
+            cx.use_dll_storage_attrs && !cx.tcx.is_foreign_item(def_id) &&
+            // ThinLTO can't handle this workaround in all cases, so we don't
+            // emit the attrs. Instead we make them unnecessary by disallowing
+            // dynamic linking when cross-language LTO is enabled.
+            !cx.tcx.sess.opts.debugging_opts.cross_lang_lto.enabled();
+
+        // If this assertion triggers, there's something wrong with commandline
+        // argument validation.
+        debug_assert!(!(cx.tcx.sess.opts.debugging_opts.cross_lang_lto.enabled() &&
+                        cx.tcx.sess.target.target.options.is_like_msvc &&
+                        cx.tcx.sess.opts.cg.prefer_dynamic));
+
+        if needs_dll_storage_attr {
             // This item is external but not foreign, i.e. it originates from an external Rust
             // crate. Since we don't know whether this crate will be linked dynamically or
             // statically in the final application, we always mark such symbols as 'dllimport'.

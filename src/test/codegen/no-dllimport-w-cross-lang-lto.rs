@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub static X: &'static str = "foobarbaz";
-pub static Y: &'static [u8] = include_bytes!("lib.rs");
+// This test makes sure that functions get annotated with the proper
+// "target-cpu" attribute in LLVM.
 
-trait Foo { fn dummy(&self) { } }
-impl Foo for usize {}
+// no-prefer-dynamic
+// only-msvc
+// compile-flags: -Z cross-lang-lto
 
-#[no_mangle]
-pub extern "C" fn dummy() {
-    // force the vtable to be created
-    let _x = &1usize as &Foo;
-}
+#![crate_type = "rlib"]
+
+// CHECK-NOT: @{{.*}}__imp_{{.*}}GLOBAL{{.*}} = global i8*
+
+pub static GLOBAL: u32 = 0;
+pub static mut GLOBAL2: u32 = 0;

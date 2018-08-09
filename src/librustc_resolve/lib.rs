@@ -13,6 +13,7 @@
       html_root_url = "https://doc.rust-lang.org/nightly/")]
 
 #![feature(crate_visibility_modifier)]
+#![cfg_attr(not(stage0), feature(nll))]
 #![feature(rustc_diagnostic_macros)]
 #![feature(slice_sort_by_cached_key)]
 
@@ -2698,7 +2699,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             self.label_ribs.pop();
         }
         self.ribs[ValueNS].pop();
-        if let Some(_) = anonymous_module {
+        if anonymous_module.is_some() {
             self.ribs[TypeNS].pop();
         }
         debug!("(resolving block) leaving block");
@@ -3485,8 +3486,9 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             let binding = if let Some(module) = module {
                 self.resolve_ident_in_module(module, ident, ns, record_used, path_span)
             } else if opt_ns == Some(MacroNS) {
-                self.resolve_lexical_macro_path_segment(ident, ns, record_used, path_span)
-                    .map(MacroBinding::binding)
+                assert!(ns == TypeNS);
+                self.resolve_lexical_macro_path_segment(ident, ns, record_used, record_used,
+                                                        false, path_span).map(MacroBinding::binding)
             } else {
                 let record_used_id =
                     if record_used { crate_lint.node_id().or(Some(CRATE_NODE_ID)) } else { None };
@@ -3514,7 +3516,8 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                     if let Some(next_module) = binding.module() {
                         module = Some(next_module);
                     } else if def == Def::ToolMod && i + 1 != path.len() {
-                        return PathResult::NonModule(PathResolution::new(Def::NonMacroAttr))
+                        let def = Def::NonMacroAttr(NonMacroAttrKind::Tool);
+                        return PathResult::NonModule(PathResolution::new(def));
                     } else if def == Def::Err {
                         return PathResult::NonModule(err_path_resolution());
                     } else if opt_ns.is_some() && (is_last || maybe_assoc) {
@@ -4254,7 +4257,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
 
         while let Some((in_module, path_segments)) = worklist.pop() {
             // abort if the module is already found
-            if let Some(_) = result { break; }
+            if result.is_some() { break; }
 
             self.populate_module_if_necessary(in_module);
 
@@ -4548,6 +4551,8 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             let result = self.resolve_lexical_macro_path_segment(ident,
                                                                  MacroNS,
                                                                  false,
+                                                                 false,
+                                                                 true,
                                                                  attr.path.span);
             if let Ok(binding) = result {
                 if let SyntaxExtension::AttrProcMacro(..) = *binding.binding().get_macro(self) {

@@ -182,6 +182,53 @@ pub struct TokenStream {
     kind: TokenStreamKind,
 }
 
+impl TokenStream {
+    /// Given a `TokenStream` with a `Stream` of only two arguments, return a new `TokenStream`
+    /// separating the two arguments with a comma for diagnostic suggestions.
+    pub(crate) fn add_comma(&self) -> Option<(TokenStream, Span)> {
+        // Used to suggest if a user writes `foo!(a b);`
+        if let TokenStreamKind::Stream(ref slice) = self.kind {
+            let mut suggestion = None;
+            let mut iter = slice.iter().enumerate().peekable();
+            while let Some((pos, ts)) = iter.next() {
+                if let Some((_, next)) = iter.peek() {
+                    match (ts, next) {
+                        (TokenStream {
+                            kind: TokenStreamKind::Tree(TokenTree::Token(_, token::Token::Comma))
+                        }, _) |
+                        (_, TokenStream {
+                            kind: TokenStreamKind::Tree(TokenTree::Token(_, token::Token::Comma))
+                        }) => {}
+                        (TokenStream {
+                            kind: TokenStreamKind::Tree(TokenTree::Token(sp, _))
+                        }, _) |
+                        (TokenStream {
+                            kind: TokenStreamKind::Tree(TokenTree::Delimited(sp, _))
+                        }, _) => {
+                            let sp = sp.shrink_to_hi();
+                            let comma = TokenStream {
+                                kind: TokenStreamKind::Tree(TokenTree::Token(sp, token::Comma)),
+                            };
+                            suggestion = Some((pos, comma, sp));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if let Some((pos, comma, sp)) = suggestion {
+                let mut new_slice = vec![];
+                let parts = slice.split_at(pos + 1);
+                new_slice.extend_from_slice(parts.0);
+                new_slice.push(comma);
+                new_slice.extend_from_slice(parts.1);
+                let slice = RcSlice::new(new_slice);
+                return Some((TokenStream { kind: TokenStreamKind::Stream(slice) }, sp));
+            }
+        }
+        None
+    }
+}
+
 #[derive(Clone, Debug)]
 enum TokenStreamKind {
     Empty,
