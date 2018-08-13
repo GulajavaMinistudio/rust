@@ -26,6 +26,7 @@
 #![feature(specialization)]
 #![feature(optin_builtin_traits)]
 #![feature(macro_vis_matcher)]
+#![cfg_attr(not(stage0), feature(nll))]
 #![feature(allow_internal_unstable)]
 #![feature(vec_resize_with)]
 
@@ -60,6 +61,7 @@ pub mod array_vec;
 pub mod base_n;
 pub mod bitslice;
 pub mod bitvec;
+pub mod const_cstr;
 pub mod flock;
 pub mod fx;
 pub mod graph;
@@ -69,6 +71,7 @@ pub mod obligation_forest;
 pub mod owning_ref;
 pub mod ptr_key;
 pub mod sip128;
+pub mod small_c_str;
 pub mod small_vec;
 pub mod snapshot_map;
 pub use ena::snapshot_vec;
