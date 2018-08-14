@@ -1,8 +1,0 @@
-error: expected a macro, found built-in attribute
-  --> $DIR/issue-11692-2.rs:12:13
-   |
-LL |     concat!(test!());
-   |             ^^^^
-
-error: aborting due to previous error
-

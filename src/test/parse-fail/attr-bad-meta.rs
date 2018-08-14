@@ -9,5 +9,5 @@
 // except according to those terms.
 
 // asterisk is bogus
-#[path*] //~ ERROR expected one of `(` or `=`
+#[path*] //~ ERROR arbitrary tokens in non-macro attributes are unstable
 mod m {}

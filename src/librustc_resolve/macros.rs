@@ -10,6 +10,7 @@
 
 use {AmbiguityError, CrateLint, Resolver, ResolutionError, is_known_tool, resolve_error};
 use {Module, ModuleKind, NameBinding, NameBindingKind, PathResult, ToNameBinding};
+use ModuleOrUniformRoot;
 use Namespace::{self, TypeNS, MacroNS};
 use build_reduced_graph::{BuildReducedGraphVisitor, IsMacroExport};
 use resolve_imports::ImportResolver;
@@ -28,6 +29,7 @@ use syntax::ext::expand::{AstFragment, Invocation, InvocationKind};
 use syntax::ext::hygiene::{self, Mark};
 use syntax::ext::tt::macro_rules;
 use syntax::feature_gate::{self, feature_err, emit_feature_err, is_builtin_attr_name, GateIssue};
+use syntax::feature_gate::EXPLAIN_DERIVE_UNDERSCORE;
 use syntax::fold::{self, Folder};
 use syntax::parse::parser::PathStyle;
 use syntax::parse::token::{self, Token};
@@ -195,9 +197,7 @@ impl<'a, 'crateloader: 'a> base::Resolver for Resolver<'a, 'crateloader> {
 
         self.current_module = invocation.module.get();
         self.current_module.unresolved_invocations.borrow_mut().remove(&mark);
-        self.unresolved_invocations_macro_export.remove(&mark);
         self.current_module.unresolved_invocations.borrow_mut().extend(derives);
-        self.unresolved_invocations_macro_export.extend(derives);
         for &derive in derives {
             self.invocations.insert(derive, invocation);
         }
@@ -338,19 +338,37 @@ impl<'a, 'crateloader: 'a> base::Resolver for Resolver<'a, 'crateloader> {
             match attr_kind {
                 NonMacroAttrKind::Tool | NonMacroAttrKind::DeriveHelper |
                 NonMacroAttrKind::Custom if is_attr_invoc => {
+                    let features = self.session.features_untracked();
                     if attr_kind == NonMacroAttrKind::Tool &&
-                       !self.session.features_untracked().tool_attributes {
+                       !features.tool_attributes {
                         feature_err(&self.session.parse_sess, "tool_attributes",
                                     invoc.span(), GateIssue::Language,
                                     "tool attributes are unstable").emit();
                     }
-                    if attr_kind == NonMacroAttrKind::Custom &&
-                       !self.session.features_untracked().custom_attribute {
-                        let msg = format!("The attribute `{}` is currently unknown to the compiler \
-                                           and may have meaning added to it in the future", path);
-                        feature_err(&self.session.parse_sess, "custom_attribute", invoc.span(),
-                                    GateIssue::Language, &msg).emit();
+                    if attr_kind == NonMacroAttrKind::Custom {
+                        assert!(path.segments.len() == 1);
+                        let name = path.segments[0].ident.name.as_str();
+                        if name.starts_with("rustc_") {
+                            if !features.rustc_attrs {
+                                let msg = "unless otherwise specified, attributes with the prefix \
+                                        `rustc_` are reserved for internal compiler diagnostics";
+                                feature_err(&self.session.parse_sess, "rustc_attrs", invoc.span(),
+                                            GateIssue::Language, &msg).emit();
+                            }
+                        } else if name.starts_with("derive_") {
+                            if !features.custom_derive {
+                                feature_err(&self.session.parse_sess, "custom_derive", invoc.span(),
+                                            GateIssue::Language, EXPLAIN_DERIVE_UNDERSCORE).emit();
+                            }
+                        } else if !features.custom_attribute {
+                            let msg = format!("The attribute `{}` is currently unknown to the \
+                                               compiler and may have meaning added to it in the \
+                                               future", path);
+                            feature_err(&self.session.parse_sess, "custom_attribute", invoc.span(),
+                                        GateIssue::Language, &msg).emit();
+                        }
                     }
+
                     return Ok(Some(Lrc::new(SyntaxExtension::NonMacroAttr {
                         mark_used: attr_kind == NonMacroAttrKind::Tool,
                     })));
@@ -521,7 +539,8 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                 return Err(Determinacy::Determined);
             }
 
-            let def = match self.resolve_path(&path, Some(MacroNS), false, span, CrateLint::No) {
+            let res = self.resolve_path(None, &path, Some(MacroNS), false, span, CrateLint::No);
+            let def = match res {
                 PathResult::NonModule(path_res) => match path_res.base_def() {
                     Def::Err => Err(Determinacy::Determined),
                     def @ _ => {
@@ -638,7 +657,12 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                 WhereToResolve::Module(module) => {
                     let orig_current_module = mem::replace(&mut self.current_module, module);
                     let binding = self.resolve_ident_in_module_unadjusted(
-                            module, ident, ns, true, record_used, path_span,
+                        ModuleOrUniformRoot::Module(module),
+                        ident,
+                        ns,
+                        true,
+                        record_used,
+                        path_span,
                     );
                     self.current_module = orig_current_module;
                     binding.map(MacroBinding::Modern)
@@ -650,7 +674,10 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                     }
                 }
                 WhereToResolve::BuiltinAttrs => {
-                    if is_builtin_attr_name(ident.name) {
+                    // FIXME: Only built-in attributes are not considered as candidates for
+                    // non-attributes to fight off regressions on stable channel (#53205).
+                    // We need to come up with some more principled approach instead.
+                    if is_attr && is_builtin_attr_name(ident.name) {
                         let binding = (Def::NonMacroAttr(NonMacroAttrKind::Builtin),
                                        ty::Visibility::Public, ident.span, Mark::root())
                                        .to_name_binding(self.arenas);
@@ -695,9 +722,14 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                     let mut result = Err(Determinacy::Determined);
                     if use_prelude {
                         if let Some(prelude) = self.prelude {
-                            if let Ok(binding) =
-                                    self.resolve_ident_in_module_unadjusted(prelude, ident, ns,
-                                                                          false, false, path_span) {
+                            if let Ok(binding) = self.resolve_ident_in_module_unadjusted(
+                                ModuleOrUniformRoot::Module(prelude),
+                                ident,
+                                ns,
+                                false,
+                                false,
+                                path_span,
+                            ) {
                                 result = Ok(MacroBinding::Global(binding));
                             }
                         }
@@ -873,7 +905,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
     pub fn finalize_current_module_macro_resolutions(&mut self) {
         let module = self.current_module;
         for &(ref path, span) in module.macro_resolutions.borrow().iter() {
-            match self.resolve_path(&path, Some(MacroNS), true, span, CrateLint::No) {
+            match self.resolve_path(None, &path, Some(MacroNS), true, span, CrateLint::No) {
                 PathResult::NonModule(_) => {},
                 PathResult::Failed(span, msg, _) => {
                     resolve_error(self, span, ResolutionError::FailedToResolve(&msg));
