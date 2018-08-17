@@ -8,5 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[doc = $not_there] //~ ERROR arbitrary tokens in non-macro attributes are unstable
+#![feature(unrestricted_attribute_tokens)]
+
+#[doc = $not_there] //~ ERROR expected `]`, found `not_there`
 fn main() { }

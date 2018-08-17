@@ -16,7 +16,7 @@
 
 mod foo {
     pub use std::io;
-    //~^ ERROR import from `std` is ambiguous
+    //~^ ERROR `std` import is ambiguous
 
     mod std {
         pub struct io;
