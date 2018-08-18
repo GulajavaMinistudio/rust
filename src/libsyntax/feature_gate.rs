@@ -81,17 +81,6 @@ macro_rules! declare_features {
             {
                 $(f(stringify!($feature), self.$feature);)+
             }
-
-            pub fn use_extern_macros(&self) -> bool {
-                // A number of "advanced" macro features enable
-                // macro modularization (`use_extern_macros`) implicitly.
-                self.use_extern_macros || self.decl_macro ||
-                self.tool_attributes || self.custom_attribute ||
-                self.macros_in_extern || self.proc_macro_path_invoc ||
-                self.proc_macro_mod || self.proc_macro_expr ||
-                self.proc_macro_non_items || self.proc_macro_gen ||
-                self.stmt_expr_attributes || self.unrestricted_attribute_tokens
-            }
         }
     };
 
@@ -307,8 +296,6 @@ declare_features! (
 
     // Allows #[link(..., cfg(..))]
     (active, link_cfg, "1.14.0", Some(37406), None),
-
-    (active, use_extern_macros, "1.15.0", Some(35896), Some(Edition::Edition2018)),
 
     // `extern "ptx-*" fn()`
     (active, abi_ptx, "1.15.0", Some(38788), None),
@@ -535,7 +522,7 @@ declare_features! (
     (removed, advanced_slice_patterns, "1.0.0", Some(23121), None,
      Some("merged into `#![feature(slice_patterns)]`")),
     (removed, macro_reexport, "1.0.0", Some(29638), None,
-     Some("subsumed by `#![feature(use_extern_macros)]` and `pub use`")),
+     Some("subsumed by `pub use`")),
 );
 
 declare_features! (
@@ -652,6 +639,9 @@ declare_features! (
     (accepted, repr_transparent, "1.28.0", Some(43036), None),
     // Defining procedural macros in `proc-macro` crates
     (accepted, proc_macro, "1.29.0", Some(38356), None),
+    // Allows importing and reexporting macros with `use`,
+    // enables macro modularization in general.
+    (accepted, use_extern_macros, "1.30.0", Some(35896), None),
 );
 
 // If you change this, please modify src/doc/unstable-book as well. You must
@@ -1930,11 +1920,67 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
     let mut features = Features::new();
     let mut edition_enabled_features = FxHashMap();
 
-    for &(name, .., f_edition, set) in ACTIVE_FEATURES.iter() {
+    for &edition in ALL_EDITIONS {
+        if edition <= crate_edition {
+            // The `crate_edition` implies its respective umbrella feature-gate
+            // (i.e. `#![feature(rust_20XX_preview)]` isn't needed on edition 20XX).
+            edition_enabled_features.insert(Symbol::intern(edition.feature_name()), edition);
+        }
+    }
+
+    for &(name, .., f_edition, set) in ACTIVE_FEATURES {
         if let Some(f_edition) = f_edition {
             if f_edition <= crate_edition {
                 set(&mut features, DUMMY_SP);
                 edition_enabled_features.insert(Symbol::intern(name), crate_edition);
+            }
+        }
+    }
+
+    // Process the edition umbrella feature-gates first, to ensure
+    // `edition_enabled_features` is completed before it's queried.
+    for attr in krate_attrs {
+        if !attr.check_name("feature") {
+            continue
+        }
+
+        let list = match attr.meta_item_list() {
+            Some(list) => list,
+            None => continue,
+        };
+
+        for mi in list {
+            let name = if let Some(word) = mi.word() {
+                word.name()
+            } else {
+                continue
+            };
+
+            if incomplete_features.iter().any(|f| *f == name.as_str()) {
+                span_handler.struct_span_warn(
+                    mi.span,
+                    &format!(
+                        "the feature `{}` is incomplete and may cause the compiler to crash",
+                        name
+                    )
+                ).emit();
+            }
+
+            if let Some(edition) = ALL_EDITIONS.iter().find(|e| name == e.feature_name()) {
+                if *edition <= crate_edition {
+                    continue;
+                }
+
+                for &(name, .., f_edition, set) in ACTIVE_FEATURES {
+                    if let Some(f_edition) = f_edition {
+                        if f_edition <= *edition {
+                            // FIXME(Manishearth) there is currently no way to set
+                            // lib features by edition
+                            set(&mut features, DUMMY_SP);
+                            edition_enabled_features.insert(Symbol::intern(name), *edition);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1962,49 +2008,26 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
                 continue
             };
 
-            if incomplete_features.iter().any(|f| *f == name.as_str()) {
-                span_handler.struct_span_warn(
+            if let Some(edition) = edition_enabled_features.get(&name) {
+                struct_span_warn!(
+                    span_handler,
                     mi.span,
-                    &format!(
-                        "the feature `{}` is incomplete and may cause the compiler to crash",
-                        name
-                    )
+                    E0705,
+                    "the feature `{}` is included in the Rust {} edition",
+                    name,
+                    edition,
                 ).emit();
+                continue;
             }
 
-            if let Some(edition) = ALL_EDITIONS.iter().find(|e| name == e.feature_name()) {
-                if *edition <= crate_edition {
-                    continue
-                }
-
-                for &(name, .., f_edition, set) in ACTIVE_FEATURES.iter() {
-                    if let Some(f_edition) = f_edition {
-                        if f_edition <= *edition {
-                            // FIXME(Manishearth) there is currently no way to set
-                            // lib features by edition
-                            set(&mut features, DUMMY_SP);
-                            edition_enabled_features.insert(Symbol::intern(name), *edition);
-                        }
-                    }
-                }
-
-                continue
+            if ALL_EDITIONS.iter().any(|e| name == e.feature_name()) {
+                // Handled in the separate loop above.
+                continue;
             }
 
             if let Some((.., set)) = ACTIVE_FEATURES.iter().find(|f| name == f.0) {
-                if let Some(edition) = edition_enabled_features.get(&name) {
-                    struct_span_warn!(
-                        span_handler,
-                        mi.span,
-                        E0705,
-                        "the feature `{}` is included in the Rust {} edition",
-                        name,
-                        edition,
-                    ).emit();
-                } else {
-                    set(&mut features, mi.span);
-                    features.declared_lang_features.push((name, mi.span, None));
-                }
+                set(&mut features, mi.span);
+                features.declared_lang_features.push((name, mi.span, None));
                 continue
             }
 

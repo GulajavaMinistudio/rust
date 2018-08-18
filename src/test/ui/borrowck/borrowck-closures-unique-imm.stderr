@@ -5,6 +5,7 @@ LL |         let p = &this.x;
    |                  ------ immutable borrow occurs here
 LL |         &mut this.x; //~ ERROR cannot borrow
    |              ^^^^^^ mutable borrow occurs here
+LL |         p.use_ref();
 LL |     };
    |     - immutable borrow ends here
 

@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// gate-test-use_extern_macros
+// Regression test for #48697
 
-fn main() {
-    globnar::brotz!(); //~ ERROR non-ident macro paths are experimental
+// compile-pass
+
+#![feature(nll)]
+
+fn foo(x: &i32) -> &i32 {
+    let z = 4;
+    let f = &|y| y;
+    let k = f(&z);
+    f(x)
 }
+
+fn main() {}

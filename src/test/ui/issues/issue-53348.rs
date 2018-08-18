@@ -8,13 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// `local_inner_macros` has no effect if `feature(use_extern_macros)` is not enabled
+fn main() {
+    let mut v = vec!["hello", "this", "is", "a", "test"];
 
-// aux-build:local_inner_macros.rs
+    let v2 = Vec::new();
 
-#[macro_use(public_macro)]
-extern crate local_inner_macros;
+    v.into_iter().map(|s|s.to_owned()).collect::<Vec<_>>();
 
-public_macro!(); //~ ERROR cannot find macro `helper2!` in this scope
-
-fn main() {}
+    let mut a = String::new();
+    for i in v {
+        a = *i.to_string();
+        //~^ ERROR mismatched types
+        //~| NOTE expected struct `std::string::String`, found str
+        //~| NOTE expected type
+        v2.push(a);
+    }
+}

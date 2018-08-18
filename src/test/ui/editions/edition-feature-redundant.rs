@@ -8,8 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// If macro modularization (`use_extern_macros`) is not enabled,
-// then tool attributes are treated as custom attributes.
+// edition:2018
+// compile-pass
 
-#[rustfmt::bar] //~ ERROR attribute `rustfmt::bar` is currently unknown to the compiler
+#![feature(rust_2018_preview)]
+//~^ WARN the feature `rust_2018_preview` is included in the Rust 2018 edition
+
 fn main() {}

@@ -80,7 +80,7 @@ use std::mem::replace;
 use rustc_data_structures::sync::Lrc;
 
 use resolve_imports::{ImportDirective, ImportDirectiveSubclass, NameResolution, ImportResolver};
-use macros::{InvocationData, LegacyBinding, LegacyScope, MacroBinding};
+use macros::{InvocationData, LegacyBinding, MacroBinding};
 
 // NB: This module needs to be declared first so diagnostics are
 // registered before they are used.
@@ -1399,23 +1399,18 @@ pub struct Resolver<'a, 'b: 'a> {
     /// crate-local macro expanded `macro_export` referred to by a module-relative path
     macro_expanded_macro_export_errors: BTreeSet<(Span, Span)>,
 
-    gated_errors: FxHashSet<Span>,
     disallowed_shadowing: Vec<&'a LegacyBinding<'a>>,
 
     arenas: &'a ResolverArenas<'a>,
     dummy_binding: &'a NameBinding<'a>,
-    /// true if `#![feature(use_extern_macros)]`
-    use_extern_macros: bool,
 
     crate_loader: &'a mut CrateLoader<'b>,
     macro_names: FxHashSet<Ident>,
     macro_prelude: FxHashMap<Name, &'a NameBinding<'a>>,
     pub all_macros: FxHashMap<Name, Def>,
-    lexical_macro_resolutions: Vec<(Ident, &'a Cell<LegacyScope<'a>>)>,
     macro_map: FxHashMap<DefId, Lrc<SyntaxExtension>>,
     macro_defs: FxHashMap<Mark, DefId>,
     local_macro_def_scopes: FxHashMap<NodeId, Module<'a>>,
-    macro_exports: Vec<Export>, // FIXME: Remove when `use_extern_macros` is stabilized
     pub whitelisted_legacy_custom_derives: Vec<Name>,
     pub found_unresolved_macro: bool,
 
@@ -1657,8 +1652,6 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
         invocations.insert(Mark::root(),
                            arenas.alloc_invocation_data(InvocationData::root(graph_root)));
 
-        let features = session.features_untracked();
-
         let mut macro_defs = FxHashMap();
         macro_defs.insert(Mark::root(), root_def_id);
 
@@ -1717,7 +1710,6 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             ambiguity_errors: Vec::new(),
             use_injections: Vec::new(),
             proc_mac_errors: Vec::new(),
-            gated_errors: FxHashSet(),
             disallowed_shadowing: Vec::new(),
             macro_expanded_macro_export_errors: BTreeSet::new(),
 
@@ -1729,15 +1721,11 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                 vis: ty::Visibility::Public,
             }),
 
-            use_extern_macros: features.use_extern_macros(),
-
             crate_loader,
             macro_names: FxHashSet(),
             macro_prelude: FxHashMap(),
             all_macros: FxHashMap(),
-            lexical_macro_resolutions: Vec::new(),
             macro_map: FxHashMap(),
-            macro_exports: Vec::new(),
             invocations,
             macro_defs,
             local_macro_def_scopes: FxHashMap(),
@@ -1770,9 +1758,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
     fn per_ns<F: FnMut(&mut Self, Namespace)>(&mut self, mut f: F) {
         f(self, TypeNS);
         f(self, ValueNS);
-        if self.use_extern_macros {
-            f(self, MacroNS);
-        }
+        f(self, MacroNS);
     }
 
     fn macro_def(&self, mut ctxt: SyntaxContext) -> DefId {
@@ -2186,10 +2172,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
 
     fn resolve_item(&mut self, item: &Item) {
         let name = item.ident.name;
-
         debug!("(resolving item) resolving {}", name);
-
-        self.check_proc_macro_attrs(&item.attrs);
 
         match item.node {
             ItemKind::Enum(_, ref generics) |
@@ -2218,8 +2201,6 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                         walk_list!(this, visit_param_bound, bounds);
 
                         for trait_item in trait_items {
-                            this.check_proc_macro_attrs(&trait_item.attrs);
-
                             let type_parameters = HasTypeParameters(&trait_item.generics,
                                                                     TraitOrImplItemRibKind);
                             this.with_type_parameter_rib(type_parameters, |this| {
@@ -2498,7 +2479,6 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                         this.visit_generics(generics);
                         this.with_current_self_type(self_type, |this| {
                             for impl_item in impl_items {
-                                this.check_proc_macro_attrs(&impl_item.attrs);
                                 this.resolve_visibility(&impl_item.vis);
 
                                 // We also need a new scope for the impl item type parameters.
@@ -3459,33 +3439,37 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             let ns = if is_last { opt_ns.unwrap_or(TypeNS) } else { TypeNS };
             let name = ident.name;
 
-            if i == 0 && ns == TypeNS && name == keywords::SelfValue.name() {
-                let mut ctxt = ident.span.ctxt().modern();
-                module = Some(ModuleOrUniformRoot::Module(
-                    self.resolve_self(&mut ctxt, self.current_module)));
-                continue
-            } else if allow_super && ns == TypeNS && name == keywords::Super.name() {
-                let mut ctxt = ident.span.ctxt().modern();
-                let self_module_parent = match i {
-                    0 => self.resolve_self(&mut ctxt, self.current_module).parent,
-                    _ => match module {
-                        Some(ModuleOrUniformRoot::Module(module)) => module.parent,
-                        _ => None,
-                    },
-                };
-                if let Some(parent) = self_module_parent {
-                    module = Some(ModuleOrUniformRoot::Module(
-                        self.resolve_self(&mut ctxt, parent)));
-                    continue
-                } else {
+            allow_super &= ns == TypeNS &&
+                (name == keywords::SelfValue.name() ||
+                 name == keywords::Super.name());
+
+            if ns == TypeNS {
+                if allow_super && name == keywords::Super.name() {
+                    let mut ctxt = ident.span.ctxt().modern();
+                    let self_module = match i {
+                        0 => Some(self.resolve_self(&mut ctxt, self.current_module)),
+                        _ => match module {
+                            Some(ModuleOrUniformRoot::Module(module)) => Some(module),
+                            _ => None,
+                        },
+                    };
+                    if let Some(self_module) = self_module {
+                        if let Some(parent) = self_module.parent {
+                            module = Some(ModuleOrUniformRoot::Module(
+                                self.resolve_self(&mut ctxt, parent)));
+                            continue;
+                        }
+                    }
                     let msg = "There are too many initial `super`s.".to_string();
                     return PathResult::Failed(ident.span, msg, false);
                 }
-            }
-            allow_super = false;
-
-            if ns == TypeNS {
                 if i == 0 {
+                    if name == keywords::SelfValue.name() {
+                        let mut ctxt = ident.span.ctxt().modern();
+                        module = Some(ModuleOrUniformRoot::Module(
+                            self.resolve_self(&mut ctxt, self.current_module)));
+                        continue;
+                    }
                     if name == keywords::Extern.name() ||
                        name == keywords::CrateRoot.name() &&
                        self.session.features_untracked().extern_absolute_paths &&
@@ -3493,30 +3477,19 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                         module = Some(ModuleOrUniformRoot::UniformRoot(name));
                         continue;
                     }
-                }
-                if (i == 0 && name == keywords::CrateRoot.name()) ||
-                   (i == 0 && name == keywords::Crate.name()) ||
-                   (i == 0 && name == keywords::DollarCrate.name()) ||
-                   (i == 1 && name == keywords::Crate.name() &&
-                              path[0].name == keywords::CrateRoot.name()) {
-                    // `::a::b`, `crate::a::b`, `::crate::a::b` or `$crate::a::b`
-                    module = Some(ModuleOrUniformRoot::Module(
-                        self.resolve_crate_root(ident)));
-                    continue
+                    if name == keywords::CrateRoot.name() ||
+                       name == keywords::Crate.name() ||
+                       name == keywords::DollarCrate.name() {
+                        // `::a::b`, `crate::a::b` or `$crate::a::b`
+                        module = Some(ModuleOrUniformRoot::Module(
+                            self.resolve_crate_root(ident)));
+                        continue;
+                    }
                 }
             }
 
             // Report special messages for path segment keywords in wrong positions.
-            if name == keywords::CrateRoot.name() && i != 0 ||
-               name == keywords::DollarCrate.name() && i != 0 ||
-               name == keywords::SelfValue.name() && i != 0 ||
-               name == keywords::SelfType.name() && i != 0 ||
-               name == keywords::Super.name() && i != 0 ||
-               name == keywords::Extern.name() && i != 0 ||
-               // we allow crate::foo and ::crate::foo but nothing else
-               name == keywords::Crate.name() && i > 1 &&
-                    path[0].name != keywords::CrateRoot.name() ||
-               name == keywords::Crate.name() && path.len() == 1 {
+            if ident.is_path_segment_keyword() && i != 0 {
                 let name_str = if name == keywords::CrateRoot.name() {
                     "crate root".to_string()
                 } else {
@@ -4495,10 +4468,6 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
     }
 
     fn report_shadowing_errors(&mut self) {
-        for (ident, scope) in replace(&mut self.lexical_macro_resolutions, Vec::new()) {
-            self.resolve_legacy_scope(scope, ident, true);
-        }
-
         let mut reported_errors = FxHashSet();
         for binding in replace(&mut self.disallowed_shadowing, Vec::new()) {
             if self.resolve_legacy_scope(&binding.parent, binding.ident, false).is_some() &&
@@ -4618,36 +4587,6 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
 
         err.emit();
         self.name_already_seen.insert(name, span);
-    }
-
-    fn check_proc_macro_attrs(&mut self, attrs: &[ast::Attribute]) {
-        if self.use_extern_macros { return; }
-
-        for attr in attrs {
-            if attr.path.segments.len() > 1 {
-                continue
-            }
-            let ident = attr.path.segments[0].ident;
-            let result = self.resolve_lexical_macro_path_segment(ident,
-                                                                 MacroNS,
-                                                                 false,
-                                                                 false,
-                                                                 true,
-                                                                 attr.path.span);
-            if let Ok(binding) = result {
-                if let SyntaxExtension::AttrProcMacro(..) = *binding.binding().get_macro(self) {
-                    attr::mark_known(attr);
-
-                    let msg = "attribute procedural macros are experimental";
-                    let feature = "use_extern_macros";
-
-                    feature_err(&self.session.parse_sess, feature,
-                                attr.span, GateIssue::Language, msg)
-                        .span_label(binding.span(), "procedural macro imported here")
-                        .emit();
-                }
-            }
-        }
     }
 }
 

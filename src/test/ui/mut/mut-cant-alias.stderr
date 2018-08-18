@@ -5,6 +5,7 @@ LL |     let b1 = &mut *b;
    |                    - first mutable borrow occurs here
 LL |     let b2 = &mut *b; //~ ERROR cannot borrow
    |                    ^ second mutable borrow occurs here
+LL |     b1.use_mut();
 LL | }
    | - first borrow ends here
 
