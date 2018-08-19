@@ -57,7 +57,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
             index: Option<usize>, // None if this is an old error
         }
 
-        let mut error_map : FxHashMap<_, _> =
+        let mut error_map : FxHashMap<_, Vec<_>> =
             self.reported_trait_errors.borrow().iter().map(|(&span, predicates)| {
                 (span, predicates.iter().map(|predicate| ErrorDescriptor {
                     predicate: predicate.clone(),
@@ -66,14 +66,14 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
             }).collect();
 
         for (index, error) in errors.iter().enumerate() {
-            error_map.entry(error.obligation.cause.span).or_insert(Vec::new()).push(
+            error_map.entry(error.obligation.cause.span).or_default().push(
                 ErrorDescriptor {
                     predicate: error.obligation.predicate.clone(),
                     index: Some(index)
                 });
 
             self.reported_trait_errors.borrow_mut()
-                .entry(error.obligation.cause.span).or_insert(Vec::new())
+                .entry(error.obligation.cause.span).or_default()
                 .push(error.obligation.predicate.clone());
         }
 
@@ -1454,6 +1454,15 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
             }
             ObligationCauseCode::VariableType(_) => {
                 err.note("all local variables must have a statically known size");
+                if !self.tcx.features().unsized_locals {
+                    err.help("unsized locals are gated as an unstable feature");
+                }
+            }
+            ObligationCauseCode::SizedArgumentType => {
+                err.note("all function arguments must have a statically known size");
+                if !self.tcx.features().unsized_locals {
+                    err.help("unsized locals are gated as an unstable feature");
+                }
             }
             ObligationCauseCode::SizedReturnType => {
                 err.note("the return type of a function must have a \
