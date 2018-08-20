@@ -25,7 +25,7 @@ use syntax::{ast, attr};
 use syntax::errors::Applicability;
 use rustc_target::spec::abi::Abi;
 use syntax_pos::Span;
-use syntax::codemap;
+use syntax::source_map;
 
 use rustc::hir;
 
@@ -208,7 +208,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
         }
 
         fn rev_binop(binop: hir::BinOp) -> hir::BinOp {
-            codemap::respan(binop.span,
+            source_map::respan(binop.span,
                             match binop.node {
                                 hir::BinOpKind::Lt => hir::BinOpKind::Gt,
                                 hir::BinOpKind::Le => hir::BinOpKind::Ge,
@@ -300,7 +300,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
         }
 
         fn get_bin_hex_repr(cx: &LateContext, lit: &ast::Lit) -> Option<String> {
-            let src = cx.sess().codemap().span_to_snippet(lit.span).ok()?;
+            let src = cx.sess().source_map().span_to_snippet(lit.span).ok()?;
             let firstch = src.chars().next()?;
 
             if firstch == '0' {
@@ -819,14 +819,6 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for VariantSizeDifferences {
     fn check_item(&mut self, cx: &LateContext, it: &hir::Item) {
         if let hir::ItemKind::Enum(ref enum_definition, _) = it.node {
             let item_def_id = cx.tcx.hir.local_def_id(it.id);
-            let generics = cx.tcx.generics_of(item_def_id);
-            for param in &generics.params {
-                match param.kind {
-                    ty::GenericParamDefKind::Lifetime { .. } => {},
-                    ty::GenericParamDefKind::Type { .. } => return,
-                }
-            }
-            // Sizes only make sense for non-generic types.
             let t = cx.tcx.type_of(item_def_id);
             let ty = cx.tcx.erase_regions(&t);
             match cx.layout_of(ty) {

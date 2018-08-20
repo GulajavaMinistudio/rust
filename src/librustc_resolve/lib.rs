@@ -49,7 +49,7 @@ use rustc::util::nodemap::{NodeMap, NodeSet, FxHashMap, FxHashSet, DefIdMap};
 use rustc_metadata::creader::CrateLoader;
 use rustc_metadata::cstore::CStore;
 
-use syntax::codemap::CodeMap;
+use syntax::source_map::SourceMap;
 use syntax::ext::hygiene::{Mark, Transparency, SyntaxContext};
 use syntax::ast::{self, Name, NodeId, Ident, FloatTy, IntTy, UintTy};
 use syntax::ext::base::SyntaxExtension;
@@ -195,7 +195,7 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver,
                                            "can't use type parameters from outer function");
             err.span_label(span, "use of type variable from outer function");
 
-            let cm = resolver.session.codemap();
+            let cm = resolver.session.source_map();
             match outer_def {
                 Def::SelfTy(_, maybe_impl_defid) => {
                     if let Some(impl_span) = maybe_impl_defid.map_or(None,
@@ -414,8 +414,8 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver,
 ///
 /// Attention: The method used is very fragile since it essentially duplicates the work of the
 /// parser. If you need to use this function or something similar, please consider updating the
-/// codemap functions and this function to something more robust.
-fn reduce_impl_span_to_impl_keyword(cm: &CodeMap, impl_span: Span) -> Span {
+/// source_map functions and this function to something more robust.
+fn reduce_impl_span_to_impl_keyword(cm: &SourceMap, impl_span: Span) -> Span {
     let impl_span = cm.span_until_char(impl_span, '<');
     let impl_span = cm.span_until_whitespace(impl_span);
     impl_span
@@ -822,11 +822,12 @@ impl<'a, 'tcx, 'cl> Visitor<'tcx> for Resolver<'a, 'cl> {
             .filter_map(|param| match param.kind {
                 GenericParamKind::Lifetime { .. } => None,
                 GenericParamKind::Type { ref default, .. } => {
-                    if found_default || default.is_some() {
-                        found_default = true;
-                        return Some((Ident::with_empty_ctxt(param.ident.name), Def::Err));
+                    found_default |= default.is_some();
+                    if found_default {
+                        Some((Ident::with_empty_ctxt(param.ident.name), Def::Err))
+                    } else {
+                        None
                     }
-                    None
                 }
             }));
 
@@ -2339,28 +2340,30 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             HasTypeParameters(generics, rib_kind) => {
                 let mut function_type_rib = Rib::new(rib_kind);
                 let mut seen_bindings = FxHashMap();
-                generics.params.iter().for_each(|param| match param.kind {
-                    GenericParamKind::Lifetime { .. } => {}
-                    GenericParamKind::Type { .. } => {
-                        let ident = param.ident.modern();
-                        debug!("with_type_parameter_rib: {}", param.id);
+                for param in &generics.params {
+                    match param.kind {
+                        GenericParamKind::Lifetime { .. } => {}
+                        GenericParamKind::Type { .. } => {
+                            let ident = param.ident.modern();
+                            debug!("with_type_parameter_rib: {}", param.id);
 
-                        if seen_bindings.contains_key(&ident) {
-                            let span = seen_bindings.get(&ident).unwrap();
-                            let err = ResolutionError::NameAlreadyUsedInTypeParameterList(
-                                ident.name,
-                                span,
-                            );
-                            resolve_error(self, param.ident.span, err);
+                            if seen_bindings.contains_key(&ident) {
+                                let span = seen_bindings.get(&ident).unwrap();
+                                let err = ResolutionError::NameAlreadyUsedInTypeParameterList(
+                                    ident.name,
+                                    span,
+                                );
+                                resolve_error(self, param.ident.span, err);
+                            }
+                            seen_bindings.entry(ident).or_insert(param.ident.span);
+
+                        // Plain insert (no renaming).
+                        let def = Def::TyParam(self.definitions.local_def_id(param.id));
+                            function_type_rib.bindings.insert(ident, def);
+                            self.record_def(param.id, PathResolution::new(def));
                         }
-                        seen_bindings.entry(ident).or_insert(param.ident.span);
-
-                    // Plain insert (no renaming).
-                    let def = Def::TyParam(self.definitions.local_def_id(param.id));
-                        function_type_rib.bindings.insert(ident, def);
-                        self.record_def(param.id, PathResolution::new(def));
                     }
-                });
+                }
                 self.ribs[TypeNS].push(function_type_rib);
             }
 
@@ -3085,7 +3088,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                             // parser issue where a struct literal is being used on an expression
                             // where a brace being opened means a block is being started. Look
                             // ahead for the next text to see if `span` is followed by a `{`.
-                            let cm = this.session.codemap();
+                            let cm = this.session.source_map();
                             let mut sp = span;
                             loop {
                                 sp = cm.next_point(sp);
@@ -3212,7 +3215,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                                   err: &mut DiagnosticBuilder,
                                   base_span: Span) {
         debug!("type_ascription_suggetion {:?}", base_span);
-        let cm = self.session.codemap();
+        let cm = self.session.source_map();
         debug!("self.current_type_ascription {:?}", self.current_type_ascription);
         if let Some(sp) = self.current_type_ascription.last() {
             let mut sp = *sp;
@@ -4527,7 +4530,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             false => "defined",
         };
 
-        let (name, span) = (ident.name, self.session.codemap().def_span(new_binding.span));
+        let (name, span) = (ident.name, self.session.source_map().def_span(new_binding.span));
 
         if let Some(s) = self.name_already_seen.get(&name) {
             if s == &span {
@@ -4566,7 +4569,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
 
         err.span_label(span, format!("`{}` re{} here", name, new_participle));
         if !old_binding.span.is_dummy() {
-            err.span_label(self.session.codemap().def_span(old_binding.span),
+            err.span_label(self.session.source_map().def_span(old_binding.span),
                            format!("previous {} of the {} `{}` here", old_noun, old_kind, name));
         }
 
@@ -4578,7 +4581,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                 old_binding
             };
 
-            let cm = self.session.codemap();
+            let cm = self.session.source_map();
             let rename_msg = "You can use `as` to change the binding name of the import";
 
             if let (Ok(snippet), false) = (cm.span_to_snippet(binding.span),
