@@ -56,19 +56,19 @@ fn uncached_llvm_type<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
     }
 
     let name = match layout.ty.sty {
-        ty::TyClosure(..) |
-        ty::TyGenerator(..) |
-        ty::TyAdt(..) |
+        ty::Closure(..) |
+        ty::Generator(..) |
+        ty::Adt(..) |
         // FIXME(eddyb) producing readable type names for trait objects can result
         // in problematically distinct types due to HRTB and subtyping (see #47638).
-        // ty::TyDynamic(..) |
-        ty::TyForeign(..) |
-        ty::TyStr => {
+        // ty::Dynamic(..) |
+        ty::Foreign(..) |
+        ty::Str => {
             let mut name = String::with_capacity(32);
             let printer = DefPathBasedNames::new(cx.tcx, true, true);
             printer.push_type_name(layout.ty, &mut name);
             match (&layout.ty.sty, &layout.variants) {
-                (&ty::TyAdt(def, _), &layout::Variants::Single { index }) => {
+                (&ty::Adt(def, _), &layout::Variants::Single { index }) => {
                     if def.is_enum() && !def.variants.is_empty() {
                         write!(&mut name, "::{}", def.variants[index].name).unwrap();
                     }
@@ -122,25 +122,29 @@ fn struct_llfields<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
 
     let mut packed = false;
     let mut offset = Size::ZERO;
-    let mut prev_align = layout.align;
+    let mut prev_effective_align = layout.align;
     let mut result: Vec<_> = Vec::with_capacity(1 + field_count * 2);
     for i in layout.fields.index_by_increasing_offset() {
-        let field = layout.field(cx, i);
-        packed |= layout.align.abi() < field.align.abi();
-
         let target_offset = layout.fields.offset(i as usize);
-        debug!("struct_llfields: {}: {:?} offset: {:?} target_offset: {:?}",
-            i, field, offset, target_offset);
+        let field = layout.field(cx, i);
+        let effective_field_align = layout.align
+            .min(field.align)
+            .restrict_for_offset(target_offset);
+        packed |= effective_field_align.abi() < field.align.abi();
+
+        debug!("struct_llfields: {}: {:?} offset: {:?} target_offset: {:?} \
+                effective_field_align: {}",
+            i, field, offset, target_offset, effective_field_align.abi());
         assert!(target_offset >= offset);
         let padding = target_offset - offset;
-        let padding_align = layout.align.min(prev_align).min(field.align);
+        let padding_align = prev_effective_align.min(effective_field_align);
         assert_eq!(offset.abi_align(padding_align) + padding, target_offset);
         result.push(Type::padding_filler(cx, padding, padding_align));
         debug!("    padding before: {:?}", padding);
 
         result.push(field.llvm_type(cx));
         offset = target_offset + field.size;
-        prev_align = field.align;
+        prev_effective_align = effective_field_align;
     }
     if !layout.is_unsized() && field_count > 0 {
         if offset > layout.size {
@@ -148,7 +152,7 @@ fn struct_llfields<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
                  layout, layout.size, offset);
         }
         let padding = layout.size - offset;
-        let padding_align = layout.align.min(prev_align);
+        let padding_align = prev_effective_align;
         assert_eq!(offset.abi_align(padding_align) + padding, layout.size);
         debug!("struct_llfields: pad_bytes: {:?} offset: {:?} stride: {:?}",
                padding, offset, layout.size);
@@ -252,14 +256,14 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
                 return llty;
             }
             let llty = match self.ty.sty {
-                ty::TyRef(_, ty, _) |
-                ty::TyRawPtr(ty::TypeAndMut { ty, .. }) => {
+                ty::Ref(_, ty, _) |
+                ty::RawPtr(ty::TypeAndMut { ty, .. }) => {
                     cx.layout_of(ty).llvm_type(cx).ptr_to()
                 }
-                ty::TyAdt(def, _) if def.is_box() => {
+                ty::Adt(def, _) if def.is_box() => {
                     cx.layout_of(self.ty.boxed_ty()).llvm_type(cx).ptr_to()
                 }
-                ty::TyFnPtr(sig) => {
+                ty::FnPtr(sig) => {
                     let sig = cx.tcx.normalize_erasing_late_bound_regions(
                         ty::ParamEnv::reveal_all(),
                         &sig,
@@ -344,11 +348,11 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
         // HACK(eddyb) special-case fat pointers until LLVM removes
         // pointee types, to avoid bitcasting every `OperandRef::deref`.
         match self.ty.sty {
-            ty::TyRef(..) |
-            ty::TyRawPtr(_) => {
+            ty::Ref(..) |
+            ty::RawPtr(_) => {
                 return self.field(cx, index).llvm_type(cx);
             }
-            ty::TyAdt(def, _) if def.is_box() => {
+            ty::Adt(def, _) if def.is_box() => {
                 let ptr_ty = cx.tcx.mk_mut_ptr(self.ty.boxed_ty());
                 return cx.layout_of(ptr_ty).scalar_pair_element_llvm_type(cx, index, immediate);
             }
@@ -410,7 +414,7 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
 
         let mut result = None;
         match self.ty.sty {
-            ty::TyRawPtr(mt) if offset.bytes() == 0 => {
+            ty::RawPtr(mt) if offset.bytes() == 0 => {
                 let (size, align) = cx.size_and_align_of(mt.ty);
                 result = Some(PointeeInfo {
                     size,
@@ -419,7 +423,7 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
                 });
             }
 
-            ty::TyRef(_, ty, mt) if offset.bytes() == 0 => {
+            ty::Ref(_, ty, mt) if offset.bytes() == 0 => {
                 let (size, align) = cx.size_and_align_of(ty);
 
                 let kind = match mt {
@@ -497,7 +501,7 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
 
                 // FIXME(eddyb) This should be for `ptr::Unique<T>`, not `Box<T>`.
                 if let Some(ref mut pointee) = result {
-                    if let ty::TyAdt(def, _) = self.ty.sty {
+                    if let ty::Adt(def, _) = self.ty.sty {
                         if def.is_box() && offset.bytes() == 0 {
                             pointee.safe = Some(PointerKind::UniqueOwned);
                         }

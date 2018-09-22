@@ -8,10 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(plugin_as_library)]
+#![allow(unused_imports)]
 // aux-build:macro_crate_test.rs
 // ignore-stage1
 
-#![feature(plugin, rustc_attrs, attr_literals)]
+#![feature(plugin, rustc_attrs)]
 #![plugin(macro_crate_test)]
 
 #[macro_use]

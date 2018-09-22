@@ -331,6 +331,13 @@ declare_lint! {
      via the module system"
 }
 
+declare_lint! {
+    pub MACRO_EXPANDED_MACRO_EXPORTS_ACCESSED_BY_ABSOLUTE_PATHS,
+    Deny,
+    "macro-expanded `macro_export` macros from the current crate \
+     cannot be referred to by absolute paths"
+}
+
 /// Some lints that are buffered from `libsyntax`. See `syntax::early_buffered_lints`.
 pub mod parser {
     declare_lint! {
@@ -398,6 +405,7 @@ impl LintPass for HardwiredLints {
             WHERE_CLAUSES_OBJECT_SAFETY,
             PROC_MACRO_DERIVE_RESOLUTION_FALLBACK,
             MACRO_USE_EXTERN_CRATE,
+            MACRO_EXPANDED_MACRO_EXPORTS_ACCESSED_BY_ABSOLUTE_PATHS,
             parser::QUESTION_MARK_MACRO_SEP,
         )
     }
@@ -412,7 +420,9 @@ pub enum BuiltinLintDiagnostics {
     AbsPathWithModule(Span),
     DuplicatedMacroExports(ast::Ident, Span, Span),
     ProcMacroDeriveResolutionFallback(Span),
+    MacroExpandedMacroExportsAccessedByAbsolutePaths(Span),
     ElidedLifetimesInPaths(usize, Span, bool, Span, String),
+    UnknownCrateTypes(Span, String, String),
 }
 
 impl BuiltinLintDiagnostics {
@@ -453,6 +463,9 @@ impl BuiltinLintDiagnostics {
                 db.span_label(span, "names from parent modules are not \
                                      accessible without an explicit import");
             }
+            BuiltinLintDiagnostics::MacroExpandedMacroExportsAccessedByAbsolutePaths(span_def) => {
+                db.span_note(span_def, "the macro is defined here");
+            }
             BuiltinLintDiagnostics::ElidedLifetimesInPaths(
                 n, path_span, incl_angl_brckt, insertion_span, anon_lts
             ) => {
@@ -486,6 +499,14 @@ impl BuiltinLintDiagnostics {
                     &format!("indicate the anonymous lifetime{}", if n >= 2 { "s" } else { "" }),
                     suggestion,
                     Applicability::MachineApplicable
+                );
+            }
+            BuiltinLintDiagnostics::UnknownCrateTypes(span, note, sugg) => {
+                db.span_suggestion_with_applicability(
+                    span,
+                    &note,
+                    sugg,
+                    Applicability::MaybeIncorrect
                 );
             }
         }

@@ -13,7 +13,6 @@ use rustc::ty::{self, Ty};
 use rustc::ty::layout::{self, Align, TyLayout, LayoutOf, Size};
 use rustc::mir;
 use rustc::mir::tcx::PlaceTy;
-use rustc_data_structures::indexed_vec::Idx;
 use base;
 use builder::Builder;
 use common::{CodegenCx, C_undef, C_usize, C_u8, C_u32, C_uint, C_null, C_uint_big};
@@ -174,7 +173,10 @@ impl PlaceRef<'ll, 'tcx> {
         let cx = bx.cx;
         let field = self.layout.field(cx, ix);
         let offset = self.layout.fields.offset(ix);
-        let align = self.align.min(self.layout.align).min(field.align);
+        let effective_field_align = self.align
+            .min(self.layout.align)
+            .min(field.align)
+            .restrict_for_offset(offset);
 
         let simple = || {
             // Unions and newtypes only use an offset of 0.
@@ -196,7 +198,7 @@ impl PlaceRef<'ll, 'tcx> {
                     None
                 },
                 layout: field,
-                align,
+                align: effective_field_align,
             }
         };
 
@@ -211,8 +213,8 @@ impl PlaceRef<'ll, 'tcx> {
                 return simple();
             }
             _ if !field.is_unsized() => return simple(),
-            ty::TySlice(..) | ty::TyStr | ty::TyForeign(..) => return simple(),
-            ty::TyAdt(def, _) => {
+            ty::Slice(..) | ty::Str | ty::Foreign(..) => return simple(),
+            ty::Adt(def, _) => {
                 if def.repr.packed() {
                     // FIXME(eddyb) generalize the adjustment when we
                     // start supporting packing to larger alignments.
@@ -269,7 +271,7 @@ impl PlaceRef<'ll, 'tcx> {
             llval: bx.pointercast(byte_ptr, ll_fty.ptr_to()),
             llextra: self.llextra,
             layout: field,
-            align,
+            align: effective_field_align,
         }
     }
 
@@ -458,7 +460,7 @@ impl FunctionCx<'a, 'll, 'tcx> {
                 let layout = cx.layout_of(self.monomorphize(&ty));
                 match bx.tcx().const_eval(param_env.and(cid)) {
                     Ok(val) => match val.val {
-                        mir::interpret::ConstValue::ByRef(alloc, offset) => {
+                        mir::interpret::ConstValue::ByRef(_, alloc, offset) => {
                             PlaceRef::from_const_alloc(bx, layout, alloc, offset)
                         }
                         _ => bug!("promoteds should have an allocation: {:?}", val),

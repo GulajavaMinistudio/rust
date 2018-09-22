@@ -11,10 +11,10 @@
 //! OS-specific functionality.
 
 #![stable(feature = "os", since = "1.0.0")]
-#![allow(missing_docs, bad_style, missing_debug_implementations)]
+#![allow(missing_docs, nonstandard_style, missing_debug_implementations)]
 
 cfg_if! {
-    if #[cfg(dox)] {
+    if #[cfg(rustdoc)] {
 
         // When documenting libstd we want to show unix/windows/linux modules as
         // these are the "main modules" that are used across platforms. This

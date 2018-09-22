@@ -11,7 +11,7 @@
 use libc::c_uint;
 use llvm::{self, SetUnnamedAddr, True};
 use rustc::hir::def_id::DefId;
-use rustc::hir::map as hir_map;
+use rustc::hir::Node;
 use debuginfo;
 use base;
 use monomorphize::MonoItem;
@@ -135,7 +135,7 @@ pub fn get_static(cx: &CodegenCx<'ll, '_>, def_id: DefId) -> &'ll Value {
 
         let llty = cx.layout_of(ty).llvm_type(cx);
         let (g, attrs) = match cx.tcx.hir.get(id) {
-            hir_map::NodeItem(&hir::Item {
+            Node::Item(&hir::Item {
                 ref attrs, span, node: hir::ItemKind::Static(..), ..
             }) => {
                 if declare::get_declared_value(cx, &sym[..]).is_some() {
@@ -153,7 +153,7 @@ pub fn get_static(cx: &CodegenCx<'ll, '_>, def_id: DefId) -> &'ll Value {
                 (g, attrs)
             }
 
-            hir_map::NodeForeignItem(&hir::ForeignItem {
+            Node::ForeignItem(&hir::ForeignItem {
                 ref attrs, span, node: hir::ForeignItemKind::Static(..), ..
             }) => {
                 let fn_attrs = cx.tcx.codegen_fn_attrs(def_id);
@@ -250,7 +250,7 @@ fn check_and_apply_linkage(
         // static and call it a day. Some linkages (like weak) will make it such
         // that the static actually has a null value.
         let llty2 = match ty.sty {
-            ty::TyRawPtr(ref mt) => cx.layout_of(mt.ty).llvm_type(cx),
+            ty::RawPtr(ref mt) => cx.layout_of(mt.ty).llvm_type(cx),
             _ => {
                 if span.is_some() {
                     cx.sess().span_fatal(span.unwrap(), "must have type `*const T` or `*mut T`")

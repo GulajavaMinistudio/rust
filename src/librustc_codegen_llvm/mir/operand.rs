@@ -13,7 +13,6 @@ use rustc::mir;
 use rustc::mir::interpret::{ConstValue, ScalarMaybeUndef};
 use rustc::ty;
 use rustc::ty::layout::{self, Align, LayoutOf, TyLayout};
-use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::sync::Lrc;
 
 use base;
@@ -126,7 +125,7 @@ impl OperandRef<'ll, 'tcx> {
                 };
                 OperandValue::Pair(a_llval, b_llval)
             },
-            ConstValue::ByRef(alloc, offset) => {
+            ConstValue::ByRef(_, alloc, offset) => {
                 return Ok(PlaceRef::from_const_alloc(bx, layout, alloc, offset).load(bx));
             },
         };

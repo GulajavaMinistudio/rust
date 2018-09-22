@@ -84,7 +84,7 @@ pub struct ProfQDumpParams {
     pub dump_profq_msg_log:bool,
 }
 
-#[allow(bad_style)]
+#[allow(nonstandard_style)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueryMsg {
     pub query: &'static str,
@@ -213,7 +213,7 @@ fn print_time_passes_entry_internal(what: &str, dur: Duration) {
             let mb = n as f64 / 1_000_000.0;
             format!("; rss: {}MB", mb.round() as usize)
         }
-        None => "".to_owned(),
+        None => String::new(),
     };
     println!("{}time: {}{}\t{}",
              "  ".repeat(indentation),

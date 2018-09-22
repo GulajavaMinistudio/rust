@@ -14,9 +14,8 @@
 //! The Qualif flags below can be used to also provide better
 //! diagnostics as to why a constant rvalue wasn't promoted.
 
-use rustc_data_structures::bitvec::BitArray;
-use rustc_data_structures::indexed_set::IdxSetBuf;
-use rustc_data_structures::indexed_vec::{IndexVec, Idx};
+use rustc_data_structures::bit_set::BitSet;
+use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_data_structures::fx::FxHashSet;
 use rustc::hir;
 use rustc::hir::def_id::DefId;
@@ -116,7 +115,7 @@ struct Qualifier<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
     param_env: ty::ParamEnv<'tcx>,
     local_qualif: IndexVec<Local, Option<Qualif>>,
     qualif: Qualif,
-    const_fn_arg_vars: BitArray<Local>,
+    const_fn_arg_vars: BitSet<Local>,
     temp_promotion_state: IndexVec<Local, TempState>,
     promotion_candidates: Vec<Candidate>
 }
@@ -127,6 +126,7 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
            mir: &'a Mir<'tcx>,
            mode: Mode)
            -> Qualifier<'a, 'tcx, 'tcx> {
+        assert!(def_id.is_local());
         let mut rpo = traversal::reverse_postorder(mir);
         let temps = promote_consts::collect_temps(mir, &mut rpo);
         rpo.reset();
@@ -150,7 +150,7 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
             param_env,
             local_qualif,
             qualif: Qualif::empty(),
-            const_fn_arg_vars: BitArray::new(mir.local_decls.len()),
+            const_fn_arg_vars: BitSet::new_empty(mir.local_decls.len()),
             temp_promotion_state: temps,
             promotion_candidates: vec![]
         }
@@ -279,12 +279,12 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
     }
 
     /// Qualify a whole const, static initializer or const fn.
-    fn qualify_const(&mut self) -> (Qualif, Lrc<IdxSetBuf<Local>>) {
+    fn qualify_const(&mut self) -> (Qualif, Lrc<BitSet<Local>>) {
         debug!("qualifying {} {:?}", self.mode, self.def_id);
 
         let mir = self.mir;
 
-        let mut seen_blocks = BitArray::new(mir.basic_blocks().len());
+        let mut seen_blocks = BitSet::new_empty(mir.basic_blocks().len());
         let mut bb = START_BLOCK;
         loop {
             seen_blocks.insert(bb.index());
@@ -382,14 +382,14 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
 
 
         // Collect all the temps we need to promote.
-        let mut promoted_temps = IdxSetBuf::new_empty(self.temp_promotion_state.len());
+        let mut promoted_temps = BitSet::new_empty(self.temp_promotion_state.len());
 
         for candidate in &self.promotion_candidates {
             match *candidate {
                 Candidate::Ref(Location { block: bb, statement_index: stmt_idx }) => {
                     match self.mir[bb].statements[stmt_idx].kind {
                         StatementKind::Assign(_, Rvalue::Ref(_, _, Place::Local(index))) => {
-                            promoted_temps.add(&index);
+                            promoted_temps.insert(index);
                         }
                         _ => {}
                     }
@@ -399,6 +399,11 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
         }
 
         (self.qualif, Lrc::new(promoted_temps))
+    }
+
+    fn is_const_panic_fn(&self, def_id: DefId) -> bool {
+        Some(def_id) == self.tcx.lang_items().panic_fn() ||
+        Some(def_id) == self.tcx.lang_items().begin_panic_fn()
     }
 }
 
@@ -495,7 +500,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                                 this.add(Qualif::NOT_CONST);
                             } else {
                                 let base_ty = proj.base.ty(this.mir, this.tcx).to_ty(this.tcx);
-                                if let ty::TyRawPtr(_) = base_ty.sty {
+                                if let ty::RawPtr(_) = base_ty.sty {
                                     if !this.tcx.sess.features_untracked().const_raw_ptr_deref {
                                         emit_feature_err(
                                             &this.tcx.sess.parse_sess, "const_raw_ptr_deref",
@@ -591,7 +596,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
             if let Place::Projection(ref proj) = *place {
                 if let ProjectionElem::Deref = proj.elem {
                     let base_ty = proj.base.ty(self.mir, self.tcx).to_ty(self.tcx);
-                    if let ty::TyRef(..) = base_ty.sty {
+                    if let ty::Ref(..) = base_ty.sty {
                         is_reborrow = true;
                     }
                 }
@@ -638,10 +643,10 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                     if self.mode == Mode::StaticMut {
                         // Inside a `static mut`, &mut [...] is also allowed.
                         match ty.sty {
-                            ty::TyArray(..) | ty::TySlice(_) => forbidden_mut = false,
+                            ty::Array(..) | ty::Slice(_) => forbidden_mut = false,
                             _ => {}
                         }
-                    } else if let ty::TyArray(_, len) = ty.sty {
+                    } else if let ty::Array(_, len) = ty.sty {
                         // FIXME(eddyb) the `self.mode == Mode::Fn` condition
                         // seems unnecessary, given that this is merely a ZST.
                         if len.unwrap_usize(self.tcx) == 0 && self.mode == Mode::Fn {
@@ -745,7 +750,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
             }
 
             Rvalue::BinaryOp(op, ref lhs, _) => {
-                if let ty::TyRawPtr(_) = lhs.ty(self.mir, self.tcx).sty {
+                if let ty::RawPtr(_) = lhs.ty(self.mir, self.tcx).sty {
                     assert!(op == BinOp::Eq || op == BinOp::Ne ||
                             op == BinOp::Le || op == BinOp::Lt ||
                             op == BinOp::Ge || op == BinOp::Gt ||
@@ -809,7 +814,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
             let fn_ty = func.ty(self.mir, self.tcx);
             let mut callee_def_id = None;
             let (mut is_shuffle, mut is_const_fn) = (false, None);
-            if let ty::TyFnDef(def_id, _) = fn_ty.sty {
+            if let ty::FnDef(def_id, _) = fn_ty.sty {
                 callee_def_id = Some(def_id);
                 match self.tcx.fn_sig(def_id).abi() {
                     Abi::RustIntrinsic |
@@ -820,11 +825,32 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                             | "min_align_of"
                             | "type_id"
                             | "bswap"
+                            | "bitreverse"
                             | "ctpop"
                             | "cttz"
                             | "cttz_nonzero"
                             | "ctlz"
-                            | "ctlz_nonzero" => is_const_fn = Some(def_id),
+                            | "ctlz_nonzero"
+                            | "overflowing_add"
+                            | "overflowing_sub"
+                            | "overflowing_mul"
+                            | "unchecked_shl"
+                            | "unchecked_shr"
+                            | "add_with_overflow"
+                            | "sub_with_overflow"
+                            | "mul_with_overflow" => is_const_fn = Some(def_id),
+                            "transmute" => {
+                                if self.mode != Mode::Fn {
+                                    is_const_fn = Some(def_id);
+                                    if !self.tcx.sess.features_untracked().const_transmute {
+                                        emit_feature_err(
+                                            &self.tcx.sess.parse_sess, "const_transmute",
+                                            self.span, GateIssue::Language,
+                                            &format!("The use of std::mem::transmute() \
+                                            is gated in {}s", self.mode));
+                                    }
+                                }
+                            }
 
                             name if name.starts_with("simd_shuffle") => {
                                 is_shuffle = true;
@@ -834,7 +860,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                         }
                     }
                     _ => {
-                        if self.tcx.is_const_fn(def_id) {
+                        if self.tcx.is_const_fn(def_id) || self.is_const_panic_fn(def_id) {
                             is_const_fn = Some(def_id);
                         }
                     }
@@ -880,11 +906,26 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
 
             // Const fn calls.
             if let Some(def_id) = is_const_fn {
+                // check the const_panic feature gate or
                 // find corresponding rustc_const_unstable feature
-                if let Some(&attr::Stability {
-                    rustc_const_unstable: Some(attr::RustcConstUnstable {
-                        feature: ref feature_name
-                    }),
+                // FIXME: cannot allow this inside `allow_internal_unstable` because that would make
+                // `panic!` insta stable in constants, since the macro is marked with the attr
+                if self.is_const_panic_fn(def_id) {
+                    if self.mode == Mode::Fn {
+                        // never promote panics
+                        self.qualif = Qualif::NOT_CONST;
+                    } else if !self.tcx.sess.features_untracked().const_panic {
+                        // don't allow panics in constants without the feature gate
+                        emit_feature_err(
+                            &self.tcx.sess.parse_sess,
+                            "const_panic",
+                            self.span,
+                            GateIssue::Language,
+                            &format!("panicking in {}s is unstable", self.mode),
+                        );
+                    }
+                } else if let Some(&attr::Stability {
+                    const_stability: Some(ref feature_name),
                 .. }) = self.tcx.lookup_stability(def_id) {
                     if
                         // feature-gate is not enabled,
@@ -892,9 +933,6 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                             .declared_lib_features
                             .iter()
                             .any(|&(ref sym, _)| sym == feature_name) &&
-
-                        // this doesn't come from a crate with the feature-gate enabled,
-                        self.def_id.is_local() &&
 
                         // this doesn't come from a macro that has #[allow_internal_unstable]
                         !self.span.allows_unstable()
@@ -1059,7 +1097,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                 StatementKind::InlineAsm {..} |
                 StatementKind::EndRegion(_) |
                 StatementKind::Validate(..) |
-                StatementKind::UserAssertTy(..) |
+                StatementKind::AscribeUserType(..) |
                 StatementKind::Nop => {}
             }
         });
@@ -1082,7 +1120,7 @@ pub fn provide(providers: &mut Providers) {
 
 fn mir_const_qualif<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                               def_id: DefId)
-                              -> (u8, Lrc<IdxSetBuf<Local>>) {
+                              -> (u8, Lrc<BitSet<Local>>) {
     // NB: This `borrow()` is guaranteed to be valid (i.e., the value
     // cannot yet be stolen), because `mir_validated()`, which steals
     // from `mir_const(), forces this query to execute before
@@ -1091,7 +1129,7 @@ fn mir_const_qualif<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
     if mir.return_ty().references_error() {
         tcx.sess.delay_span_bug(mir.span, "mir_const_qualif: Mir had errors");
-        return (Qualif::NOT_CONST.bits(), Lrc::new(IdxSetBuf::new_empty(0)));
+        return (Qualif::NOT_CONST.bits(), Lrc::new(BitSet::new_empty(0)));
     }
 
     let mut qualifier = Qualifier::new(tcx, def_id, mir, Mode::Const);
@@ -1141,8 +1179,20 @@ impl MirPass for QualifyAndPromoteConstants {
             let (temps, candidates) = {
                 let mut qualifier = Qualifier::new(tcx, def_id, mir, mode);
                 if mode == Mode::ConstFn {
-                    // Enforce a constant-like CFG for `const fn`.
-                    qualifier.qualify_const();
+                    if tcx.is_min_const_fn(def_id) {
+                        // enforce `min_const_fn` for stable const fns
+                        use super::qualify_min_const_fn::is_min_const_fn;
+                        if let Err((span, err)) = is_min_const_fn(tcx, def_id, mir) {
+                            tcx.sess.span_err(span, &err);
+                        } else {
+                            // this should not produce any errors, but better safe than sorry
+                            // FIXME(#53819)
+                            qualifier.qualify_const();
+                        }
+                    } else {
+                        // Enforce a constant-like CFG for `const fn`.
+                        qualifier.qualify_const();
+                    }
                 } else {
                     while let Some((bb, data)) = qualifier.rpo.next() {
                         qualifier.visit_basic_block_data(bb, data);
@@ -1169,7 +1219,7 @@ impl MirPass for QualifyAndPromoteConstants {
                 block.statements.retain(|statement| {
                     match statement.kind {
                         StatementKind::StorageDead(index) => {
-                            !promoted_temps.contains(&index)
+                            !promoted_temps.contains(index)
                         }
                         _ => true
                     }
@@ -1177,7 +1227,7 @@ impl MirPass for QualifyAndPromoteConstants {
                 let terminator = block.terminator_mut();
                 match terminator.kind {
                     TerminatorKind::Drop { location: Place::Local(index), target, .. } => {
-                        if promoted_temps.contains(&index) {
+                        if promoted_temps.contains(index) {
                             terminator.kind = TerminatorKind::Goto {
                                 target,
                             };

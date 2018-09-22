@@ -198,12 +198,6 @@ impl<'tcx> QueryDescription<'tcx> for queries::super_predicates_of<'tcx> {
     }
 }
 
-impl<'tcx> QueryDescription<'tcx> for queries::const_value_to_allocation<'tcx> {
-    fn describe(_tcx: TyCtxt, val: &'tcx ty::Const<'tcx>) -> String {
-        format!("converting value `{:?}` to an allocation", val)
-    }
-}
-
 impl<'tcx> QueryDescription<'tcx> for queries::erase_regions_ty<'tcx> {
     fn describe(_tcx: TyCtxt, ty: Ty<'tcx>) -> String {
         format!("erasing regions from `{:?}`", ty)
@@ -470,6 +464,12 @@ impl<'tcx> QueryDescription<'tcx> for queries::has_global_allocator<'tcx> {
     }
 }
 
+impl<'tcx> QueryDescription<'tcx> for queries::has_panic_handler<'tcx> {
+    fn describe(_: TyCtxt, _: CrateNum) -> String {
+        "checking if the crate has_panic_handler".to_string()
+    }
+}
+
 impl<'tcx> QueryDescription<'tcx> for queries::extern_crate<'tcx> {
     fn describe(_: TyCtxt, _: DefId) -> String {
         "getting crate's ExternCrateData".to_string()
@@ -719,12 +719,6 @@ impl<'tcx> QueryDescription<'tcx> for queries::collect_and_partition_mono_items<
 impl<'tcx> QueryDescription<'tcx> for queries::codegen_unit<'tcx> {
     fn describe(_tcx: TyCtxt, _: InternedString) -> String {
         "codegen_unit".to_string()
-    }
-}
-
-impl<'tcx> QueryDescription<'tcx> for queries::compile_codegen_unit<'tcx> {
-    fn describe(_tcx: TyCtxt, _: InternedString) -> String {
-        "compile_codegen_unit".to_string()
     }
 }
 

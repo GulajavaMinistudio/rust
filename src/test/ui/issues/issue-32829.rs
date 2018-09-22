@@ -9,7 +9,7 @@
 // except according to those terms.
 
 static S : u64 = { { panic!("foo"); 0 } };
-//~^ ERROR calls in statics are limited
+//~^ ERROR panicking in statics is unstable
 
 fn main() {
     println!("{:?}", S);

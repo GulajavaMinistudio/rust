@@ -16,7 +16,6 @@
 #![feature(rustc_private)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(iterator_find_map)]
 #![cfg_attr(not(stage0), feature(nll))]
 #![feature(set_stdio)]
 #![feature(slice_sort_by_cached_key)]
@@ -25,6 +24,7 @@
 #![feature(ptr_offset_from)]
 #![feature(crate_visibility_modifier)]
 #![feature(const_fn)]
+#![feature(drain_filter)]
 
 #![recursion_limit="256"]
 
@@ -49,6 +49,7 @@ extern crate rustc_errors as errors;
 extern crate pulldown_cmark;
 extern crate tempfile;
 extern crate minifier;
+extern crate parking_lot;
 
 extern crate serialize as rustc_serialize; // used by deriving
 
@@ -161,6 +162,10 @@ fn opts() -> Vec<RustcOptGroup> {
         stable("cfg", |o| o.optmulti("", "cfg", "pass a --cfg to rustc", "")),
         stable("extern", |o| {
             o.optmulti("", "extern", "pass an --extern to rustc", "NAME=PATH")
+        }),
+        unstable("extern-html-root-url", |o| {
+            o.optmulti("", "extern-html-root-url",
+                       "base URL to use for dependencies", "NAME=URL")
         }),
         stable("plugin-path", |o| {
             o.optmulti("", "plugin-path", "removed", "DIR")
@@ -282,7 +287,7 @@ fn opts() -> Vec<RustcOptGroup> {
                       \"light-suffix.css\"",
                      "PATH")
         }),
-        unstable("edition", |o| {
+        stable("edition", |o| {
             o.optopt("", "edition",
                      "edition to use when compiling rust code (default: 2015)",
                      "EDITION")
@@ -401,8 +406,14 @@ fn main_args(args: &[String]) -> isize {
                                   `short` (instead was `{}`)", arg));
         }
     };
+    let treat_err_as_bug = matches.opt_strs("Z").iter().any(|x| {
+        *x == "treat-err-as-bug"
+    });
+    let ui_testing = matches.opt_strs("Z").iter().any(|x| {
+        *x == "ui-testing"
+    });
 
-    let diag = core::new_handler(error_format, None);
+    let diag = core::new_handler(error_format, None, treat_err_as_bug, ui_testing);
 
     // check for deprecated options
     check_deprecated_options(&matches, &diag);
@@ -453,6 +464,13 @@ fn main_args(args: &[String]) -> isize {
             return 1;
         }
     };
+    let extern_urls = match parse_extern_html_roots(&matches) {
+        Ok(ex) => ex,
+        Err(err) => {
+            diag.struct_err(err).emit();
+            return 1;
+        }
+    };
 
     let test_args = matches.opt_strs("test-args");
     let test_args: Vec<String> = test_args.iter()
@@ -466,7 +484,8 @@ fn main_args(args: &[String]) -> isize {
 
     let output = matches.opt_str("o").map(|s| PathBuf::from(&s));
     let css_file_extension = matches.opt_str("e").map(|s| PathBuf::from(&s));
-    let cfgs = matches.opt_strs("cfg");
+    let mut cfgs = matches.opt_strs("cfg");
+    cfgs.push("rustdoc".to_string());
 
     if let Some(ref p) = css_file_extension {
         if !p.is_file() {
@@ -549,11 +568,11 @@ fn main_args(args: &[String]) -> isize {
     let res = acquire_input(PathBuf::from(input), externs, edition, cg, &matches, error_format,
                             move |out| {
         let Output { krate, passes, renderinfo } = out;
-        let diag = core::new_handler(error_format, None);
+        let diag = core::new_handler(error_format, None, treat_err_as_bug, ui_testing);
         info!("going to format");
         match output_format.as_ref().map(|s| &**s) {
             Some("html") | None => {
-                html::render::run(krate, &external_html, playground_url,
+                html::render::run(krate, extern_urls, &external_html, playground_url,
                                   output.unwrap_or(PathBuf::from("doc")),
                                   resource_suffix.unwrap_or(String::new()),
                                   passes.into_iter().collect(),
@@ -598,18 +617,38 @@ where R: 'static + Send, F: 'static + Send + FnOnce(Output) -> R {
 /// Extracts `--extern CRATE=PATH` arguments from `matches` and
 /// returns a map mapping crate names to their paths or else an
 /// error message.
+// FIXME(eddyb) This shouldn't be duplicated with `rustc::session`.
 fn parse_externs(matches: &getopts::Matches) -> Result<Externs, String> {
     let mut externs: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
     for arg in &matches.opt_strs("extern") {
         let mut parts = arg.splitn(2, '=');
         let name = parts.next().ok_or("--extern value must not be empty".to_string())?;
-        let location = parts.next()
-                                 .ok_or("--extern value must be of the format `foo=bar`"
-                                    .to_string())?;
+        let location = parts.next().map(|s| s.to_string());
+        if location.is_none() && !nightly_options::is_unstable_enabled(matches) {
+            return Err("the `-Z unstable-options` flag must also be passed to \
+                        enable `--extern crate_name` without `=path`".to_string());
+        }
         let name = name.to_string();
-        externs.entry(name).or_default().insert(location.to_string());
+        externs.entry(name).or_default().insert(location);
     }
     Ok(Externs::new(externs))
+}
+
+/// Extracts `--extern-html-root-url` arguments from `matches` and returns a map of crate names to
+/// the given URLs. If an `--extern-html-root-url` argument was ill-formed, returns an error
+/// describing the issue.
+fn parse_extern_html_roots(matches: &getopts::Matches)
+    -> Result<BTreeMap<String, String>, &'static str>
+{
+    let mut externs = BTreeMap::new();
+    for arg in &matches.opt_strs("extern-html-root-url") {
+        let mut parts = arg.splitn(2, '=');
+        let name = parts.next().ok_or("--extern-html-root-url must not be empty")?;
+        let url = parts.next().ok_or("--extern-html-root-url must be of the form name=url")?;
+        externs.insert(name.to_string(), url.to_string());
+    }
+
+    Ok(externs)
 }
 
 /// Interprets the input file as a rust source file, passing it through the
@@ -643,7 +682,8 @@ where R: 'static + Send,
     for s in &matches.opt_strs("L") {
         paths.add_path(s, ErrorOutputType::default());
     }
-    let cfgs = matches.opt_strs("cfg");
+    let mut cfgs = matches.opt_strs("cfg");
+    cfgs.push("rustdoc".to_string());
     let triple = matches.opt_str("target").map(|target| {
         if target.ends_with(".json") {
             TargetTriple::TargetPath(PathBuf::from(target))
@@ -662,6 +702,12 @@ where R: 'static + Send,
     let force_unstable_if_unmarked = matches.opt_strs("Z").iter().any(|x| {
         *x == "force-unstable-if-unmarked"
     });
+    let treat_err_as_bug = matches.opt_strs("Z").iter().any(|x| {
+        *x == "treat-err-as-bug"
+    });
+    let ui_testing = matches.opt_strs("Z").iter().any(|x| {
+        *x == "ui-testing"
+    });
 
     let (lint_opts, describe_lints, lint_cap) = get_cmd_lint_options(matches, error_format);
 
@@ -674,7 +720,8 @@ where R: 'static + Send,
             core::run_core(paths, cfgs, externs, Input::File(cratefile), triple, maybe_sysroot,
                            display_warnings, crate_name.clone(),
                            force_unstable_if_unmarked, edition, cg, error_format,
-                           lint_opts, lint_cap, describe_lints, manual_passes, default_passes);
+                           lint_opts, lint_cap, describe_lints, manual_passes, default_passes,
+                           treat_err_as_bug, ui_testing);
 
         info!("finished with rustc");
 

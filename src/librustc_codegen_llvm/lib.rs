@@ -65,13 +65,13 @@ extern crate rustc_errors as errors;
 extern crate serialize;
 extern crate cc; // Used to locate MSVC
 extern crate tempfile;
+extern crate memmap;
 
 use back::bytecode::RLIB_BYTECODE_EXTENSION;
 
 pub use llvm_util::target_features;
-
 use std::any::Any;
-use std::path::PathBuf;
+use std::path::{PathBuf};
 use std::sync::mpsc;
 use rustc_data_structures::sync::Lrc;
 
@@ -88,6 +88,7 @@ use rustc::util::nodemap::{FxHashSet, FxHashMap};
 use rustc::util::profiling::ProfileCategory;
 use rustc_mir::monomorphize;
 use rustc_codegen_utils::codegen_backend::CodegenBackend;
+use rustc_data_structures::svh::Svh;
 
 mod diagnostics;
 
@@ -98,7 +99,7 @@ mod back {
     mod command;
     pub mod linker;
     pub mod link;
-    mod lto;
+    pub mod lto;
     pub mod symbol_export;
     pub mod write;
     mod rpath;
@@ -251,7 +252,7 @@ impl CodegenBackend for LlvmCodegenBackend {
 
         // Now that we won't touch anything in the incremental compilation directory
         // any more, we can finalize it (which involves renaming it)
-        rustc_incremental::finalize_session_directory(sess, ongoing_codegen.link.crate_hash);
+        rustc_incremental::finalize_session_directory(sess, ongoing_codegen.crate_hash);
 
         Ok(())
     }
@@ -271,8 +272,13 @@ struct ModuleCodegen {
     /// as the crate name and disambiguator.
     /// We currently generate these names via CodegenUnit::build_cgu_name().
     name: String,
-    source: ModuleSource,
+    module_llvm: ModuleLlvm,
     kind: ModuleKind,
+}
+
+struct CachedModuleCodegen {
+    name: String,
+    source: WorkProduct,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -283,22 +289,11 @@ enum ModuleKind {
 }
 
 impl ModuleCodegen {
-    fn llvm(&self) -> Option<&ModuleLlvm> {
-        match self.source {
-            ModuleSource::Codegened(ref llvm) => Some(llvm),
-            ModuleSource::Preexisting(_) => None,
-        }
-    }
-
     fn into_compiled_module(self,
-                                emit_obj: bool,
-                                emit_bc: bool,
-                                emit_bc_compressed: bool,
-                                outputs: &OutputFilenames) -> CompiledModule {
-        let pre_existing = match self.source {
-            ModuleSource::Preexisting(_) => true,
-            ModuleSource::Codegened(_) => false,
-        };
+                            emit_obj: bool,
+                            emit_bc: bool,
+                            emit_bc_compressed: bool,
+                            outputs: &OutputFilenames) -> CompiledModule {
         let object = if emit_obj {
             Some(outputs.temp_path(OutputType::Object, Some(&self.name)))
         } else {
@@ -319,7 +314,6 @@ impl ModuleCodegen {
         CompiledModule {
             name: self.name.clone(),
             kind: self.kind,
-            pre_existing,
             object,
             bytecode,
             bytecode_compressed,
@@ -331,18 +325,9 @@ impl ModuleCodegen {
 struct CompiledModule {
     name: String,
     kind: ModuleKind,
-    pre_existing: bool,
     object: Option<PathBuf>,
     bytecode: Option<PathBuf>,
     bytecode_compressed: Option<PathBuf>,
-}
-
-enum ModuleSource {
-    /// Copy the `.o` files or whatever from the incr. comp. directory.
-    Preexisting(WorkProduct),
-
-    /// Rebuild from this LLVM module.
-    Codegened(ModuleLlvm),
 }
 
 struct ModuleLlvm {
@@ -389,7 +374,7 @@ struct CodegenResults {
     modules: Vec<CompiledModule>,
     allocator_module: Option<CompiledModule>,
     metadata_module: CompiledModule,
-    link: rustc::middle::cstore::LinkMeta,
+    crate_hash: Svh,
     metadata: rustc::middle::cstore::EncodedMetadata,
     windows_subsystem: Option<String>,
     linker_info: back::linker::LinkerInfo,

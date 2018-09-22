@@ -28,8 +28,8 @@ use ThinVec;
 use tokenstream::{ThinTokenStream, TokenStream};
 
 use serialize::{self, Encoder, Decoder};
-use std::collections::HashSet;
 use std::fmt;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::sync::Lrc;
 use std::u32;
 
@@ -407,7 +407,7 @@ pub struct WhereEqPredicate {
 
 /// The set of MetaItems that define the compilation environment of the crate,
 /// used to drive conditional compilation
-pub type CrateConfig = HashSet<(Name, Option<Symbol>)>;
+pub type CrateConfig = FxHashSet<(Name, Option<Symbol>)>;
 
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug)]
 pub struct Crate {
@@ -857,8 +857,13 @@ pub struct Local {
 pub struct Arm {
     pub attrs: Vec<Attribute>,
     pub pats: Vec<P<Pat>>,
-    pub guard: Option<P<Expr>>,
+    pub guard: Option<Guard>,
     pub body: P<Expr>,
+}
+
+#[derive(Clone, RustcEncodable, RustcDecodable, Debug)]
+pub enum Guard {
+    If(P<Expr>),
 }
 
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug)]
@@ -987,7 +992,7 @@ impl Expr {
             ExprKind::Match(..) => ExprPrecedence::Match,
             ExprKind::Closure(..) => ExprPrecedence::Closure,
             ExprKind::Block(..) => ExprPrecedence::Block,
-            ExprKind::Catch(..) => ExprPrecedence::Catch,
+            ExprKind::TryBlock(..) => ExprPrecedence::TryBlock,
             ExprKind::Async(..) => ExprPrecedence::Async,
             ExprKind::Assign(..) => ExprPrecedence::Assign,
             ExprKind::AssignOp(..) => ExprPrecedence::AssignOp,
@@ -1108,8 +1113,8 @@ pub enum ExprKind {
     /// created during lowering cannot be made the parent of any other
     /// preexisting defs.
     Async(CaptureBy, NodeId, P<Block>),
-    /// A catch block (`catch { ... }`)
-    Catch(P<Block>),
+    /// A try block (`try { ... }`)
+    TryBlock(P<Block>),
 
     /// An assignment (`a = foo()`)
     Assign(P<Expr>, P<Expr>),
@@ -1582,7 +1587,7 @@ impl TyKind {
         if let TyKind::ImplicitSelf = *self { true } else { false }
     }
 
-    crate fn is_unit(&self) -> bool {
+    pub fn is_unit(&self) -> bool {
         if let TyKind::Tup(ref tys) = *self { tys.is_empty() } else { false }
     }
 }

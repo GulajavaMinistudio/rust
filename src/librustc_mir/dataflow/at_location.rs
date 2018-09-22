@@ -12,8 +12,7 @@
 //! locations.
 
 use rustc::mir::{BasicBlock, Location};
-use rustc_data_structures::indexed_set::{HybridIdxSetBuf, IdxSetBuf, Iter};
-use rustc_data_structures::indexed_vec::Idx;
+use rustc_data_structures::bit_set::{BitIter, BitSet, HybridBitSet};
 
 use dataflow::{BitDenotation, BlockSets, DataflowResults};
 use dataflow::move_paths::{HasMoveData, MovePathIndex};
@@ -27,6 +26,15 @@ use std::iter;
 pub trait FlowsAtLocation {
     /// Reset the state bitvector to represent the entry to block `bb`.
     fn reset_to_entry_of(&mut self, bb: BasicBlock);
+
+    /// Reset the state bitvector to represent the exit of the
+    /// terminator of block `bb`.
+    ///
+    /// **Important:** In the case of a `Call` terminator, these
+    /// effects do *not* include the result of storing the destination
+    /// of the call, since that is edge-dependent (in other words, the
+    /// effects don't apply to the unwind edge).
+    fn reset_to_exit_of(&mut self, bb: BasicBlock);
 
     /// Build gen + kill sets for statement at `loc`.
     ///
@@ -67,9 +75,9 @@ where
     BD: BitDenotation,
 {
     base_results: DataflowResults<BD>,
-    curr_state: IdxSetBuf<BD::Idx>,
-    stmt_gen: HybridIdxSetBuf<BD::Idx>,
-    stmt_kill: HybridIdxSetBuf<BD::Idx>,
+    curr_state: BitSet<BD::Idx>,
+    stmt_gen: HybridBitSet<BD::Idx>,
+    stmt_kill: HybridBitSet<BD::Idx>,
 }
 
 impl<BD> FlowAtLocation<BD>
@@ -96,9 +104,9 @@ where
 
     pub fn new(results: DataflowResults<BD>) -> Self {
         let bits_per_block = results.sets().bits_per_block();
-        let curr_state = IdxSetBuf::new_empty(bits_per_block);
-        let stmt_gen = HybridIdxSetBuf::new_empty(bits_per_block);
-        let stmt_kill = HybridIdxSetBuf::new_empty(bits_per_block);
+        let curr_state = BitSet::new_empty(bits_per_block);
+        let stmt_gen = HybridBitSet::new_empty(bits_per_block);
+        let stmt_kill = HybridBitSet::new_empty(bits_per_block);
         FlowAtLocation {
             base_results: results,
             curr_state: curr_state,
@@ -112,12 +120,12 @@ where
         self.base_results.operator()
     }
 
-    pub fn contains(&self, x: &BD::Idx) -> bool {
+    pub fn contains(&self, x: BD::Idx) -> bool {
         self.curr_state.contains(x)
     }
 
     /// Returns an iterator over the elements present in the current state.
-    pub fn iter_incoming(&self) -> iter::Peekable<Iter<BD::Idx>> {
+    pub fn iter_incoming(&self) -> iter::Peekable<BitIter<BD::Idx>> {
         self.curr_state.iter().peekable()
     }
 
@@ -126,11 +134,11 @@ where
     /// Invokes `f` with an iterator over the resulting state.
     pub fn with_iter_outgoing<F>(&self, f: F)
     where
-        F: FnOnce(Iter<BD::Idx>),
+        F: FnOnce(BitIter<BD::Idx>),
     {
         let mut curr_state = self.curr_state.clone();
-        curr_state.union_hybrid(&self.stmt_gen);
-        curr_state.subtract_hybrid(&self.stmt_kill);
+        curr_state.union(&self.stmt_gen);
+        curr_state.subtract(&self.stmt_kill);
         f(curr_state.iter());
     }
 }
@@ -140,6 +148,12 @@ impl<BD> FlowsAtLocation for FlowAtLocation<BD>
 {
     fn reset_to_entry_of(&mut self, bb: BasicBlock) {
         self.curr_state.overwrite(self.base_results.sets().on_entry_set_for(bb.index()));
+    }
+
+    fn reset_to_exit_of(&mut self, bb: BasicBlock) {
+        self.reset_to_entry_of(bb);
+        self.curr_state.union(self.base_results.sets().gen_set_for(bb.index()));
+        self.curr_state.subtract(self.base_results.sets().kill_set_for(bb.index()));
     }
 
     fn reconstruct_statement_effect(&mut self, loc: Location) {
@@ -193,8 +207,8 @@ impl<BD> FlowsAtLocation for FlowAtLocation<BD>
     }
 
     fn apply_local_effect(&mut self, _loc: Location) {
-        self.curr_state.union_hybrid(&self.stmt_gen);
-        self.curr_state.subtract_hybrid(&self.stmt_kill);
+        self.curr_state.union(&self.stmt_gen);
+        self.curr_state.subtract(&self.stmt_kill);
     }
 }
 
@@ -209,7 +223,7 @@ where
         //   siblings);
         // - ~99% of the time the loop isn't reached, and this code is hot, so
         //   we don't want to allocate `todo` unnecessarily.
-        if self.contains(&mpi) {
+        if self.contains(mpi) {
             return Some(mpi);
         }
         let move_data = self.operator().move_data();
@@ -221,7 +235,7 @@ where
         };
 
         while let Some(mpi) = todo.pop() {
-            if self.contains(&mpi) {
+            if self.contains(mpi) {
                 return Some(mpi);
             }
             let move_path = &move_data.move_paths[mpi];

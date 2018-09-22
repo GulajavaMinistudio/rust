@@ -53,7 +53,7 @@ pub enum Def {
     Existential(DefId),
     /// `type Foo = Bar;`
     TyAlias(DefId),
-    TyForeign(DefId),
+    ForeignTy(DefId),
     TraitAlias(DefId),
     AssociatedTy(DefId),
     /// `existential type Foo: Bar;`
@@ -68,7 +68,8 @@ pub enum Def {
     Const(DefId),
     Static(DefId, bool /* is_mutbl */),
     StructCtor(DefId, CtorKind), // DefId refers to NodeId of the struct's constructor
-    VariantCtor(DefId, CtorKind),
+    VariantCtor(DefId, CtorKind), // DefId refers to the enum variant
+    SelfCtor(DefId /* impl */),  // DefId refers to the impl
     Method(DefId),
     AssociatedConst(DefId),
 
@@ -272,7 +273,8 @@ impl Def {
             Def::AssociatedTy(id) | Def::TyParam(id) | Def::Struct(id) | Def::StructCtor(id, ..) |
             Def::Union(id) | Def::Trait(id) | Def::Method(id) | Def::Const(id) |
             Def::AssociatedConst(id) | Def::Macro(id, ..) |
-            Def::Existential(id) | Def::AssociatedExistential(id) | Def::TyForeign(id) => {
+            Def::Existential(id) | Def::AssociatedExistential(id) | Def::ForeignTy(id) |
+            Def::SelfCtor(id) => {
                 id
             }
 
@@ -309,9 +311,10 @@ impl Def {
             Def::StructCtor(.., CtorKind::Fn) => "tuple struct",
             Def::StructCtor(.., CtorKind::Const) => "unit struct",
             Def::StructCtor(.., CtorKind::Fictive) => bug!("impossible struct constructor"),
+            Def::SelfCtor(..) => "self constructor",
             Def::Union(..) => "union",
             Def::Trait(..) => "trait",
-            Def::TyForeign(..) => "foreign type",
+            Def::ForeignTy(..) => "foreign type",
             Def::Method(..) => "method",
             Def::Const(..) => "constant",
             Def::AssociatedConst(..) => "associated constant",

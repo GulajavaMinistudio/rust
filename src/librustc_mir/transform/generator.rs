@@ -66,10 +66,10 @@ use rustc::mir::visit::{PlaceContext, Visitor, MutVisitor};
 use rustc::ty::{self, TyCtxt, AdtDef, Ty};
 use rustc::ty::subst::Substs;
 use util::dump_mir;
-use util::liveness::{self, IdentityMap, LivenessMode};
+use util::liveness::{self, IdentityMap};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::indexed_vec::Idx;
-use rustc_data_structures::indexed_set::IdxSetBuf;
-use std::collections::HashMap;
+use rustc_data_structures::bit_set::BitSet;
 use std::borrow::Cow;
 use std::iter::once;
 use std::mem;
@@ -142,10 +142,12 @@ struct TransformVisitor<'a, 'tcx: 'a> {
     state_field: usize,
 
     // Mapping from Local to (type of local, generator struct index)
-    remap: HashMap<Local, (Ty<'tcx>, usize)>,
+    // FIXME(eddyb) This should use `IndexVec<Local, Option<_>>`.
+    remap: FxHashMap<Local, (Ty<'tcx>, usize)>,
 
     // A map from a suspension point in a block to the locals which have live storage at that point
-    storage_liveness: HashMap<BasicBlock, liveness::LiveVarSet<Local>>,
+    // FIXME(eddyb) This should use `IndexVec<BasicBlock, Option<_>>`.
+    storage_liveness: FxHashMap<BasicBlock, liveness::LiveVarSet<Local>>,
 
     // A list of suspension points, generated during the transform
     suspension_points: Vec<SuspensionPoint>,
@@ -157,7 +159,7 @@ struct TransformVisitor<'a, 'tcx: 'a> {
 impl<'a, 'tcx> TransformVisitor<'a, 'tcx> {
     // Make a GeneratorState rvalue
     fn make_state(&self, idx: usize, val: Operand<'tcx>) -> Rvalue<'tcx> {
-        let adt = AggregateKind::Adt(self.state_adt_ref, idx, self.state_substs, None);
+        let adt = AggregateKind::Adt(self.state_adt_ref, idx, self.state_substs, None, None);
         Rvalue::Aggregate(box adt, vec![val])
     }
 
@@ -177,6 +179,7 @@ impl<'a, 'tcx> TransformVisitor<'a, 'tcx> {
         let val = Operand::Constant(box Constant {
             span: source_info.span,
             ty: self.tcx.types.u32,
+            user_ty: None,
             literal: ty::Const::from_bits(
                 self.tcx,
                 state_disc.into(),
@@ -300,6 +303,7 @@ fn replace_result_variable<'tcx>(
     let new_ret = LocalDecl {
         mutability: Mutability::Mut,
         ty: ret_ty,
+        user_ty: None,
         name: None,
         source_info,
         visibility_scope: source_info.scope,
@@ -327,7 +331,7 @@ impl<'tcx> Visitor<'tcx> for StorageIgnored {
                        _location: Location) {
         match statement.kind {
             StatementKind::StorageLive(l) |
-            StatementKind::StorageDead(l) => { self.0.remove(&l); }
+            StatementKind::StorageDead(l) => { self.0.remove(l); }
             _ => (),
         }
     }
@@ -337,7 +341,7 @@ struct BorrowedLocals(liveness::LiveVarSet<Local>);
 
 fn mark_as_borrowed<'tcx>(place: &Place<'tcx>, locals: &mut BorrowedLocals) {
     match *place {
-        Place::Local(l) => { locals.0.add(&l); },
+        Place::Local(l) => { locals.0.insert(l); },
         Place::Promoted(_) |
         Place::Static(..) => (),
         Place::Projection(ref proj) => {
@@ -363,13 +367,16 @@ impl<'tcx> Visitor<'tcx> for BorrowedLocals {
     }
 }
 
-fn locals_live_across_suspend_points<'a, 'tcx,>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                               mir: &Mir<'tcx>,
-                                               source: MirSource,
-                                               movable: bool) ->
-                                               (liveness::LiveVarSet<Local>,
-                                                HashMap<BasicBlock, liveness::LiveVarSet<Local>>) {
-    let dead_unwinds = IdxSetBuf::new_empty(mir.basic_blocks().len());
+fn locals_live_across_suspend_points(
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    mir: &Mir<'tcx>,
+    source: MirSource,
+    movable: bool,
+) -> (
+    liveness::LiveVarSet<Local>,
+    FxHashMap<BasicBlock, liveness::LiveVarSet<Local>>,
+) {
+    let dead_unwinds = BitSet::new_empty(mir.basic_blocks().len());
     let node_id = tcx.hir.as_local_node_id(source.def_id).unwrap();
 
     // Calculate when MIR locals have live storage. This gives us an upper bound of their
@@ -381,7 +388,7 @@ fn locals_live_across_suspend_points<'a, 'tcx,>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
     // Find the MIR locals which do not use StorageLive/StorageDead statements.
     // The storage of these locals are always live.
-    let mut ignored = StorageIgnored(IdxSetBuf::new_filled(mir.local_decls.len()));
+    let mut ignored = StorageIgnored(BitSet::new_filled(mir.local_decls.len()));
     ignored.visit_mir(mir);
 
     // Calculate the MIR locals which have been previously
@@ -401,10 +408,6 @@ fn locals_live_across_suspend_points<'a, 'tcx,>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let mut set = liveness::LiveVarSet::new_empty(mir.local_decls.len());
     let mut liveness = liveness::liveness_of_locals(
         mir,
-        LivenessMode {
-            include_regular_use: true,
-            include_drops: true,
-        },
         &IdentityMap::new(mir),
     );
     liveness::dump_mir(
@@ -416,7 +419,7 @@ fn locals_live_across_suspend_points<'a, 'tcx,>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         &liveness,
     );
 
-    let mut storage_liveness_map = HashMap::new();
+    let mut storage_liveness_map = FxHashMap::default();
 
     for (block, data) in mir.basic_blocks().iter_enumerated() {
         if let TerminatorKind::Yield { .. } = data.terminator().kind {
@@ -469,7 +472,7 @@ fn locals_live_across_suspend_points<'a, 'tcx,>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 
     // The generator argument is ignored
-    set.remove(&self_arg());
+    set.remove(self_arg());
 
     (set, storage_liveness_map)
 }
@@ -480,9 +483,9 @@ fn compute_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                             interior: Ty<'tcx>,
                             movable: bool,
                             mir: &mut Mir<'tcx>)
-    -> (HashMap<Local, (Ty<'tcx>, usize)>,
+    -> (FxHashMap<Local, (Ty<'tcx>, usize)>,
         GeneratorLayout<'tcx>,
-        HashMap<BasicBlock, liveness::LiveVarSet<Local>>)
+        FxHashMap<BasicBlock, liveness::LiveVarSet<Local>>)
 {
     // Use a liveness analysis to compute locals which are live across a suspension point
     let (live_locals, storage_liveness) = locals_live_across_suspend_points(tcx,
@@ -493,13 +496,13 @@ fn compute_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     // MIR types
     let allowed_upvars = tcx.erase_regions(&upvars);
     let allowed = match interior.sty {
-        ty::TyGeneratorWitness(s) => tcx.erase_late_bound_regions(&s),
+        ty::GeneratorWitness(s) => tcx.erase_late_bound_regions(&s),
         _ => bug!(),
     };
 
     for (local, decl) in mir.local_decls.iter_enumerated() {
         // Ignore locals which are internal or not live
-        if !live_locals.contains(&local) || decl.internal {
+        if !live_locals.contains(local) || decl.internal {
             continue;
         }
 
@@ -515,7 +518,7 @@ fn compute_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 
     let upvar_len = mir.upvar_decls.len();
-    let dummy_local = LocalDecl::new_internal(tcx.mk_nil(), mir.span);
+    let dummy_local = LocalDecl::new_internal(tcx.mk_unit(), mir.span);
 
     // Gather live locals and their indices replacing values in mir.local_decls with a dummy
     // to avoid changing local indices
@@ -653,7 +656,8 @@ fn create_generator_drop_shim<'a, 'tcx>(
     // Replace the return variable
     mir.local_decls[RETURN_PLACE] = LocalDecl {
         mutability: Mutability::Mut,
-        ty: tcx.mk_nil(),
+        ty: tcx.mk_unit(),
+        user_ty: None,
         name: None,
         source_info,
         visibility_scope: source_info.scope,
@@ -670,6 +674,7 @@ fn create_generator_drop_shim<'a, 'tcx>(
             ty: gen_ty,
             mutbl: hir::Mutability::MutMutable,
         }),
+        user_ty: None,
         name: None,
         source_info,
         visibility_scope: source_info.scope,
@@ -710,6 +715,7 @@ fn insert_panic_block<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         cond: Operand::Constant(box Constant {
             span: mir.span,
             ty: tcx.types.bool,
+            user_ty: None,
             literal: ty::Const::from_bool(tcx, false),
         }),
         expected: true,
@@ -817,7 +823,7 @@ fn create_cases<'a, 'tcx, F>(mir: &mut Mir<'tcx>,
             // Create StorageLive instructions for locals with live storage
             for i in 0..(mir.local_decls.len()) {
                 let l = Local::new(i);
-                if point.storage_liveness.contains(&l) && !transform.remap.contains_key(&l) {
+                if point.storage_liveness.contains(l) && !transform.remap.contains_key(&l) {
                     statements.push(Statement {
                         source_info,
                         kind: StatementKind::StorageLive(l),
@@ -863,7 +869,7 @@ impl MirPass for StateTransform {
 
         // Get the interior types and substs which typeck computed
         let (upvars, interior, movable) = match gen_ty.sty {
-            ty::TyGenerator(_, substs, movability) => {
+            ty::Generator(_, substs, movability) => {
                 (substs.upvar_tys(def_id, tcx).collect(),
                  substs.witness(def_id, tcx),
                  movability == hir::GeneratorMovability::Movable)

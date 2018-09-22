@@ -22,10 +22,11 @@ use syntax::ptr::P;
 use syntax::symbol::Symbol;
 use syntax::tokenstream;
 use syntax_pos::{MultiSpan, Span, DUMMY_SP};
+use errors::Applicability;
 
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
 
 #[derive(PartialEq)]
 enum ArgumentType {
@@ -64,7 +65,7 @@ struct Context<'a, 'b: 'a> {
     /// Unique format specs seen for each argument.
     arg_unique_types: Vec<Vec<ArgumentType>>,
     /// Map from named arguments to their resolved indices.
-    names: HashMap<String, usize>,
+    names: FxHashMap<String, usize>,
 
     /// The latest consecutive literal strings, or empty if there weren't any.
     literal: String,
@@ -103,7 +104,7 @@ struct Context<'a, 'b: 'a> {
     /// * `count_args`: `vec![Exact(0), Exact(5), Exact(3)]`
     count_args: Vec<Position>,
     /// Relative slot numbers for count arguments.
-    count_positions: HashMap<usize, usize>,
+    count_positions: FxHashMap<usize, usize>,
     /// Number of count slots assigned.
     count_positions_count: usize,
 
@@ -117,7 +118,7 @@ struct Context<'a, 'b: 'a> {
     invalid_refs: Vec<(usize, usize)>,
     /// Spans of all the formatting arguments, in order.
     arg_spans: Vec<Span>,
-    /// Wether this formatting string is a literal or it comes from a macro.
+    /// Whether this formatting string is a literal or it comes from a macro.
     is_literal: bool,
 }
 
@@ -133,9 +134,9 @@ struct Context<'a, 'b: 'a> {
 fn parse_args(ecx: &mut ExtCtxt,
               sp: Span,
               tts: &[tokenstream::TokenTree])
-              -> Option<(P<ast::Expr>, Vec<P<ast::Expr>>, HashMap<String, usize>)> {
+              -> Option<(P<ast::Expr>, Vec<P<ast::Expr>>, FxHashMap<String, usize>)> {
     let mut args = Vec::<P<ast::Expr>>::new();
-    let mut names = HashMap::<String, usize>::new();
+    let mut names = FxHashMap::<String, usize>::default();
 
     let mut p = ecx.new_parser_from_tts(tts);
 
@@ -767,7 +768,7 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
                                     sp: Span,
                                     efmt: P<ast::Expr>,
                                     args: Vec<P<ast::Expr>>,
-                                    names: HashMap<String, usize>,
+                                    names: FxHashMap<String, usize>,
                                     append_newline: bool)
                                     -> P<ast::Expr> {
     // NOTE: this verbose way of initializing `Vec<Vec<ArgumentType>>` is because
@@ -791,10 +792,11 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
                 0 => "{}".to_string(),
                 _ => format!("{}{{}}", "{} ".repeat(args.len())),
             };
-            err.span_suggestion(
+            err.span_suggestion_with_applicability(
                 fmt_sp.shrink_to_lo(),
                 "you might be missing a string literal to format with",
                 format!("\"{}\", ", sugg_fmt),
+                Applicability::MaybeIncorrect,
             );
             err.emit();
             return DummyResult::raw_expr(sp);
@@ -850,7 +852,7 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
         curpiece: 0,
         arg_index_map: Vec::new(),
         count_args: Vec::new(),
-        count_positions: HashMap::new(),
+        count_positions: FxHashMap::default(),
         count_positions_count: 0,
         count_args_index_offset: 0,
         literal: String::new(),
@@ -950,7 +952,7 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
 
             // The set of foreign substitutions we've explained.  This prevents spamming the user
             // with `%d should be written as {}` over and over again.
-            let mut explained = HashSet::new();
+            let mut explained = FxHashSet::default();
 
             macro_rules! check_foreign {
                 ($kind:ident) => {{
@@ -994,9 +996,10 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
                         ));
                     }
                     if suggestions.len() > 0 {
-                        diag.multipart_suggestion(
+                        diag.multipart_suggestion_with_applicability(
                             "format specifiers use curly braces",
                             suggestions,
+                            Applicability::MachineApplicable,
                         );
                     }
                 }};

@@ -21,7 +21,7 @@ pub use self::MovedValueUseKind::*;
 use self::InteriorKind::*;
 
 use rustc::hir::HirId;
-use rustc::hir::map as hir_map;
+use rustc::hir::Node;
 use rustc::hir::map::blocks::FnLikeNode;
 use rustc::cfg;
 use rustc::middle::borrowck::{BorrowCheckResult, SignalledError};
@@ -45,7 +45,7 @@ use rustc_data_structures::sync::Lrc;
 use std::hash::{Hash, Hasher};
 use syntax::ast;
 use syntax_pos::{MultiSpan, Span};
-use errors::{DiagnosticBuilder, DiagnosticId};
+use errors::{Applicability, DiagnosticBuilder, DiagnosticId};
 
 use rustc::hir;
 use rustc::hir::intravisit::{self, Visitor};
@@ -95,8 +95,8 @@ fn borrowck<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, owner_def_id: DefId)
     let owner_id = tcx.hir.as_local_node_id(owner_def_id).unwrap();
 
     match tcx.hir.get(owner_id) {
-        hir_map::NodeStructCtor(_) |
-        hir_map::NodeVariant(_) => {
+        Node::StructCtor(_) |
+        Node::Variant(_) => {
             // We get invoked with anything that has MIR, but some of
             // those things (notably the synthesized constructors from
             // tuple structs/variants) do not have an associated body
@@ -419,7 +419,7 @@ fn closure_to_block(closure_id: LocalDefId,
                     tcx: TyCtxt) -> ast::NodeId {
     let closure_id = tcx.hir.local_def_id_to_node_id(closure_id);
     match tcx.hir.get(closure_id) {
-        hir_map::NodeExpr(expr) => match expr.node {
+        Node::Expr(expr) => match expr.node {
             hir::ExprKind::Closure(.., body_id, _, _) => {
                 body_id.node_id
             }
@@ -441,7 +441,7 @@ impl<'a, 'tcx> LoanPath<'tcx> {
             LpUpvar(upvar_id) => {
                 let block_id = closure_to_block(upvar_id.closure_expr_id, bccx.tcx);
                 let hir_id = bccx.tcx.hir.node_to_hir_id(block_id);
-                region::Scope::Node(hir_id.local_id)
+                region::Scope { id: hir_id.local_id, data: region::ScopeData::Node }
             }
             LpDowncast(ref base, _) |
             LpExtend(ref base, ..) => base.kill_scope(bccx),
@@ -697,7 +697,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                                                              Some(nl.to_string()),
                                                              Origin::Ast);
                 let need_note = match lp.ty.sty {
-                    ty::TypeVariants::TyClosure(id, _) => {
+                    ty::Closure(id, _) => {
                         let node_id = self.tcx.hir.as_local_node_id(id).unwrap();
                         let hir_id = self.tcx.hir.node_to_hir_id(node_id);
                         if let Some((span, name)) = self.tables.closure_kind_origins().get(hir_id) {
@@ -867,10 +867,20 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                                         }) = cmt.cat {
                                             db.note(fn_closure_msg);
                                         } else {
-                                            db.span_suggestion(sp, msg, suggestion);
+                                            db.span_suggestion_with_applicability(
+                                                sp,
+                                                msg,
+                                                suggestion,
+                                                Applicability::Unspecified,
+                                            );
                                         }
                                     } else {
-                                        db.span_suggestion(sp, msg, suggestion);
+                                        db.span_suggestion_with_applicability(
+                                            sp,
+                                            msg,
+                                            suggestion,
+                                            Applicability::Unspecified,
+                                        );
                                     }
                                 }
                                 _ => {
@@ -908,7 +918,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                     let node =  self.tcx.hir.get(node_id);
 
                     // This pattern probably always matches.
-                    if let hir_map::NodeExpr(
+                    if let Node::Expr(
                         hir::Expr { node: hir::ExprKind::Index(lhs, _), ..}
                     ) = node {
                         let ty = self.tables.expr_ty(lhs);
@@ -1032,7 +1042,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                 if let ty::ReScope(scope) = *super_scope {
                     let node_id = scope.node_id(self.tcx, &self.region_scope_tree);
                     match self.tcx.hir.find(node_id) {
-                        Some(hir_map::NodeStmt(_)) => {
+                        Some(Node::Stmt(_)) => {
                             if *sub_scope != ty::ReStatic {
                                 db.note("consider using a `let` binding to increase its lifetime");
                             }
@@ -1183,7 +1193,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
 
     fn local_binding_mode(&self, node_id: ast::NodeId) -> ty::BindingMode {
         let pat = match self.tcx.hir.get(node_id) {
-            hir_map::Node::NodeBinding(pat) => pat,
+            Node::Binding(pat) => pat,
             node => bug!("bad node for local: {:?}", node)
         };
 
@@ -1236,10 +1246,16 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                         let let_span = self.tcx.hir.span(node_id);
                         let suggestion = suggest_ref_mut(self.tcx, let_span);
                         if let Some(replace_str) = suggestion {
-                            db.span_suggestion(
+                            db.span_suggestion_with_applicability(
                                 let_span,
                                 "use a mutable reference instead",
                                 replace_str,
+                                // I believe this can be machine applicable,
+                                // but if there are multiple attempted uses of an immutable
+                                // reference, I don't know how rustfix handles it, it might
+                                // attempt fixing them multiple times.
+                                //                              @estebank
+                                Applicability::Unspecified,
                             );
                         }
                     }
@@ -1259,7 +1275,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                     None => return
                 };
 
-                if let hir_map::Node::NodeField(ref field) = self.tcx.hir.get(node_id) {
+                if let Node::Field(ref field) = self.tcx.hir.get(node_id) {
                     if let Some(msg) = self.suggest_mut_for_immutable(&field.ty, false) {
                         db.span_label(field.ty.span, msg);
                     }
@@ -1292,16 +1308,19 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                 )) = ty.map(|t| &t.node)
                 {
                     let borrow_expr_id = self.tcx.hir.get_parent_node(borrowed_node_id);
-                    db.span_suggestion(
+                    db.span_suggestion_with_applicability(
                         self.tcx.hir.span(borrow_expr_id),
                         "consider removing the `&mut`, as it is an \
                         immutable binding to a mutable reference",
-                        snippet
+                        snippet,
+                        Applicability::MachineApplicable,
                     );
                 } else {
-                    db.span_label(
+                    db.span_suggestion_with_applicability(
                         let_span,
-                        format!("consider changing this to `mut {}`", snippet),
+                        "make this binding mutable",
+                        format!("mut {}", snippet),
+                        Applicability::MachineApplicable,
                     );
                 }
             }
@@ -1324,12 +1343,15 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                                                   &cmt_path_or_string,
                                                   capture_span,
                                                   Origin::Ast)
-            .span_suggestion(err.span,
-                             &format!("to force the closure to take ownership of {} \
-                                       (and any other referenced variables), \
-                                       use the `move` keyword",
-                                       cmt_path_or_string),
-                             suggestion)
+            .span_suggestion_with_applicability(
+                 err.span,
+                 &format!("to force the closure to take ownership of {} \
+                           (and any other referenced variables), \
+                           use the `move` keyword",
+                           cmt_path_or_string),
+                 suggestion,
+                 Applicability::MachineApplicable,
+            )
             .emit();
         self.signal_error();
     }

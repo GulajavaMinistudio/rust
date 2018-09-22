@@ -308,12 +308,12 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::Ty {
 }
 
 impl_stable_hash_for!(enum hir::PrimTy {
-    TyInt(int_ty),
-    TyUint(uint_ty),
-    TyFloat(float_ty),
-    TyStr,
-    TyBool,
-    TyChar
+    Int(int_ty),
+    Uint(uint_ty),
+    Float(float_ty),
+    Str,
+    Bool,
+    Char
 });
 
 impl_stable_hash_for!(struct hir::BareFnTy {
@@ -491,6 +491,10 @@ impl_stable_hash_for!(struct hir::Arm {
     pats,
     guard,
     body
+});
+
+impl_stable_hash_for!(enum hir::Guard {
+    If(expr),
 });
 
 impl_stable_hash_for!(struct hir::Field {
@@ -1012,11 +1016,12 @@ impl_stable_hash_for!(enum hir::def::Def {
     PrimTy(prim_ty),
     TyParam(def_id),
     SelfTy(trait_def_id, impl_def_id),
-    TyForeign(def_id),
+    ForeignTy(def_id),
     Fn(def_id),
     Const(def_id),
     Static(def_id, is_mutbl),
     StructCtor(def_id, ctor_kind),
+    SelfCtor(impl_def_id),
     VariantCtor(def_id, ctor_kind),
     Method(def_id),
     AssociatedConst(def_id),
@@ -1136,6 +1141,7 @@ impl_stable_hash_for!(struct hir::CodegenFnAttrs {
     flags,
     inline,
     export_name,
+    link_name,
     target_features,
     linkage,
     link_section,

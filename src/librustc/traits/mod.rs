@@ -24,7 +24,7 @@ use infer::outlives::env::OutlivesEnvironment;
 use middle::region;
 use mir::interpret::ConstEvalErr;
 use ty::subst::Substs;
-use ty::{self, AdtKind, Slice, Ty, TyCtxt, GenericParamDefKind, ToPredicate};
+use ty::{self, AdtKind, List, Ty, TyCtxt, GenericParamDefKind, ToPredicate};
 use ty::error::{ExpectedFound, TypeError};
 use ty::fold::{TypeFolder, TypeFoldable, TypeVisitor};
 use infer::{InferCtxt};
@@ -325,7 +325,7 @@ pub enum Goal<'tcx> {
     CannotProve,
 }
 
-pub type Goals<'tcx> = &'tcx Slice<Goal<'tcx>>;
+pub type Goals<'tcx> = &'tcx List<Goal<'tcx>>;
 
 impl<'tcx> DomainGoal<'tcx> {
     pub fn into_goal(self) -> Goal<'tcx> {
@@ -357,7 +357,7 @@ pub enum Clause<'tcx> {
 }
 
 /// Multiple clauses.
-pub type Clauses<'tcx> = &'tcx Slice<Clause<'tcx>>;
+pub type Clauses<'tcx> = &'tcx List<Clause<'tcx>>;
 
 /// A "program clause" has the form `D :- G1, ..., Gn`. It is saying
 /// that the domain goal `D` is true if `G1...Gn` are provable. This
@@ -661,7 +661,7 @@ pub fn normalize_param_env_or_error<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
     let predicates: Vec<_> =
         util::elaborate_predicates(tcx, unnormalized_env.caller_bounds.to_vec())
-        .collect();
+            .collect();
 
     debug!("normalize_param_env_or_error: elaborated-predicates={:?}",
            predicates);
@@ -707,7 +707,7 @@ pub fn normalize_param_env_or_error<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         };
 
         debug!("normalize_param_env_or_error: normalized predicates={:?}",
-            predicates);
+               predicates);
 
         let region_scope_tree = region::ScopeTree::default();
 
@@ -851,16 +851,16 @@ fn vtable_methods<'a, 'tcx>(
 
                 // the method may have some early-bound lifetimes, add
                 // regions for those
-                let substs = trait_ref.map_bound(|trait_ref| {
-                    Substs::for_item(tcx, def_id, |param, _| {
+                let substs = trait_ref.map_bound(|trait_ref|
+                    Substs::for_item(tcx, def_id, |param, _|
                         match param.kind {
                             GenericParamDefKind::Lifetime => tcx.types.re_erased.into(),
                             GenericParamDefKind::Type {..} => {
                                 trait_ref.substs[param.index as usize]
                             }
                         }
-                    })
-                });
+                    )
+                );
 
                 // the trait type may have higher-ranked lifetimes in it;
                 // so erase them if they appear, so that we get the type

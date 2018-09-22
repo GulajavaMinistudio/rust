@@ -20,7 +20,7 @@ use std::mem;
 use super::abs_domain::Lift;
 
 use super::{LocationMap, MoveData, MovePath, MovePathLookup, MovePathIndex, MoveOut, MoveOutIndex};
-use super::{MoveError, InitIndex, Init, LookupResult, InitKind};
+use super::{MoveError, InitIndex, Init, InitLocation, LookupResult, InitKind};
 use super::IllegalMoveOriginKind::*;
 
 struct MoveDataBuilder<'a, 'gcx: 'tcx, 'tcx: 'a> {
@@ -134,19 +134,19 @@ impl<'b, 'a, 'gcx, 'tcx> Gatherer<'b, 'a, 'gcx, 'tcx> {
         let tcx = self.builder.tcx;
         let place_ty = proj.base.ty(mir, tcx).to_ty(tcx);
         match place_ty.sty {
-            ty::TyRef(..) | ty::TyRawPtr(..) =>
+            ty::Ref(..) | ty::RawPtr(..) =>
                 return Err(MoveError::cannot_move_out_of(
                     self.loc,
                     BorrowedContent { target_place: place.clone() })),
-            ty::TyAdt(adt, _) if adt.has_dtor(tcx) && !adt.is_box() =>
+            ty::Adt(adt, _) if adt.has_dtor(tcx) && !adt.is_box() =>
                 return Err(MoveError::cannot_move_out_of(self.loc,
                                                          InteriorOfTypeWithDestructor {
                     container_ty: place_ty
                 })),
             // move out of union - always move the entire union
-            ty::TyAdt(adt, _) if adt.is_union() =>
+            ty::Adt(adt, _) if adt.is_union() =>
                 return Err(MoveError::UnionMove { path: base }),
-            ty::TySlice(_) =>
+            ty::Slice(_) =>
                 return Err(MoveError::cannot_move_out_of(
                     self.loc,
                     InteriorOfSliceOrArray {
@@ -155,7 +155,7 @@ impl<'b, 'a, 'gcx, 'tcx> Gatherer<'b, 'a, 'gcx, 'tcx> {
                             _ => false
                         },
                     })),
-            ty::TyArray(..) => match proj.elem {
+            ty::Array(..) => match proj.elem {
                 ProjectionElem::Index(..) =>
                     return Err(MoveError::cannot_move_out_of(
                         self.loc,
@@ -201,7 +201,7 @@ impl<'a, 'gcx, 'tcx> MoveDataBuilder<'a, 'gcx, 'tcx> {
             "done dumping moves"
         });
 
-        if self.errors.len() > 0 {
+        if !self.errors.is_empty() {
             Err((self.data, self.errors))
         } else {
             Ok(self.data)
@@ -237,10 +237,9 @@ impl<'a, 'gcx, 'tcx> MoveDataBuilder<'a, 'gcx, 'tcx> {
     fn gather_args(&mut self) {
         for arg in self.mir.args_iter() {
             let path = self.data.rev_lookup.locals[arg];
-            let span = self.mir.local_decls[arg].source_info.span;
 
             let init = self.data.inits.push(Init {
-                path, span, kind: InitKind::Deep
+                path, kind: InitKind::Deep, location: InitLocation::Argument(arg),
             });
 
             debug!("gather_args: adding init {:?} of {:?} for argument {:?}",
@@ -305,7 +304,7 @@ impl<'b, 'a, 'gcx, 'tcx> Gatherer<'b, 'a, 'gcx, 'tcx> {
             }
             StatementKind::EndRegion(_) |
             StatementKind::Validate(..) |
-            StatementKind::UserAssertTy(..) |
+            StatementKind::AscribeUserType(..) |
             StatementKind::Nop => {}
         }
     }
@@ -428,7 +427,7 @@ impl<'b, 'a, 'gcx, 'tcx> Gatherer<'b, 'a, 'gcx, 'tcx> {
 
         if let LookupResult::Exact(path) = self.builder.data.rev_lookup.find(place) {
             let init = self.builder.data.inits.push(Init {
-                span: self.builder.mir.source_info(self.loc).span,
+                location: InitLocation::Statement(self.loc),
                 path,
                 kind,
             });

@@ -17,6 +17,8 @@ use libc::c_int;
 use std::ffi::CString;
 use syntax::feature_gate::UnstableFeatures;
 
+use std::str;
+use std::slice;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
@@ -84,10 +86,14 @@ unsafe fn configure_llvm(sess: &Session) {
 // array, leading to crashes.
 
 const ARM_WHITELIST: &[(&str, Option<&str>)] = &[
+    ("aclass", Some("arm_target_feature")),
     ("mclass", Some("arm_target_feature")),
     ("rclass", Some("arm_target_feature")),
     ("dsp", Some("arm_target_feature")),
     ("neon", Some("arm_target_feature")),
+    ("v5te", Some("arm_target_feature")),
+    ("v6k", Some("arm_target_feature")),
+    ("v6t2", Some("arm_target_feature")),
     ("v7", Some("arm_target_feature")),
     ("vfp2", Some("arm_target_feature")),
     ("vfp3", Some("arm_target_feature")),
@@ -171,6 +177,7 @@ const MIPS_WHITELIST: &[(&str, Option<&str>)] = &[
 
 const WASM_WHITELIST: &[(&str, Option<&str>)] = &[
     ("simd128", Some("wasm_target_feature")),
+    ("atomics", Some("wasm_target_feature")),
 ];
 
 /// When rustdoc is running, provide a list of all known features so that all their respective
@@ -260,5 +267,21 @@ pub(crate) fn print(req: PrintRequest, sess: &Session) {
             PrintRequest::TargetFeatures => llvm::LLVMRustPrintTargetFeatures(tm),
             _ => bug!("rustc_codegen_llvm can't handle print request: {:?}", req),
         }
+    }
+}
+
+pub fn target_cpu(sess: &Session) -> &str {
+    let name = match sess.opts.cg.target_cpu {
+        Some(ref s) => &**s,
+        None => &*sess.target.target.options.cpu
+    };
+    if name != "native" {
+        return name
+    }
+
+    unsafe {
+        let mut len = 0;
+        let ptr = llvm::LLVMRustGetHostCPUName(&mut len);
+        str::from_utf8(slice::from_raw_parts(ptr as *const u8, len)).unwrap()
     }
 }

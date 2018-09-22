@@ -13,7 +13,7 @@
 //! Here we build the "reduced graph": the graph of the module tree without
 //! any imports resolved.
 
-use macros::{InvocationData, LegacyScope};
+use macros::{InvocationData, ParentScope, LegacyScope};
 use resolve_imports::ImportDirective;
 use resolve_imports::ImportDirectiveSubclass::{self, GlobImport, SingleImport};
 use {Module, ModuleData, ModuleKind, NameBinding, NameBindingKind, ToNameBinding};
@@ -22,7 +22,7 @@ use Namespace::{self, TypeNS, ValueNS, MacroNS};
 use {resolve_error, resolve_struct_error, ResolutionError};
 
 use rustc::hir::def::*;
-use rustc::hir::def_id::{BUILTIN_MACROS_CRATE, CRATE_DEF_INDEX, LOCAL_CRATE, DefId};
+use rustc::hir::def_id::{CrateNum, CRATE_DEF_INDEX, LOCAL_CRATE, DefId};
 use rustc::ty;
 use rustc::middle::cstore::CrateStore;
 use rustc_metadata::cstore::LoadedMacro;
@@ -39,6 +39,7 @@ use syntax::ext::base::{MacroKind, SyntaxExtension};
 use syntax::ext::base::Determinacy::Undetermined;
 use syntax::ext::hygiene::Mark;
 use syntax::ext::tt::macro_rules;
+use syntax::feature_gate::is_builtin_attr;
 use syntax::parse::token::{self, Token};
 use syntax::std_inject::injected_crate_name;
 use syntax::symbol::keywords;
@@ -120,26 +121,48 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
         use_tree: &ast::UseTree,
         id: NodeId,
         vis: ty::Visibility,
-        prefix: &ast::Path,
+        parent_prefix: &[Ident],
         mut uniform_paths_canary_emitted: bool,
         nested: bool,
         item: &Item,
         expansion: Mark,
     ) {
-        debug!("build_reduced_graph_for_use_tree(prefix={:?}, \
+        debug!("build_reduced_graph_for_use_tree(parent_prefix={:?}, \
                 uniform_paths_canary_emitted={}, \
                 use_tree={:?}, nested={})",
-               prefix, uniform_paths_canary_emitted, use_tree, nested);
+               parent_prefix, uniform_paths_canary_emitted, use_tree, nested);
 
         let is_prelude = attr::contains_name(&item.attrs, "prelude_import");
-        let path = &use_tree.prefix;
+        let uniform_paths =
+            self.session.rust_2018() &&
+            self.session.features_untracked().uniform_paths;
 
-        let mut module_path: Vec<_> = prefix.segments.iter()
-            .chain(path.segments.iter())
-            .map(|seg| seg.ident)
-            .collect();
+        let prefix_iter = || parent_prefix.iter().cloned()
+            .chain(use_tree.prefix.segments.iter().map(|seg| seg.ident));
+        let prefix_start = prefix_iter().nth(0);
+        let starts_with_non_keyword = prefix_start.map_or(false, |ident| {
+            !ident.is_path_segment_keyword()
+        });
 
-        debug!("build_reduced_graph_for_use_tree: module_path={:?}", module_path);
+        // Imports are resolved as global by default, prepend `CrateRoot`,
+        // unless `#![feature(uniform_paths)]` is enabled.
+        let inject_crate_root =
+            !uniform_paths &&
+            match use_tree.kind {
+                // HACK(eddyb) special-case `use *` to mean `use ::*`.
+                ast::UseTreeKind::Glob if prefix_start.is_none() => true,
+                _ => starts_with_non_keyword,
+            };
+        let root = if inject_crate_root {
+            let span = use_tree.prefix.span.shrink_to_lo();
+            Some(Ident::new(keywords::CrateRoot.name(), span))
+        } else {
+            None
+        };
+
+        let prefix: Vec<_> = root.into_iter().chain(prefix_iter()).collect();
+
+        debug!("build_reduced_graph_for_use_tree: prefix={:?}", prefix);
 
         // `#[feature(uniform_paths)]` allows an unqualified import path,
         // e.g. `use x::...;` to resolve not just globally (`use ::x::...;`)
@@ -172,15 +195,11 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
         // ergonomically unacceptable.
         let emit_uniform_paths_canary =
             !uniform_paths_canary_emitted &&
-            module_path.get(0).map_or(false, |ident| {
-                !ident.is_path_segment_keyword()
-            });
+            self.session.rust_2018() &&
+            starts_with_non_keyword;
         if emit_uniform_paths_canary {
-            // Relative paths should only get here if the feature-gate is on.
-            assert!(self.session.rust_2018() &&
-                    self.session.features_untracked().uniform_paths);
+            let source = prefix_start.unwrap();
 
-            let source = module_path[0];
             // Helper closure to emit a canary with the given base path.
             let emit = |this: &mut Self, base: Option<Ident>| {
                 let subclass = SingleImport {
@@ -239,6 +258,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
         match use_tree.kind {
             ast::UseTreeKind::Simple(rename, ..) => {
                 let mut ident = use_tree.ident();
+                let mut module_path = prefix;
                 let mut source = module_path.pop().unwrap();
                 let mut type_ns_only = false;
 
@@ -337,7 +357,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                     max_vis: Cell::new(ty::Visibility::Invisible),
                 };
                 self.add_import_directive(
-                    module_path,
+                    prefix,
                     subclass,
                     use_tree.span,
                     id,
@@ -349,13 +369,6 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                 );
             }
             ast::UseTreeKind::Nested(ref items) => {
-                let prefix = ast::Path {
-                    segments: module_path.into_iter()
-                        .map(|ident| ast::PathSegment::from_ident(ident))
-                        .collect(),
-                    span: path.span,
-                };
-
                 // Ensure there is at most one `self` in the list
                 let self_spans = items.iter().filter_map(|&(ref use_tree, _)| {
                     if let ast::UseTreeKind::Simple(..) = use_tree.kind {
@@ -405,28 +418,13 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
 
         match item.node {
             ItemKind::Use(ref use_tree) => {
-                let uniform_paths =
-                    self.session.rust_2018() &&
-                    self.session.features_untracked().uniform_paths;
-                // Imports are resolved as global by default, add starting root segment.
-                let root = if !uniform_paths {
-                    use_tree.prefix.make_root()
-                } else {
-                    // Except when `#![feature(uniform_paths)]` is on.
-                    None
-                };
-                let prefix = ast::Path {
-                    segments: root.into_iter().collect(),
-                    span: use_tree.span,
-                };
-
                 self.build_reduced_graph_for_use_tree(
                     use_tree,
                     item.id,
                     use_tree,
                     item.id,
                     vis,
-                    &prefix,
+                    &[],
                     false, // uniform_paths_canary_emitted
                     false,
                     item,
@@ -656,7 +654,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                 (Def::Static(self.definitions.local_def_id(item.id), m), ValueNS)
             }
             ForeignItemKind::Ty => {
-                (Def::TyForeign(self.definitions.local_def_id(item.id)), TypeNS)
+                (Def::ForeignTy(self.definitions.local_def_id(item.id)), TypeNS)
             }
             ForeignItemKind::Macro(_) => unreachable!(),
         };
@@ -692,7 +690,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                                              span);
                 self.define(parent, ident, TypeNS, (module, vis, DUMMY_SP, expansion));
             }
-            Def::Variant(..) | Def::TyAlias(..) | Def::TyForeign(..) => {
+            Def::Variant(..) | Def::TyAlias(..) | Def::ForeignTy(..) => {
                 self.define(parent, ident, TypeNS, (def, vis, DUMMY_SP, expansion));
             }
             Def::Fn(..) | Def::Static(..) | Def::Const(..) | Def::VariantCtor(..) => {
@@ -771,7 +769,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
         let def_id = self.macro_defs[&expansion];
         if let Some(id) = self.definitions.as_local_node_id(def_id) {
             self.local_macro_def_scopes[&id]
-        } else if def_id.krate == BUILTIN_MACROS_CRATE {
+        } else if def_id.krate == CrateNum::BuiltinMacros {
             self.injected_crate.unwrap_or(self.graph_root)
         } else {
             let module_def_id = ty::DefIdTree::parent(&*self, def_id).unwrap();
@@ -820,7 +818,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
                            binding: &'a NameBinding<'a>,
                            span: Span,
                            allow_shadowing: bool) {
-        if self.macro_prelude.insert(name, binding).is_some() && !allow_shadowing {
+        if self.macro_use_prelude.insert(name, binding).is_some() && !allow_shadowing {
             let msg = format!("`{}` is already in scope", name);
             let note =
                 "macro-expanded `#[macro_use]`s may not shadow existing macros (see RFC 1560)";
@@ -933,7 +931,7 @@ impl<'a, 'cl> Resolver<'a, 'cl> {
 
 pub struct BuildReducedGraphVisitor<'a, 'b: 'a, 'c: 'b> {
     pub resolver: &'a mut Resolver<'b, 'c>,
-    pub legacy_scope: LegacyScope<'b>,
+    pub current_legacy_scope: LegacyScope<'b>,
     pub expansion: Mark,
 }
 
@@ -943,7 +941,8 @@ impl<'a, 'b, 'cl> BuildReducedGraphVisitor<'a, 'b, 'cl> {
         self.resolver.current_module.unresolved_invocations.borrow_mut().insert(mark);
         let invocation = self.resolver.invocations[&mark];
         invocation.module.set(self.resolver.current_module);
-        invocation.legacy_scope.set(self.legacy_scope);
+        invocation.parent_legacy_scope.set(self.current_legacy_scope);
+        invocation.output_legacy_scope.set(self.current_legacy_scope);
         invocation
     }
 }
@@ -969,29 +968,30 @@ impl<'a, 'b, 'cl> Visitor<'a> for BuildReducedGraphVisitor<'a, 'b, 'cl> {
     fn visit_item(&mut self, item: &'a Item) {
         let macro_use = match item.node {
             ItemKind::MacroDef(..) => {
-                self.resolver.define_macro(item, self.expansion, &mut self.legacy_scope);
+                self.resolver.define_macro(item, self.expansion, &mut self.current_legacy_scope);
                 return
             }
             ItemKind::Mac(..) => {
-                self.legacy_scope = LegacyScope::Expansion(self.visit_invoc(item.id));
+                self.current_legacy_scope = LegacyScope::Invocation(self.visit_invoc(item.id));
                 return
             }
             ItemKind::Mod(..) => self.resolver.contains_macro_use(&item.attrs),
             _ => false,
         };
 
-        let (parent, legacy_scope) = (self.resolver.current_module, self.legacy_scope);
+        let orig_current_module = self.resolver.current_module;
+        let orig_current_legacy_scope = self.current_legacy_scope;
         self.resolver.build_reduced_graph_for_item(item, self.expansion);
         visit::walk_item(self, item);
-        self.resolver.current_module = parent;
+        self.resolver.current_module = orig_current_module;
         if !macro_use {
-            self.legacy_scope = legacy_scope;
+            self.current_legacy_scope = orig_current_legacy_scope;
         }
     }
 
     fn visit_stmt(&mut self, stmt: &'a ast::Stmt) {
         if let ast::StmtKind::Mac(..) = stmt.node {
-            self.legacy_scope = LegacyScope::Expansion(self.visit_invoc(stmt.id));
+            self.current_legacy_scope = LegacyScope::Invocation(self.visit_invoc(stmt.id));
         } else {
             visit::walk_stmt(self, stmt);
         }
@@ -1008,11 +1008,12 @@ impl<'a, 'b, 'cl> Visitor<'a> for BuildReducedGraphVisitor<'a, 'b, 'cl> {
     }
 
     fn visit_block(&mut self, block: &'a Block) {
-        let (parent, legacy_scope) = (self.resolver.current_module, self.legacy_scope);
+        let orig_current_module = self.resolver.current_module;
+        let orig_current_legacy_scope = self.current_legacy_scope;
         self.resolver.build_reduced_graph_for_block(block, self.expansion);
         visit::walk_block(self, block);
-        self.resolver.current_module = parent;
-        self.legacy_scope = legacy_scope;
+        self.resolver.current_module = orig_current_module;
+        self.current_legacy_scope = orig_current_legacy_scope;
     }
 
     fn visit_trait_item(&mut self, item: &'a TraitItem) {
@@ -1056,5 +1057,21 @@ impl<'a, 'b, 'cl> Visitor<'a> for BuildReducedGraphVisitor<'a, 'b, 'cl> {
                 _ => {}
             }
         }
+    }
+
+    fn visit_attribute(&mut self, attr: &'a ast::Attribute) {
+        if !attr.is_sugared_doc && is_builtin_attr(attr) {
+            let parent_scope = ParentScope {
+                module: self.resolver.current_module.nearest_item_scope(),
+                expansion: self.expansion,
+                legacy: self.current_legacy_scope,
+                // Let's hope discerning built-in attributes from derive helpers is not necessary
+                derives: Vec::new(),
+            };
+            parent_scope.module.builtin_attrs.borrow_mut().push((
+                attr.path.segments[0].ident, parent_scope
+            ));
+        }
+        visit::walk_attribute(self, attr);
     }
 }

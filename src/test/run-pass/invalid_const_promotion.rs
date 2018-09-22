@@ -8,8 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(unused_mut)]
 // ignore-wasm32
 // ignore-emscripten
+
+// compile-flags: -C debug_assertions=yes
 
 #![feature(const_fn, libc)]
 #![allow(const_err)]
@@ -19,7 +22,7 @@ extern crate libc;
 use std::env;
 use std::process::{Command, Stdio};
 
-// this will panic in debug mode
+// this will panic in debug mode and overflow in release mode
 const fn bar() -> usize { 0 - 1 }
 
 fn foo() {

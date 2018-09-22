@@ -74,6 +74,7 @@ mod thumb_base;
 mod l4re_base;
 mod fuchsia_base;
 mod redox_base;
+mod riscv_base;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash,
          RustcEncodable, RustcDecodable)]
@@ -370,7 +371,10 @@ supported_targets! {
     ("armv7-apple-ios", armv7_apple_ios),
     ("armv7s-apple-ios", armv7s_apple_ios),
 
+    ("armebv7r-none-eabi", armebv7r_none_eabi),
     ("armebv7r-none-eabihf", armebv7r_none_eabihf),
+    ("armv7r-none-eabi", armv7r_none_eabi),
+    ("armv7r-none-eabihf", armv7r_none_eabihf),
 
     ("x86_64-sun-solaris", x86_64_sun_solaris),
     ("sparcv9-sun-solaris", sparcv9_sun_solaris),
@@ -382,6 +386,7 @@ supported_targets! {
     ("x86_64-pc-windows-msvc", x86_64_pc_windows_msvc),
     ("i686-pc-windows-msvc", i686_pc_windows_msvc),
     ("i586-pc-windows-msvc", i586_pc_windows_msvc),
+    ("thumbv7a-pc-windows-msvc", thumbv7a_pc_windows_msvc),
 
     ("asmjs-unknown-emscripten", asmjs_unknown_emscripten),
     ("wasm32-unknown-emscripten", wasm32_unknown_emscripten),
@@ -403,6 +408,7 @@ supported_targets! {
     ("aarch64-unknown-hermit", aarch64_unknown_hermit),
     ("x86_64-unknown-hermit", x86_64_unknown_hermit),
 
+    ("riscv32imc-unknown-none-elf", riscv32imc_unknown_none_elf),
     ("riscv32imac-unknown-none-elf", riscv32imac_unknown_none_elf),
 
     ("aarch64-unknown-none", aarch64_unknown_none),
@@ -686,7 +692,7 @@ impl Default for TargetOptions {
             post_link_args: LinkArgs::new(),
             asm_args: Vec::new(),
             cpu: "generic".to_string(),
-            features: "".to_string(),
+            features: String::new(),
             dynamic_linking: false,
             only_cdylib: false,
             executables: false,
@@ -698,7 +704,7 @@ impl Default for TargetOptions {
             function_sections: true,
             dll_prefix: "lib".to_string(),
             dll_suffix: ".so".to_string(),
-            exe_suffix: "".to_string(),
+            exe_suffix: String::new(),
             staticlib_prefix: "lib".to_string(),
             staticlib_suffix: ".a".to_string(),
             target_family: None,

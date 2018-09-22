@@ -117,12 +117,12 @@ impl<'a, 'tcx, O:DataFlowOperator> pprust::PpAnn for DataFlowContext<'a, 'tcx, O
            ps: &mut pprust::State,
            node: pprust::AnnNode) -> io::Result<()> {
         let id = match node {
-            pprust::NodeName(_) => return Ok(()),
-            pprust::NodeExpr(expr) => expr.hir_id.local_id,
-            pprust::NodeBlock(blk) => blk.hir_id.local_id,
-            pprust::NodeItem(_) |
-            pprust::NodeSubItem(_) => return Ok(()),
-            pprust::NodePat(pat) => pat.hir_id.local_id
+            pprust::AnnNode::Name(_) => return Ok(()),
+            pprust::AnnNode::Expr(expr) => expr.hir_id.local_id,
+            pprust::AnnNode::Block(blk) => blk.hir_id.local_id,
+            pprust::AnnNode::Item(_) |
+            pprust::AnnNode::SubItem(_) => return Ok(()),
+            pprust::AnnNode::Pat(pat) => pat.hir_id.local_id
         };
 
         if !self.has_bitset_for_local_id(id) {
@@ -140,21 +140,21 @@ impl<'a, 'tcx, O:DataFlowOperator> pprust::PpAnn for DataFlowContext<'a, 'tcx, O
             let gens_str = if gens.iter().any(|&u| u != 0) {
                 format!(" gen: {}", bits_to_string(gens))
             } else {
-                "".to_string()
+                String::new()
             };
 
             let action_kills = &self.action_kills[start .. end];
             let action_kills_str = if action_kills.iter().any(|&u| u != 0) {
                 format!(" action_kill: {}", bits_to_string(action_kills))
             } else {
-                "".to_string()
+                String::new()
             };
 
             let scope_kills = &self.scope_kills[start .. end];
             let scope_kills_str = if scope_kills.iter().any(|&u| u != 0) {
                 format!(" scope_kill: {}", bits_to_string(scope_kills))
             } else {
-                "".to_string()
+                String::new()
             };
 
             ps.synth_comment(

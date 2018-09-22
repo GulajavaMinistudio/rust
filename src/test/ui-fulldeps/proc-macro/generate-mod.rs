@@ -12,8 +12,6 @@
 
 // aux-build:generate-mod.rs
 
-#![feature(proc_macro_gen, proc_macro_path_invoc)]
-
 extern crate generate_mod;
 
 struct FromOutside;
@@ -30,6 +28,14 @@ struct S;
                                      //~| WARN this was previously accepted
                                      //~| WARN this was previously accepted
 struct Z;
+
+fn inner_block() {
+    #[derive(generate_mod::CheckDerive)] //~ WARN cannot find type `FromOutside` in this scope
+                                        //~| WARN cannot find type `OuterDerive` in this scope
+                                        //~| WARN this was previously accepted
+                                        //~| WARN this was previously accepted
+    struct InnerZ;
+}
 
 #[derive(generate_mod::CheckDeriveLint)] // OK, lint is suppressed
 struct W;

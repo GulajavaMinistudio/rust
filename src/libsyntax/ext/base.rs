@@ -26,7 +26,7 @@ use OneVector;
 use symbol::{keywords, Ident, Symbol};
 use ThinVec;
 
-use std::collections::HashMap;
+use rustc_data_structures::fx::FxHashMap;
 use std::iter;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -316,11 +316,11 @@ impl<F> IdentMacroExpander for F
 // Use a macro because forwarding to a simple function has type system issues
 macro_rules! make_stmts_default {
     ($me:expr) => {
-        $me.make_expr().map(|e| OneVector::one(ast::Stmt {
+        $me.make_expr().map(|e| smallvec![ast::Stmt {
             id: ast::DUMMY_NODE_ID,
             span: e.span,
             node: ast::StmtKind::Expr(e),
-        }))
+        }])
     }
 }
 
@@ -548,11 +548,11 @@ impl MacResult for DummyResult {
     }
 
     fn make_stmts(self: Box<DummyResult>) -> Option<OneVector<ast::Stmt>> {
-        Some(OneVector::one(ast::Stmt {
+        Some(smallvec![ast::Stmt {
             id: ast::DUMMY_NODE_ID,
             node: ast::StmtKind::Expr(DummyResult::raw_expr(self.span)),
             span: self.span,
-        }))
+        }])
     }
 
     fn make_ty(self: Box<DummyResult>) -> Option<P<ast::Ty>> {
@@ -727,10 +727,12 @@ pub trait Resolver {
     fn find_legacy_attr_invoc(&mut self, attrs: &mut Vec<Attribute>, allow_derive: bool)
                               -> Option<Attribute>;
 
-    fn resolve_invoc(&mut self, invoc: &Invocation, scope: Mark, force: bool)
-                     -> Result<Option<Lrc<SyntaxExtension>>, Determinacy>;
-    fn resolve_macro(&mut self, scope: Mark, path: &ast::Path, kind: MacroKind, force: bool)
-                     -> Result<Lrc<SyntaxExtension>, Determinacy>;
+    fn resolve_macro_invocation(&mut self, invoc: &Invocation, invoc_id: Mark, force: bool)
+                                -> Result<Option<Lrc<SyntaxExtension>>, Determinacy>;
+    fn resolve_macro_path(&mut self, path: &ast::Path, kind: MacroKind, invoc_id: Mark,
+                          derives_in_scope: Vec<ast::Path>, force: bool)
+                          -> Result<Lrc<SyntaxExtension>, Determinacy>;
+
     fn check_unused_macros(&self);
 }
 
@@ -761,12 +763,13 @@ impl Resolver for DummyResolver {
     fn resolve_imports(&mut self) {}
     fn find_legacy_attr_invoc(&mut self, _attrs: &mut Vec<Attribute>, _allow_derive: bool)
                               -> Option<Attribute> { None }
-    fn resolve_invoc(&mut self, _invoc: &Invocation, _scope: Mark, _force: bool)
-                     -> Result<Option<Lrc<SyntaxExtension>>, Determinacy> {
+    fn resolve_macro_invocation(&mut self, _invoc: &Invocation, _invoc_id: Mark, _force: bool)
+                                -> Result<Option<Lrc<SyntaxExtension>>, Determinacy> {
         Err(Determinacy::Determined)
     }
-    fn resolve_macro(&mut self, _scope: Mark, _path: &ast::Path, _kind: MacroKind,
-                     _force: bool) -> Result<Lrc<SyntaxExtension>, Determinacy> {
+    fn resolve_macro_path(&mut self, _path: &ast::Path, _kind: MacroKind, _invoc_id: Mark,
+                          _derives_in_scope: Vec<ast::Path>, _force: bool)
+                          -> Result<Lrc<SyntaxExtension>, Determinacy> {
         Err(Determinacy::Determined)
     }
     fn check_unused_macros(&self) {}
@@ -797,7 +800,7 @@ pub struct ExtCtxt<'a> {
     pub resolver: &'a mut dyn Resolver,
     pub resolve_err_count: usize,
     pub current_expansion: ExpansionData,
-    pub expansions: HashMap<Span, Vec<String>>,
+    pub expansions: FxHashMap<Span, Vec<String>>,
 }
 
 impl<'a> ExtCtxt<'a> {
@@ -818,7 +821,7 @@ impl<'a> ExtCtxt<'a> {
                 directory_ownership: DirectoryOwnership::Owned { relative: None },
                 crate_span: None,
             },
-            expansions: HashMap::new(),
+            expansions: FxHashMap::default(),
         }
     }
 

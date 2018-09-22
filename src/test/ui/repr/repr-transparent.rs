@@ -13,7 +13,7 @@
 // - repr-transparent-other-reprs.rs
 // - repr-transparent-other-items.rs
 
-#![feature(repr_align, attr_literals)]
+#![feature(repr_align)]
 
 use std::marker::PhantomData;
 
@@ -48,3 +48,5 @@ struct ZstAlign32<T>(PhantomData<T>);
 
 #[repr(transparent)]
 struct GenericAlign<T>(ZstAlign32<T>, u32); //~ ERROR alignment larger than 1
+
+fn main() {}

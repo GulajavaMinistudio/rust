@@ -17,17 +17,17 @@ use hir::def::CtorKind;
 use hir::def_id::DefId;
 use hir::{self, HirId, InlineAsm};
 use middle::region;
-use mir::interpret::{EvalErrorKind, Scalar, Value, ScalarMaybeUndef};
+use mir::interpret::{ConstValue, EvalErrorKind, Scalar, ScalarMaybeUndef};
 use mir::visit::MirVisitable;
 use rustc_apfloat::ieee::{Double, Single};
 use rustc_apfloat::Float;
 use rustc_data_structures::graph::dominators::{dominators, Dominators};
 use rustc_data_structures::graph::{self, GraphPredecessors, GraphSuccessors};
 use rustc_data_structures::indexed_vec::{Idx, IndexVec};
-use rustc_data_structures::small_vec::SmallVec;
 use rustc_data_structures::sync::Lrc;
-use rustc_data_structures::sync::ReadGuard;
+use rustc_data_structures::sync::MappedReadGuard;
 use rustc_serialize as serialize;
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter, Write};
 use std::ops::{Index, IndexMut};
@@ -131,9 +131,6 @@ pub struct Mir<'tcx> {
     cache: cache::Cache,
 }
 
-/// where execution begins
-pub const START_BLOCK: BasicBlock = BasicBlock(0);
-
 impl<'tcx> Mir<'tcx> {
     pub fn new(
         basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
@@ -194,13 +191,42 @@ impl<'tcx> Mir<'tcx> {
     }
 
     #[inline]
-    pub fn predecessors(&self) -> ReadGuard<IndexVec<BasicBlock, Vec<BasicBlock>>> {
+    pub fn predecessors(&self) -> MappedReadGuard<'_, IndexVec<BasicBlock, Vec<BasicBlock>>> {
         self.cache.predecessors(self)
     }
 
     #[inline]
-    pub fn predecessors_for(&self, bb: BasicBlock) -> ReadGuard<Vec<BasicBlock>> {
-        ReadGuard::map(self.predecessors(), |p| &p[bb])
+    pub fn predecessors_for(&self, bb: BasicBlock) -> MappedReadGuard<'_, Vec<BasicBlock>> {
+        MappedReadGuard::map(self.predecessors(), |p| &p[bb])
+    }
+
+    #[inline]
+    pub fn predecessor_locations(&self, loc: Location) -> impl Iterator<Item = Location> + '_ {
+        let if_zero_locations = if loc.statement_index == 0 {
+            let predecessor_blocks = self.predecessors_for(loc.block);
+            let num_predecessor_blocks = predecessor_blocks.len();
+            Some(
+                (0..num_predecessor_blocks)
+                    .map(move |i| predecessor_blocks[i])
+                    .map(move |bb| self.terminator_loc(bb)),
+            )
+        } else {
+            None
+        };
+
+        let if_not_zero_locations = if loc.statement_index == 0 {
+            None
+        } else {
+            Some(Location {
+                block: loc.block,
+                statement_index: loc.statement_index - 1,
+            })
+        };
+
+        if_zero_locations
+            .into_iter()
+            .flatten()
+            .chain(if_not_zero_locations)
     }
 
     #[inline]
@@ -210,7 +236,7 @@ impl<'tcx> Mir<'tcx> {
 
     #[inline]
     pub fn local_kind(&self, local: Local) -> LocalKind {
-        let index = local.0 as usize;
+        let index = local.as_usize();
         if index == 0 {
             debug_assert!(
                 self.local_decls[local].mutability == Mutability::Mut,
@@ -223,11 +249,6 @@ impl<'tcx> Mir<'tcx> {
         } else if self.local_decls[local].name.is_some() {
             LocalKind::Var
         } else {
-            debug_assert!(
-                self.local_decls[local].mutability == Mutability::Mut,
-                "temp should be mutable"
-            );
-
             LocalKind::Temp
         }
     }
@@ -327,6 +348,14 @@ impl<'tcx> Mir<'tcx> {
     /// Return the return type, it always return first element from `local_decls` array
     pub fn return_ty(&self) -> Ty<'tcx> {
         self.local_decls[RETURN_PLACE].ty
+    }
+
+    /// Get the location of the terminator for the given block
+    pub fn terminator_loc(&self, bb: BasicBlock) -> Location {
+        Location {
+            block: bb,
+            statement_index: self[bb].statements.len(),
+        }
     }
 }
 
@@ -486,11 +515,12 @@ impl BorrowKind {
 ///////////////////////////////////////////////////////////////////////////
 // Variables and temps
 
-newtype_index!(Local
-    {
+newtype_index! {
+    pub struct Local {
         DEBUG_FORMAT = "_{}",
         const RETURN_PLACE = 0,
-    });
+    }
+}
 
 /// Classifies locals into categories. See `Mir::local_kind`.
 #[derive(PartialEq, Eq, Debug)]
@@ -547,13 +577,15 @@ impl_stable_hash_for!(struct self::VarBindingForm<'tcx> {
 });
 
 mod binding_form_impl {
-    use rustc_data_structures::stable_hasher::{HashStable, StableHasher, StableHasherResult};
     use ich::StableHashingContext;
+    use rustc_data_structures::stable_hasher::{HashStable, StableHasher, StableHasherResult};
 
     impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for super::BindingForm<'tcx> {
-        fn hash_stable<W: StableHasherResult>(&self,
-                                            hcx: &mut StableHashingContext<'a>,
-                                            hasher: &mut StableHasher<W>) {
+        fn hash_stable<W: StableHasherResult>(
+            &self,
+            hcx: &mut StableHashingContext<'a>,
+            hasher: &mut StableHasher<W>,
+        ) {
             use super::BindingForm::*;
             ::std::mem::discriminant(self).hash_stable(hcx, hasher);
 
@@ -607,6 +639,12 @@ pub struct LocalDecl<'tcx> {
 
     /// Type of this local.
     pub ty: Ty<'tcx>,
+
+    /// If the user manually ascribed a type to this variable,
+    /// e.g. via `let x: T`, then we carry that type here. The MIR
+    /// borrow checker needs this information since it can affect
+    /// region inference.
+    pub user_ty: Option<CanonicalTy<'tcx>>,
 
     /// Name of the local, used in debuginfo and pretty-printing.
     ///
@@ -745,33 +783,39 @@ impl<'tcx> LocalDecl<'tcx> {
     /// Create a new `LocalDecl` for a temporary.
     #[inline]
     pub fn new_temp(ty: Ty<'tcx>, span: Span) -> Self {
-        LocalDecl {
-            mutability: Mutability::Mut,
-            ty,
-            name: None,
-            source_info: SourceInfo {
-                span,
-                scope: OUTERMOST_SOURCE_SCOPE,
-            },
-            visibility_scope: OUTERMOST_SOURCE_SCOPE,
-            internal: false,
-            is_user_variable: None,
-        }
+        Self::new_local(ty, Mutability::Mut, false, span)
+    }
+
+    /// Create a new immutable `LocalDecl` for a temporary.
+    #[inline]
+    pub fn new_immutable_temp(ty: Ty<'tcx>, span: Span) -> Self {
+        Self::new_local(ty, Mutability::Not, false, span)
     }
 
     /// Create a new `LocalDecl` for a internal temporary.
     #[inline]
     pub fn new_internal(ty: Ty<'tcx>, span: Span) -> Self {
+        Self::new_local(ty, Mutability::Mut, true, span)
+    }
+
+    #[inline]
+    fn new_local(
+        ty: Ty<'tcx>,
+        mutability: Mutability,
+        internal: bool,
+        span: Span,
+    ) -> Self {
         LocalDecl {
-            mutability: Mutability::Mut,
+            mutability,
             ty,
+            user_ty: None,
             name: None,
             source_info: SourceInfo {
                 span,
                 scope: OUTERMOST_SOURCE_SCOPE,
             },
             visibility_scope: OUTERMOST_SOURCE_SCOPE,
-            internal: true,
+            internal,
             is_user_variable: None,
         }
     }
@@ -784,6 +828,7 @@ impl<'tcx> LocalDecl<'tcx> {
         LocalDecl {
             mutability: Mutability::Mut,
             ty: return_ty,
+            user_ty: None,
             source_info: SourceInfo {
                 span,
                 scope: OUTERMOST_SOURCE_SCOPE,
@@ -813,7 +858,12 @@ pub struct UpvarDecl {
 ///////////////////////////////////////////////////////////////////////////
 // BasicBlock
 
-newtype_index!(BasicBlock { DEBUG_FORMAT = "bb{}" });
+newtype_index! {
+    pub struct BasicBlock {
+        DEBUG_FORMAT = "bb{}",
+        const START_BLOCK = 0,
+    }
+}
 
 impl BasicBlock {
     pub fn start_location(self) -> Location {
@@ -927,11 +977,11 @@ pub enum TerminatorKind<'tcx> {
     ///   Drop(P, goto BB1, unwind BB2)
     /// }
     /// BB1 {
-    ///   // P is now unitialized
+    ///   // P is now uninitialized
     ///   P <- V
     /// }
     /// BB2 {
-    ///   // P is now unitialized -- its dtor panicked
+    ///   // P is now uninitialized -- its dtor panicked
     ///   P <- V
     /// }
     /// ```
@@ -1469,17 +1519,18 @@ impl<'tcx> TerminatorKind<'tcx> {
                     .iter()
                     .map(|&u| {
                         let mut s = String::new();
-                        print_miri_value(
-                            Scalar::Bits {
-                                bits: u,
-                                size: size.bytes() as u8,
-                            }.to_value(),
-                            switch_ty,
-                            &mut s,
-                        ).unwrap();
+                        let c = ty::Const {
+                            val: ConstValue::Scalar(
+                                Scalar::Bits {
+                                    bits: u,
+                                    size: size.bytes() as u8,
+                                }.into(),
+                            ),
+                            ty: switch_ty,
+                        };
+                        fmt_const_val(&mut s, &c).unwrap();
                         s.into()
-                    })
-                    .chain(iter::once(String::from("otherwise").into()))
+                    }).chain(iter::once(String::from("otherwise").into()))
                     .collect()
             }
             Call {
@@ -1593,22 +1644,19 @@ pub enum StatementKind<'tcx> {
     /// (The starting point(s) arise implicitly from borrows.)
     EndRegion(region::Scope),
 
-    /// Encodes a user's type assertion. These need to be preserved intact so that NLL can respect
-    /// them. For example:
+    /// Encodes a user's type ascription. These need to be preserved
+    /// intact so that NLL can respect them. For example:
     ///
-    ///     let (a, b): (T, U) = y;
+    ///     let a: T = y;
     ///
-    /// Here we would insert a `UserAssertTy<(T, U)>(y)` instruction to check that the type of `y`
-    /// is the right thing.
+    /// The effect of this annotation is to relate the type `T_y` of the place `y`
+    /// to the user-given type `T`. The effect depends on the specified variance:
     ///
-    /// `CanonicalTy` is used to capture "inference variables" from the user's types. For example:
-    ///
-    ///     let x: Vec<_> = ...;
-    ///     let y: &u32 = ...;
-    ///
-    /// would result in `Vec<?0>` and `&'?0 u32` respectively (where `?0` is a canonicalized
-    /// variable).
-    UserAssertTy(CanonicalTy<'tcx>, Local),
+    /// - `Covariant` -- requires that `T_y <: T`
+    /// - `Contravariant` -- requires that `T_y :> T`
+    /// - `Invariant` -- requires that `T_y == T`
+    /// - `Bivariant` -- no effect
+    AscribeUserType(Place<'tcx>, ty::Variance, CanonicalTy<'tcx>),
 
     /// No-op. Useful for deleting instructions without affecting statement indices.
     Nop,
@@ -1685,8 +1733,8 @@ impl<'tcx> Debug for Statement<'tcx> {
                 ref outputs,
                 ref inputs,
             } => write!(fmt, "asm!({:?} : {:?} : {:?})", asm, outputs, inputs),
-            UserAssertTy(ref c_ty, ref local) => {
-                write!(fmt, "UserAssertTy({:?}, {:?})", c_ty, local)
+            AscribeUserType(ref place, ref variance, ref c_ty) => {
+                write!(fmt, "AscribeUserType({:?}, {:?}, {:?})", place, variance, c_ty)
             }
             Nop => write!(fmt, "nop"),
         }
@@ -1782,7 +1830,11 @@ pub type PlaceProjection<'tcx> = Projection<'tcx, Place<'tcx>, Local, Ty<'tcx>>;
 /// and the index is a local.
 pub type PlaceElem<'tcx> = ProjectionElem<'tcx, Local, Ty<'tcx>>;
 
-newtype_index!(Field { DEBUG_FORMAT = "field[{}]" });
+newtype_index! {
+    pub struct Field {
+        DEBUG_FORMAT = "field[{}]"
+    }
+}
 
 impl<'tcx> Place<'tcx> {
     pub fn field(self, f: Field, ty: Ty<'tcx>) -> Place<'tcx> {
@@ -1855,11 +1907,12 @@ impl<'tcx> Debug for Place<'tcx> {
 ///////////////////////////////////////////////////////////////////////////
 // Scopes
 
-newtype_index!(SourceScope
-    {
+newtype_index! {
+    pub struct SourceScope {
         DEBUG_FORMAT = "scope[{}]",
         const OUTERMOST_SOURCE_SCOPE = 0,
-    });
+    }
+}
 
 #[derive(Clone, Debug, RustcEncodable, RustcDecodable)]
 pub struct SourceScopeData {
@@ -1888,12 +1941,15 @@ pub enum Operand<'tcx> {
     /// This implies that the type of the place must be `Copy`; this is true
     /// by construction during build, but also checked by the MIR type checker.
     Copy(Place<'tcx>),
+
     /// Move: The value (including old borrows of it) will not be used again.
     ///
     /// Safe for values of all types (modulo future developments towards `?Move`).
     /// Correct usage patterns are enforced by the borrow checker for safe code.
     /// `Copy` may be converted to `Move` to enable "last-use" optimizations.
     Move(Place<'tcx>),
+
+    /// Synthesizes a constant value.
     Constant(Box<Constant<'tcx>>),
 }
 
@@ -1909,6 +1965,9 @@ impl<'tcx> Debug for Operand<'tcx> {
 }
 
 impl<'tcx> Operand<'tcx> {
+    /// Convenience helper to make a constant that refers to the fn
+    /// with given def-id and substs. Since this is used to synthesize
+    /// MIR, assumes `user_ty` is None.
     pub fn function_handle<'a>(
         tcx: TyCtxt<'a, 'tcx, 'tcx>,
         def_id: DefId,
@@ -1919,6 +1978,7 @@ impl<'tcx> Operand<'tcx> {
         Operand::Constant(box Constant {
             span,
             ty,
+            user_ty: None,
             literal: ty::Const::zero_sized(tcx, ty),
         })
     }
@@ -2002,7 +2062,13 @@ pub enum AggregateKind<'tcx> {
     /// active field number and is present only for union expressions
     /// -- e.g. for a union expression `SomeUnion { c: .. }`, the
     /// active field index would identity the field `c`
-    Adt(&'tcx AdtDef, usize, &'tcx Substs<'tcx>, Option<usize>),
+    Adt(
+        &'tcx AdtDef,
+        usize,
+        &'tcx Substs<'tcx>,
+        Option<CanonicalTy<'tcx>>,
+        Option<usize>,
+    ),
 
     Closure(DefId, ClosureSubsts<'tcx>),
     Generator(DefId, GeneratorSubsts<'tcx>, hir::GeneratorMovability),
@@ -2105,7 +2171,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     region
                 } else {
                     // Do not even print 'static
-                    "".to_owned()
+                    String::new()
                 };
                 write!(fmt, "&{}{}{:?}", region, kind_str, place)
             }
@@ -2128,7 +2194,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                         _ => fmt_tuple(fmt, places),
                     },
 
-                    AggregateKind::Adt(adt_def, variant, substs, _) => {
+                    AggregateKind::Adt(adt_def, variant, substs, _user_ty, _) => {
                         let variant_def = &adt_def.variants[variant];
 
                         ppaux::parameterized(fmt, substs, variant_def.did, &[])?;
@@ -2207,10 +2273,22 @@ impl<'tcx> Debug for Rvalue<'tcx> {
 pub struct Constant<'tcx> {
     pub span: Span,
     pub ty: Ty<'tcx>,
+
+    /// Optional user-given type: for something like
+    /// `collect::<Vec<_>>`, this would be present and would
+    /// indicate that `Vec<_>` was explicitly specified.
+    ///
+    /// Needed for NLL to impose user-given type constraints.
+    pub user_ty: Option<CanonicalTy<'tcx>>,
+
     pub literal: &'tcx ty::Const<'tcx>,
 }
 
-newtype_index!(Promoted { DEBUG_FORMAT = "promoted[{}]" });
+newtype_index! {
+    pub struct Promoted {
+        DEBUG_FORMAT = "promoted[{}]"
+    }
+}
 
 impl<'tcx> Debug for Constant<'tcx> {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
@@ -2220,25 +2298,19 @@ impl<'tcx> Debug for Constant<'tcx> {
 }
 
 /// Write a `ConstValue` in a way closer to the original source code than the `Debug` output.
-pub fn fmt_const_val<W: Write>(fmt: &mut W, const_val: &ty::Const) -> fmt::Result {
-    if let Some(value) = const_val.to_byval_value() {
-        print_miri_value(value, const_val.ty, fmt)
-    } else {
-        write!(fmt, "{:?}:{}", const_val.val, const_val.ty)
-    }
-}
-
-pub fn print_miri_value<W: Write>(value: Value, ty: Ty, f: &mut W) -> fmt::Result {
-    use ty::TypeVariants::*;
+pub fn fmt_const_val(f: &mut impl Write, const_val: &ty::Const) -> fmt::Result {
+    use ty::TyKind::*;
+    let value = const_val.val;
+    let ty = const_val.ty;
     // print some primitives
-    if let Value::Scalar(ScalarMaybeUndef::Scalar(Scalar::Bits { bits, .. })) = value {
+    if let ConstValue::Scalar(Scalar::Bits { bits, .. }) = value {
         match ty.sty {
-            TyBool if bits == 0 => return write!(f, "false"),
-            TyBool if bits == 1 => return write!(f, "true"),
-            TyFloat(ast::FloatTy::F32) => return write!(f, "{}f32", Single::from_bits(bits)),
-            TyFloat(ast::FloatTy::F64) => return write!(f, "{}f64", Double::from_bits(bits)),
-            TyUint(ui) => return write!(f, "{:?}{}", bits, ui),
-            TyInt(i) => {
+            Bool if bits == 0 => return write!(f, "false"),
+            Bool if bits == 1 => return write!(f, "true"),
+            Float(ast::FloatTy::F32) => return write!(f, "{}f32", Single::from_bits(bits)),
+            Float(ast::FloatTy::F64) => return write!(f, "{}f64", Double::from_bits(bits)),
+            Uint(ui) => return write!(f, "{:?}{}", bits, ui),
+            Int(i) => {
                 let bit_width = ty::tls::with(|tcx| {
                     let ty = tcx.lift_to_global(&ty).unwrap();
                     tcx.layout_of(ty::ParamEnv::empty().and(ty))
@@ -2249,31 +2321,29 @@ pub fn print_miri_value<W: Write>(value: Value, ty: Ty, f: &mut W) -> fmt::Resul
                 let shift = 128 - bit_width;
                 return write!(f, "{:?}{}", ((bits as i128) << shift) >> shift, i);
             }
-            TyChar => return write!(f, "{:?}", ::std::char::from_u32(bits as u32).unwrap()),
-            _ => {},
+            Char => return write!(f, "{:?}", ::std::char::from_u32(bits as u32).unwrap()),
+            _ => {}
         }
     }
     // print function definitons
-    if let TyFnDef(did, _) = ty.sty {
+    if let FnDef(did, _) = ty.sty {
         return write!(f, "{}", item_path_str(did));
     }
     // print string literals
-    if let Value::ScalarPair(ptr, len) = value {
-        if let ScalarMaybeUndef::Scalar(Scalar::Ptr(ptr)) = ptr {
+    if let ConstValue::ScalarPair(ptr, len) = value {
+        if let Scalar::Ptr(ptr) = ptr {
             if let ScalarMaybeUndef::Scalar(Scalar::Bits { bits: len, .. }) = len {
-                if let TyRef(_, &ty::TyS { sty: TyStr, .. }, _) = ty.sty {
+                if let Ref(_, &ty::TyS { sty: Str, .. }, _) = ty.sty {
                     return ty::tls::with(|tcx| {
                         let alloc = tcx.alloc_map.lock().get(ptr.alloc_id);
                         if let Some(interpret::AllocType::Memory(alloc)) = alloc {
                             assert_eq!(len as usize as u128, len);
-                            let slice = &alloc
-                                .bytes
-                                    [(ptr.offset.bytes() as usize)..]
-                                    [..(len as usize)];
+                            let slice =
+                                &alloc.bytes[(ptr.offset.bytes() as usize)..][..(len as usize)];
                             let s = ::std::str::from_utf8(slice).expect("non utf8 str from miri");
                             write!(f, "{:?}", s)
                         } else {
-                             write!(f, "pointer to erroneous constant {:?}, {:?}", ptr, len)
+                            write!(f, "pointer to erroneous constant {:?}, {:?}", ptr, len)
                         }
                     });
                 }
@@ -2377,6 +2447,8 @@ impl Location {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub enum UnsafetyViolationKind {
     General,
+    /// unsafety is not allowed at all in min const fn
+    MinConstFn,
     ExternStatic(ast::NodeId),
     BorrowPacked(ast::NodeId),
 }
@@ -2549,6 +2621,7 @@ BraceStructTypeFoldableImpl! {
         is_user_variable,
         internal,
         ty,
+        user_ty,
         name,
         source_info,
         visibility_scope,
@@ -2585,7 +2658,7 @@ EnumTypeFoldableImpl! {
         (StatementKind::InlineAsm) { asm, outputs, inputs },
         (StatementKind::Validate)(a, b),
         (StatementKind::EndRegion)(a),
-        (StatementKind::UserAssertTy)(a, b),
+        (StatementKind::AscribeUserType)(a, v, b),
         (StatementKind::Nop),
     }
 }
@@ -2804,9 +2877,13 @@ impl<'tcx> TypeFoldable<'tcx> for Rvalue<'tcx> {
                 let kind = box match **kind {
                     AggregateKind::Array(ty) => AggregateKind::Array(ty.fold_with(folder)),
                     AggregateKind::Tuple => AggregateKind::Tuple,
-                    AggregateKind::Adt(def, v, substs, n) => {
-                        AggregateKind::Adt(def, v, substs.fold_with(folder), n)
-                    }
+                    AggregateKind::Adt(def, v, substs, user_ty, n) => AggregateKind::Adt(
+                        def,
+                        v,
+                        substs.fold_with(folder),
+                        user_ty.fold_with(folder),
+                        n,
+                    ),
                     AggregateKind::Closure(id, substs) => {
                         AggregateKind::Closure(id, substs.fold_with(folder))
                     }
@@ -2837,7 +2914,9 @@ impl<'tcx> TypeFoldable<'tcx> for Rvalue<'tcx> {
                 (match **kind {
                     AggregateKind::Array(ty) => ty.visit_with(visitor),
                     AggregateKind::Tuple => false,
-                    AggregateKind::Adt(_, _, substs, _) => substs.visit_with(visitor),
+                    AggregateKind::Adt(_, _, substs, user_ty, _) => {
+                        substs.visit_with(visitor) || user_ty.visit_with(visitor)
+                    }
                     AggregateKind::Closure(_, substs) => substs.visit_with(visitor),
                     AggregateKind::Generator(_, substs, _) => substs.visit_with(visitor),
                 }) || fields.visit_with(visitor)
@@ -2908,6 +2987,7 @@ impl<'tcx> TypeFoldable<'tcx> for Constant<'tcx> {
         Constant {
             span: self.span.clone(),
             ty: self.ty.fold_with(folder),
+            user_ty: self.user_ty.fold_with(folder),
             literal: self.literal.fold_with(folder),
         }
     }

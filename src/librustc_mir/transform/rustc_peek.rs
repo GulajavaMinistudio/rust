@@ -14,8 +14,7 @@ use syntax_pos::Span;
 
 use rustc::ty::{self, TyCtxt};
 use rustc::mir::{self, Mir, Location};
-use rustc_data_structures::indexed_set::IdxSetBuf;
-use rustc_data_structures::indexed_vec::Idx;
+use rustc_data_structures::bit_set::BitSet;
 use transform::{MirPass, MirSource};
 
 use dataflow::{do_dataflow, DebugFormatted};
@@ -47,7 +46,7 @@ impl MirPass for SanityCheck {
         let param_env = tcx.param_env(def_id);
         let move_data = MoveData::gather_moves(mir, tcx).unwrap();
         let mdpe = MoveDataParamEnv { move_data: move_data, param_env: param_env };
-        let dead_unwinds = IdxSetBuf::new_empty(mir.basic_blocks().len());
+        let dead_unwinds = BitSet::new_empty(mir.basic_blocks().len());
         let flow_inits =
             do_dataflow(tcx, mir, id, &attributes, &dead_unwinds,
                         MaybeInitializedPlaces::new(tcx, mir, &mdpe),
@@ -164,7 +163,7 @@ fn each_block<'a, 'tcx, O>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             mir::StatementKind::InlineAsm { .. } |
             mir::StatementKind::EndRegion(_) |
             mir::StatementKind::Validate(..) |
-            mir::StatementKind::UserAssertTy(..) |
+            mir::StatementKind::AscribeUserType(..) |
             mir::StatementKind::Nop => continue,
             mir::StatementKind::SetDiscriminant{ .. } =>
                 span_bug!(stmt.source_info.span,
@@ -176,7 +175,7 @@ fn each_block<'a, 'tcx, O>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 // Okay, our search is over.
                 match move_data.rev_lookup.find(peeking_at_place) {
                     LookupResult::Exact(peek_mpi) => {
-                        let bit_state = sets.on_entry.contains(&peek_mpi);
+                        let bit_state = sets.on_entry.contains(peek_mpi);
                         debug!("rustc_peek({:?} = &{:?}) bit_state: {}",
                                place, peeking_at_place, bit_state);
                         if !bit_state {
@@ -209,8 +208,8 @@ fn each_block<'a, 'tcx, O>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             &mut sets, Location { block: bb, statement_index: j });
         results.0.operator.statement_effect(
             &mut sets, Location { block: bb, statement_index: j });
-        sets.on_entry.union_hybrid(sets.gen_set);
-        sets.on_entry.subtract_hybrid(sets.kill_set);
+        sets.on_entry.union(sets.gen_set);
+        sets.on_entry.subtract(sets.kill_set);
     }
 
     results.0.operator.before_terminator_effect(
@@ -229,7 +228,7 @@ fn is_rustc_peek<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     if let Some(mir::Terminator { ref kind, source_info, .. }) = *terminator {
         if let mir::TerminatorKind::Call { func: ref oper, ref args, .. } = *kind {
             if let mir::Operand::Constant(ref func) = *oper {
-                if let ty::TyFnDef(def_id, _) = func.ty.sty {
+                if let ty::FnDef(def_id, _) = func.ty.sty {
                     let abi = tcx.fn_sig(def_id).abi();
                     let name = tcx.item_name(def_id);
                     if abi == Abi::RustIntrinsic &&  name == "rustc_peek" {

@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::collections::HashMap;
+use rustc_data_structures::fx::FxHashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::prelude::*;
@@ -26,11 +26,12 @@ use rustc::session::config::{self, CrateType, OptLevel, DebugInfo,
 use rustc::ty::TyCtxt;
 use rustc_target::spec::{LinkerFlavor, LldFlavor};
 use serialize::{json, Encoder};
+use llvm_util;
 
 /// For all the linkers we support, and information they might
 /// need out of the shared crate context before we get rid of it.
 pub struct LinkerInfo {
-    exports: HashMap<CrateType, Vec<String>>,
+    exports: FxHashMap<CrateType, Vec<String>>,
 }
 
 impl LinkerInfo {
@@ -202,15 +203,14 @@ impl<'a> GccLinker<'a> {
         };
 
         self.linker_arg(&format!("-plugin-opt={}", opt_level));
-        self.linker_arg(&format!("-plugin-opt=mcpu={}", self.sess.target_cpu()));
+        self.linker_arg(&format!("-plugin-opt=mcpu={}", llvm_util::target_cpu(self.sess)));
 
-        match self.sess.opts.cg.lto {
+        match self.sess.lto() {
             config::Lto::Thin |
             config::Lto::ThinLocal => {
                 self.linker_arg("-plugin-opt=thin");
             }
             config::Lto::Fat |
-            config::Lto::Yes |
             config::Lto::No => {
                 // default to regular LTO
             }
@@ -1070,6 +1070,10 @@ impl<'a> Linker for WasmLd<'a> {
 
         // Make the default table accessible
         self.cmd.arg("--export-table");
+
+        // Rust code should never have warnings, and warnings are often
+        // indicative of bugs, let's prevent them.
+        self.cmd.arg("--fatal-warnings");
 
         let mut cmd = Command::new("");
         ::std::mem::swap(&mut cmd, &mut self.cmd);

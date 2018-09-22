@@ -247,7 +247,6 @@ impl<'test> TestCx<'test> {
         match self.config.mode {
             CompileFail | ParseFail => self.run_cfail_test(),
             RunFail => self.run_rfail_test(),
-            RunPass => self.run_rpass_test(),
             RunPassValgrind => self.run_valgrind_test(),
             Pretty => self.run_pretty_test(),
             DebugInfoGdb => self.run_debuginfo_gdb_test(),
@@ -257,13 +256,43 @@ impl<'test> TestCx<'test> {
             CodegenUnits => self.run_codegen_units_test(),
             Incremental => self.run_incremental_test(),
             RunMake => self.run_rmake_test(),
-            Ui => self.run_ui_test(),
+            RunPass | Ui => self.run_ui_test(),
             MirOpt => self.run_mir_opt_test(),
         }
     }
 
+    fn should_run_successfully(&self) -> bool {
+        let run_pass = match self.config.mode {
+            RunPass => true,
+            Ui => self.props.run_pass,
+            _ => unimplemented!(),
+        };
+        return run_pass && !self.props.skip_codegen;
+    }
+
+    fn should_compile_successfully(&self) -> bool {
+        match self.config.mode {
+            ParseFail | CompileFail => self.props.compile_pass,
+            RunPass => true,
+            Ui => self.props.compile_pass,
+            Incremental => {
+                let revision = self.revision
+                    .expect("incremental tests require a list of revisions");
+                if revision.starts_with("rpass") || revision.starts_with("rfail") {
+                    true
+                } else if revision.starts_with("cfail") {
+                    // FIXME: would be nice if incremental revs could start with "cpass"
+                    self.props.compile_pass
+                } else {
+                    panic!("revision name must begin with rpass, rfail, or cfail");
+                }
+            }
+            mode => panic!("unimplemented for mode {:?}", mode),
+        }
+    }
+
     fn check_if_test_should_compile(&self, proc_res: &ProcRes) {
-        if self.props.compile_pass {
+        if self.should_compile_successfully() {
             if !proc_res.status.success() {
                 self.fatal_proc_rec("test compilation failed although it shouldn't!", proc_res);
             }
@@ -1677,7 +1706,7 @@ impl<'test> TestCx<'test> {
                     rustc.arg("-Zui-testing");
                 }
             }
-            Ui => {
+            RunPass | Ui => {
                 if !self
                     .props
                     .compile_flags
@@ -1706,7 +1735,7 @@ impl<'test> TestCx<'test> {
 
                 rustc.arg(dir_opt);
             }
-            RunPass | RunFail | RunPassValgrind | Pretty | DebugInfoGdb | DebugInfoLldb
+            RunFail | RunPassValgrind | Pretty | DebugInfoGdb | DebugInfoLldb
             | Codegen | Rustdoc | RunMake | CodegenUnits => {
                 // do not use JSON output
             }
@@ -2355,21 +2384,30 @@ impl<'test> TestCx<'test> {
             string
         }
 
+        // Given a cgu-name-prefix of the form <crate-name>.<crate-disambiguator> or
+        // the form <crate-name1>.<crate-disambiguator1>-in-<crate-name2>.<crate-disambiguator2>,
+        // remove all crate-disambiguators.
         fn remove_crate_disambiguator_from_cgu(cgu: &str) -> String {
-            // The first '.' is the start of the crate disambiguator
-            let disambiguator_start = cgu.find('.')
-                .expect("Could not find start of crate disambiguator in CGU spec");
+            lazy_static! {
+                static ref RE: Regex = Regex::new(
+                    r"^[^\.]+(?P<d1>\.[[:alnum:]]+)(-in-[^\.]+(?P<d2>\.[[:alnum:]]+))?"
+                ).unwrap();
+            }
 
-            // The first non-alphanumeric character is the end of the disambiguator
-            let disambiguator_end = cgu[disambiguator_start + 1 ..]
-                .find(|c| !char::is_alphanumeric(c))
-                .expect("Could not find end of crate disambiguator in CGU spec")
-                + disambiguator_start + 1;
+            let captures = RE.captures(cgu).unwrap_or_else(|| {
+                panic!("invalid cgu name encountered: {}", cgu)
+            });
 
-            let mut result = cgu[0 .. disambiguator_start].to_string();
-            result.push_str(&cgu[disambiguator_end ..]);
+            let mut new_name = cgu.to_owned();
 
-            result
+            if let Some(d2) = captures.name("d2") {
+                new_name.replace_range(d2.start() .. d2.end(), "");
+            }
+
+            let d1 = captures.name("d1").unwrap();
+            new_name.replace_range(d1.start() .. d1.end(), "");
+
+            new_name
         }
     }
 
@@ -2629,8 +2667,12 @@ impl<'test> TestCx<'test> {
         let normalized_stderr = self.normalize_output(&stderr, &self.props.normalize_stderr);
 
         let mut errors = 0;
-        errors += self.compare_output("stdout", &normalized_stdout, &expected_stdout);
-        errors += self.compare_output("stderr", &normalized_stderr, &expected_stderr);
+        if !self.props.dont_check_compiler_stdout {
+            errors += self.compare_output("stdout", &normalized_stdout, &expected_stdout);
+        }
+        if !self.props.dont_check_compiler_stderr {
+            errors += self.compare_output("stderr", &normalized_stderr, &expected_stderr);
+        }
 
         let modes_to_prune = vec![CompareMode::Nll];
         self.prune_duplicate_outputs(&modes_to_prune);
@@ -2682,7 +2724,7 @@ impl<'test> TestCx<'test> {
 
         let expected_errors = errors::load_errors(&self.testpaths.file, self.revision);
 
-        if self.props.run_pass {
+        if self.should_run_successfully() {
             let proc_res = self.exec_compiled_test();
 
             if !proc_res.status.success() {
@@ -2962,6 +3004,13 @@ impl<'test> TestCx<'test> {
             // Thus we just turn escaped newlines back into newlines.
             normalized = normalized.replace("\\n", "\n");
         }
+
+        // If there are `$SRC_DIR` normalizations with line and column numbers, then replace them
+        // with placeholders as we do not want tests needing updated when compiler source code
+        // changes.
+        // eg. $SRC_DIR/libcore/mem.rs:323:14 becomes $SRC_DIR/libcore/mem.rs:LL:COL
+        normalized = Regex::new("SRC_DIR(.+):\\d+:\\d+").unwrap()
+            .replace_all(&normalized, "SRC_DIR$1:LL:COL").into_owned();
 
         normalized = normalized.replace("\\\\", "\\") // denormalize for paths on windows
               .replace("\\", "/") // normalize for paths on windows

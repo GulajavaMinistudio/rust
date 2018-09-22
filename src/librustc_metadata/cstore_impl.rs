@@ -17,7 +17,6 @@ use schema;
 
 use rustc::ty::query::QueryConfig;
 use rustc::middle::cstore::{CrateStore, DepKind,
-                            LinkMeta,
                             EncodedMetadata, NativeLibraryKind};
 use rustc::middle::exported_symbols::ExportedSymbol;
 use rustc::middle::stability::DeprecationEntry;
@@ -43,7 +42,7 @@ use syntax::edition::Edition;
 use syntax::parse::source_file_to_stream;
 use syntax::symbol::Symbol;
 use syntax_pos::{Span, NO_EXPANSION, FileName};
-use rustc_data_structures::indexed_set::IdxSetBuf;
+use rustc_data_structures::bit_set::BitSet;
 use rustc::hir;
 
 macro_rules! provide {
@@ -142,7 +141,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
         mir
     }
     mir_const_qualif => {
-        (cdata.mir_const_qualif(def_id.index), Lrc::new(IdxSetBuf::new_empty(0)))
+        (cdata.mir_const_qualif(def_id.index), Lrc::new(BitSet::new_empty(0)))
     }
     fn_sig => { cdata.fn_sig(def_id.index, tcx) }
     inherent_impls => { Lrc::new(cdata.get_inherent_implementations_for_type(def_id.index)) }
@@ -174,6 +173,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     is_panic_runtime => { cdata.root.panic_runtime }
     is_compiler_builtins => { cdata.root.compiler_builtins }
     has_global_allocator => { cdata.root.has_global_allocator }
+    has_panic_handler => { cdata.root.has_panic_handler }
     is_sanitizer_runtime => { cdata.root.sanitizer_runtime }
     is_profiler_runtime => { cdata.root.profiler_runtime }
     panic_strategy => { cdata.root.panic_strategy }
@@ -258,12 +258,6 @@ provide! { <'tcx> tcx, def_id, other, cdata,
     exported_symbols => {
         let cnum = cdata.cnum;
         assert!(cnum != LOCAL_CRATE);
-
-        // If this crate is a custom derive crate, then we're not even going to
-        // link those in so we skip those crates.
-        if cdata.root.macro_derive_registrar.is_some() {
-            return Arc::new(Vec::new())
-        }
 
         Arc::new(cdata.exported_symbols(tcx))
     }
@@ -567,11 +561,10 @@ impl CrateStore for cstore::CStore {
     }
 
     fn encode_metadata<'a, 'tcx>(&self,
-                                 tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                 link_meta: &LinkMeta)
+                                 tcx: TyCtxt<'a, 'tcx, 'tcx>)
                                  -> EncodedMetadata
     {
-        encoder::encode_metadata(tcx, link_meta)
+        encoder::encode_metadata(tcx)
     }
 
     fn metadata_encoding_version(&self) -> &[u8]

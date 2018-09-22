@@ -28,7 +28,7 @@ use rustc_data_structures::base_n;
 use rustc_data_structures::sync::{self, Lrc, Lock, LockCell, OneThread, Once, RwLock};
 
 use syntax::ast::NodeId;
-use errors::{self, DiagnosticBuilder, DiagnosticId};
+use errors::{self, DiagnosticBuilder, DiagnosticId, Applicability};
 use errors::emitter::{Emitter, EmitterWriter};
 use syntax::edition::Edition;
 use syntax::json::JsonEmitter;
@@ -47,7 +47,6 @@ use jobserver::Client;
 
 use std;
 use std::cell::{self, Cell, RefCell};
-use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::io::Write;
@@ -122,7 +121,7 @@ pub struct Session {
     /// Map from imported macro spans (which consist of
     /// the localized span for the macro body) to the
     /// macro name and definition span in the source crate.
-    pub imported_macro_spans: OneThread<RefCell<HashMap<Span, (String, Span)>>>,
+    pub imported_macro_spans: OneThread<RefCell<FxHashMap<Span, (String, Span)>>>,
 
     incr_comp_session: OneThread<RefCell<IncrCompSession>>,
 
@@ -159,6 +158,9 @@ pub struct Session {
 
     /// Metadata about the allocators for the current crate being compiled
     pub has_global_allocator: Once<bool>,
+
+    /// Metadata about the panic handlers for the current crate being compiled
+    pub has_panic_handler: Once<bool>,
 
     /// Cap lint level specified by a driver specifically.
     pub driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
@@ -429,8 +431,13 @@ impl Session {
                     diag_builder.span_note(span, message);
                 }
                 DiagnosticBuilderMethod::SpanSuggestion(suggestion) => {
-                    let span = span_maybe.expect("span_suggestion needs a span");
-                    diag_builder.span_suggestion(span, message, suggestion);
+                    let span = span_maybe.expect("span_suggestion_* needs a span");
+                    diag_builder.span_suggestion_with_applicability(
+                        span,
+                        message,
+                        suggestion,
+                        Applicability::Unspecified,
+                    );
                 }
             }
         }
@@ -548,9 +555,27 @@ impl Session {
         // lto` and we've for whatever reason forced off ThinLTO via the CLI,
         // then ensure we can't use a ThinLTO.
         match self.opts.cg.lto {
-            config::Lto::No => {}
-            config::Lto::Yes if self.opts.cli_forced_thinlto_off => return config::Lto::Fat,
-            other => return other,
+            config::LtoCli::Unspecified => {
+                // The compiler was invoked without the `-Clto` flag. Fall
+                // through to the default handling
+            }
+            config::LtoCli::No => {
+                // The user explicitly opted out of any kind of LTO
+                return config::Lto::No;
+            }
+            config::LtoCli::Yes |
+            config::LtoCli::Fat |
+            config::LtoCli::NoParam => {
+                // All of these mean fat LTO
+                return config::Lto::Fat;
+            }
+            config::LtoCli::Thin => {
+                return if self.opts.cli_forced_thinlto_off {
+                    config::Lto::Fat
+                } else {
+                    config::Lto::Thin
+                };
+            }
         }
 
         // Ok at this point the target doesn't require anything and the user
@@ -578,11 +603,6 @@ impl Session {
         // If there's only one codegen unit and LTO isn't enabled then there's
         // no need for ThinLTO so just return false.
         if self.codegen_units() == 1 {
-            return config::Lto::No;
-        }
-
-        // Right now ThinLTO isn't compatible with incremental compilation.
-        if self.opts.incremental.is_some() {
             return config::Lto::No;
         }
 
@@ -646,13 +666,6 @@ impl Session {
             !found_negative
         } else {
             found_positive
-        }
-    }
-
-    pub fn target_cpu(&self) -> &str {
-        match self.opts.cg.target_cpu {
-            Some(ref s) => &**s,
-            None => &*self.target.target.options.cpu
         }
     }
 
@@ -1004,6 +1017,7 @@ pub fn build_session_with_source_map(
     let can_emit_warnings = !(warnings_allow || cap_lints_allow);
 
     let treat_err_as_bug = sopts.debugging_opts.treat_err_as_bug;
+    let dont_buffer_diagnostics = sopts.debugging_opts.dont_buffer_diagnostics;
     let report_delayed_bugs = sopts.debugging_opts.report_delayed_bugs;
 
     let external_macro_backtrace = sopts.debugging_opts.external_macro_backtrace;
@@ -1051,6 +1065,7 @@ pub fn build_session_with_source_map(
             can_emit_warnings,
             treat_err_as_bug,
             report_delayed_bugs,
+            dont_buffer_diagnostics,
             external_macro_backtrace,
             ..Default::default()
         },
@@ -1129,7 +1144,7 @@ pub fn build_session_(
         injected_allocator: Once::new(),
         allocator_kind: Once::new(),
         injected_panic_runtime: Once::new(),
-        imported_macro_spans: OneThread::new(RefCell::new(HashMap::new())),
+        imported_macro_spans: OneThread::new(RefCell::new(FxHashMap::default())),
         incr_comp_session: OneThread::new(RefCell::new(IncrCompSession::NotInitialized)),
         self_profiling: Lock::new(SelfProfiler::new()),
         profile_channel: Lock::new(None),
@@ -1173,6 +1188,7 @@ pub fn build_session_(
             (*GLOBAL_JOBSERVER).clone()
         },
         has_global_allocator: Once::new(),
+        has_panic_handler: Once::new(),
         driver_lint_caps: FxHashMap(),
     };
 
@@ -1185,8 +1201,17 @@ pub fn build_session_(
 // commandline argument, you can do so here.
 fn validate_commandline_args_with_session_available(sess: &Session) {
 
-    if sess.lto() != Lto::No && sess.opts.incremental.is_some() {
-        sess.err("can't perform LTO when compiling incrementally");
+    if sess.opts.incremental.is_some() {
+        match sess.lto() {
+            Lto::Thin |
+            Lto::Fat => {
+                sess.err("can't perform LTO when compiling incrementally");
+            }
+            Lto::ThinLocal |
+            Lto::No => {
+                // This is fine
+            }
+        }
     }
 
     // Since we don't know if code in an rlib will be linked to statically or

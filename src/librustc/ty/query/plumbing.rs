@@ -692,10 +692,12 @@ macro_rules! define_queries_inner {
         impl<$tcx> Queries<$tcx> {
             pub fn new(
                 providers: IndexVec<CrateNum, Providers<$tcx>>,
+                fallback_extern_providers: Providers<$tcx>,
                 on_disk_cache: OnDiskCache<'tcx>,
             ) -> Self {
                 Queries {
                     providers,
+                    fallback_extern_providers: Box::new(fallback_extern_providers),
                     on_disk_cache,
                     $($name: Lock::new(QueryCache::new())),*
                 }
@@ -718,7 +720,7 @@ macro_rules! define_queries_inner {
             }
         }
 
-        #[allow(bad_style)]
+        #[allow(nonstandard_style)]
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
         pub enum Query<$tcx> {
             $($(#[$attr])* $name($K)),*
@@ -775,7 +777,7 @@ macro_rules! define_queries_inner {
         pub mod queries {
             use std::marker::PhantomData;
 
-            $(#[allow(bad_style)]
+            $(#[allow(nonstandard_style)]
             pub struct $name<$tcx> {
                 data: PhantomData<&$tcx ()>
             })*
@@ -818,7 +820,13 @@ macro_rules! define_queries_inner {
             #[inline]
             fn compute(tcx: TyCtxt<'_, 'tcx, '_>, key: Self::Key) -> Self::Value {
                 __query_compute::$name(move || {
-                    let provider = tcx.queries.providers[key.query_crate()].$name;
+                    let provider = tcx.queries.providers.get(key.query_crate())
+                        // HACK(eddyb) it's possible crates may be loaded after
+                        // the query engine is created, and because crate loading
+                        // is not yet integrated with the query engine, such crates
+                        // would be be missing appropriate entries in `providers`.
+                        .unwrap_or(&tcx.queries.fallback_extern_providers)
+                        .$name;
                     provider(tcx.global_tcx(), key)
                 })
             }
@@ -899,6 +907,7 @@ macro_rules! define_queries_struct {
             pub(crate) on_disk_cache: OnDiskCache<'tcx>,
 
             providers: IndexVec<CrateNum, Providers<$tcx>>,
+            fallback_extern_providers: Box<Providers<$tcx>>,
 
             $($(#[$attr])*  $name: Lock<QueryCache<$tcx, queries::$name<$tcx>>>,)*
         }
@@ -1062,7 +1071,6 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::FulfillObligation |
         DepKind::VtableMethods |
         DepKind::EraseRegionsTy |
-        DepKind::ConstValueToAllocation |
         DepKind::NormalizeProjectionTy |
         DepKind::NormalizeTyAfterErasingRegions |
         DepKind::ImpliedOutlivesBounds |
@@ -1169,6 +1177,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::IsPanicRuntime => { force!(is_panic_runtime, krate!()); }
         DepKind::IsCompilerBuiltins => { force!(is_compiler_builtins, krate!()); }
         DepKind::HasGlobalAllocator => { force!(has_global_allocator, krate!()); }
+        DepKind::HasPanicHandler => { force!(has_panic_handler, krate!()); }
         DepKind::ExternCrate => { force!(extern_crate, def_id!()); }
         DepKind::LintLevels => { force!(lint_levels, LOCAL_CRATE); }
         DepKind::InScopeTraits => { force!(in_scope_traits_map, def_id!().index); }

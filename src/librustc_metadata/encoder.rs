@@ -13,7 +13,7 @@ use index_builder::{FromId, IndexBuilder, Untracked};
 use isolated_encoder::IsolatedEncoder;
 use schema::*;
 
-use rustc::middle::cstore::{LinkMeta, LinkagePreference, NativeLibrary,
+use rustc::middle::cstore::{LinkagePreference, NativeLibrary,
                             EncodedMetadata, ForeignModule};
 use rustc::hir::def::CtorKind;
 use rustc::hir::def_id::{CrateNum, CRATE_DEF_INDEX, DefIndex, DefId, LocalDefId, LOCAL_CRATE};
@@ -52,7 +52,6 @@ use rustc::hir::intravisit;
 pub struct EncodeContext<'a, 'tcx: 'a> {
     opaque: opaque::Encoder,
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
-    link_meta: &'a LinkMeta,
 
     lazy_state: LazyState,
     type_shorthands: FxHashMap<Ty<'tcx>, usize>,
@@ -76,7 +75,7 @@ macro_rules! encoder_methods {
 impl<'a, 'tcx> Encoder for EncodeContext<'a, 'tcx> {
     type Error = <opaque::Encoder as Encoder>::Error;
 
-    fn emit_nil(&mut self) -> Result<(), Self::Error> {
+    fn emit_unit(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -482,20 +481,21 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let index_bytes = self.position() - i;
 
         let attrs = tcx.hir.krate_attrs();
-        let link_meta = self.link_meta;
         let is_proc_macro = tcx.sess.crate_types.borrow().contains(&CrateType::ProcMacro);
         let has_default_lib_allocator = attr::contains_name(&attrs, "default_lib_allocator");
         let has_global_allocator = *tcx.sess.has_global_allocator.get();
+        let has_panic_handler = *tcx.sess.has_panic_handler.try_get().unwrap_or(&false);
 
         let root = self.lazy(&CrateRoot {
             name: tcx.crate_name(LOCAL_CRATE),
             extra_filename: tcx.sess.opts.cg.extra_filename.clone(),
             triple: tcx.sess.opts.target_triple.clone(),
-            hash: link_meta.crate_hash,
+            hash: tcx.crate_hash(LOCAL_CRATE),
             disambiguator: tcx.sess.local_crate_disambiguator(),
             panic_strategy: tcx.sess.panic_strategy(),
             edition: hygiene::default_edition(),
             has_global_allocator: has_global_allocator,
+            has_panic_handler: has_panic_handler,
             has_default_lib_allocator: has_default_lib_allocator,
             plugin_registrar_fn: tcx.sess
                 .plugin_registrar_fn
@@ -742,7 +742,9 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
 
         // If the structure is marked as non_exhaustive then lower the visibility
         // to within the crate.
-        if adt_def.is_non_exhaustive() && ctor_vis == ty::Visibility::Public {
+        if adt_def.non_enum_variant().is_field_list_non_exhaustive() &&
+            ctor_vis == ty::Visibility::Public
+        {
             ctor_vis = ty::Visibility::Restricted(DefId::local(CRATE_DEF_INDEX));
         }
 
@@ -1113,7 +1115,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
                 let trait_ref = tcx.impl_trait_ref(def_id);
                 let parent = if let Some(trait_ref) = trait_ref {
                     let trait_def = tcx.trait_def(trait_ref.def_id);
-                    trait_def.ancestors(tcx, def_id).skip(1).next().and_then(|node| {
+                    trait_def.ancestors(tcx, def_id).nth(1).and_then(|node| {
                         match node {
                             specialization_graph::Node::Impl(parent) => Some(parent),
                             _ => None,
@@ -1344,7 +1346,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
         let node_id = self.tcx.hir.as_local_node_id(def_id).unwrap();
         let hir_id = self.tcx.hir.node_to_hir_id(node_id);
         let kind = match tables.node_id_to_type(hir_id).sty {
-            ty::TyGenerator(def_id, ..) => {
+            ty::Generator(def_id, ..) => {
                 let layout = self.tcx.generator_layout(def_id);
                 let data = GeneratorData {
                     layout: layout.clone(),
@@ -1352,7 +1354,7 @@ impl<'a, 'b: 'a, 'tcx: 'b> IsolatedEncoder<'a, 'b, 'tcx> {
                 EntryKind::Generator(self.lazy(&data))
             }
 
-            ty::TyClosure(def_id, substs) => {
+            ty::Closure(def_id, substs) => {
                 let sig = substs.closure_sig(def_id, self.tcx);
                 let data = ClosureData { sig: self.lazy(&sig) };
                 EntryKind::Closure(self.lazy(&data))
@@ -1823,8 +1825,7 @@ impl<'a, 'tcx, 'v> ItemLikeVisitor<'v> for ImplVisitor<'a, 'tcx> {
 // will allow us to slice the metadata to the precise length that we just
 // generated regardless of trailing bytes that end up in it.
 
-pub fn encode_metadata<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                 link_meta: &LinkMeta)
+pub fn encode_metadata<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>)
                                  -> EncodedMetadata
 {
     let mut encoder = opaque::Encoder::new(vec![]);
@@ -1837,7 +1838,6 @@ pub fn encode_metadata<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         let mut ecx = EncodeContext {
             opaque: encoder,
             tcx,
-            link_meta,
             lazy_state: LazyState::NoNode,
             type_shorthands: Default::default(),
             predicate_shorthands: Default::default(),
@@ -1869,7 +1869,7 @@ pub fn encode_metadata<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 pub fn get_repr_options<'a, 'tcx, 'gcx>(tcx: &TyCtxt<'a, 'tcx, 'gcx>, did: DefId) -> ReprOptions {
     let ty = tcx.type_of(did);
     match ty.sty {
-        ty::TyAdt(ref def, _) => return def.repr,
+        ty::Adt(ref def, _) => return def.repr,
         _ => bug!("{} is not an ADT", ty),
     }
 }

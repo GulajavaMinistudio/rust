@@ -53,7 +53,7 @@ use ty::query::Providers;
 use util::nodemap::NodeMap;
 
 pub use lint::context::{LateContext, EarlyContext, LintContext, LintStore,
-                        check_crate, check_ast_crate,
+                        check_crate, check_ast_crate, CheckLintNameResult,
                         FutureIncompatibleInfo, BufferedEarlyLint};
 
 /// Specification of a single lint.
@@ -266,7 +266,7 @@ macro_rules! late_lint_methods {
 
 macro_rules! expand_lint_pass_methods {
     ($context:ty, [$($(#[$attr:meta])* fn $name:ident($($param:ident: $arg:ty),*);)*]) => (
-        $(#[inline(always)] fn $name(&mut self, $context, $(_: $arg),*) {})*
+        $(#[inline(always)] fn $name(&mut self, _: $context, $(_: $arg),*) {})*
     )
 }
 

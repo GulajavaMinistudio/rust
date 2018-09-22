@@ -15,17 +15,19 @@ use rustc::mir::{BindingForm, BorrowKind, ClearCrossCrate, Field, Local};
 use rustc::mir::{LocalDecl, LocalKind, Location, Operand, Place};
 use rustc::mir::{ProjectionElem, Rvalue, Statement, StatementKind};
 use rustc::ty;
-use rustc_data_structures::indexed_vec::Idx;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::DiagnosticBuilder;
+use rustc_errors::{Applicability, DiagnosticBuilder};
 use syntax_pos::Span;
 
 use super::borrow_set::BorrowData;
 use super::{Context, MirBorrowckCtxt};
 use super::{InitializationRequiringAction, PrefixSet};
 
+use borrow_check::nll::explain_borrow::BorrowContainsPointReason;
+use dataflow::drop_flag_effects;
+use dataflow::move_paths::indexes::MoveOutIndex;
 use dataflow::move_paths::MovePathIndex;
-use dataflow::{FlowAtLocation, MovingOutStatements};
 use util::borrowck_errors::{BorrowckErrors, Origin};
 
 impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
@@ -35,22 +37,25 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         desired_action: InitializationRequiringAction,
         (place, span): (&Place<'tcx>, Span),
         mpi: MovePathIndex,
-        curr_move_out: &FlowAtLocation<MovingOutStatements<'_, 'gcx, 'tcx>>,
     ) {
+        debug!(
+            "report_use_of_moved_or_uninitialized: context={:?} desired_action={:?} place={:?} \
+            span={:?} mpi={:?}",
+            context, desired_action, place, span, mpi
+        );
+
         let use_spans = self
             .move_spans(place, context.loc)
             .or_else(|| self.borrow_spans(span, context.loc));
         let span = use_spans.args_or_use();
 
-        let mois = self.move_data.path_map[mpi]
-            .iter()
-            .filter(|moi| curr_move_out.contains(moi))
-            .collect::<Vec<_>>();
+        let mois = self.get_moved_indexes(context, mpi);
+        debug!("report_use_of_moved_or_uninitialized: mois={:?}", mois);
 
         if mois.is_empty() {
             let root_place = self.prefixes(&place, PrefixSet::All).last().unwrap();
 
-            if self.moved_error_reported.contains(&root_place.clone()) {
+            if self.uninitialized_error_reported.contains(&root_place.clone()) {
                 debug!(
                     "report_use_of_moved_or_uninitialized place: error about {:?} suppressed",
                     root_place
@@ -58,7 +63,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                 return;
             }
 
-            self.moved_error_reported.insert(root_place.clone());
+            self.uninitialized_error_reported.insert(root_place.clone());
 
             let item_msg = match self.describe_place_with_options(place, IncludingDowncast(true)) {
                 Some(name) => format!("`{}`", name),
@@ -81,6 +86,14 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
 
             err.buffer(&mut self.errors_buffer);
         } else {
+            if let Some((reported_place, _)) = self.move_error_reported.get(&mois) {
+                if self.prefixes(&reported_place, PrefixSet::All).any(|p| p == place) {
+                    debug!("report_use_of_moved_or_uninitialized place: error suppressed \
+                           mois={:?}", mois);
+                    return;
+                }
+            }
+
             let msg = ""; //FIXME: add "partially " or "collaterally "
 
             let mut err = self.tcx.cannot_act_on_moved_value(
@@ -93,7 +106,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
 
             let mut is_loop_move = false;
             for moi in &mois {
-                let move_out = self.move_data.moves[**moi];
+                let move_out = self.move_data.moves[*moi];
                 let moved_place = &self.move_data.move_paths[move_out.path].place;
 
                 let move_spans = self.move_spans(moved_place, move_out.source);
@@ -134,7 +147,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
 
             if let Some(ty) = self.retrieve_type_for_place(place) {
                 let needs_note = match ty.sty {
-                    ty::TypeVariants::TyClosure(id, _) => {
+                    ty::Closure(id, _) => {
                         let tables = self.tcx.typeck_tables_of(id);
                         let node_id = self.tcx.hir.as_local_node_id(id).unwrap();
                         let hir_id = self.tcx.hir.node_to_hir_id(node_id);
@@ -148,7 +161,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                 };
 
                 if needs_note {
-                    let mpi = self.move_data.moves[*mois[0]].path;
+                    let mpi = self.move_data.moves[mois[0]].path;
                     let place = &self.move_data.move_paths[mpi].place;
 
                     if let Some(ty) = self.retrieve_type_for_place(place) {
@@ -168,7 +181,13 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                 }
             }
 
-            err.buffer(&mut self.errors_buffer);
+            if let Some((_, mut old_err)) = self.move_error_reported.insert(
+                mois,
+                (place.clone(), err)
+            ) {
+                // Cancel the old error so it doesn't ICE.
+                old_err.cancel();
+            }
         }
     }
 
@@ -348,10 +367,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         if issued_spans == borrow_spans {
             borrow_spans.var_span_label(
                 &mut err,
-                format!(
-                    "borrows occur due to use of `{}` in closure",
-                    desc_place
-                ),
+                format!("borrows occur due to use of `{}` in closure", desc_place),
             );
         } else {
             let borrow_place = &issued_borrow.borrowed_place;
@@ -366,7 +382,10 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
 
             borrow_spans.var_span_label(
                 &mut err,
-                format!("second borrow occurs due to use of `{}` in closure", desc_place),
+                format!(
+                    "second borrow occurs due to use of `{}` in closure",
+                    desc_place
+                ),
             );
         }
 
@@ -411,29 +430,28 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         self.access_place_error_reported
             .insert((root_place.clone(), borrow_span));
 
+        let borrow_reason = self.find_why_borrow_contains_point(context, borrow);
+
         let mut err = match &self.describe_place(&borrow.borrowed_place) {
             Some(_) if self.is_place_thread_local(root_place) => {
-                self.report_thread_local_value_does_not_live_long_enough(
-                    drop_span,
-                    borrow_span,
-                )
+                self.report_thread_local_value_does_not_live_long_enough(drop_span, borrow_span)
             }
             Some(name) => self.report_local_value_does_not_live_long_enough(
                 context,
                 name,
                 &scope_tree,
                 &borrow,
+                borrow_reason,
                 drop_span,
                 borrow_span,
-                proper_span,
                 kind.map(|k| (k, place_span.0)),
             ),
             None => self.report_temporary_value_does_not_live_long_enough(
                 context,
                 &scope_tree,
                 &borrow,
+                borrow_reason,
                 drop_span,
-                borrow_span,
                 proper_span,
             ),
         };
@@ -449,20 +467,23 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         name: &String,
         scope_tree: &Lrc<ScopeTree>,
         borrow: &BorrowData<'tcx>,
+        reason: BorrowContainsPointReason<'tcx>,
         drop_span: Span,
         borrow_span: Span,
-        _proper_span: Span,
         kind_place: Option<(WriteKind, &Place<'tcx>)>,
     ) -> DiagnosticBuilder<'cx> {
         debug!(
             "report_local_value_does_not_live_long_enough(\
-             {:?}, {:?}, {:?}, {:?}, {:?}, {:?}\
+             {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}\
              )",
-            context, name, scope_tree, borrow, drop_span, borrow_span
+            context, name, scope_tree, borrow, reason, drop_span, borrow_span
         );
 
         let mut err = self.tcx.path_does_not_live_long_enough(
-            borrow_span, &format!("`{}`", name), Origin::Mir);
+            borrow_span,
+            &format!("`{}`", name),
+            Origin::Mir,
+        );
 
         err.span_label(borrow_span, "borrowed value does not live long enough");
         err.span_label(
@@ -470,7 +491,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
             format!("`{}` dropped here while still borrowed", name),
         );
 
-        self.explain_why_borrow_contains_point(context, borrow, kind_place, &mut err);
+        self.report_why_borrow_contains_point(&mut err, reason, kind_place);
         err
     }
 
@@ -486,11 +507,14 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
             drop_span, borrow_span
         );
 
-        let mut err = self.tcx.thread_local_value_does_not_live_long_enough(
-            borrow_span, Origin::Mir);
+        let mut err = self
+            .tcx
+            .thread_local_value_does_not_live_long_enough(borrow_span, Origin::Mir);
 
-        err.span_label(borrow_span,
-                       "thread-local variables cannot be borrowed beyond the end of the function");
+        err.span_label(
+            borrow_span,
+            "thread-local variables cannot be borrowed beyond the end of the function",
+        );
         err.span_label(drop_span, "end of enclosing function is here");
         err
     }
@@ -500,15 +524,15 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         context: Context,
         scope_tree: &Lrc<ScopeTree>,
         borrow: &BorrowData<'tcx>,
+        reason: BorrowContainsPointReason<'tcx>,
         drop_span: Span,
-        _borrow_span: Span,
         proper_span: Span,
     ) -> DiagnosticBuilder<'cx> {
         debug!(
             "report_temporary_value_does_not_live_long_enough(\
-             {:?}, {:?}, {:?}, {:?}, {:?}\
+             {:?}, {:?}, {:?}, {:?}, {:?}, {:?}\
              )",
-            context, scope_tree, borrow, drop_span, proper_span
+            context, scope_tree, borrow, reason, drop_span, proper_span
         );
 
         let tcx = self.tcx;
@@ -517,8 +541,102 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         err.span_label(proper_span, "temporary value does not live long enough");
         err.span_label(drop_span, "temporary value only lives until here");
 
-        self.explain_why_borrow_contains_point(context, borrow, None, &mut err);
+        // Only give this note and suggestion if they could be relevant
+        match reason {
+            BorrowContainsPointReason::Liveness {..}
+            | BorrowContainsPointReason::DropLiveness {..} => {
+                err.note("consider using a `let` binding to create a longer lived value");
+            }
+            BorrowContainsPointReason::OutlivesFreeRegion {..} => (),
+        }
+
+        self.report_why_borrow_contains_point(&mut err, reason, None);
         err
+    }
+
+    fn get_moved_indexes(&mut self, context: Context, mpi: MovePathIndex) -> Vec<MoveOutIndex> {
+        let mir = self.mir;
+
+        let mut stack = Vec::new();
+        stack.extend(mir.predecessor_locations(context.loc));
+
+        let mut visited = FxHashSet();
+        let mut result = vec![];
+
+        'dfs: while let Some(l) = stack.pop() {
+            debug!(
+                "report_use_of_moved_or_uninitialized: current_location={:?}",
+                l
+            );
+
+            if !visited.insert(l) {
+                continue;
+            }
+
+            // check for moves
+            let stmt_kind = mir[l.block]
+                .statements
+                .get(l.statement_index)
+                .map(|s| &s.kind);
+            if let Some(StatementKind::StorageDead(..)) = stmt_kind {
+                // this analysis only tries to find moves explicitly
+                // written by the user, so we ignore the move-outs
+                // created by `StorageDead` and at the beginning
+                // of a function.
+            } else {
+                // If we are found a use of a.b.c which was in error, then we want to look for
+                // moves not only of a.b.c but also a.b and a.
+                //
+                // Note that the moves data already includes "parent" paths, so we don't have to
+                // worry about the other case: that is, if there is a move of a.b.c, it is already
+                // marked as a move of a.b and a as well, so we will generate the correct errors
+                // there.
+                let mut mpis = vec![mpi];
+                let move_paths = &self.move_data.move_paths;
+                mpis.extend(move_paths[mpi].parents(move_paths));
+
+                for moi in &self.move_data.loc_map[l] {
+                    debug!("report_use_of_moved_or_uninitialized: moi={:?}", moi);
+                    if mpis.contains(&self.move_data.moves[*moi].path) {
+                        debug!("report_use_of_moved_or_uninitialized: found");
+                        result.push(*moi);
+
+                        // Strictly speaking, we could continue our DFS here. There may be
+                        // other moves that can reach the point of error. But it is kind of
+                        // confusing to highlight them.
+                        //
+                        // Example:
+                        //
+                        // ```
+                        // let a = vec![];
+                        // let b = a;
+                        // let c = a;
+                        // drop(a); // <-- current point of error
+                        // ```
+                        //
+                        // Because we stop the DFS here, we only highlight `let c = a`,
+                        // and not `let b = a`. We will of course also report an error at
+                        // `let c = a` which highlights `let b = a` as the move.
+                        continue 'dfs;
+                    }
+                }
+            }
+
+            // check for inits
+            let mut any_match = false;
+            drop_flag_effects::for_location_inits(self.tcx, self.mir, self.move_data, l, |m| {
+                if m == mpi {
+                    any_match = true;
+                }
+            });
+            if any_match {
+                continue 'dfs;
+            }
+
+            stack.extend(mir.predecessor_locations(l));
+        }
+
+        result
     }
 
     pub(super) fn report_illegal_mutation_of_borrowed(
@@ -615,9 +733,11 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         if let Some(decl) = local_decl {
             if let Some(name) = decl.name {
                 if decl.can_be_made_mutable() {
-                    err.span_label(
+                    err.span_suggestion_with_applicability(
                         decl.source_info.span,
-                        format!("consider changing this to `mut {}`", name),
+                        "make this binding mutable",
+                        format!("mut {}", name),
+                        Applicability::MachineApplicable,
                     );
                 }
             }
@@ -834,19 +954,19 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
             self.describe_field_from_ty(&ty.boxed_ty(), field)
         } else {
             match ty.sty {
-                ty::TyAdt(def, _) => if def.is_enum() {
+                ty::Adt(def, _) => if def.is_enum() {
                     field.index().to_string()
                 } else {
                     def.non_enum_variant().fields[field.index()]
                         .ident
                         .to_string()
                 },
-                ty::TyTuple(_) => field.index().to_string(),
-                ty::TyRef(_, ty, _) | ty::TyRawPtr(ty::TypeAndMut { ty, .. }) => {
+                ty::Tuple(_) => field.index().to_string(),
+                ty::Ref(_, ty, _) | ty::RawPtr(ty::TypeAndMut { ty, .. }) => {
                     self.describe_field_from_ty(&ty, field)
                 }
-                ty::TyArray(ty, _) | ty::TySlice(ty) => self.describe_field_from_ty(&ty, field),
-                ty::TyClosure(def_id, _) | ty::TyGenerator(def_id, _, _) => {
+                ty::Array(ty, _) | ty::Slice(ty) => self.describe_field_from_ty(&ty, field),
+                ty::Closure(def_id, _) | ty::Generator(def_id, _, _) => {
                     // Convert the def-id into a node-id. node-ids are only valid for
                     // the local code in the current crate, so this returns an `Option` in case
                     // the closure comes from another crate. But in that case we wouldn't
@@ -890,8 +1010,10 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
             let attrs = self.tcx.get_attrs(statik.def_id);
             let is_thread_local = attrs.iter().any(|attr| attr.check_name("thread_local"));
 
-            debug!("is_place_thread_local: attrs={:?} is_thread_local={:?}",
-                   attrs, is_thread_local);
+            debug!(
+                "is_place_thread_local: attrs={:?} is_thread_local={:?}",
+                attrs, is_thread_local
+            );
             is_thread_local
         } else {
             debug!("is_place_thread_local: no");
@@ -909,7 +1031,7 @@ pub(super) enum UseSpans {
         // it's present.
         args_span: Span,
         // The span of the first use of the captured variable inside the closure.
-        var_span: Span
+        var_span: Span,
     },
     // This access has a single span associated to it: common case.
     OtherUse(Span),

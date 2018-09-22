@@ -24,12 +24,11 @@
 //!     int) and rec(x=int, y=int, z=int) will have the same llvm::Type.
 
 use super::ModuleLlvm;
-use super::ModuleSource;
 use super::ModuleCodegen;
 use super::ModuleKind;
+use super::CachedModuleCodegen;
 
 use abi;
-use back::link;
 use back::write::{self, OngoingCodegen};
 use llvm::{self, TypeKind, get_param};
 use metadata;
@@ -41,12 +40,11 @@ use rustc::middle::cstore::{EncodedMetadata};
 use rustc::ty::{self, Ty, TyCtxt};
 use rustc::ty::layout::{self, Align, TyLayout, LayoutOf};
 use rustc::ty::query::Providers;
-use rustc::dep_graph::{DepNode, DepConstructor};
-use rustc::middle::cstore::{self, LinkMeta, LinkagePreference};
+use rustc::middle::cstore::{self, LinkagePreference};
 use rustc::middle::exported_symbols;
 use rustc::util::common::{time, print_time_passes_entry};
 use rustc::util::profiling::ProfileCategory;
-use rustc::session::config::{self, DebugInfo, EntryFnType};
+use rustc::session::config::{self, DebugInfo, EntryFnType, Lto};
 use rustc::session::Session;
 use rustc_incremental;
 use allocator;
@@ -167,12 +165,12 @@ pub fn compare_simd_types(
     op: hir::BinOpKind
 ) -> &'ll Value {
     let signed = match t.sty {
-        ty::TyFloat(_) => {
+        ty::Float(_) => {
             let cmp = bin_op_to_fcmp_predicate(op);
             return bx.sext(bx.fcmp(cmp, lhs, rhs), ret_ty);
         },
-        ty::TyUint(_) => false,
-        ty::TyInt(_) => true,
+        ty::Uint(_) => false,
+        ty::Int(_) => true,
         _ => bug!("compare_simd_types: invalid SIMD type"),
     };
 
@@ -198,16 +196,16 @@ pub fn unsized_info(
 ) -> &'ll Value {
     let (source, target) = cx.tcx.struct_lockstep_tails(source, target);
     match (&source.sty, &target.sty) {
-        (&ty::TyArray(_, len), &ty::TySlice(_)) => {
+        (&ty::Array(_, len), &ty::Slice(_)) => {
             C_usize(cx, len.unwrap_usize(cx.tcx))
         }
-        (&ty::TyDynamic(..), &ty::TyDynamic(..)) => {
+        (&ty::Dynamic(..), &ty::Dynamic(..)) => {
             // For now, upcasts are limited to changes in marker
             // traits, and hence never actually require an actual
             // change to the vtable.
             old_info.expect("unsized_info: missing old info for trait upcast")
         }
-        (_, &ty::TyDynamic(ref data, ..)) => {
+        (_, &ty::Dynamic(ref data, ..)) => {
             let vtable_ptr = cx.layout_of(cx.tcx.mk_mut_ptr(target))
                 .field(cx, abi::FAT_PTR_EXTRA);
             consts::ptrcast(meth::get_vtable(cx, source, data.principal()),
@@ -228,23 +226,23 @@ pub fn unsize_thin_ptr(
 ) -> (&'ll Value, &'ll Value) {
     debug!("unsize_thin_ptr: {:?} => {:?}", src_ty, dst_ty);
     match (&src_ty.sty, &dst_ty.sty) {
-        (&ty::TyRef(_, a, _),
-         &ty::TyRef(_, b, _)) |
-        (&ty::TyRef(_, a, _),
-         &ty::TyRawPtr(ty::TypeAndMut { ty: b, .. })) |
-        (&ty::TyRawPtr(ty::TypeAndMut { ty: a, .. }),
-         &ty::TyRawPtr(ty::TypeAndMut { ty: b, .. })) => {
+        (&ty::Ref(_, a, _),
+         &ty::Ref(_, b, _)) |
+        (&ty::Ref(_, a, _),
+         &ty::RawPtr(ty::TypeAndMut { ty: b, .. })) |
+        (&ty::RawPtr(ty::TypeAndMut { ty: a, .. }),
+         &ty::RawPtr(ty::TypeAndMut { ty: b, .. })) => {
             assert!(bx.cx.type_is_sized(a));
             let ptr_ty = bx.cx.layout_of(b).llvm_type(bx.cx).ptr_to();
             (bx.pointercast(src, ptr_ty), unsized_info(bx.cx, a, b, None))
         }
-        (&ty::TyAdt(def_a, _), &ty::TyAdt(def_b, _)) if def_a.is_box() && def_b.is_box() => {
+        (&ty::Adt(def_a, _), &ty::Adt(def_b, _)) if def_a.is_box() && def_b.is_box() => {
             let (a, b) = (src_ty.boxed_ty(), dst_ty.boxed_ty());
             assert!(bx.cx.type_is_sized(a));
             let ptr_ty = bx.cx.layout_of(b).llvm_type(bx.cx).ptr_to();
             (bx.pointercast(src, ptr_ty), unsized_info(bx.cx, a, b, None))
         }
-        (&ty::TyAdt(def_a, _), &ty::TyAdt(def_b, _)) => {
+        (&ty::Adt(def_a, _), &ty::Adt(def_b, _)) => {
             assert_eq!(def_a, def_b);
 
             let src_layout = bx.cx.layout_of(src_ty);
@@ -300,16 +298,16 @@ pub fn coerce_unsized_into(
         OperandValue::Pair(base, info).store(bx, dst);
     };
     match (&src_ty.sty, &dst_ty.sty) {
-        (&ty::TyRef(..), &ty::TyRef(..)) |
-        (&ty::TyRef(..), &ty::TyRawPtr(..)) |
-        (&ty::TyRawPtr(..), &ty::TyRawPtr(..)) => {
+        (&ty::Ref(..), &ty::Ref(..)) |
+        (&ty::Ref(..), &ty::RawPtr(..)) |
+        (&ty::RawPtr(..), &ty::RawPtr(..)) => {
             coerce_ptr()
         }
-        (&ty::TyAdt(def_a, _), &ty::TyAdt(def_b, _)) if def_a.is_box() && def_b.is_box() => {
+        (&ty::Adt(def_a, _), &ty::Adt(def_b, _)) if def_a.is_box() && def_b.is_box() => {
             coerce_ptr()
         }
 
-        (&ty::TyAdt(def_a, _), &ty::TyAdt(def_b, _)) => {
+        (&ty::Adt(def_a, _), &ty::Adt(def_b, _)) => {
             assert_eq!(def_a, def_b);
 
             for i in 0..def_a.variants[0].fields.len() {
@@ -608,8 +606,7 @@ fn maybe_create_entry_wrapper(cx: &CodegenCx) {
 }
 
 fn write_metadata<'a, 'gcx>(tcx: TyCtxt<'a, 'gcx, 'gcx>,
-                            llvm_module: &ModuleLlvm,
-                            link_meta: &LinkMeta)
+                            llvm_module: &ModuleLlvm)
                             -> EncodedMetadata {
     use std::io::Write;
     use flate2::Compression;
@@ -641,7 +638,7 @@ fn write_metadata<'a, 'gcx>(tcx: TyCtxt<'a, 'gcx, 'gcx>,
         return EncodedMetadata::new();
     }
 
-    let metadata = tcx.encode_metadata(link_meta);
+    let metadata = tcx.encode_metadata();
     if kind == MetadataKind::Uncompressed {
         return metadata;
     }
@@ -700,6 +697,50 @@ pub fn iter_globals(llmod: &'ll llvm::Module) -> ValueIter<'ll> {
     }
 }
 
+#[derive(Debug)]
+enum CguReUsable {
+    PreLto,
+    PostLto,
+    No
+}
+
+fn determine_cgu_reuse<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                 cgu: &CodegenUnit<'tcx>)
+                                 -> CguReUsable {
+    if !tcx.dep_graph.is_fully_enabled() {
+        return CguReUsable::No
+    }
+
+    let work_product_id = &cgu.work_product_id();
+    if tcx.dep_graph.previous_work_product(work_product_id).is_none() {
+        // We don't have anything cached for this CGU. This can happen
+        // if the CGU did not exist in the previous session.
+        return CguReUsable::No
+    }
+
+    // Try to mark the CGU as green. If it we can do so, it means that nothing
+    // affecting the LLVM module has changed and we can re-use a cached version.
+    // If we compile with any kind of LTO, this means we can re-use the bitcode
+    // of the Pre-LTO stage (possibly also the Post-LTO version but we'll only
+    // know that later). If we are not doing LTO, there is only one optimized
+    // version of each module, so we re-use that.
+    let dep_node = cgu.codegen_dep_node(tcx);
+    assert!(!tcx.dep_graph.dep_node_exists(&dep_node),
+        "CompileCodegenUnit dep-node for CGU `{}` already exists before marking.",
+        cgu.name());
+
+    if tcx.dep_graph.try_mark_green(tcx, &dep_node).is_some() {
+        // We can re-use either the pre- or the post-thinlto state
+        if tcx.sess.lto() != Lto::No {
+            CguReUsable::PreLto
+        } else {
+            CguReUsable::PostLto
+        }
+    } else {
+        CguReUsable::No
+    }
+}
+
 pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                              rx: mpsc::Receiver<Box<dyn Any + Send>>)
                              -> OngoingCodegen {
@@ -719,8 +760,6 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         tcx.sess.fatal("this compiler's LLVM does not support PGO");
     }
 
-    let crate_hash = tcx.crate_hash(LOCAL_CRATE);
-    let link_meta = link::build_link_meta(crate_hash);
     let cgu_name_builder = &mut CodegenUnitNameBuilder::new(tcx);
 
     // Codegen the metadata.
@@ -732,13 +771,13 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                                                              .to_string();
     let metadata_llvm_module = ModuleLlvm::new(tcx.sess, &metadata_cgu_name);
     let metadata = time(tcx.sess, "write metadata", || {
-        write_metadata(tcx, &metadata_llvm_module, &link_meta)
+        write_metadata(tcx, &metadata_llvm_module)
     });
     tcx.sess.profiler(|p| p.end_activity(ProfileCategory::Codegen));
 
     let metadata_module = ModuleCodegen {
         name: metadata_cgu_name,
-        source: ModuleSource::Codegened(metadata_llvm_module),
+        module_llvm: metadata_llvm_module,
         kind: ModuleKind::Metadata,
     };
 
@@ -754,7 +793,6 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         let ongoing_codegen = write::start_async_codegen(
             tcx,
             time_graph.clone(),
-            link_meta,
             metadata,
             rx,
             1);
@@ -789,7 +827,6 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let ongoing_codegen = write::start_async_codegen(
         tcx,
         time_graph.clone(),
-        link_meta,
         metadata,
         rx,
         codegen_units.len());
@@ -829,7 +866,7 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
         Some(ModuleCodegen {
             name: llmod_id,
-            source: ModuleSource::Codegened(modules),
+            module_llvm: modules,
             kind: ModuleKind::Allocator,
         })
     } else {
@@ -857,48 +894,40 @@ pub fn codegen_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         ongoing_codegen.wait_for_signal_to_codegen_item();
         ongoing_codegen.check_for_errors(tcx.sess);
 
-        // First, if incremental compilation is enabled, we try to re-use the
-        // codegen unit from the cache.
-        if tcx.dep_graph.is_fully_enabled() {
-            let cgu_id = cgu.work_product_id();
-
-            // Check whether there is a previous work-product we can
-            // re-use.  Not only must the file exist, and the inputs not
-            // be dirty, but the hash of the symbols we will generate must
-            // be the same.
-            if let Some(buf) = tcx.dep_graph.previous_work_product(&cgu_id) {
-                let dep_node = &DepNode::new(tcx,
-                    DepConstructor::CompileCodegenUnit(cgu.name().clone()));
-
-                // We try to mark the DepNode::CompileCodegenUnit green. If we
-                // succeed it means that none of the dependencies has changed
-                // and we can safely re-use.
-                if let Some(dep_node_index) = tcx.dep_graph.try_mark_green(tcx, dep_node) {
-                    let module = ModuleCodegen {
-                        name: cgu.name().to_string(),
-                        source: ModuleSource::Preexisting(buf),
-                        kind: ModuleKind::Regular,
-                    };
-                    tcx.dep_graph.mark_loaded_from_cache(dep_node_index, true);
-                    write::submit_codegened_module_to_llvm(tcx, module, 0);
-                    // Continue to next cgu, this one is done.
-                    continue
-                }
-            } else {
-                // This can happen if files were  deleted from the cache
-                // directory for some reason. We just re-compile then.
+        let loaded_from_cache = match determine_cgu_reuse(tcx, &cgu) {
+            CguReUsable::No => {
+                let _timing_guard = time_graph.as_ref().map(|time_graph| {
+                    time_graph.start(write::CODEGEN_WORKER_TIMELINE,
+                                     write::CODEGEN_WORK_PACKAGE_KIND,
+                                     &format!("codegen {}", cgu.name()))
+                });
+                let start_time = Instant::now();
+                let stats = compile_codegen_unit(tcx, *cgu.name());
+                all_stats.extend(stats);
+                total_codegen_time += start_time.elapsed();
+                false
             }
-        }
+            CguReUsable::PreLto => {
+                write::submit_pre_lto_module_to_llvm(tcx, CachedModuleCodegen {
+                    name: cgu.name().to_string(),
+                    source: cgu.work_product(tcx),
+                });
+                true
+            }
+            CguReUsable::PostLto => {
+                write::submit_post_lto_module_to_llvm(tcx, CachedModuleCodegen {
+                    name: cgu.name().to_string(),
+                    source: cgu.work_product(tcx),
+                });
+                true
+            }
+        };
 
-        let _timing_guard = time_graph.as_ref().map(|time_graph| {
-            time_graph.start(write::CODEGEN_WORKER_TIMELINE,
-                             write::CODEGEN_WORK_PACKAGE_KIND,
-                             &format!("codegen {}", cgu.name()))
-        });
-        let start_time = Instant::now();
-        all_stats.extend(tcx.compile_codegen_unit(*cgu.name()));
-        total_codegen_time += start_time.elapsed();
-        ongoing_codegen.check_for_errors(tcx.sess);
+        if tcx.dep_graph.is_fully_enabled() {
+            let dep_node = cgu.codegen_dep_node(tcx);
+            let dep_node_index = tcx.dep_graph.dep_node_index_of(&dep_node);
+            tcx.dep_graph.mark_loaded_from_cache(dep_node_index, loaded_from_cache);
+        }
     }
 
     ongoing_codegen.codegen_finished(tcx);
@@ -1162,11 +1191,15 @@ fn is_codegened_item(tcx: TyCtxt, id: DefId) -> bool {
 }
 
 fn compile_codegen_unit<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                  cgu: InternedString) -> Stats {
-    let cgu = tcx.codegen_unit(cgu);
-
+                                  cgu_name: InternedString)
+                                  -> Stats {
     let start_time = Instant::now();
-    let (stats, module) = module_codegen(tcx, cgu);
+
+    let dep_node = tcx.codegen_unit(cgu_name).codegen_dep_node(tcx);
+    let ((stats, module), _) = tcx.dep_graph.with_task(dep_node,
+                                                       tcx,
+                                                       cgu_name,
+                                                       module_codegen);
     let time_to_codegen = start_time.elapsed();
 
     // We assume that the cost to run LLVM on a CGU is proportional to
@@ -1175,23 +1208,23 @@ fn compile_codegen_unit<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                time_to_codegen.subsec_nanos() as u64;
 
     write::submit_codegened_module_to_llvm(tcx,
-                                            module,
-                                            cost);
+                                           module,
+                                           cost);
     return stats;
 
     fn module_codegen<'a, 'tcx>(
         tcx: TyCtxt<'a, 'tcx, 'tcx>,
-        cgu: Arc<CodegenUnit<'tcx>>)
+        cgu_name: InternedString)
         -> (Stats, ModuleCodegen)
     {
-        let cgu_name = cgu.name().to_string();
+        let cgu = tcx.codegen_unit(cgu_name);
 
         // Instantiate monomorphizations without filling out definitions yet...
-        let llvm_module = ModuleLlvm::new(tcx.sess, &cgu_name);
+        let llvm_module = ModuleLlvm::new(tcx.sess, &cgu_name.as_str());
         let stats = {
             let cx = CodegenCx::new(tcx, cgu, &llvm_module);
             let mono_items = cx.codegen_unit
-                                 .items_in_deterministic_order(cx.tcx);
+                               .items_in_deterministic_order(cx.tcx);
             for &(mono_item, (linkage, visibility)) in &mono_items {
                 mono_item.predefine(&cx, linkage, visibility);
             }
@@ -1240,8 +1273,8 @@ fn compile_codegen_unit<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         };
 
         (stats, ModuleCodegen {
-            name: cgu_name,
-            source: ModuleSource::Codegened(llvm_module),
+            name: cgu_name.to_string(),
+            module_llvm: llvm_module,
             kind: ModuleKind::Regular,
         })
     }
@@ -1260,7 +1293,6 @@ pub fn provide(providers: &mut Providers) {
             .cloned()
             .unwrap_or_else(|| panic!("failed to find cgu with name {:?}", name))
     };
-    providers.compile_codegen_unit = compile_codegen_unit;
 
     provide_extern(providers);
 }

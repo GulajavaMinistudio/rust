@@ -15,7 +15,6 @@ use hir::map::definitions::Definitions;
 use ich::{self, CachingSourceMapView, Fingerprint};
 use middle::cstore::CrateStore;
 use ty::{TyCtxt, fast_reject};
-use mir::interpret::AllocId;
 use session::Session;
 
 use std::cmp::Ord;
@@ -28,14 +27,15 @@ use syntax::ast;
 use syntax::source_map::SourceMap;
 use syntax::ext::hygiene::SyntaxContext;
 use syntax::symbol::Symbol;
+use syntax::tokenstream::DelimSpan;
 use syntax_pos::{Span, DUMMY_SP};
 use syntax_pos::hygiene;
 
 use rustc_data_structures::stable_hasher::{HashStable,
                                            StableHasher, StableHasherResult,
                                            ToStableHashKey};
-use rustc_data_structures::accumulate_vec::AccumulateVec;
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
+use smallvec::SmallVec;
 
 fn compute_ignored_attr_names() -> FxHashSet<Symbol> {
     debug_assert!(ich::IGNORED_ATTRIBUTES.len() > 0);
@@ -60,8 +60,6 @@ pub struct StableHashingContext<'a> {
     // CachingSourceMapView, so we initialize it lazily.
     raw_source_map: &'a SourceMap,
     caching_source_map: Option<CachingSourceMapView<'a>>,
-
-    pub(super) alloc_id_recursion_tracker: FxHashSet<AllocId>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -105,7 +103,6 @@ impl<'a> StableHashingContext<'a> {
             hash_spans: hash_spans_initial,
             hash_bodies: true,
             node_id_hashing_mode: NodeIdHashingMode::HashDefPath,
-            alloc_id_recursion_tracker: Default::default(),
         }
     }
 
@@ -396,6 +393,17 @@ impl<'a> HashStable<StableHashingContext<'a>> for Span {
     }
 }
 
+impl<'a> HashStable<StableHashingContext<'a>> for DelimSpan {
+    fn hash_stable<W: StableHasherResult>(
+        &self,
+        hcx: &mut StableHashingContext<'a>,
+        hasher: &mut StableHasher<W>,
+    ) {
+        self.open.hash_stable(hcx, hasher);
+        self.close.hash_stable(hcx, hasher);
+    }
+}
+
 pub fn hash_stable_trait_impls<'a, 'gcx, W, R>(
     hcx: &mut StableHashingContext<'a>,
     hasher: &mut StableHasher<W>,
@@ -405,7 +413,7 @@ pub fn hash_stable_trait_impls<'a, 'gcx, W, R>(
           R: std_hash::BuildHasher,
 {
     {
-        let mut blanket_impls: AccumulateVec<[_; 8]> = blanket_impls
+        let mut blanket_impls: SmallVec<[_; 8]> = blanket_impls
             .iter()
             .map(|&def_id| hcx.def_path_hash(def_id))
             .collect();
@@ -418,7 +426,7 @@ pub fn hash_stable_trait_impls<'a, 'gcx, W, R>(
     }
 
     {
-        let mut keys: AccumulateVec<[_; 8]> =
+        let mut keys: SmallVec<[_; 8]> =
             non_blanket_impls.keys()
                              .map(|k| (k, k.map_def(|d| hcx.def_path_hash(d))))
                              .collect();
@@ -426,7 +434,7 @@ pub fn hash_stable_trait_impls<'a, 'gcx, W, R>(
         keys.len().hash_stable(hcx, hasher);
         for (key, ref stable_key) in keys {
             stable_key.hash_stable(hcx, hasher);
-            let mut impls : AccumulateVec<[_; 8]> = non_blanket_impls[key]
+            let mut impls : SmallVec<[_; 8]> = non_blanket_impls[key]
                 .iter()
                 .map(|&impl_id| hcx.def_path_hash(impl_id))
                 .collect();

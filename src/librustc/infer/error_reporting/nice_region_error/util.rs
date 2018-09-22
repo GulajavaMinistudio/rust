@@ -10,11 +10,11 @@
 
 //! Helper functions corresponding to lifetime errors due to
 //! anonymous regions.
+
 use hir;
 use infer::error_reporting::nice_region_error::NiceRegionError;
 use ty::{self, Region, Ty};
 use hir::def_id::DefId;
-use hir::map as hir_map;
 use syntax_pos::Span;
 
 // The struct contains the information about the anonymous region
@@ -32,18 +32,6 @@ pub(super) struct AnonymousArgInfo<'tcx> {
     // corresponds to id the argument is the first parameter
     // in the declaration
     pub is_first: bool,
-}
-
-// This struct contains information regarding the
-// Refree((FreeRegion) corresponding to lifetime conflict
-#[derive(Debug)]
-pub(super) struct FreeRegionInfo {
-    // def id corresponding to FreeRegion
-    pub def_id: DefId,
-    // the bound region corresponding to FreeRegion
-    pub boundregion: ty::BoundRegion,
-    // checks if bound region is in Impl Item
-    pub is_impl_item: bool,
 }
 
 impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
@@ -121,36 +109,6 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
         }
     }
 
-    // This method returns the DefId and the BoundRegion corresponding to the given region.
-    pub(super) fn is_suitable_region(&self, region: Region<'tcx>) -> Option<FreeRegionInfo> {
-        let (suitable_region_binding_scope, bound_region) = match *region {
-            ty::ReFree(ref free_region) => (free_region.scope, free_region.bound_region),
-            ty::ReEarlyBound(ref ebr) => (
-                self.tcx.parent_def_id(ebr.def_id).unwrap(),
-                ty::BoundRegion::BrNamed(ebr.def_id, ebr.name),
-            ),
-            _ => return None, // not a free region
-        };
-
-        let node_id = self.tcx
-            .hir
-            .as_local_node_id(suitable_region_binding_scope)
-            .unwrap();
-        let is_impl_item = match self.tcx.hir.find(node_id) {
-            Some(hir_map::NodeItem(..)) | Some(hir_map::NodeTraitItem(..)) => false,
-            Some(hir_map::NodeImplItem(..)) => {
-                self.is_bound_region_in_impl_item(suitable_region_binding_scope)
-            }
-            _ => return None,
-        };
-
-        return Some(FreeRegionInfo {
-            def_id: suitable_region_binding_scope,
-            boundregion: bound_region,
-            is_impl_item: is_impl_item,
-        });
-    }
-
     // Here, we check for the case where the anonymous region
     // is in the return type.
     // FIXME(#42703) - Need to handle certain cases here.
@@ -162,7 +120,7 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
     ) -> Option<Span> {
         let ret_ty = self.tcx.type_of(scope_def_id);
         match ret_ty.sty {
-            ty::TyFnDef(_, _) => {
+            ty::FnDef(_, _) => {
                 let sig = ret_ty.fn_sig(self.tcx);
                 let late_bound_regions = self.tcx
                     .collect_referenced_late_bound_regions(&sig.output());
@@ -173,22 +131,6 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
             _ => {}
         }
         None
-    }
-
-    pub(super) fn is_return_type_impl_trait(
-        &self,
-        scope_def_id: DefId,
-    ) -> bool {
-        let ret_ty = self.tcx.type_of(scope_def_id);
-        match ret_ty.sty {
-            ty::TyFnDef(_, _) => {
-                let sig = ret_ty.fn_sig(self.tcx);
-                let output = self.tcx.erase_late_bound_regions(&sig.output());
-                return output.is_impl_trait();
-            }
-            _ => {}
-        }
-        false
     }
 
     // Here we check for the case where anonymous region
@@ -202,24 +144,4 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
                 .map(|i| i.method_has_self_argument) == Some(true)
     }
 
-    // Here we check if the bound region is in Impl Item.
-    pub(super) fn is_bound_region_in_impl_item(
-        &self,
-        suitable_region_binding_scope: DefId,
-    ) -> bool {
-        let container_id = self.tcx
-            .associated_item(suitable_region_binding_scope)
-            .container
-            .id();
-        if self.tcx.impl_trait_ref(container_id).is_some() {
-            // For now, we do not try to target impls of traits. This is
-            // because this message is going to suggest that the user
-            // change the fn signature, but they may not be free to do so,
-            // since the signature must match the trait.
-            //
-            // FIXME(#42706) -- in some cases, we could do better here.
-            return true;
-        }
-        false
-    }
 }

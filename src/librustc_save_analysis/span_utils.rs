@@ -154,8 +154,7 @@ impl<'a> SpanUtils<'a> {
                 let loc = self.sess.source_map().lookup_char_pos(span.lo());
                 span_bug!(
                     span,
-                    "Mis-counted brackets when breaking path? Parsing '{}' \
-                     in {}, line {}",
+                    "Mis-counted brackets when breaking path? Parsing '{}' in {}, line {}",
                     self.snippet(span),
                     loc.file.name,
                     loc.line
@@ -264,11 +263,8 @@ impl<'a> SpanUtils<'a> {
     /// such as references to macro internal variables.
     pub fn filter_generated(&self, sub_span: Option<Span>, parent: Span) -> bool {
         if !generated_code(parent) {
-            if sub_span.is_none() {
-                // Edge case - this occurs on generated code with incorrect expansion info.
-                return true;
-            }
-            return false;
+            // Edge case - this occurs on generated code with incorrect expansion info.
+            return sub_span.is_none()
         }
         // If sub_span is none, filter out generated code.
         let sub_span = match sub_span {

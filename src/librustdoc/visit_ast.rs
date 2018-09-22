@@ -18,7 +18,7 @@ use syntax::attr;
 use syntax::source_map::Spanned;
 use syntax_pos::{self, Span};
 
-use rustc::hir::map as hir_map;
+use rustc::hir::Node;
 use rustc::hir::def::Def;
 use rustc::hir::def_id::{DefId, LOCAL_CRATE};
 use rustc::middle::privacy::AccessLevel;
@@ -267,9 +267,12 @@ impl<'a, 'tcx, 'rcx, 'cstore> RustdocVisitor<'a, 'tcx, 'rcx, 'cstore> {
                 Def::Struct(did) |
                 Def::Union(did) |
                 Def::Enum(did) |
-                Def::TyForeign(did) |
+                Def::ForeignTy(did) |
                 Def::TyAlias(did) if !self_is_hidden => {
-                    self.cx.access_levels.borrow_mut().map.insert(did, AccessLevel::Public);
+                    self.cx.renderinfo
+                        .borrow_mut()
+                        .access_levels.map
+                        .insert(did, AccessLevel::Public);
                 },
                 Def::Mod(did) => if !self_is_hidden {
                     ::visit_lib::LibEmbargoVisitor::new(self.cx).visit_mod(did);
@@ -284,7 +287,7 @@ impl<'a, 'tcx, 'rcx, 'cstore> RustdocVisitor<'a, 'tcx, 'rcx, 'cstore> {
             Some(n) => n, None => return false
         };
 
-        let is_private = !self.cx.access_levels.borrow().is_public(def_did);
+        let is_private = !self.cx.renderinfo.borrow().access_levels.is_public(def_did);
         let is_hidden = inherits_doc_hidden(self.cx, def_node_id);
 
         // Only inline if requested or if the item would otherwise be stripped
@@ -295,7 +298,7 @@ impl<'a, 'tcx, 'rcx, 'cstore> RustdocVisitor<'a, 'tcx, 'rcx, 'cstore> {
         if !self.view_item_stack.insert(def_node_id) { return false }
 
         let ret = match tcx.hir.get(def_node_id) {
-            hir_map::NodeItem(&hir::Item { node: hir::ItemKind::Mod(ref m), .. }) if glob => {
+            Node::Item(&hir::Item { node: hir::ItemKind::Mod(ref m), .. }) if glob => {
                 let prev = mem::replace(&mut self.inlining, true);
                 for i in &m.item_ids {
                     let i = self.cx.tcx.hir.expect_item(i.id);
@@ -304,13 +307,13 @@ impl<'a, 'tcx, 'rcx, 'cstore> RustdocVisitor<'a, 'tcx, 'rcx, 'cstore> {
                 self.inlining = prev;
                 true
             }
-            hir_map::NodeItem(it) if !glob => {
+            Node::Item(it) if !glob => {
                 let prev = mem::replace(&mut self.inlining, true);
                 self.visit_item(it, renamed, om);
                 self.inlining = prev;
                 true
             }
-            hir_map::NodeForeignItem(it) if !glob => {
+            Node::ForeignItem(it) if !glob => {
                 // generate a fresh `extern {}` block if we want to inline a foreign item.
                 om.foreigns.push(hir::ForeignMod {
                     abi: tcx.hir.get_foreign_abi(it.id),
@@ -371,7 +374,7 @@ impl<'a, 'tcx, 'rcx, 'cstore> RustdocVisitor<'a, 'tcx, 'rcx, 'cstore> {
                 // struct and variant constructors always show up alongside their definitions, we've
                 // already processed them so just discard these.
                 match path.def {
-                    Def::StructCtor(..) | Def::VariantCtor(..) => return,
+                    Def::StructCtor(..) | Def::VariantCtor(..) | Def::SelfCtor(..) => return,
                     _ => {}
                 }
 
@@ -510,9 +513,9 @@ impl<'a, 'tcx, 'rcx, 'cstore> RustdocVisitor<'a, 'tcx, 'rcx, 'cstore> {
                           ref tr,
                           ref ty,
                           ref item_ids) => {
-                // Don't duplicate impls when inlining, we'll pick them up
-                // regardless of where they're located.
-                if !self.inlining {
+                // Don't duplicate impls when inlining or if it's implementing a trait, we'll pick
+                // them up regardless of where they're located.
+                if !self.inlining && tr.is_none() {
                     let items = item_ids.iter()
                                         .map(|ii| self.cx.tcx.hir.impl_item(ii.id).clone())
                                         .collect();

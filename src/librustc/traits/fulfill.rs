@@ -269,7 +269,8 @@ impl<'a, 'b, 'gcx, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'gcx, 
         // doing more work yet
         if !pending_obligation.stalled_on.is_empty() {
             if pending_obligation.stalled_on.iter().all(|&ty| {
-                let resolved_ty = self.selcx.infcx().shallow_resolve(&ty);
+                // Use the force-inlined variant of shallow_resolve() because this code is hot.
+                let resolved_ty = self.selcx.infcx().inlined_shallow_resolve(&ty);
                 resolved_ty == ty // nothing changed here
             }) {
                 debug!("process_predicate: pending obligation {:?} still stalled on {:?}",
@@ -525,7 +526,7 @@ impl<'a, 'b, 'gcx, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'gcx, 
         if self.selcx.coinductive_match(cycle.clone().map(|s| s.obligation.predicate)) {
             debug!("process_child_obligations: coinductive match");
         } else {
-            let cycle : Vec<_> = cycle.map(|c| c.obligation.clone()).collect();
+            let cycle: Vec<_> = cycle.map(|c| c.obligation.clone()).collect();
             self.selcx.infcx().report_overflow_error_cycle(&cycle);
         }
     }
@@ -540,7 +541,7 @@ fn trait_ref_type_vars<'a, 'gcx, 'tcx>(selcx: &mut SelectionContext<'a, 'gcx, 't
      .map(|t| selcx.infcx().resolve_type_vars_if_possible(&t))
      .filter(|t| t.has_infer_types())
      .flat_map(|t| t.walk())
-     .filter(|t| match t.sty { ty::TyInfer(_) => true, _ => false })
+     .filter(|t| match t.sty { ty::Infer(_) => true, _ => false })
      .collect()
 }
 

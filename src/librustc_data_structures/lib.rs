@@ -20,12 +20,14 @@
       html_favicon_url = "https://www.rust-lang.org/favicon.ico",
       html_root_url = "https://doc.rust-lang.org/nightly/")]
 
+#![feature(in_band_lifetimes)]
+#![feature(impl_header_lifetime_elision)]
 #![feature(unboxed_closures)]
 #![feature(fn_traits)]
 #![feature(unsize)]
 #![feature(specialization)]
 #![feature(optin_builtin_traits)]
-#![feature(macro_vis_matcher)]
+#![cfg_attr(stage0, feature(macro_vis_matcher))]
 #![cfg_attr(not(stage0), feature(nll))]
 #![feature(allow_internal_unstable)]
 #![feature(vec_resize_with)]
@@ -48,6 +50,8 @@ extern crate rustc_rayon as rayon;
 extern crate rustc_rayon_core as rayon_core;
 extern crate rustc_hash;
 extern crate serialize;
+#[cfg_attr(test, macro_use)]
+extern crate smallvec;
 
 // See librustc_cratesio_shim/Cargo.toml for a comment explaining this.
 #[allow(unused_extern_crates)]
@@ -56,16 +60,12 @@ extern crate rustc_cratesio_shim;
 pub use rustc_serialize::hex::ToHex;
 
 pub mod svh;
-pub mod accumulate_vec;
-pub mod array_vec;
 pub mod base_n;
-pub mod bitslice;
-pub mod bitvec;
+pub mod bit_set;
 pub mod const_cstr;
 pub mod flock;
 pub mod fx;
 pub mod graph;
-pub mod indexed_set;
 pub mod indexed_vec;
 pub mod obligation_forest;
 pub mod owning_ref;
@@ -83,6 +83,7 @@ pub mod thin_vec;
 pub mod transitive_relation;
 pub mod tuple_slice;
 pub use ena::unify;
+pub mod vec_linked_list;
 pub mod work_queue;
 pub mod fingerprint;
 

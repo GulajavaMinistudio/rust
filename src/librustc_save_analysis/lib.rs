@@ -42,7 +42,7 @@ mod sig;
 
 use rustc::hir;
 use rustc::hir::def::Def as HirDef;
-use rustc::hir::map::{Node, NodeTraitItem, NodeImplItem};
+use rustc::hir::Node;
 use rustc::hir::def_id::{DefId, LOCAL_CRATE};
 use rustc::middle::cstore::ExternCrate;
 use rustc::session::config::CrateType;
@@ -100,7 +100,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
         let end = cm.lookup_char_pos(span.hi());
 
         SpanData {
-            file_name: start.file.name.clone().to_string().into(),
+            file_name: start.file.name.to_string().into(),
             byte_start: span.lo().0,
             byte_end: span.hi().0,
             line_start: Row::new_one_indexed(start.line as u32),
@@ -112,7 +112,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
 
     // List external crates used by the current crate.
     pub fn get_external_crates(&self) -> Vec<ExternalCrateData> {
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(self.tcx.crates().len());
 
         for &n in self.tcx.crates().iter() {
             let span = match *self.tcx.extern_crate(n.as_def_id()) {
@@ -147,7 +147,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                 filter!(self.span_utils, sub_span, item.span, None);
 
                 Some(Data::DefData(Def {
-                    kind: DefKind::Function,
+                    kind: DefKind::ForeignFunction,
                     id: id_from_node_id(item.id, self),
                     span: self.span_from_span(sub_span.unwrap()),
                     name: item.ident.to_string(),
@@ -170,7 +170,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                 let span = self.span_from_span(sub_span.unwrap());
 
                 Some(Data::DefData(Def {
-                    kind: DefKind::Static,
+                    kind: DefKind::ForeignStatic,
                     id,
                     span,
                     name: item.ident.to_string(),
@@ -320,7 +320,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                     decl_id: None,
                     docs: self.docs_for_attrs(&item.attrs),
                     sig: sig::item_signature(item, self),
-                    attributes: lower_attributes(item.attrs.to_owned(), self),
+                    attributes: lower_attributes(item.attrs.clone(), self),
                 }))
             }
             ast::ItemKind::Impl(.., ref trait_ref, ref typ, ref impls) => {
@@ -419,7 +419,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
         let (qualname, parent_scope, decl_id, docs, attributes) =
             match self.tcx.impl_of_method(self.tcx.hir.local_def_id(id)) {
                 Some(impl_id) => match self.tcx.hir.get_if_local(impl_id) {
-                    Some(Node::NodeItem(item)) => match item.node {
+                    Some(Node::Item(item)) => match item.node {
                         hir::ItemKind::Impl(.., ref ty, _) => {
                             let mut qualname = String::from("<");
                             qualname.push_str(&self.tcx.hir.node_to_pretty_string(ty.id));
@@ -428,7 +428,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                             let mut decl_id = None;
                             let mut docs = String::new();
                             let mut attrs = vec![];
-                            if let Some(NodeImplItem(item)) = self.tcx.hir.find(id) {
+                            if let Some(Node::ImplItem(item)) = self.tcx.hir.find(id) {
                                 docs = self.docs_for_attrs(&item.attrs);
                                 attrs = item.attrs.to_vec();
                             }
@@ -470,7 +470,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                         let mut docs = String::new();
                         let mut attrs = vec![];
 
-                        if let Some(NodeTraitItem(item)) = self.tcx.hir.find(id) {
+                        if let Some(Node::TraitItem(item)) = self.tcx.hir.find(id) {
                             docs = self.docs_for_attrs(&item.attrs);
                             attrs = item.attrs.to_vec();
                         }
@@ -534,13 +534,13 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
     pub fn get_expr_data(&self, expr: &ast::Expr) -> Option<Data> {
         let hir_node = self.tcx.hir.expect_expr(expr.id);
         let ty = self.tables.expr_ty_adjusted_opt(&hir_node);
-        if ty.is_none() || ty.unwrap().sty == ty::TyError {
+        if ty.is_none() || ty.unwrap().sty == ty::Error {
             return None;
         }
         match expr.node {
             ast::ExprKind::Field(ref sub_ex, ident) => {
                 let hir_node = match self.tcx.hir.find(sub_ex.id) {
-                    Some(Node::NodeExpr(expr)) => expr,
+                    Some(Node::Expr(expr)) => expr,
                     _ => {
                         debug!(
                             "Missing or weird node for sub-expression {} in {:?}",
@@ -551,7 +551,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                     }
                 };
                 match self.tables.expr_ty_adjusted(&hir_node).sty {
-                    ty::TyAdt(def, _) if !def.is_enum() => {
+                    ty::Adt(def, _) if !def.is_enum() => {
                         let variant = &def.non_enum_variant();
                         let index = self.tcx.find_field_index(ident, variant).unwrap();
                         let sub_span = self.span_utils.span_for_last_ident(expr.span);
@@ -563,7 +563,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                             ref_id: id_from_def_id(variant.fields[index].did),
                         }));
                     }
-                    ty::TyTuple(..) => None,
+                    ty::Tuple(..) => None,
                     _ => {
                         debug!("Expected struct or union type, found {:?}", ty);
                         None
@@ -572,7 +572,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
             }
             ast::ExprKind::Struct(ref path, ..) => {
                 match self.tables.expr_ty_adjusted(&hir_node).sty {
-                    ty::TyAdt(def, _) if !def.is_enum() => {
+                    ty::Adt(def, _) if !def.is_enum() => {
                         let sub_span = self.span_utils.span_for_last_ident(path.span);
                         filter!(self.span_utils, sub_span, path.span, None);
                         let span = self.span_from_span(sub_span.unwrap());
@@ -627,32 +627,32 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
 
     pub fn get_path_def(&self, id: NodeId) -> HirDef {
         match self.tcx.hir.get(id) {
-            Node::NodeTraitRef(tr) => tr.path.def,
+            Node::TraitRef(tr) => tr.path.def,
 
-            Node::NodeItem(&hir::Item {
+            Node::Item(&hir::Item {
                 node: hir::ItemKind::Use(ref path, _),
                 ..
             }) |
-            Node::NodeVisibility(&Spanned {
+            Node::Visibility(&Spanned {
                 node: hir::VisibilityKind::Restricted { ref path, .. }, .. }) => path.def,
 
-            Node::NodeExpr(&hir::Expr {
+            Node::Expr(&hir::Expr {
                 node: hir::ExprKind::Struct(ref qpath, ..),
                 ..
             }) |
-            Node::NodeExpr(&hir::Expr {
+            Node::Expr(&hir::Expr {
                 node: hir::ExprKind::Path(ref qpath),
                 ..
             }) |
-            Node::NodePat(&hir::Pat {
+            Node::Pat(&hir::Pat {
                 node: hir::PatKind::Path(ref qpath),
                 ..
             }) |
-            Node::NodePat(&hir::Pat {
+            Node::Pat(&hir::Pat {
                 node: hir::PatKind::Struct(ref qpath, ..),
                 ..
             }) |
-            Node::NodePat(&hir::Pat {
+            Node::Pat(&hir::Pat {
                 node: hir::PatKind::TupleStruct(ref qpath, ..),
                 ..
             }) => {
@@ -660,12 +660,12 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                 self.tables.qpath_def(qpath, hir_id)
             }
 
-            Node::NodeBinding(&hir::Pat {
+            Node::Binding(&hir::Pat {
                 node: hir::PatKind::Binding(_, canonical_id, ..),
                 ..
             }) => HirDef::Local(canonical_id),
 
-            Node::NodeTy(ty) => if let hir::Ty {
+            Node::Ty(ty) => if let hir::Ty {
                 node: hir::TyKind::Path(ref qpath),
                 ..
             } = *ty
@@ -674,7 +674,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                     hir::QPath::Resolved(_, ref path) => path.def,
                     hir::QPath::TypeRelative(..) => {
                         let ty = hir_ty_to_ty(self.tcx, ty);
-                        if let ty::TyProjection(proj) = ty.sty {
+                        if let ty::Projection(proj) = ty.sty {
                             return HirDef::AssociatedTy(proj.item_def_id);
                         }
                         HirDef::Err
@@ -747,7 +747,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
             HirDef::Union(def_id) |
             HirDef::Enum(def_id) |
             HirDef::TyAlias(def_id) |
-            HirDef::TyForeign(def_id) |
+            HirDef::ForeignTy(def_id) |
             HirDef::TraitAlias(def_id) |
             HirDef::AssociatedExistential(def_id) |
             HirDef::AssociatedTy(def_id) |
@@ -813,6 +813,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
             HirDef::Macro(..) |
             HirDef::ToolMod |
             HirDef::NonMacroAttr(..) |
+            HirDef::SelfCtor(..) |
             HirDef::Err => None,
         }
     }
@@ -1050,7 +1051,7 @@ impl<'a> DumpHandler<'a> {
                     .iter()
                     .any(|ct| *ct == CrateType::Executable);
                 let mut out_name = if executable {
-                    "".to_owned()
+                    String::new()
                 } else {
                     "lib".to_owned()
                 };

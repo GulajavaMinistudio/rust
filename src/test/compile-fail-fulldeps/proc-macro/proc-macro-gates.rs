@@ -10,7 +10,6 @@
 
 // aux-build:proc-macro-gates.rs
 // gate-test-proc_macro_non_items
-// gate-test-proc_macro_path_invoc
 // gate-test-proc_macro_mod line
 // gate-test-proc_macro_expr
 // gate-test-proc_macro_mod
@@ -22,20 +21,16 @@ extern crate proc_macro_gates as foo;
 
 use foo::*;
 
-#[foo::a] //~ ERROR: paths of length greater than one
-fn _test() {}
-
 fn _test_inner() {
-    #![a] // OK
+    #![a] //~ ERROR: non-builtin inner attributes are unstable
 }
 
 #[a] //~ ERROR: custom attributes cannot be applied to modules
-//~| ERROR: procedural macros cannot expand to modules
 mod _test2 {}
 
 mod _test2_inner {
     #![a] //~ ERROR: custom attributes cannot be applied to modules
-    //~| ERROR: procedural macros cannot expand to modules
+          //~| ERROR: non-builtin inner attributes are unstable
 }
 
 #[a = y] //~ ERROR: must only be followed by a delimiter token

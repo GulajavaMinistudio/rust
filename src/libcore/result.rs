@@ -470,6 +470,36 @@ impl<T, E> Result<T, E> {
         }
     }
 
+    /// Maps a `Result<T, E>` to `U` by applying a function to a
+    /// contained [`Ok`] value, or a fallback function to a
+    /// contained [`Err`] value.
+    ///
+    /// This function can be used to unpack a successful result
+    /// while handling an error.
+    ///
+    /// [`Ok`]: enum.Result.html#variant.Ok
+    /// [`Err`]: enum.Result.html#variant.Err
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// #![feature(result_map_or_else)]
+    /// let k = 21;
+    ///
+    /// let x : Result<_, &str> = Ok("foo");
+    /// assert_eq!(x.map_or_else(|e| k * 2, |v| v.len()), 3);
+    ///
+    /// let x : Result<&str, _> = Err("bar");
+    /// assert_eq!(x.map_or_else(|e| k * 2, |v| v.len()), 42);
+    /// ```
+    #[inline]
+    #[unstable(feature = "result_map_or_else", issue = "53268")]
+    pub fn map_or_else<U, M: FnOnce(T) -> U, F: FnOnce(E) -> U>(self, fallback: F, map: M) -> U {
+        self.map(map).unwrap_or_else(fallback)
+    }
+
     /// Maps a `Result<T, E>` to `Result<T, F>` by applying a function to a
     /// contained [`Err`] value, leaving an [`Ok`] value untouched.
     ///
@@ -507,7 +537,7 @@ impl<T, E> Result<T, E> {
 
     /// Returns an iterator over the possibly contained value.
     ///
-    /// The iterator yields one value if the result is [`Ok`], otherwise none.
+    /// The iterator yields one value if the result is [`Result::Ok`], otherwise none.
     ///
     /// # Examples
     ///
@@ -520,8 +550,6 @@ impl<T, E> Result<T, E> {
     /// let x: Result<u32, &str> = Err("nothing!");
     /// assert_eq!(x.iter().next(), None);
     /// ```
-    ///
-    /// [`Ok`]: enum.Result.html#variant.Ok
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn iter(&self) -> Iter<T> {
@@ -530,7 +558,7 @@ impl<T, E> Result<T, E> {
 
     /// Returns a mutable iterator over the possibly contained value.
     ///
-    /// The iterator yields one value if the result is [`Ok`], otherwise none.
+    /// The iterator yields one value if the result is [`Result::Ok`], otherwise none.
     ///
     /// # Examples
     ///
@@ -547,8 +575,6 @@ impl<T, E> Result<T, E> {
     /// let mut x: Result<u32, &str> = Err("nothing!");
     /// assert_eq!(x.iter_mut().next(), None);
     /// ```
-    ///
-    /// [`Ok`]: enum.Result.html#variant.Ok
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn iter_mut(&mut self) -> IterMut<T> {
@@ -994,7 +1020,7 @@ impl<T, E> IntoIterator for Result<T, E> {
 
     /// Returns a consuming iterator over the possibly contained value.
     ///
-    /// The iterator yields one value if the result is [`Ok`], otherwise none.
+    /// The iterator yields one value if the result is [`Result::Ok`], otherwise none.
     ///
     /// # Examples
     ///
@@ -1009,8 +1035,6 @@ impl<T, E> IntoIterator for Result<T, E> {
     /// let v: Vec<u32> = x.into_iter().collect();
     /// assert_eq!(v, []);
     /// ```
-    ///
-    /// [`Ok`]: enum.Result.html#variant.Ok
     #[inline]
     fn into_iter(self) -> IntoIter<T> {
         IntoIter { inner: self.ok() }

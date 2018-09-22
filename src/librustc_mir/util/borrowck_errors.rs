@@ -425,8 +425,8 @@ pub trait BorrowckErrors<'cx>: Sized + Copy {
         o: Origin,
     ) -> DiagnosticBuilder<'cx> {
         let type_name = match (&ty.sty, is_index) {
-            (&ty::TyArray(_, _), Some(true)) | (&ty::TyArray(_, _), None) => "array",
-            (&ty::TySlice(_), _) => "slice",
+            (&ty::Array(_, _), Some(true)) | (&ty::Array(_, _), None) => "array",
+            (&ty::Slice(_), _) => "slice",
             _ => span_bug!(move_from_span, "this path should not cause illegal move"),
         };
         let mut err = struct_span_err!(
@@ -474,7 +474,7 @@ pub trait BorrowckErrors<'cx>: Sized + Copy {
     ) -> DiagnosticBuilder<'cx> {
         let moved_path = moved_path
             .map(|mp| format!(": `{}`", mp))
-            .unwrap_or("".to_owned());
+            .unwrap_or(String::new());
 
         let err = struct_span_err!(
             self,

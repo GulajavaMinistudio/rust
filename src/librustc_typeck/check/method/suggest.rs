@@ -13,6 +13,7 @@
 
 use check::FnCtxt;
 use rustc::hir::map as hir_map;
+use hir::Node;
 use rustc_data_structures::sync::Lrc;
 use rustc::ty::{self, Ty, TyCtxt, ToPolyTraitRef, ToPredicate, TypeFoldable};
 use hir::def::Def;
@@ -24,7 +25,7 @@ use util::nodemap::FxHashSet;
 
 use syntax::ast;
 use syntax::util::lev_distance::find_best_match_for_name;
-use errors::DiagnosticBuilder;
+use errors::{Applicability, DiagnosticBuilder};
 use syntax_pos::{Span, FileName};
 
 
@@ -32,7 +33,7 @@ use rustc::hir::def_id::LOCAL_CRATE;
 use rustc::hir;
 use rustc::hir::print;
 use rustc::infer::type_variable::TypeVariableOrigin;
-use rustc::ty::TyAdt;
+use rustc::ty::Adt;
 
 use std::cmp::Ordering;
 
@@ -45,9 +46,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         match ty.sty {
             // Not all of these (e.g. unsafe fns) implement FnOnce
             // so we look for these beforehand
-            ty::TyClosure(..) |
-            ty::TyFnDef(..) |
-            ty::TyFnPtr(_) => true,
+            ty::Closure(..) |
+            ty::FnDef(..) |
+            ty::FnPtr(_) => true,
             // If it's not a simple function, look for things which implement FnOnce
             _ => {
                 let fn_once = match tcx.lang_items().require(FnOnceTraitLangItem) {
@@ -199,7 +200,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 let item_kind = if is_method {
                     "method"
                 } else if actual.is_enum() {
-                    if let TyAdt(ref adt_def, _) = actual.sty {
+                    if let Adt(ref adt_def, _) = actual.sty {
                         let names = adt_def.variants.iter().map(|s| &s.name);
                         suggestion = find_best_match_for_name(names,
                                                               &item_name.as_str(),
@@ -250,13 +251,16 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                 let snippet = tcx.sess.source_map().span_to_snippet(lit.span)
                                     .unwrap_or("<numeric literal>".to_string());
 
-                                err.span_suggestion(lit.span,
+                                err.span_suggestion_with_applicability(
+                                                    lit.span,
                                                     &format!("you must specify a concrete type for \
                                                               this numeric value, like `{}`",
                                                              concrete_type),
                                                     format!("{}_{}",
                                                             snippet,
-                                                            concrete_type));
+                                                            concrete_type),
+                                                    Applicability::MaybeIncorrect,
+                                );
                             }
                             hir::ExprKind::Path(ref qpath) => {  // local binding
                                 if let &hir::QPath::Resolved(_, ref path) = &qpath {
@@ -275,18 +279,19 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                         );
 
                                         match (filename, parent_node) {
-                                            (FileName::Real(_), hir_map::NodeLocal(hir::Local {
+                                            (FileName::Real(_), Node::Local(hir::Local {
                                                 source: hir::LocalSource::Normal,
                                                 ty,
                                                 ..
                                             })) => {
-                                                err.span_suggestion(
+                                                err.span_suggestion_with_applicability(
                                                     // account for `let x: _ = 42;`
                                                     //                  ^^^^
                                                     span.to(ty.as_ref().map(|ty| ty.span)
                                                         .unwrap_or(span)),
                                                     &msg,
                                                     format!("{}: {}", snippet, concrete_type),
+                                                    Applicability::MaybeIncorrect,
                                                 );
                                             }
                                             _ => {
@@ -338,7 +343,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 if let Some(expr) = rcvr_expr {
                     for (ty, _) in self.autoderef(span, rcvr_ty) {
                         match ty.sty {
-                            ty::TyAdt(def, substs) if !def.is_enum() => {
+                            ty::Adt(def, substs) if !def.is_enum() => {
                                 let variant = &def.non_enum_variant();
                                 if let Some(index) = self.tcx.find_field_index(item_name, variant) {
                                     let field = &variant.fields[index];
@@ -407,11 +412,12 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
                 if static_sources.len() == 1 {
                     if let Some(expr) = rcvr_expr {
-                        err.span_suggestion(expr.span.to(span),
+                        err.span_suggestion_with_applicability(expr.span.to(span),
                                             "use associated function syntax instead",
                                             format!("{}::{}",
                                                     self.ty_to_string(actual),
-                                                    item_name));
+                                                    item_name),
+                                            Applicability::MachineApplicable);
                     } else {
                         err.help(&format!("try with `{}::{}`",
                                           self.ty_to_string(actual), item_name));
@@ -514,7 +520,12 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 format!("use {};\n{}", self.tcx.item_path_str(*did), additional_newline)
             }).collect();
 
-            err.span_suggestions(span, &msg, path_strings);
+            err.span_suggestions_with_applicability(
+                                                    span,
+                                                    &msg,
+                                                    path_strings,
+                                                    Applicability::MaybeIncorrect,
+            );
         } else {
             let limit = if candidates.len() == 5 { 5 } else { 4 };
             for (i, trait_did) in candidates.iter().take(limit).enumerate() {
@@ -638,13 +649,13 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             -> bool {
         fn is_local(ty: Ty) -> bool {
             match ty.sty {
-                ty::TyAdt(def, _) => def.did.is_local(),
-                ty::TyForeign(did) => did.is_local(),
+                ty::Adt(def, _) => def.did.is_local(),
+                ty::Foreign(did) => did.is_local(),
 
-                ty::TyDynamic(ref tr, ..) => tr.principal()
+                ty::Dynamic(ref tr, ..) => tr.principal()
                     .map_or(false, |p| p.def_id().is_local()),
 
-                ty::TyParam(_) => true,
+                ty::Param(_) => true,
 
                 // everything else (primitive types etc.) is effectively
                 // non-local (there are "edge" cases, e.g. (LocalType,), but

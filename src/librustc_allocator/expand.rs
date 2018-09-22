@@ -78,20 +78,20 @@ impl<'a> Folder for ExpandAllocatorDirectives<'a> {
             _ => {
                 self.handler
                     .span_err(item.span, "allocators must be statics");
-                return OneVector::one(item);
+                return smallvec![item];
             }
         }
 
         if self.in_submod > 0 {
             self.handler
                 .span_err(item.span, "`global_allocator` cannot be used in submodules");
-            return OneVector::one(item);
+            return smallvec![item];
         }
 
         if self.found {
             self.handler
                 .span_err(item.span, "cannot define more than one #[global_allocator]");
-            return OneVector::one(item);
+            return smallvec![item];
         }
         self.found = true;
 
@@ -236,15 +236,9 @@ impl<'a> AllocFnFactory<'a> {
     }
 
     fn attrs(&self) -> Vec<Attribute> {
-        let no_mangle = Symbol::intern("no_mangle");
-        let no_mangle = self.cx.meta_word(self.span, no_mangle);
-
         let special = Symbol::intern("rustc_std_internal_symbol");
         let special = self.cx.meta_word(self.span, special);
-        vec![
-            self.cx.attribute(self.span, no_mangle),
-            self.cx.attribute(self.span, special),
-        ]
+        vec![self.cx.attribute(self.span, special)]
     }
 
     fn arg_ty(

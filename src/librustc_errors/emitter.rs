@@ -16,12 +16,12 @@ use {Level, CodeSuggestion, DiagnosticBuilder, SubDiagnostic, SourceMapperDyn, D
 use snippet::{Annotation, AnnotationType, Line, MultilineAnnotation, StyledString, Style};
 use styled_buffer::StyledBuffer;
 
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::Lrc;
 use atty;
 use std::borrow::Cow;
 use std::io::prelude::*;
 use std::io;
-use std::collections::HashMap;
 use std::cmp::{min, Reverse};
 use termcolor::{StandardStream, ColorChoice, ColorSpec, BufferWriter};
 use termcolor::{WriteColor, Color, Buffer};
@@ -798,7 +798,7 @@ impl EmitterWriter {
                                                          // at by "in this macro invocation"
                                                          format!(" (#{})", i + 1)
                                                      } else {
-                                                         "".to_string()
+                                                         String::new()
                                                      })));
                         }
                         // Check to make sure we're not in any <*macros>
@@ -813,7 +813,7 @@ impl EmitterWriter {
                                                          // backtrace is multiple levels deep
                                                          format!(" (#{})", i + 1)
                                                      } else {
-                                                         "".to_string()
+                                                         String::new()
                                                      })));
                             if !always_backtrace {
                                 break;
@@ -1065,7 +1065,7 @@ impl EmitterWriter {
                     let col = if let Some(first_annotation) = first_line.annotations.first() {
                         format!(":{}", first_annotation.start_col + 1)
                     } else {
-                        "".to_string()
+                        String::new()
                     };
                     format!("{}:{}{}",
                             annotated_file.file.name,
@@ -1090,7 +1090,7 @@ impl EmitterWriter {
                                             max_line_num_len + 1);
 
                 // Contains the vertical lines' positions for active multiline annotations
-                let mut multilines = HashMap::new();
+                let mut multilines = FxHashMap::default();
 
                 // Next, output the annotate source for this file
                 for line_idx in 0..annotated_file.lines.len() {
@@ -1109,7 +1109,7 @@ impl EmitterWriter {
                                                          width_offset,
                                                          code_offset);
 
-                    let mut to_add = HashMap::new();
+                    let mut to_add = FxHashMap::default();
 
                     for (depth, style) in depths {
                         if multilines.get(&depth).is_some() {

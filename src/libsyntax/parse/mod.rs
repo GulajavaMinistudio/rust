@@ -24,8 +24,8 @@ use symbol::Symbol;
 use tokenstream::{TokenStream, TokenTree};
 use diagnostics::plugin::ErrorMap;
 
+use rustc_data_structures::fx::FxHashSet;
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::str;
@@ -46,7 +46,7 @@ pub struct ParseSess {
     pub span_diagnostic: Handler,
     pub unstable_features: UnstableFeatures,
     pub config: CrateConfig,
-    pub missing_fragment_specifiers: Lock<HashSet<Span>>,
+    pub missing_fragment_specifiers: Lock<FxHashSet<Span>>,
     /// Places where raw identifiers were used. This is used for feature gating
     /// raw identifiers
     pub raw_identifier_spans: Lock<Vec<Span>>,
@@ -75,8 +75,8 @@ impl ParseSess {
         ParseSess {
             span_diagnostic: handler,
             unstable_features: UnstableFeatures::from_environment(),
-            config: HashSet::new(),
-            missing_fragment_specifiers: Lock::new(HashSet::new()),
+            config: FxHashSet::default(),
+            missing_fragment_specifiers: Lock::new(FxHashSet::default()),
             raw_identifier_spans: Lock::new(Vec::new()),
             registered_diagnostics: Lock::new(ErrorMap::new()),
             included_mod_stack: Lock::new(vec![]),
@@ -533,7 +533,7 @@ fn byte_lit(lit: &str) -> (u8, usize) {
 fn byte_str_lit(lit: &str) -> Lrc<Vec<u8>> {
     let mut res = Vec::with_capacity(lit.len());
 
-    let error = |i| format!("lexer should have rejected {} at {}", lit, i);
+    let error = |i| panic!("lexer should have rejected {} at {}", lit, i);
 
     /// Eat everything up to a non-whitespace
     fn eat<I: Iterator<Item=(usize, u8)>>(it: &mut iter::Peekable<I>) {
@@ -552,12 +552,11 @@ fn byte_str_lit(lit: &str) -> Lrc<Vec<u8>> {
     loop {
         match chars.next() {
             Some((i, b'\\')) => {
-                let em = error(i);
-                match chars.peek().expect(&em).1 {
+                match chars.peek().unwrap_or_else(|| error(i)).1 {
                     b'\n' => eat(&mut chars),
                     b'\r' => {
                         chars.next();
-                        if chars.peek().expect(&em).1 != b'\n' {
+                        if chars.peek().unwrap_or_else(|| error(i)).1 != b'\n' {
                             panic!("lexer accepted bare CR");
                         }
                         eat(&mut chars);
@@ -574,8 +573,7 @@ fn byte_str_lit(lit: &str) -> Lrc<Vec<u8>> {
                 }
             },
             Some((i, b'\r')) => {
-                let em = error(i);
-                if chars.peek().expect(&em).1 != b'\n' {
+                if chars.peek().unwrap_or_else(|| error(i)).1 != b'\n' {
                     panic!("lexer accepted bare CR");
                 }
                 chars.next();
@@ -724,7 +722,7 @@ mod tests {
     use attr::first_attr_value_str_by_name;
     use parse;
     use print::pprust::item_to_string;
-    use tokenstream::{self, TokenTree};
+    use tokenstream::{self, DelimSpan, TokenTree};
     use util::parser_testing::string_to_stream;
     use util::parser_testing::{string_to_expr, string_to_item};
     use with_globals;
@@ -807,7 +805,7 @@ mod tests {
                 TokenTree::Token(sp(0, 2), token::Ident(Ident::from_str("fn"), false)).into(),
                 TokenTree::Token(sp(3, 4), token::Ident(Ident::from_str("a"), false)).into(),
                 TokenTree::Delimited(
-                    sp(5, 14),
+                    DelimSpan::from_pair(sp(5, 6), sp(13, 14)),
                     tokenstream::Delimited {
                         delim: token::DelimToken::Paren,
                         tts: TokenStream::concat(vec![
@@ -819,7 +817,7 @@ mod tests {
                         ]).into(),
                     }).into(),
                 TokenTree::Delimited(
-                    sp(15, 21),
+                    DelimSpan::from_pair(sp(15, 16), sp(20, 21)),
                     tokenstream::Delimited {
                         delim: token::DelimToken::Brace,
                         tts: TokenStream::concat(vec![

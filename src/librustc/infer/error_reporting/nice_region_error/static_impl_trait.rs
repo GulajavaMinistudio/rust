@@ -14,6 +14,7 @@ use infer::error_reporting::nice_region_error::NiceRegionError;
 use infer::lexical_region_resolve::RegionResolutionError;
 use ty::{BoundRegion, FreeRegion, RegionKind};
 use util::common::ErrorReported;
+use errors::Applicability;
 
 impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
     /// Print the error message for lifetime errors when the return type is a static impl Trait.
@@ -27,9 +28,9 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
                     sup_origin,
                     sup_r,
                 ) => {
-                    let anon_reg_sup = self.is_suitable_region(sup_r)?;
+                    let anon_reg_sup = self.tcx.is_suitable_region(sup_r)?;
                     if sub_r == &RegionKind::ReStatic &&
-                        self.is_return_type_impl_trait(anon_reg_sup.def_id)
+                        self.tcx.return_type_impl_trait(anon_reg_sup.def_id).is_some()
                     {
                         let sp = var_origin.span();
                         let return_sp = sub_origin.span();
@@ -61,7 +62,7 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
                             _ => "'_".to_owned(),
                         };
                         if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(return_sp) {
-                            err.span_suggestion(
+                            err.span_suggestion_with_applicability(
                                 return_sp,
                                 &format!(
                                     "you can add a constraint to the return type to make it last \
@@ -69,6 +70,7 @@ impl<'a, 'gcx, 'tcx> NiceRegionError<'a, 'gcx, 'tcx> {
                                     lifetime,
                                 ),
                                 format!("{} + {}", snippet, lifetime_name),
+                                Applicability::Unspecified,
                             );
                         }
                         err.emit();

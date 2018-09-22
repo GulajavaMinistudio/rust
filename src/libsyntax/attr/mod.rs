@@ -15,7 +15,7 @@ mod builtin;
 pub use self::builtin::{
     cfg_matches, contains_feature_attr, eval_condition, find_crate_name, find_deprecation,
     find_repr_attrs, find_stability, find_unwind_attr, Deprecation, InlineAttr, IntType, ReprAttr,
-    RustcConstUnstable, RustcDeprecation, Stability, StabilityLevel, UnwindAttr,
+    RustcDeprecation, Stability, StabilityLevel, UnwindAttr,
 };
 pub use self::IntType::*;
 pub use self::ReprAttr::*;
@@ -34,7 +34,7 @@ use parse::token::{self, Token};
 use ptr::P;
 use symbol::Symbol;
 use ThinVec;
-use tokenstream::{TokenStream, TokenTree, Delimited};
+use tokenstream::{TokenStream, TokenTree, Delimited, DelimSpan};
 use GLOBALS;
 
 use std::iter;
@@ -535,7 +535,7 @@ impl MetaItemKind {
                     }
                     tokens.push(item.node.tokens());
                 }
-                TokenTree::Delimited(span, Delimited {
+                TokenTree::Delimited(DelimSpan::from_single(span), Delimited {
                     delim: token::Paren,
                     tts: TokenStream::concat(tokens).into(),
                 }).into()

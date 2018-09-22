@@ -9,8 +9,8 @@
 // except according to those terms.
 
 use llvm;
-use rustc::mir::interpret::ConstEvalErr;
-use rustc_mir::interpret::{read_target_uint, const_val_field};
+use rustc::mir::interpret::{ConstEvalErr, read_target_uint};
+use rustc_mir::interpret::{const_field};
 use rustc::hir::def_id::DefId;
 use rustc::mir;
 use rustc_data_structures::indexed_vec::Idx;
@@ -57,7 +57,7 @@ pub fn scalar_to_llvm(
             let base_addr = match alloc_type {
                 Some(AllocType::Memory(alloc)) => {
                     let init = const_alloc_to_llvm(cx, alloc);
-                    if alloc.runtime_mutability == Mutability::Mutable {
+                    if alloc.mutability == Mutability::Mutable {
                         consts::addr_of_mut(cx, init, alloc.align, None)
                     } else {
                         consts::addr_of(cx, init, alloc.align, None)
@@ -134,7 +134,7 @@ pub fn codegen_static_initializer(
     let static_ = cx.tcx.const_eval(param_env.and(cid))?;
 
     let alloc = match static_.val {
-        ConstValue::ByRef(alloc, n) if n.bytes() == 0 => alloc,
+        ConstValue::ByRef(_, alloc, n) if n.bytes() == 0 => alloc,
         _ => bug!("static const eval returned {:#?}", static_),
     };
     Ok((const_alloc_to_llvm(cx, alloc), alloc))
@@ -182,11 +182,11 @@ impl FunctionCx<'a, 'll, 'tcx> {
             .and_then(|c| {
                 let field_ty = c.ty.builtin_index().unwrap();
                 let fields = match c.ty.sty {
-                    ty::TyArray(_, n) => n.unwrap_usize(bx.tcx()),
+                    ty::Array(_, n) => n.unwrap_usize(bx.tcx()),
                     ref other => bug!("invalid simd shuffle type: {}", other),
                 };
                 let values: Result<Vec<_>, Lrc<_>> = (0..fields).map(|field| {
-                    let field = const_val_field(
+                    let field = const_field(
                         bx.tcx(),
                         ty::ParamEnv::reveal_all(),
                         self.instance,

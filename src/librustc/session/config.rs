@@ -21,7 +21,7 @@ use rustc_target::spec::{Target, TargetTriple};
 use lint;
 use middle::cstore;
 
-use syntax::ast::{self, IntTy, UintTy};
+use syntax::ast::{self, IntTy, UintTy, MetaItemKind};
 use syntax::source_map::{FileName, FilePathMapping};
 use syntax::edition::{Edition, EDITION_NAME_LIST, DEFAULT_EDITION};
 use syntax::parse::token;
@@ -37,10 +37,10 @@ use std::collections::btree_map::Iter as BTreeMapIter;
 use std::collections::btree_map::Keys as BTreeMapKeysIter;
 use std::collections::btree_map::Values as BTreeMapValuesIter;
 
+use rustc_data_structures::fx::FxHashSet;
 use std::{fmt, str};
 use std::hash::Hasher;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 
@@ -68,14 +68,12 @@ pub enum OptLevel {
     SizeMin,    // -Oz
 }
 
-#[derive(Clone, Copy, PartialEq, Hash)]
+/// This is what the `LtoCli` values get mapped to after resolving defaults and
+/// and taking other command line options into account.
+#[derive(Clone, Copy, PartialEq, Hash, Debug)]
 pub enum Lto {
     /// Don't do any LTO whatsoever
     No,
-
-    /// Do a full crate graph LTO. The flavor is determined by the compiler
-    /// (currently the default is "fat").
-    Yes,
 
     /// Do a full crate graph LTO with ThinLTO
     Thin,
@@ -86,6 +84,23 @@ pub enum Lto {
 
     /// Do a full crate graph LTO with "fat" LTO
     Fat,
+}
+
+/// The different settings that the `-C lto` flag can have.
+#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+pub enum LtoCli {
+    /// `-C lto=no`
+    No,
+    /// `-C lto=yes`
+    Yes,
+    /// `-C lto`
+    NoParam,
+    /// `-C lto=thin`
+    Thin,
+    /// `-C lto=fat`
+    Fat,
+    /// No `-C lto` flag passed
+    Unspecified,
 }
 
 #[derive(Clone, PartialEq, Hash)]
@@ -260,18 +275,18 @@ impl OutputTypes {
 // DO NOT switch BTreeMap or BTreeSet out for an unsorted container type! That
 // would break dependency tracking for commandline arguments.
 #[derive(Clone, Hash)]
-pub struct Externs(BTreeMap<String, BTreeSet<String>>);
+pub struct Externs(BTreeMap<String, BTreeSet<Option<String>>>);
 
 impl Externs {
-    pub fn new(data: BTreeMap<String, BTreeSet<String>>) -> Externs {
+    pub fn new(data: BTreeMap<String, BTreeSet<Option<String>>>) -> Externs {
         Externs(data)
     }
 
-    pub fn get(&self, key: &str) -> Option<&BTreeSet<String>> {
+    pub fn get(&self, key: &str) -> Option<&BTreeSet<Option<String>>> {
         self.0.get(key)
     }
 
-    pub fn iter<'a>(&'a self) -> BTreeMapIter<'a, String, BTreeSet<String>> {
+    pub fn iter<'a>(&'a self) -> BTreeMapIter<'a, String, BTreeSet<Option<String>>> {
         self.0.iter()
     }
 }
@@ -801,7 +816,8 @@ macro_rules! options {
         pub const parse_unpretty: Option<&'static str> =
             Some("`string` or `string=string`");
         pub const parse_lto: Option<&'static str> =
-            Some("one of `thin`, `fat`, or omitted");
+            Some("either a boolean (`yes`, `no`, `on`, `off`, etc), `thin`, \
+                  `fat`, or omitted");
         pub const parse_cross_lang_lto: Option<&'static str> =
             Some("either a boolean (`yes`, `no`, `on`, `off`, etc), \
                   or the path to the linker plugin");
@@ -809,7 +825,7 @@ macro_rules! options {
 
     #[allow(dead_code)]
     mod $mod_set {
-        use super::{$struct_name, Passes, Sanitizer, Lto, CrossLangLto};
+        use super::{$struct_name, Passes, Sanitizer, LtoCli, CrossLangLto};
         use rustc_target::spec::{LinkerFlavor, PanicStrategy, RelroLevel};
         use std::path::PathBuf;
 
@@ -1002,11 +1018,23 @@ macro_rules! options {
             }
         }
 
-        fn parse_lto(slot: &mut Lto, v: Option<&str>) -> bool {
+        fn parse_lto(slot: &mut LtoCli, v: Option<&str>) -> bool {
+            if v.is_some() {
+                let mut bool_arg = None;
+                if parse_opt_bool(&mut bool_arg, v) {
+                    *slot = if bool_arg.unwrap() {
+                        LtoCli::Yes
+                    } else {
+                        LtoCli::No
+                    };
+                    return true
+                }
+            }
+
             *slot = match v {
-                None => Lto::Yes,
-                Some("thin") => Lto::Thin,
-                Some("fat") => Lto::Fat,
+                None => LtoCli::NoParam,
+                Some("thin") => LtoCli::Thin,
+                Some("fat") => LtoCli::Fat,
                 Some(_) => return false,
             };
             true
@@ -1047,11 +1075,11 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
         "extra arguments to append to the linker invocation (space separated)"),
     link_dead_code: bool = (false, parse_bool, [UNTRACKED],
         "don't let linker strip dead code (turning it on can be used for code coverage)"),
-    lto: Lto = (Lto::No, parse_lto, [TRACKED],
+    lto: LtoCli = (LtoCli::Unspecified, parse_lto, [TRACKED],
         "perform LLVM link-time optimizations"),
     target_cpu: Option<String> = (None, parse_opt_string, [TRACKED],
         "select target processor (rustc --print target-cpus for details)"),
-    target_feature: String = ("".to_string(), parse_string, [TRACKED],
+    target_feature: String = (String::new(), parse_string, [TRACKED],
         "target specific attributes (rustc --print target-features for details)"),
     passes: Vec<String> = (Vec::new(), parse_list, [TRACKED],
         "a list of extra LLVM passes to run (space separated)"),
@@ -1085,7 +1113,7 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
          "choose the code model to use (rustc --print code-models for details)"),
     metadata: Vec<String> = (Vec::new(), parse_list, [TRACKED],
          "metadata to mangle symbol names with"),
-    extra_filename: String = ("".to_string(), parse_string, [UNTRACKED],
+    extra_filename: String = (String::new(), parse_string, [UNTRACKED],
          "extra data to put in each output filename"),
     codegen_units: Option<usize> = (None, parse_opt_uint, [UNTRACKED],
         "divide crate into N units to optimize in parallel"),
@@ -1303,6 +1331,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "disable user provided type assertion in NLL"),
     nll_dont_emit_read_for_match: bool = (false, parse_bool, [UNTRACKED],
         "in match codegen, do not include ReadForMatch statements (used by mir-borrowck)"),
+    dont_buffer_diagnostics: bool = (false, parse_bool, [UNTRACKED],
+        "emit diagnostics rather than buffering (breaks NLL error downgrading, sorting)."),
     polonius: bool = (false, parse_bool, [UNTRACKED],
         "enable polonius-based borrow-checker"),
     codegen_time_graph: bool = (false, parse_bool, [UNTRACKED],
@@ -1373,7 +1403,7 @@ pub fn default_configuration(sess: &Session) -> ast::CrateConfig {
     let max_atomic_width = sess.target.target.max_atomic_width();
     let atomic_cas = sess.target.target.options.atomic_cas;
 
-    let mut ret = HashSet::new();
+    let mut ret = FxHashSet::default();
     // Target bindings.
     ret.insert((Symbol::intern("target_os"), Some(Symbol::intern(os))));
     if let Some(ref fam) = sess.target.target.options.target_family {
@@ -1735,22 +1765,33 @@ pub fn parse_cfgspecs(cfgspecs: Vec<String>) -> ast::CrateConfig {
             let mut parser =
                 parse::new_parser_from_source_str(&sess, FileName::CfgSpec, s.to_string());
 
-            let meta_item = panictry!(parser.parse_meta_item());
+            macro_rules! error {($reason: expr) => {
+                early_error(ErrorOutputType::default(),
+                            &format!(concat!("invalid `--cfg` argument: `{}` (", $reason, ")"), s));
+            }}
 
-            if parser.token != token::Eof {
-                early_error(
-                    ErrorOutputType::default(),
-                    &format!("invalid --cfg argument: {}", s),
-                )
-            } else if meta_item.is_meta_item_list() {
-                let msg = format!(
-                    "invalid predicate in --cfg command line argument: `{}`",
-                    meta_item.ident
-                );
-                early_error(ErrorOutputType::default(), &msg)
+            match &mut parser.parse_meta_item() {
+                Ok(meta_item) if parser.token == token::Eof => {
+                    if meta_item.ident.segments.len() != 1 {
+                        error!("argument key must be an identifier");
+                    }
+                    match &meta_item.node {
+                        MetaItemKind::List(..) => {
+                            error!(r#"expected `key` or `key="value"`"#);
+                        }
+                        MetaItemKind::NameValue(lit) if !lit.node.is_str() => {
+                            error!("argument value must be a string");
+                        }
+                        MetaItemKind::NameValue(..) | MetaItemKind::Word => {
+                            return (meta_item.name(), meta_item.value_str());
+                        }
+                    }
+                }
+                Ok(..) => {}
+                Err(err) => err.cancel(),
             }
 
-            (meta_item.name(), meta_item.value_str())
+            error!(r#"expected `key` or `key="value"`"#);
         })
         .collect::<ast::CrateConfig>()
 }
@@ -1992,7 +2033,7 @@ pub fn build_session_options_and_crate_config(
     };
     if cg.target_feature == "help" {
         prints.push(PrintRequest::TargetFeatures);
-        cg.target_feature = "".to_string();
+        cg.target_feature = String::new();
     }
     if cg.relocation_model.as_ref().map_or(false, |s| s == "help") {
         prints.push(PrintRequest::RelocationModels);
@@ -2130,6 +2171,8 @@ pub fn build_session_options_and_crate_config(
     let cfg = parse_cfgspecs(matches.opt_strs("cfg"));
     let test = matches.opt_present("test");
 
+    let is_unstable_enabled = nightly_options::is_unstable_enabled(matches);
+
     prints.extend(matches.opt_strs("print").into_iter().map(|s| match &*s {
         "crate-name" => PrintRequest::CrateName,
         "file-names" => PrintRequest::FileNames,
@@ -2143,15 +2186,13 @@ pub fn build_session_options_and_crate_config(
         "tls-models" => PrintRequest::TlsModels,
         "native-static-libs" => PrintRequest::NativeStaticLibs,
         "target-spec-json" => {
-            if nightly_options::is_unstable_enabled(matches) {
+            if is_unstable_enabled {
                 PrintRequest::TargetSpec
             } else {
                 early_error(
                     error_format,
-                    &format!(
-                        "the `-Z unstable-options` flag must also be passed to \
-                         enable the target-spec-json print option"
-                    ),
+                    "the `-Z unstable-options` flag must also be passed to \
+                     enable the target-spec-json print option",
                 );
             }
         }
@@ -2181,18 +2222,19 @@ pub fn build_session_options_and_crate_config(
             Some(s) => s,
             None => early_error(error_format, "--extern value must not be empty"),
         };
-        let location = match parts.next() {
-            Some(s) => s,
-            None => early_error(
+        let location = parts.next().map(|s| s.to_string());
+        if location.is_none() && !is_unstable_enabled {
+            early_error(
                 error_format,
-                "--extern value must be of the format `foo=bar`",
-            ),
+                "the `-Z unstable-options` flag must also be passed to \
+                 enable `--extern crate_name` without `=path`",
+            );
         };
 
         externs
             .entry(name.to_string())
             .or_default()
-            .insert(location.to_string());
+            .insert(location);
     }
 
     let crate_name = matches.opt_str("crate-name");
@@ -2373,8 +2415,8 @@ mod dep_tracking {
     use std::hash::Hash;
     use std::path::PathBuf;
     use std::collections::hash_map::DefaultHasher;
-    use super::{CrateType, DebugInfo, ErrorOutputType, Lto, OptLevel, OutputTypes,
-                Passes, Sanitizer, CrossLangLto};
+    use super::{CrateType, DebugInfo, ErrorOutputType, OptLevel, OutputTypes,
+                Passes, Sanitizer, LtoCli, CrossLangLto};
     use syntax::feature_gate::UnstableFeatures;
     use rustc_target::spec::{PanicStrategy, RelroLevel, TargetTriple};
     use syntax::edition::Edition;
@@ -2429,7 +2471,7 @@ mod dep_tracking {
     impl_dep_tracking_hash_via_hash!(RelroLevel);
     impl_dep_tracking_hash_via_hash!(Passes);
     impl_dep_tracking_hash_via_hash!(OptLevel);
-    impl_dep_tracking_hash_via_hash!(Lto);
+    impl_dep_tracking_hash_via_hash!(LtoCli);
     impl_dep_tracking_hash_via_hash!(DebugInfo);
     impl_dep_tracking_hash_via_hash!(UnstableFeatures);
     impl_dep_tracking_hash_via_hash!(OutputTypes);
@@ -2503,7 +2545,7 @@ mod tests {
     use lint;
     use middle::cstore;
     use session::config::{build_configuration, build_session_options_and_crate_config};
-    use session::config::{Lto, CrossLangLto};
+    use session::config::{LtoCli, CrossLangLto};
     use session::build_session;
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter::FromIterator;
@@ -2648,33 +2690,33 @@ mod tests {
         v1.externs = Externs::new(mk_map(vec![
             (
                 String::from("a"),
-                mk_set(vec![String::from("b"), String::from("c")]),
+                mk_set(vec![Some(String::from("b")), Some(String::from("c"))]),
             ),
             (
                 String::from("d"),
-                mk_set(vec![String::from("e"), String::from("f")]),
+                mk_set(vec![Some(String::from("e")), Some(String::from("f"))]),
             ),
         ]));
 
         v2.externs = Externs::new(mk_map(vec![
             (
                 String::from("d"),
-                mk_set(vec![String::from("e"), String::from("f")]),
+                mk_set(vec![Some(String::from("e")), Some(String::from("f"))]),
             ),
             (
                 String::from("a"),
-                mk_set(vec![String::from("b"), String::from("c")]),
+                mk_set(vec![Some(String::from("b")), Some(String::from("c"))]),
             ),
         ]));
 
         v3.externs = Externs::new(mk_map(vec![
             (
                 String::from("a"),
-                mk_set(vec![String::from("b"), String::from("c")]),
+                mk_set(vec![Some(String::from("b")), Some(String::from("c"))]),
             ),
             (
                 String::from("d"),
-                mk_set(vec![String::from("f"), String::from("e")]),
+                mk_set(vec![Some(String::from("f")), Some(String::from("e"))]),
             ),
         ]));
 
@@ -2937,7 +2979,7 @@ mod tests {
 
         // Make sure changing a [TRACKED] option changes the hash
         opts = reference.clone();
-        opts.cg.lto = Lto::Fat;
+        opts.cg.lto = LtoCli::Fat;
         assert!(reference.dep_tracking_hash() != opts.dep_tracking_hash());
 
         opts = reference.clone();

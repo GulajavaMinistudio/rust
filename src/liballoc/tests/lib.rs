@@ -10,9 +10,9 @@
 
 #![feature(allocator_api)]
 #![feature(alloc_system)]
-#![feature(attr_literals)]
 #![feature(box_syntax)]
-#![feature(const_fn)]
+#![cfg_attr(stage0, feature(const_fn))]
+#![cfg_attr(not(stage0), feature(min_const_fn))]
 #![feature(drain_filter)]
 #![feature(exact_size_is_empty)]
 #![feature(pattern)]

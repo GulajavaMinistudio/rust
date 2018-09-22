@@ -244,14 +244,14 @@
 #![feature(arbitrary_self_types)]
 #![feature(array_error_internals)]
 #![feature(asm)]
-#![feature(attr_literals)]
 #![feature(box_syntax)]
 #![feature(cfg_target_has_atomic)]
 #![feature(cfg_target_thread_local)]
 #![feature(cfg_target_vendor)]
 #![feature(char_error_internals)]
 #![feature(compiler_builtins_lib)]
-#![feature(const_fn)]
+#![cfg_attr(stage0, feature(const_fn))]
+#![cfg_attr(not(stage0), feature(min_const_fn))]
 #![feature(const_int_ops)]
 #![feature(const_ip)]
 #![feature(core_intrinsics)]
@@ -270,7 +270,7 @@
 #![feature(libc)]
 #![feature(link_args)]
 #![feature(linkage)]
-#![feature(macro_vis_matcher)]
+#![cfg_attr(stage0, feature(macro_vis_matcher))]
 #![feature(needs_panic_runtime)]
 #![feature(never_type)]
 #![cfg_attr(not(stage0), feature(nll))]
@@ -306,11 +306,11 @@
 #![feature(doc_cfg)]
 #![feature(doc_masked)]
 #![feature(doc_spotlight)]
-#![cfg_attr(windows, feature(used))]
+#![cfg_attr(all(windows, stage0), feature(used))]
 #![feature(doc_alias)]
 #![feature(doc_keyword)]
 #![feature(panic_info_message)]
-#![feature(panic_implementation)]
+#![cfg_attr(stage0, feature(panic_implementation))]
 #![feature(non_exhaustive)]
 
 #![default_lib_allocator]
@@ -434,6 +434,8 @@ pub use alloc_crate::borrow;
 pub use alloc_crate::fmt;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use alloc_crate::format;
+#[unstable(feature = "pin", issue = "49150")]
+pub use core::pin;
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use alloc_crate::slice;
 #[stable(feature = "rust1", since = "1.0.0")]

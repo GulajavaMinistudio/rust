@@ -9,18 +9,22 @@
 // except according to those terms.
 
 use rustc::hir;
-use rustc::mir::{self, BindingForm, ClearCrossCrate, Local, Location, Mir};
-use rustc::mir::{Mutability, Place, Projection, ProjectionElem, Static};
-use rustc::ty::{self, TyCtxt};
+use rustc::hir::Node;
+use rustc::mir::{self, BindingForm, Constant, ClearCrossCrate, Local, Location, Mir};
+use rustc::mir::{Mutability, Operand, Place, Projection, ProjectionElem, Static, Terminator};
+use rustc::mir::TerminatorKind;
+use rustc::ty::{self, Const, DefIdTree, TyS, TyKind, TyCtxt};
 use rustc_data_structures::indexed_vec::Idx;
 use syntax_pos::Span;
 
+use dataflow::move_paths::InitLocation;
 use borrow_check::MirBorrowckCtxt;
 use util::borrowck_errors::{BorrowckErrors, Origin};
 use util::collect_writes::FindAssignments;
 use util::suggest_ref_mut;
+use rustc_errors::Applicability;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum AccessKind {
     MutableBorrow,
     Mutate,
@@ -128,7 +132,7 @@ impl<'a, 'gcx, 'tcx> MirBorrowckCtxt<'a, 'gcx, 'tcx> {
                         }
                     } else {
                         item_msg = format!("data in a {}", pointer_type);
-                        reason = "".to_string();
+                        reason = String::new();
                     }
                 }
             }
@@ -138,7 +142,7 @@ impl<'a, 'gcx, 'tcx> MirBorrowckCtxt<'a, 'gcx, 'tcx> {
             Place::Static(box Static { def_id, ty: _ }) => {
                 if let Place::Static(_) = access_place {
                     item_msg = format!("immutable static item `{}`", access_place_desc.unwrap());
-                    reason = "".to_string();
+                    reason = String::new();
                 } else {
                     item_msg = format!("`{}`", access_place_desc.unwrap());
                     let static_name = &self.tcx.item_name(*def_id);
@@ -224,10 +228,11 @@ impl<'a, 'gcx, 'tcx> MirBorrowckCtxt<'a, 'gcx, 'tcx> {
                 assert_eq!(local_decl.mutability, Mutability::Not);
 
                 err.span_label(span, format!("cannot {ACT}", ACT = act));
-                err.span_suggestion(
+                err.span_suggestion_with_applicability(
                     local_decl.source_info.span,
                     "consider changing this to be mutable",
                     format!("mut {}", local_decl.name.unwrap()),
+                    Applicability::MachineApplicable,
                 );
             }
 
@@ -246,7 +251,7 @@ impl<'a, 'gcx, 'tcx> MirBorrowckCtxt<'a, 'gcx, 'tcx> {
                     .var_hir_id
                     .assert_crate_local();
                 let upvar_node_id = self.tcx.hir.hir_to_node_id(upvar_hir_id);
-                if let Some(hir::map::NodeBinding(pat)) = self.tcx.hir.find(upvar_node_id) {
+                if let Some(Node::Binding(pat)) = self.tcx.hir.find(upvar_node_id) {
                     if let hir::PatKind::Binding(
                         hir::BindingAnnotation::Unannotated,
                         _,
@@ -254,10 +259,11 @@ impl<'a, 'gcx, 'tcx> MirBorrowckCtxt<'a, 'gcx, 'tcx> {
                         _,
                     ) = pat.node
                     {
-                        err.span_suggestion(
+                        err.span_suggestion_with_applicability(
                             upvar_ident.span,
                             "consider changing this to be mutable",
                             format!("mut {}", upvar_ident.name),
+                            Applicability::MachineApplicable,
                         );
                     }
                 }
@@ -348,10 +354,11 @@ impl<'a, 'gcx, 'tcx> MirBorrowckCtxt<'a, 'gcx, 'tcx> {
                 };
 
                 if let Some((err_help_span, suggested_code)) = suggestion {
-                    err.span_suggestion(
+                    err.span_suggestion_with_applicability(
                         err_help_span,
                         &format!("consider changing this to be a mutable {}", pointer_desc),
                         suggested_code,
+                        Applicability::MachineApplicable,
                     );
                 }
 
@@ -390,6 +397,63 @@ impl<'a, 'gcx, 'tcx> MirBorrowckCtxt<'a, 'gcx, 'tcx> {
                     self.mir.span,
                     "consider changing this to accept closures that implement `FnMut`"
                 );
+            }
+
+            Place::Projection(box Projection {
+                base: Place::Local(local),
+                elem: ProjectionElem::Deref,
+            })  if error_access == AccessKind::MutableBorrow => {
+                err.span_label(span, format!("cannot {ACT}", ACT = act));
+
+                let mpi = self.move_data.rev_lookup.find_local(*local);
+                for i in self.move_data.init_path_map[mpi].iter() {
+                    if let InitLocation::Statement(location) = self.move_data.inits[*i].location {
+                        if let Some(
+                            Terminator {
+                                kind: TerminatorKind::Call {
+                                    func: Operand::Constant(box Constant {
+                                        literal: Const {
+                                            ty: &TyS {
+                                                sty: TyKind::FnDef(id, substs),
+                                                ..
+                                            },
+                                            ..
+                                        },
+                                        ..
+                                    }),
+                                    ..
+                                },
+                                ..
+                            }
+                        ) = &self.mir.basic_blocks()[location.block].terminator {
+                            if self.tcx.parent(id) == self.tcx.lang_items().index_trait() {
+
+                                let mut found = false;
+                                self.tcx.for_each_relevant_impl(
+                                    self.tcx.lang_items().index_mut_trait().unwrap(),
+                                    substs.type_at(0),
+                                    |_relevant_impl| {
+                                        found = true;
+                                    }
+                                );
+
+                                let extra = if found {
+                                    String::from("")
+                                } else {
+                                    format!(", but it is not implemented for `{}`",
+                                            substs.type_at(0))
+                                };
+
+                                err.help(
+                                    &format!(
+                                        "trait `IndexMut` is required to modify indexed content{}",
+                                         extra,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             _ => {

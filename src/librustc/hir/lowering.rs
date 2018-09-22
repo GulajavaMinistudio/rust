@@ -50,6 +50,7 @@ use hir::GenericArg;
 use lint::builtin::{self, PARENTHESIZED_PARAMS_IN_TYPES_AND_MODULES,
                     ELIDED_LIFETIMES_IN_PATHS};
 use middle::cstore::CrateStore;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_data_structures::small_vec::OneVector;
 use rustc_data_structures::thin_vec::ThinVec;
@@ -57,7 +58,7 @@ use session::Session;
 use util::common::FN_OUTPUT_NAME;
 use util::nodemap::{DefIdMap, NodeMap};
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::iter;
 use std::mem;
@@ -66,6 +67,7 @@ use syntax::ast;
 use syntax::ast::*;
 use syntax::errors;
 use syntax::ext::hygiene::{Mark, SyntaxContext};
+use syntax::feature_gate::{emit_feature_err, GateIssue};
 use syntax::print::pprust;
 use syntax::ptr::P;
 use syntax::source_map::{self, respan, CompilerDesugaringKind, Spanned};
@@ -595,7 +597,7 @@ impl<'a> LoweringContext<'a> {
         })
     }
 
-    fn expect_full_def_from_use(&mut self, id: NodeId) -> impl Iterator<Item=Def> {
+    fn expect_full_def_from_use(&mut self, id: NodeId) -> impl Iterator<Item = Def> {
         self.resolver.get_import(id).present_items().map(|pr| {
             if pr.unresolved_segments() != 0 {
                 bug!("path not fully resolved: {:?}", pr);
@@ -988,7 +990,7 @@ impl<'a> LoweringContext<'a> {
             None => {
                 self.loop_scopes
                     .last()
-                    .map(|innermost_loop_id| *innermost_loop_id)
+                    .cloned()
                     .map(|id| Ok(self.lower_node_id(id).node_id))
                     .unwrap_or(Err(hir::LoopIdError::OutsideLoopScope))
                     .into()
@@ -1053,7 +1055,10 @@ impl<'a> LoweringContext<'a> {
         hir::Arm {
             attrs: self.lower_attrs(&arm.attrs),
             pats: arm.pats.iter().map(|x| self.lower_pat(x)).collect(),
-            guard: arm.guard.as_ref().map(|ref x| P(self.lower_expr(x))),
+            guard: match arm.guard {
+                Some(Guard::If(ref x)) => Some(hir::Guard::If(P(self.lower_expr(x)))),
+                _ => None,
+            },
             body: P(self.lower_expr(&arm.body)),
         }
     }
@@ -1183,7 +1188,7 @@ impl<'a> LoweringContext<'a> {
                     }
                     ImplTraitContext::Universal(in_band_ty_params) => {
                         self.lower_node_id(def_node_id);
-                        // Add a definition for the in-band TyParam
+                        // Add a definition for the in-band Param
                         let def_index = self
                             .resolver
                             .definitions()
@@ -1342,7 +1347,7 @@ impl<'a> LoweringContext<'a> {
             exist_ty_id: NodeId,
             collect_elided_lifetimes: bool,
             currently_bound_lifetimes: Vec<hir::LifetimeName>,
-            already_defined_lifetimes: HashSet<hir::LifetimeName>,
+            already_defined_lifetimes: FxHashSet<hir::LifetimeName>,
             output_lifetimes: Vec<hir::GenericArg>,
             output_lifetime_params: Vec<hir::GenericParam>,
         }
@@ -1476,7 +1481,7 @@ impl<'a> LoweringContext<'a> {
             exist_ty_id,
             collect_elided_lifetimes: true,
             currently_bound_lifetimes: Vec::new(),
-            already_defined_lifetimes: HashSet::new(),
+            already_defined_lifetimes: FxHashSet::default(),
             output_lifetimes: Vec::new(),
             output_lifetime_params: Vec::new(),
         };
@@ -3178,18 +3183,18 @@ impl<'a> LoweringContext<'a> {
     fn lower_item_id(&mut self, i: &Item) -> OneVector<hir::ItemId> {
         match i.node {
             ItemKind::Use(ref use_tree) => {
-                let mut vec = OneVector::one(hir::ItemId { id: i.id });
+                let mut vec = smallvec![hir::ItemId { id: i.id }];
                 self.lower_item_id_use_tree(use_tree, i.id, &mut vec);
                 vec
             }
             ItemKind::MacroDef(..) => OneVector::new(),
             ItemKind::Fn(ref decl, ref header, ..) => {
-                let mut ids = OneVector::one(hir::ItemId { id: i.id });
+                let mut ids = smallvec![hir::ItemId { id: i.id }];
                 self.lower_impl_trait_ids(decl, header, &mut ids);
                 ids
             },
             ItemKind::Impl(.., None, _, ref items) => {
-                let mut ids = OneVector::one(hir::ItemId { id: i.id });
+                let mut ids = smallvec![hir::ItemId { id: i.id }];
                 for item in items {
                     if let ImplItemKind::Method(ref sig, _) = item.node {
                         self.lower_impl_trait_ids(&sig.decl, &sig.header, &mut ids);
@@ -3197,7 +3202,7 @@ impl<'a> LoweringContext<'a> {
                 }
                 ids
             },
-            _ => OneVector::one(hir::ItemId { id: i.id }),
+            _ => smallvec![hir::ItemId { id: i.id }],
         }
     }
 
@@ -3425,19 +3430,24 @@ impl<'a> LoweringContext<'a> {
                     ParamMode::Optional,
                     ImplTraitContext::Disallowed,
                 );
+                self.check_self_struct_ctor_feature(&qpath);
                 hir::PatKind::TupleStruct(
                     qpath,
                     pats.iter().map(|x| self.lower_pat(x)).collect(),
                     ddpos,
                 )
             }
-            PatKind::Path(ref qself, ref path) => hir::PatKind::Path(self.lower_qpath(
-                p.id,
-                qself,
-                path,
-                ParamMode::Optional,
-                ImplTraitContext::Disallowed,
-            )),
+            PatKind::Path(ref qself, ref path) => {
+                let qpath = self.lower_qpath(
+                    p.id,
+                    qself,
+                    path,
+                    ParamMode::Optional,
+                    ImplTraitContext::Disallowed,
+                );
+                self.check_self_struct_ctor_feature(&qpath);
+                hir::PatKind::Path(qpath)
+            }
             PatKind::Struct(ref path, ref fields, etc) => {
                 let qpath = self.lower_qpath(
                     p.id,
@@ -3613,10 +3623,10 @@ impl<'a> LoweringContext<'a> {
                     hir::LoopSource::Loop,
                 )
             }),
-            ExprKind::Catch(ref body) => {
+            ExprKind::TryBlock(ref body) => {
                 self.with_catch_scope(body.id, |this| {
                     let unstable_span =
-                        this.allow_internal_unstable(CompilerDesugaringKind::Catch, body.span);
+                        this.allow_internal_unstable(CompilerDesugaringKind::TryBlock, body.span);
                     let mut block = this.lower_block(body, true).into_inner();
                     let tail = block.expr.take().map_or_else(
                         || {
@@ -3824,13 +3834,17 @@ impl<'a> LoweringContext<'a> {
                     attrs: e.attrs.clone(),
                 };
             }
-            ExprKind::Path(ref qself, ref path) => hir::ExprKind::Path(self.lower_qpath(
-                e.id,
-                qself,
-                path,
-                ParamMode::Optional,
-                ImplTraitContext::Disallowed,
-            )),
+            ExprKind::Path(ref qself, ref path) => {
+                let qpath = self.lower_qpath(
+                    e.id,
+                    qself,
+                    path,
+                    ParamMode::Optional,
+                    ImplTraitContext::Disallowed,
+                );
+                self.check_self_struct_ctor_feature(&qpath);
+                hir::ExprKind::Path(qpath)
+            }
             ExprKind::Break(opt_label, ref opt_expr) => {
                 let destination = if self.is_in_loop_condition && opt_label.is_none() {
                     hir::Destination {
@@ -4297,7 +4311,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn lower_stmt(&mut self, s: &Stmt) -> OneVector<hir::Stmt> {
-        OneVector::one(match s.node {
+        smallvec![match s.node {
             StmtKind::Local(ref l) => Spanned {
                 node: hir::StmtKind::Decl(
                     P(Spanned {
@@ -4336,7 +4350,7 @@ impl<'a> LoweringContext<'a> {
                 span: s.span,
             },
             StmtKind::Mac(..) => panic!("Shouldn't exist here"),
-        })
+        }]
     }
 
     fn lower_capture_clause(&mut self, c: CaptureBy) -> hir::CaptureClause {
@@ -4810,6 +4824,18 @@ impl<'a> LoweringContext<'a> {
         let from_err = P(self.expr_std_path(unstable_span, path, None,
                                             ThinVec::new()));
         P(self.expr_call(e.span, from_err, hir_vec![e]))
+    }
+
+    fn check_self_struct_ctor_feature(&self, qp: &hir::QPath) {
+        if let hir::QPath::Resolved(_, ref p) = qp {
+            if p.segments.len() == 1 &&
+               p.segments[0].ident.name == keywords::SelfType.name() &&
+               !self.sess.features_untracked().self_struct_ctor {
+                emit_feature_err(&self.sess.parse_sess, "self_struct_ctor",
+                                 p.span, GateIssue::Language,
+                                 "`Self` struct constructors are unstable");
+            }
+        }
     }
 }
 

@@ -64,10 +64,10 @@
 //! methods.  It effectively does a reverse walk of the AST; whenever we
 //! reach a loop node, we iterate until a fixed point is reached.
 //!
-//! ## The `Users` struct
+//! ## The `RWU` struct
 //!
 //! At each live node `N`, we track three pieces of information for each
-//! variable `V` (these are encapsulated in the `Users` struct):
+//! variable `V` (these are encapsulated in the `RWU` struct):
 //!
 //! - `reader`: the `LiveNode` ID of some node which will read the value
 //!    that `V` holds on entry to `N`.  Formally: a node `M` such
@@ -102,11 +102,13 @@
 //!   only dead if the end of the function's block can never be reached.
 //!   It is the responsibility of typeck to ensure that there are no
 //!   `return` expressions in a function declared as diverging.
+
 use self::LoopKind::*;
 use self::LiveNodeKind::*;
 use self::VarKind::*;
 
 use hir::def::*;
+use hir::Node;
 use ty::{self, TyCtxt};
 use lint;
 use errors::Applicability;
@@ -362,7 +364,7 @@ fn visit_fn<'a, 'tcx: 'a>(ir: &mut IrMaps<'a, 'tcx>,
     // Don't run unused pass for #[derive()]
     if let FnKind::Method(..) = fk {
         let parent = ir.tcx.hir.get_parent(id);
-        if let Some(hir::map::Node::NodeItem(i)) = ir.tcx.hir.find(parent) {
+        if let Some(Node::Item(i)) = ir.tcx.hir.find(parent) {
             if i.attrs.iter().any(|a| a.check_name("automatically_derived")) {
                 return;
             }
@@ -535,17 +537,108 @@ fn visit_expr<'a, 'tcx>(ir: &mut IrMaps<'a, 'tcx>, expr: &'tcx Expr) {
 // the same basic propagation framework in all cases.
 
 #[derive(Clone, Copy)]
-struct Users {
+struct RWU {
     reader: LiveNode,
     writer: LiveNode,
     used: bool
 }
 
-fn invalid_users() -> Users {
-    Users {
-        reader: invalid_node(),
-        writer: invalid_node(),
-        used: false
+/// Conceptually, this is like a `Vec<RWU>`. But the number of `RWU`s can get
+/// very large, so it uses a more compact representation that takes advantage
+/// of the fact that when the number of `RWU`s is large, most of them have an
+/// invalid reader and an invalid writer.
+struct RWUTable {
+    /// Each entry in `packed_rwus` is either INV_INV_FALSE, INV_INV_TRUE, or
+    /// an index into `unpacked_rwus`. In the common cases, this compacts the
+    /// 65 bits of data into 32; in the uncommon cases, it expands the 65 bits
+    /// in 96.
+    ///
+    /// More compact representations are possible -- e.g. use only 2 bits per
+    /// packed `RWU` and make the secondary table a HashMap that maps from
+    /// indices to `RWU`s -- but this one strikes a good balance between size
+    /// and speed.
+    packed_rwus: Vec<u32>,
+    unpacked_rwus: Vec<RWU>,
+}
+
+// A constant representing `RWU { reader: invalid_node(); writer: invalid_node(); used: false }`.
+const INV_INV_FALSE: u32 = u32::MAX;
+
+// A constant representing `RWU { reader: invalid_node(); writer: invalid_node(); used: true }`.
+const INV_INV_TRUE: u32 = u32::MAX - 1;
+
+impl RWUTable {
+    fn new(num_rwus: usize) -> RWUTable {
+        Self {
+            packed_rwus: vec![INV_INV_FALSE; num_rwus],
+            unpacked_rwus: vec![],
+        }
+    }
+
+    fn get(&self, idx: usize) -> RWU {
+        let packed_rwu = self.packed_rwus[idx];
+        match packed_rwu {
+            INV_INV_FALSE => RWU { reader: invalid_node(), writer: invalid_node(), used: false },
+            INV_INV_TRUE => RWU { reader: invalid_node(), writer: invalid_node(), used: true },
+            _ => self.unpacked_rwus[packed_rwu as usize],
+        }
+    }
+
+    fn get_reader(&self, idx: usize) -> LiveNode {
+        let packed_rwu = self.packed_rwus[idx];
+        match packed_rwu {
+            INV_INV_FALSE | INV_INV_TRUE => invalid_node(),
+            _ => self.unpacked_rwus[packed_rwu as usize].reader,
+        }
+    }
+
+    fn get_writer(&self, idx: usize) -> LiveNode {
+        let packed_rwu = self.packed_rwus[idx];
+        match packed_rwu {
+            INV_INV_FALSE | INV_INV_TRUE => invalid_node(),
+            _ => self.unpacked_rwus[packed_rwu as usize].writer,
+        }
+    }
+
+    fn get_used(&self, idx: usize) -> bool {
+        let packed_rwu = self.packed_rwus[idx];
+        match packed_rwu {
+            INV_INV_FALSE => false,
+            INV_INV_TRUE => true,
+            _ => self.unpacked_rwus[packed_rwu as usize].used,
+        }
+    }
+
+    #[inline]
+    fn copy_packed(&mut self, dst_idx: usize, src_idx: usize) {
+        self.packed_rwus[dst_idx] = self.packed_rwus[src_idx];
+    }
+
+    fn assign_unpacked(&mut self, idx: usize, rwu: RWU) {
+        if rwu.reader == invalid_node() && rwu.writer == invalid_node() {
+            // When we overwrite an indexing entry in `self.packed_rwus` with
+            // `INV_INV_{TRUE,FALSE}` we don't remove the corresponding entry
+            // from `self.unpacked_rwus`; it's not worth the effort, and we
+            // can't have entries shifting around anyway.
+            self.packed_rwus[idx] = if rwu.used {
+                INV_INV_TRUE
+            } else {
+                INV_INV_FALSE
+            }
+        } else {
+            // Add a new RWU to `unpacked_rwus` and make `packed_rwus[idx]`
+            // point to it.
+            self.packed_rwus[idx] = self.unpacked_rwus.len() as u32;
+            self.unpacked_rwus.push(rwu);
+        }
+    }
+
+    fn assign_inv_inv(&mut self, idx: usize) {
+        self.packed_rwus[idx] = if self.get_used(idx) {
+            INV_INV_TRUE
+        } else {
+            INV_INV_FALSE
+        };
     }
 }
 
@@ -565,7 +658,7 @@ struct Liveness<'a, 'tcx: 'a> {
     tables: &'a ty::TypeckTables<'tcx>,
     s: Specials,
     successors: Vec<LiveNode>,
-    users: Vec<Users>,
+    rwu_table: RWUTable,
 
     // mappings from loop node ID to LiveNode
     // ("break" label should map to loop node ID,
@@ -596,7 +689,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
             tables,
             s: specials,
             successors: vec![invalid_node(); num_live_nodes],
-            users: vec![invalid_users(); num_live_nodes * num_vars],
+            rwu_table: RWUTable::new(num_live_nodes * num_vars),
             break_ln: NodeMap(),
             cont_ln: NodeMap(),
         }
@@ -660,16 +753,13 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
         ln.get() * self.ir.num_vars + var.get()
     }
 
-    fn live_on_entry(&self, ln: LiveNode, var: Variable)
-                      -> Option<LiveNodeKind> {
+    fn live_on_entry(&self, ln: LiveNode, var: Variable) -> Option<LiveNodeKind> {
         assert!(ln.is_valid());
-        let reader = self.users[self.idx(ln, var)].reader;
-        if reader.is_valid() {Some(self.ir.lnk(reader))} else {None}
+        let reader = self.rwu_table.get_reader(self.idx(ln, var));
+        if reader.is_valid() { Some(self.ir.lnk(reader)) } else { None }
     }
 
-    /*
-    Is this variable live on entry to any of its successor nodes?
-    */
+    // Is this variable live on entry to any of its successor nodes?
     fn live_on_exit(&self, ln: LiveNode, var: Variable)
                     -> Option<LiveNodeKind> {
         let successor = self.successors[ln.get()];
@@ -678,14 +768,14 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
 
     fn used_on_entry(&self, ln: LiveNode, var: Variable) -> bool {
         assert!(ln.is_valid());
-        self.users[self.idx(ln, var)].used
+        self.rwu_table.get_used(self.idx(ln, var))
     }
 
     fn assigned_on_entry(&self, ln: LiveNode, var: Variable)
                          -> Option<LiveNodeKind> {
         assert!(ln.is_valid());
-        let writer = self.users[self.idx(ln, var)].writer;
-        if writer.is_valid() {Some(self.ir.lnk(writer))} else {None}
+        let writer = self.rwu_table.get_writer(self.idx(ln, var));
+        if writer.is_valid() { Some(self.ir.lnk(writer)) } else { None }
     }
 
     fn assigned_on_exit(&self, ln: LiveNode, var: Variable)
@@ -728,9 +818,9 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
         {
             let wr = &mut wr as &mut dyn Write;
             write!(wr, "[ln({:?}) of kind {:?} reads", ln.get(), self.ir.lnk(ln));
-            self.write_vars(wr, ln, |idx| self.users[idx].reader);
+            self.write_vars(wr, ln, |idx| self.rwu_table.get_reader(idx));
             write!(wr, "  writes");
-            self.write_vars(wr, ln, |idx| self.users[idx].writer);
+            self.write_vars(wr, ln, |idx| self.rwu_table.get_writer(idx));
             write!(wr, "  precedes {:?}]", self.successors[ln.get()]);
         }
         String::from_utf8(wr).unwrap()
@@ -739,14 +829,9 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
     fn init_empty(&mut self, ln: LiveNode, succ_ln: LiveNode) {
         self.successors[ln.get()] = succ_ln;
 
-        // It is not necessary to initialize the
-        // values to empty because this is the value
-        // they have when they are created, and the sets
-        // only grow during iterations.
-        //
-        // self.indices(ln) { |idx|
-        //     self.users[idx] = invalid_users();
-        // }
+        // It is not necessary to initialize the RWUs here because they are all
+        // set to INV_INV_FALSE when they are created, and the sets only grow
+        // during iterations.
     }
 
     fn init_from_succ(&mut self, ln: LiveNode, succ_ln: LiveNode) {
@@ -754,7 +839,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
         self.successors[ln.get()] = succ_ln;
 
         self.indices2(ln, succ_ln, |this, idx, succ_idx| {
-            this.users[idx] = this.users[succ_idx]
+            this.rwu_table.copy_packed(idx, succ_idx);
         });
         debug!("init_from_succ(ln={}, succ={})",
                self.ln_str(ln), self.ln_str(succ_ln));
@@ -769,28 +854,31 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
 
         let mut changed = false;
         self.indices2(ln, succ_ln, |this, idx, succ_idx| {
-            changed |= copy_if_invalid(this.users[succ_idx].reader,
-                                       &mut this.users[idx].reader);
-            changed |= copy_if_invalid(this.users[succ_idx].writer,
-                                       &mut this.users[idx].writer);
-            if this.users[succ_idx].used && !this.users[idx].used {
-                this.users[idx].used = true;
+            let mut rwu = this.rwu_table.get(idx);
+            let succ_rwu = this.rwu_table.get(succ_idx);
+            if succ_rwu.reader.is_valid() && !rwu.reader.is_valid() {
+                rwu.reader = succ_rwu.reader;
+                changed = true
+            }
+
+            if succ_rwu.writer.is_valid() && !rwu.writer.is_valid() {
+                rwu.writer = succ_rwu.writer;
+                changed = true
+            }
+
+            if succ_rwu.used && !rwu.used {
+                rwu.used = true;
                 changed = true;
+            }
+
+            if changed {
+                this.rwu_table.assign_unpacked(idx, rwu);
             }
         });
 
         debug!("merge_from_succ(ln={:?}, succ={}, first_merge={}, changed={})",
                ln, self.ln_str(succ_ln), first_merge, changed);
         return changed;
-
-        fn copy_if_invalid(src: LiveNode, dst: &mut LiveNode) -> bool {
-            if src.is_valid() && !dst.is_valid() {
-                *dst = src;
-                true
-            } else {
-                false
-            }
-        }
     }
 
     // Indicates that a local variable was *defined*; we know that no
@@ -798,8 +886,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
     // this) so we just clear out all the data.
     fn define(&mut self, writer: LiveNode, var: Variable) {
         let idx = self.idx(writer, var);
-        self.users[idx].reader = invalid_node();
-        self.users[idx].writer = invalid_node();
+        self.rwu_table.assign_inv_inv(idx);
 
         debug!("{:?} defines {:?} (idx={}): {}", writer, var,
                idx, self.ln_str(writer));
@@ -811,22 +898,24 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
                ln, acc, var, self.ln_str(ln));
 
         let idx = self.idx(ln, var);
-        let user = &mut self.users[idx];
+        let mut rwu = self.rwu_table.get(idx);
 
         if (acc & ACC_WRITE) != 0 {
-            user.reader = invalid_node();
-            user.writer = ln;
+            rwu.reader = invalid_node();
+            rwu.writer = ln;
         }
 
         // Important: if we both read/write, must do read second
         // or else the write will override.
         if (acc & ACC_READ) != 0 {
-            user.reader = ln;
+            rwu.reader = ln;
         }
 
         if (acc & ACC_USE) != 0 {
-            user.used = true;
+            rwu.used = true;
         }
+
+        self.rwu_table.assign_unpacked(idx, rwu);
     }
 
     // _______________________________________________________________________
@@ -1028,7 +1117,12 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
                 let body_succ =
                     self.propagate_through_expr(&arm.body, succ);
                 let guard_succ =
-                    self.propagate_through_opt_expr(arm.guard.as_ref().map(|e| &**e), body_succ);
+                    self.propagate_through_opt_expr(
+                        arm.guard.as_ref().map(|g|
+                            match g {
+                                hir::Guard::If(e) => &**e,
+                            }),
+                        body_succ);
                 // only consider the first pattern; any later patterns must have
                 // the same bindings, and we also consider the first pattern to be
                 // the "authoritative" set of ids

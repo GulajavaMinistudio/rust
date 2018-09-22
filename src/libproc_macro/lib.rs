@@ -12,12 +12,8 @@
 //!
 //! This library, provided by the standard distribution, provides the types
 //! consumed in the interfaces of procedurally defined macro definitions such as
-//! function-like macros `#[proc_macro]`, macro attribures `#[proc_macro_attribute]` and
+//! function-like macros `#[proc_macro]`, macro attributes `#[proc_macro_attribute]` and
 //! custom derive attributes`#[proc_macro_derive]`.
-//!
-//! Note that this crate is intentionally bare-bones currently.
-//! This functionality is intended to be expanded over time as more surface
-//! area for macro authors is stabilized.
 //!
 //! See [the book](../book/first-edition/procedural-macros.html) for more.
 
@@ -51,8 +47,8 @@ pub mod rustc;
 
 mod diagnostic;
 
-#[unstable(feature = "proc_macro_diagnostic", issue = "38356")]
-pub use diagnostic::{Diagnostic, Level};
+#[unstable(feature = "proc_macro_diagnostic", issue = "54140")]
+pub use diagnostic::{Diagnostic, Level, MultiSpan};
 
 use std::{ascii, fmt, iter};
 use std::path::PathBuf;
@@ -62,7 +58,7 @@ use std::str::FromStr;
 use syntax::errors::DiagnosticBuilder;
 use syntax::parse::{self, token};
 use syntax::symbol::Symbol;
-use syntax::tokenstream;
+use syntax::tokenstream::{self, DelimSpan};
 use syntax_pos::{Pos, FileName};
 
 /// The main type provided by this crate, representing an abstract stream of
@@ -72,9 +68,6 @@ use syntax_pos::{Pos, FileName};
 ///
 /// This is both the input and output of `#[proc_macro]`, `#[proc_macro_attribute]`
 /// and `#[proc_macro_derive]` definitions.
-///
-/// The API of this type is intentionally bare-bones, but it'll be expanded over
-/// time!
 #[stable(feature = "proc_macro_lib", since = "1.15.0")]
 #[derive(Clone)]
 pub struct TokenStream(tokenstream::TokenStream);
@@ -281,7 +274,7 @@ macro_rules! diagnostic_method {
     ($name:ident, $level:expr) => (
         /// Create a new `Diagnostic` with the given `message` at the span
         /// `self`.
-        #[unstable(feature = "proc_macro_diagnostic", issue = "38356")]
+        #[unstable(feature = "proc_macro_diagnostic", issue = "54140")]
         pub fn $name<T: Into<String>>(self, message: T) -> Diagnostic {
             Diagnostic::spanned(self, $level, message)
         }
@@ -608,7 +601,7 @@ impl fmt::Display for TokenTree {
 pub struct Group {
     delimiter: Delimiter,
     stream: TokenStream,
-    span: Span,
+    span: DelimSpan,
 }
 
 #[stable(feature = "proc_macro_lib2", since = "1.29.0")]
@@ -649,7 +642,7 @@ impl Group {
         Group {
             delimiter: delimiter,
             stream: stream,
-            span: Span::call_site(),
+            span: DelimSpan::from_single(Span::call_site().0),
         }
     }
 
@@ -670,9 +663,36 @@ impl Group {
 
     /// Returns the span for the delimiters of this token stream, spanning the
     /// entire `Group`.
+    ///
+    /// ```text
+    /// pub fn span(&self) -> Span {
+    ///            ^^^^^^^
+    /// ```
     #[stable(feature = "proc_macro_lib2", since = "1.29.0")]
     pub fn span(&self) -> Span {
-        self.span
+        Span(self.span.entire())
+    }
+
+    /// Returns the span pointing to the opening delimiter of this group.
+    ///
+    /// ```text
+    /// pub fn span_open(&self) -> Span {
+    ///                 ^
+    /// ```
+    #[unstable(feature = "proc_macro_span", issue = "38356")]
+    pub fn span_open(&self) -> Span {
+        Span(self.span.open)
+    }
+
+    /// Returns the span pointing to the closing delimiter of this group.
+    ///
+    /// ```text
+    /// pub fn span_close(&self) -> Span {
+    ///                        ^
+    /// ```
+    #[unstable(feature = "proc_macro_span", issue = "38356")]
+    pub fn span_close(&self) -> Span {
+        Span(self.span.close)
     }
 
     /// Configures the span for this `Group`'s delimiters, but not its internal
@@ -683,7 +703,7 @@ impl Group {
     /// tokens at the level of the `Group`.
     #[stable(feature = "proc_macro_lib2", since = "1.29.0")]
     pub fn set_span(&mut self, span: Span) {
-        self.span = span;
+        self.span = DelimSpan::from_single(span.0);
     }
 }
 

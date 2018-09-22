@@ -77,7 +77,6 @@
 #![feature(arbitrary_self_types)]
 #![feature(asm)]
 #![feature(associated_type_defaults)]
-#![feature(attr_literals)]
 #![feature(cfg_target_has_atomic)]
 #![feature(concat_idents)]
 #![feature(const_fn)]
@@ -120,6 +119,13 @@
 #![feature(const_slice_len)]
 #![feature(const_str_as_bytes)]
 #![feature(const_str_len)]
+#![feature(const_let)]
+#![feature(const_int_rotate)]
+#![feature(const_int_wrapping)]
+#![feature(const_int_sign)]
+#![feature(const_int_conversion)]
+#![feature(const_transmute)]
+#![feature(reverse_bits)]
 #![feature(non_exhaustive)]
 
 #[prelude_import]
@@ -191,10 +197,12 @@ pub mod cell;
 pub mod char;
 pub mod panic;
 pub mod panicking;
+pub mod pin;
 pub mod iter;
 pub mod option;
 pub mod raw;
 pub mod result;
+pub mod ffi;
 
 pub mod slice;
 pub mod str;

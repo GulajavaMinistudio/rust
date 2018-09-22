@@ -230,7 +230,7 @@ macro_rules! await {
         loop {
             if let $crate::task::Poll::Ready(x) =
                 $crate::future::poll_in_task_cx(unsafe {
-                    $crate::mem::PinMut::new_unchecked(&mut pinned)
+                    $crate::pin::Pin::new_unchecked(&mut pinned)
                 })
             {
                 break x;
@@ -309,7 +309,7 @@ macro_rules! assert_approx_eq {
 /// These macros do not have any corresponding definition with a `macro_rules!`
 /// macro, but are documented here. Their implementations can be found hardcoded
 /// into libsyntax itself.
-#[cfg(dox)]
+#[cfg(rustdoc)]
 mod builtin {
 
     /// Unconditionally causes compilation to fail with the given error message when encountered.

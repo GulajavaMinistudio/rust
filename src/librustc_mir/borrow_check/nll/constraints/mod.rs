@@ -58,8 +58,9 @@ impl ConstraintSet {
     crate fn compute_sccs(
         &self,
         constraint_graph: &graph::NormalConstraintGraph,
+        static_region: RegionVid,
     ) -> Sccs<RegionVid, ConstraintSccIndex> {
-        let region_graph = &constraint_graph.region_graph(self);
+        let region_graph = &constraint_graph.region_graph(self, static_region);
         Sccs::new(region_graph)
     }
 }
@@ -98,6 +99,14 @@ impl fmt::Debug for OutlivesConstraint {
     }
 }
 
-newtype_index!(ConstraintIndex { DEBUG_FORMAT = "ConstraintIndex({})" });
+newtype_index! {
+    pub struct ConstraintIndex {
+        DEBUG_FORMAT = "ConstraintIndex({})"
+    }
+}
 
-newtype_index!(ConstraintSccIndex { DEBUG_FORMAT = "ConstraintSccIndex({})" });
+newtype_index! {
+    pub struct ConstraintSccIndex {
+        DEBUG_FORMAT = "ConstraintSccIndex({})"
+    }
+}

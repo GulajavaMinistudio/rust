@@ -15,7 +15,8 @@
 use fmt;
 use future::Future;
 use marker::{PhantomData, Unpin};
-use mem::PinMut;
+use ops;
+use pin::Pin;
 use task::{Context, Poll};
 
 /// A custom trait object for polling futures, roughly akin to
@@ -27,7 +28,7 @@ use task::{Context, Poll};
 /// - The `Future` trait is currently not object safe: The `Future::poll`
 ///   method makes uses the arbitrary self types feature and traits in which
 ///   this feature is used are currently not object safe due to current compiler
-///   limitations. (See tracking issue for arbitray self types for more
+///   limitations. (See tracking issue for arbitrary self types for more
 ///   information #44874)
 pub struct LocalFutureObj<'a, T> {
     ptr: *mut (),
@@ -78,9 +79,9 @@ impl<'a, T> Future for LocalFutureObj<'a, T> {
     type Output = T;
 
     #[inline]
-    fn poll(self: PinMut<Self>, cx: &mut Context) -> Poll<T> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
         unsafe {
-            (self.poll_fn)(self.ptr, cx)
+            ((*self).poll_fn)((*self).ptr, cx)
         }
     }
 }
@@ -102,7 +103,7 @@ impl<'a, T> Drop for LocalFutureObj<'a, T> {
 /// - The `Future` trait is currently not object safe: The `Future::poll`
 ///   method makes uses the arbitrary self types feature and traits in which
 ///   this feature is used are currently not object safe due to current compiler
-///   limitations. (See tracking issue for arbitray self types for more
+///   limitations. (See tracking issue for arbitrary self types for more
 ///   information #44874)
 pub struct FutureObj<'a, T>(LocalFutureObj<'a, T>);
 
@@ -128,9 +129,11 @@ impl<'a, T> Future for FutureObj<'a, T> {
     type Output = T;
 
     #[inline]
-    fn poll(self: PinMut<Self>, cx: &mut Context) -> Poll<T> {
-        let pinned_field = unsafe { PinMut::map_unchecked(self, |x| &mut x.0) };
-        pinned_field.poll(cx)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
+        let pinned_field: Pin<&mut LocalFutureObj<'a, T>> = unsafe {
+            Pin::map_unchecked_mut(self, |x| &mut x.0)
+        };
+        LocalFutureObj::poll(pinned_field, cx)
     }
 }
 
@@ -175,7 +178,25 @@ unsafe impl<'a, T, F> UnsafeFutureObj<'a, T> for &'a mut F
     }
 
     unsafe fn poll(ptr: *mut (), cx: &mut Context) -> Poll<T> {
-        PinMut::new_unchecked(&mut *(ptr as *mut F)).poll(cx)
+        let p: Pin<&mut F> = Pin::new_unchecked(&mut *(ptr as *mut F));
+        F::poll(p, cx)
+    }
+
+    unsafe fn drop(_ptr: *mut ()) {}
+}
+
+#[unstable(feature = "futures_api", issue = "50547")]
+unsafe impl<'a, T, P, F> UnsafeFutureObj<'a, T> for Pin<P> where
+    P: ops::DerefMut<Target = F> + 'a,
+    F: Future<Output = T> + 'a,
+{
+    fn into_raw(mut self) -> *mut () {
+        unsafe { Pin::get_mut_unchecked(Pin::as_mut(&mut self)) as *mut F as *mut () }
+    }
+
+    unsafe fn poll(ptr: *mut (), cx: &mut Context) -> Poll<T> {
+        let future: Pin<&mut F> = Pin::new_unchecked(&mut *(ptr as *mut F));
+        F::poll(future, cx)
     }
 
     unsafe fn drop(_ptr: *mut ()) {}

@@ -8,21 +8,26 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use borrow_check::nll::region_infer::{ConstraintIndex, RegionInferenceContext};
+use borrow_check::nll::constraints::OutlivesConstraint;
+use borrow_check::nll::region_infer::RegionInferenceContext;
 use borrow_check::nll::type_check::Locations;
 use rustc::hir::def_id::DefId;
 use rustc::infer::error_reporting::nice_region_error::NiceRegionError;
 use rustc::infer::InferCtxt;
 use rustc::mir::{self, Location, Mir, Place, Rvalue, StatementKind, TerminatorKind};
-use rustc::ty::{TyCtxt, RegionVid};
+use rustc::ty::{self, TyCtxt, RegionVid};
 use rustc_data_structures::indexed_vec::IndexVec;
-use rustc_errors::Diagnostic;
+use rustc_errors::{Diagnostic, DiagnosticBuilder};
 use std::collections::VecDeque;
 use std::fmt;
+use syntax::symbol::keywords;
 use syntax_pos::Span;
+use syntax::errors::Applicability;
 
 mod region_name;
 mod var_name;
+
+use self::region_name::RegionName;
 
 /// Constraints that are considered interesting can be categorized to
 /// determine why they are interesting. Order of variants indicates
@@ -53,7 +58,7 @@ impl fmt::Display for ConstraintCategory {
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Trace {
     StartRegion,
-    FromConstraint(ConstraintIndex),
+    FromOutlivesConstraint(OutlivesConstraint),
     NotVisited,
 }
 
@@ -80,12 +85,11 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         debug!(
             "best_blame_constraint: path={:#?}",
             path.iter()
-                .map(|&ci| format!(
-                    "{:?}: {:?} ({:?}: {:?})",
-                    ci,
-                    &self.constraints[ci],
-                    self.constraint_sccs.scc(self.constraints[ci].sup),
-                    self.constraint_sccs.scc(self.constraints[ci].sub),
+                .map(|&c| format!(
+                    "{:?} ({:?}: {:?})",
+                    c,
+                    self.constraint_sccs.scc(c.sup),
+                    self.constraint_sccs.scc(c.sub),
                 ))
                 .collect::<Vec<_>>()
         );
@@ -121,7 +125,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // highlight (e.g., a call site or something).
         let target_scc = self.constraint_sccs.scc(target_region);
         let best_choice = (0..path.len()).rev().find(|&i| {
-            let constraint = &self.constraints[path[i]];
+            let constraint = path[i];
 
             let constraint_sup_scc = self.constraint_sccs.scc(constraint.sup);
 
@@ -164,7 +168,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         &self,
         from_region: RegionVid,
         target_test: impl Fn(RegionVid) -> bool,
-    ) -> Option<(Vec<ConstraintIndex>, RegionVid)> {
+    ) -> Option<(Vec<OutlivesConstraint>, RegionVid)> {
         let mut context = IndexVec::from_elem(Trace::NotVisited, &self.definitions);
         context[from_region] = Trace::StartRegion;
 
@@ -185,9 +189,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                         Trace::NotVisited => {
                             bug!("found unvisited region {:?} on path to {:?}", p, r)
                         }
-                        Trace::FromConstraint(c) => {
+                        Trace::FromOutlivesConstraint(c) => {
                             result.push(c);
-                            p = self.constraints[c].sup;
+                            p = c.sup;
                         }
 
                         Trace::StartRegion => {
@@ -201,11 +205,14 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             // Otherwise, walk over the outgoing constraints and
             // enqueue any regions we find, keeping track of how we
             // reached them.
-            for constraint in self.constraint_graph.outgoing_edges(r) {
-                assert_eq!(self.constraints[constraint].sup, r);
-                let sub_region = self.constraints[constraint].sub;
+            let fr_static = self.universal_regions.fr_static;
+            for constraint in self.constraint_graph.outgoing_edges(r,
+                                                                   &self.constraints,
+                                                                   fr_static) {
+                assert_eq!(constraint.sup, r);
+                let sub_region = constraint.sub;
                 if let Trace::NotVisited = context[sub_region] {
-                    context[sub_region] = Trace::FromConstraint(constraint);
+                    context[sub_region] = Trace::FromOutlivesConstraint(constraint);
                     deque.push_back(sub_region);
                 }
             }
@@ -216,8 +223,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
 
     /// This function will return true if a constraint is interesting and false if a constraint
     /// is not. It is useful in filtering constraint paths to only interesting points.
-    fn constraint_is_interesting(&self, index: ConstraintIndex) -> bool {
-        let constraint = self.constraints[index];
+    fn constraint_is_interesting(&self, constraint: OutlivesConstraint) -> bool {
         debug!(
             "constraint_is_interesting: locations={:?} constraint={:?}",
             constraint.locations, constraint
@@ -232,11 +238,10 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// This function classifies a constraint from a location.
     fn classify_constraint(
         &self,
-        index: ConstraintIndex,
+        constraint: OutlivesConstraint,
         mir: &Mir<'tcx>,
         tcx: TyCtxt<'_, '_, 'tcx>,
     ) -> (ConstraintCategory, Span) {
-        let constraint = self.constraints[index];
         debug!("classify_constraint: constraint={:?}", constraint);
         let span = constraint.locations.span(mir);
         let location = constraint
@@ -244,7 +249,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             .from_location()
             .unwrap_or(Location::START);
 
-        if !self.constraint_is_interesting(index) {
+        if !self.constraint_is_interesting(constraint) {
             return (ConstraintCategory::Boring, span);
         }
 
@@ -355,9 +360,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             self.universal_regions.is_local_free_region(fr),
             self.universal_regions.is_local_free_region(outlived_fr),
         );
+
         debug!("report_error: fr_is_local={:?} outlived_fr_is_local={:?} category={:?}",
                fr_is_local, outlived_fr_is_local, category);
-
         match (category, fr_is_local, outlived_fr_is_local) {
             (ConstraintCategory::Assignment, true, false) |
             (ConstraintCategory::CallArgument, true, false) =>
@@ -464,7 +469,92 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             },
         }
 
+        self.add_static_impl_trait_suggestion(
+            infcx, &mut diag, fr, fr_name, outlived_fr,
+        );
+
         diag.buffer(errors_buffer);
+    }
+
+    fn add_static_impl_trait_suggestion(
+        &self,
+        infcx: &InferCtxt<'_, '_, 'tcx>,
+        diag: &mut DiagnosticBuilder<'_>,
+        fr: RegionVid,
+        // We need to pass `fr_name` - computing it again will label it twice.
+        fr_name: RegionName,
+        outlived_fr: RegionVid,
+    ) {
+        if let (
+            Some(f),
+            Some(ty::RegionKind::ReStatic)
+        ) = (self.to_error_region(fr), self.to_error_region(outlived_fr)) {
+            if let Some(ty::TyS {
+                sty: ty::TyKind::Opaque(did, substs),
+                ..
+            }) = infcx.tcx.is_suitable_region(f)
+                    .map(|r| r.def_id)
+                    .map(|id| infcx.tcx.return_type_impl_trait(id))
+                    .unwrap_or(None)
+            {
+                // Check whether or not the impl trait return type is intended to capture
+                // data with the static lifetime.
+                //
+                // eg. check for `impl Trait + 'static` instead of `impl Trait`.
+                let has_static_predicate = {
+                    let predicates_of = infcx.tcx.predicates_of(*did);
+                    let bounds = predicates_of.instantiate(infcx.tcx, substs);
+
+                    let mut found = false;
+                    for predicate in bounds.predicates {
+                        if let ty::Predicate::TypeOutlives(binder) = predicate {
+                            if let ty::OutlivesPredicate(
+                                _,
+                                ty::RegionKind::ReStatic
+                            ) = binder.skip_binder() {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    found
+                };
+
+                debug!("add_static_impl_trait_suggestion: has_static_predicate={:?}",
+                       has_static_predicate);
+                let static_str = keywords::StaticLifetime.name();
+                // If there is a static predicate, then the only sensible suggestion is to replace
+                // fr with `'static`.
+                if has_static_predicate {
+                    diag.help(
+                        &format!(
+                            "consider replacing `{}` with `{}`",
+                            fr_name, static_str,
+                        ),
+                    );
+                } else {
+                    // Otherwise, we should suggest adding a constraint on the return type.
+                    let span = infcx.tcx.def_span(*did);
+                    if let Ok(snippet) = infcx.tcx.sess.source_map().span_to_snippet(span) {
+                        let suggestable_fr_name = match fr_name {
+                            RegionName::Named(name) => format!("{}", name),
+                            RegionName::Synthesized(_) => "'_".to_string(),
+                        };
+                        diag.span_suggestion_with_applicability(
+                            span,
+                            &format!(
+                                "to allow this impl Trait to capture borrowed data with lifetime \
+                                 `{}`, add `{}` as a constraint",
+                                fr_name, suggestable_fr_name,
+                            ),
+                            format!("{} + {}", snippet, suggestable_fr_name),
+                            Applicability::MachineApplicable,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // Finds some region R such that `fr1: R` and `R` is live at

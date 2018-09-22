@@ -16,23 +16,22 @@ use source_map::Spanned;
 use edition::Edition;
 use parse::{token, ParseSess};
 use OneVector;
+use errors::Applicability;
 
 use ptr::P;
 
 /// A folder that strips out items that do not belong in the current configuration.
 pub struct StripUnconfigured<'a> {
-    pub should_test: bool,
     pub sess: &'a ParseSess,
     pub features: Option<&'a Features>,
 }
 
 // `cfg_attr`-process the crate's attributes and compute the crate's features.
-pub fn features(mut krate: ast::Crate, sess: &ParseSess, should_test: bool, edition: Edition)
+pub fn features(mut krate: ast::Crate, sess: &ParseSess, edition: Edition)
                 -> (ast::Crate, Features) {
     let features;
     {
         let mut strip_unconfigured = StripUnconfigured {
-            should_test,
             sess,
             features: None,
         };
@@ -118,30 +117,50 @@ impl<'a> StripUnconfigured<'a> {
     // Determine if a node with the given attributes should be included in this configuration.
     pub fn in_cfg(&mut self, attrs: &[ast::Attribute]) -> bool {
         attrs.iter().all(|attr| {
-            // When not compiling with --test we should not compile the #[test] functions
-            if !self.should_test && is_test_or_bench(attr) {
-                return false;
+            if !is_cfg(attr) {
+                return true;
             }
 
-            let mis = if !is_cfg(attr) {
-                return true;
-            } else if let Some(mis) = attr.meta_item_list() {
-                mis
-            } else {
-                return true;
+            let error = |span, msg, suggestion: &str| {
+                let mut err = self.sess.span_diagnostic.struct_span_err(span, msg);
+                if !suggestion.is_empty() {
+                    err.span_suggestion_with_applicability(
+                        span,
+                        "expected syntax is",
+                        suggestion.into(),
+                        Applicability::MaybeIncorrect,
+                    );
+                }
+                err.emit();
+                true
             };
 
-            if mis.len() != 1 {
-                self.sess.span_diagnostic.span_err(attr.span, "expected 1 cfg-pattern");
-                return true;
+            let meta_item = if let Some(meta_item) = attr.meta() {
+                meta_item
+            } else {
+                // Not a well-formed meta-item. Why? We don't know.
+                return error(attr.span, "`cfg` is not a well-formed meta-item",
+                                        "#[cfg(/* predicate */)]");
+            };
+            let nested_meta_items = if let Some(nested_meta_items) = meta_item.meta_item_list() {
+                nested_meta_items
+            } else {
+                return error(meta_item.span, "`cfg` is not followed by parentheses",
+                                             "cfg(/* predicate */)");
+            };
+
+            if nested_meta_items.is_empty() {
+                return error(meta_item.span, "`cfg` predicate is not specified", "");
+            } else if nested_meta_items.len() > 1 {
+                return error(nested_meta_items.last().unwrap().span,
+                             "multiple `cfg` predicates are specified", "");
             }
 
-            if !mis[0].is_meta_item() {
-                self.sess.span_diagnostic.span_err(mis[0].span, "unexpected literal");
-                return true;
+            match nested_meta_items[0].meta_item() {
+                Some(meta_item) => attr::cfg_matches(meta_item, self.sess, self.features),
+                None => error(nested_meta_items[0].span,
+                              "`cfg` predicate key cannot be a literal", ""),
             }
-
-            attr::cfg_matches(mis[0].meta_item().unwrap(), self.sess, self.features)
         })
     }
 
@@ -249,7 +268,7 @@ impl<'a> StripUnconfigured<'a> {
         //
         // NB: This is intentionally not part of the fold_expr() function
         //     in order for fold_opt_expr() to be able to avoid this check
-        if let Some(attr) = expr.attrs().iter().find(|a| is_cfg(a) || is_test_or_bench(a)) {
+        if let Some(attr) = expr.attrs().iter().find(|a| is_cfg(a)) {
             let msg = "removing an expression is not supported in this position";
             self.sess.span_diagnostic.span_err(attr.span, msg);
         }
@@ -351,8 +370,4 @@ impl<'a> fold::Folder for StripUnconfigured<'a> {
 
 fn is_cfg(attr: &ast::Attribute) -> bool {
     attr.check_name("cfg")
-}
-
-pub fn is_test_or_bench(attr: &ast::Attribute) -> bool {
-    attr.check_name("test") || attr.check_name("bench")
 }

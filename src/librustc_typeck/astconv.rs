@@ -12,8 +12,7 @@
 //! representation.  The main routine here is `ast_ty_to_ty()`: each use
 //! is parameterized by an instance of `AstConv`.
 
-use rustc_data_structures::accumulate_vec::AccumulateVec;
-use rustc_data_structures::array_vec::ArrayVec;
+use smallvec::SmallVec;
 use hir::{self, GenericArg, GenericArgs};
 use hir::def::Def;
 use hir::def_id::DefId;
@@ -26,10 +25,11 @@ use rustc::ty::{self, Ty, TyCtxt, ToPredicate, TypeFoldable};
 use rustc::ty::{GenericParamDef, GenericParamDefKind};
 use rustc::ty::wf::object_region_bounds;
 use rustc_target::spec::abi;
+use std::collections::BTreeSet;
 use std::slice;
 use require_c_abi_if_variadic;
 use util::common::ErrorReported;
-use util::nodemap::{FxHashSet, FxHashMap};
+use util::nodemap::FxHashMap;
 use errors::{FatalError, DiagnosticId};
 use lint;
 
@@ -99,16 +99,10 @@ enum GenericArgPosition {
     MethodCall,
 }
 
-// FIXME(#53525): these error codes should all be unified.
-struct GenericArgMismatchErrorCode {
-    lifetimes: (&'static str, &'static str),
-    types: (&'static str, &'static str),
-}
-
 /// Dummy type used for the `Self` of a `TraitRef` created for converting
 /// a trait object, and which gets removed in `ExistentialTraitRef`.
 /// This type must not appear anywhere in other converted types.
-const TRAIT_OBJECT_DUMMY_SELF: ty::TypeVariants<'static> = ty::TyInfer(ty::FreshTy(0));
+const TRAIT_OBJECT_DUMMY_SELF: ty::TyKind<'static> = ty::Infer(ty::FreshTy(0));
 
 impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
     pub fn ast_region_to_region(&self,
@@ -262,10 +256,6 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
             },
             def.parent.is_none() && def.has_self, // `has_self`
             seg.infer_types || suppress_mismatch, // `infer_types`
-            GenericArgMismatchErrorCode {
-                lifetimes: ("E0090", "E0088"),
-                types: ("E0089", "E0087"),
-            },
         )
     }
 
@@ -279,7 +269,6 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
         position: GenericArgPosition,
         has_self: bool,
         infer_types: bool,
-        error_codes: GenericArgMismatchErrorCode,
     ) -> bool {
         // At this stage we are guaranteed that the generic arguments are in the correct order, e.g.
         // that lifetimes will proceed types. So it suffices to check the number of each generic
@@ -325,8 +314,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
             }
         }
 
-        let check_kind_count = |error_code: (&str, &str),
-                                kind,
+        let check_kind_count = |kind,
                                 required,
                                 permitted,
                                 provided,
@@ -371,7 +359,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                     quantifier,
                     bound,
                     kind,
-                    if required != 1 { "s" } else { "" },
+                    if bound != 1 { "s" } else { "" },
                 )
             };
 
@@ -384,13 +372,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                     bound,
                     provided,
                 ),
-                DiagnosticId::Error({
-                    if provided <= permitted {
-                        error_code.0
-                    } else {
-                        error_code.1
-                    }
-                }.into())
+                DiagnosticId::Error("E0107".into())
             ).span_label(span, label).emit();
 
             provided > required // `suppress_error`
@@ -398,7 +380,6 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
 
         if !infer_lifetimes || arg_counts.lifetimes > param_counts.lifetimes {
             check_kind_count(
-                error_codes.lifetimes,
                 "lifetime",
                 param_counts.lifetimes,
                 param_counts.lifetimes,
@@ -409,7 +390,6 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
         if !infer_types
             || arg_counts.types > param_counts.types - defaults.types - has_self as usize {
             check_kind_count(
-                error_codes.types,
                 "type",
                 param_counts.types - defaults.types - has_self as usize,
                 param_counts.types - has_self as usize,
@@ -451,18 +431,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
         // We manually build up the substitution, rather than using convenience
         // methods in subst.rs so that we can iterate over the arguments and
         // parameters in lock-step linearly, rather than trying to match each pair.
-        let mut substs: AccumulateVec<[Kind<'tcx>; 8]> = if count <= 8 {
-            AccumulateVec::Array(ArrayVec::new())
-        } else {
-            AccumulateVec::Heap(Vec::with_capacity(count))
-        };
-
-        fn push_kind<'tcx>(substs: &mut AccumulateVec<[Kind<'tcx>; 8]>, kind: Kind<'tcx>) {
-            match substs {
-                AccumulateVec::Array(ref mut arr) => arr.push(kind),
-                AccumulateVec::Heap(ref mut vec) => vec.push(kind),
-            }
-        }
+        let mut substs: SmallVec<[Kind<'tcx>; 8]> = SmallVec::with_capacity(count);
 
         // Iterate over each segment of the path.
         while let Some((def_id, defs)) = stack.pop() {
@@ -471,7 +440,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
             // If we have already computed substitutions for parents, we can use those directly.
             while let Some(&param) = params.peek() {
                 if let Some(&kind) = parent_substs.get(param.index as usize) {
-                    push_kind(&mut substs, kind);
+                    substs.push(kind);
                     params.next();
                 } else {
                     break;
@@ -483,7 +452,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                 if let Some(&param) = params.peek() {
                     if param.index == 0 {
                         if let GenericParamDefKind::Type { .. } = param.kind {
-                            push_kind(&mut substs, self_ty.map(|ty| ty.into())
+                            substs.push(self_ty.map(|ty| ty.into())
                                 .unwrap_or_else(|| inferred_kind(None, param, true)));
                             params.next();
                         }
@@ -507,7 +476,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                         match (arg, &param.kind) {
                             (GenericArg::Lifetime(_), GenericParamDefKind::Lifetime)
                             | (GenericArg::Type(_), GenericParamDefKind::Type { .. }) => {
-                                push_kind(&mut substs, provided_kind(param, arg));
+                                substs.push(provided_kind(param, arg));
                                 args.next();
                                 params.next();
                             }
@@ -521,7 +490,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                             (GenericArg::Type(_), GenericParamDefKind::Lifetime) => {
                                 // We expected a lifetime argument, but got a type
                                 // argument. That means we're inferring the lifetimes.
-                                push_kind(&mut substs, inferred_kind(None, param, infer_types));
+                                substs.push(inferred_kind(None, param, infer_types));
                                 params.next();
                             }
                         }
@@ -538,7 +507,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                         match param.kind {
                             GenericParamDefKind::Lifetime | GenericParamDefKind::Type { .. } => {
                                 let kind = inferred_kind(Some(&substs), param, infer_types);
-                                push_kind(&mut substs, kind);
+                                substs.push(kind);
                             }
                         }
                         args.next();
@@ -587,10 +556,6 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
             GenericArgPosition::Type,
             has_self,
             infer_types,
-            GenericArgMismatchErrorCode {
-                lifetimes: ("E0107", "E0107"),
-                types: ("E0243", "E0244"),
-            },
         );
 
         let is_object = self_ty.map_or(false, |ty| ty.sty == TRAIT_OBJECT_DUMMY_SELF);
@@ -1032,7 +997,9 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
             return tcx.types.err;
         }
 
-        let mut associated_types = FxHashSet::default();
+        // use a btreeset to keep output in a more consistent order
+        let mut associated_types = BTreeSet::default();
+
         for tr in traits::supertraits(tcx, principal) {
             associated_types.extend(tcx.associated_items(tr.def_id())
                 .filter(|item| item.kind == ty::AssociatedKind::Type)
@@ -1065,7 +1032,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
             .chain(auto_traits.into_iter().map(ty::ExistentialPredicate::AutoTrait))
             .chain(existential_projections
                    .map(|x| ty::ExistentialPredicate::Projection(*x.skip_binder())))
-            .collect::<AccumulateVec<[_; 8]>>();
+            .collect::<SmallVec<[_; 8]>>();
         v.sort_by(|a, b| a.stable_cmp(tcx, b));
         let existential_predicates = ty::Binder::bind(tcx.mk_existential_predicates(v.into_iter()));
 
@@ -1239,8 +1206,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                     Err(ErrorReported) => return (tcx.types.err, Def::Err),
                 }
             }
-            (&ty::TyParam(_), Def::SelfTy(Some(param_did), None)) |
-            (&ty::TyParam(_), Def::TyParam(param_did)) => {
+            (&ty::Param(_), Def::SelfTy(Some(param_did), None)) |
+            (&ty::Param(_), Def::TyParam(param_did)) => {
                 match self.find_bound_for_assoc_item(param_did, assoc_name, span) {
                     Ok(bound) => bound,
                     Err(ErrorReported) => return (tcx.types.err, Def::Err),
@@ -1367,7 +1334,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                      -> Ty<'tcx> {
         let tcx = self.tcx();
 
-        debug!("base_def_to_ty(def={:?}, opt_self_ty={:?}, path_segments={:?})",
+        debug!("def_to_ty(def={:?}, opt_self_ty={:?}, path_segments={:?})",
                path.def, opt_self_ty, path.segments);
 
         let span = path.span;
@@ -1383,11 +1350,11 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                 let substs = self.ast_path_substs_for_ty(span, did, item_segment.0);
                 self.normalize_ty(
                     span,
-                    tcx.mk_anon(did, substs),
+                    tcx.mk_opaque(did, substs),
                 )
             }
             Def::Enum(did) | Def::TyAlias(did) | Def::Struct(did) |
-            Def::Union(did) | Def::TyForeign(did) => {
+            Def::Union(did) | Def::ForeignTy(did) => {
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(path.segments.split_last().unwrap().1);
                 self.ast_path_to_ty(span, did, path.segments.last().unwrap())
@@ -1438,12 +1405,12 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(&path.segments);
                 match prim_ty {
-                    hir::TyBool => tcx.types.bool,
-                    hir::TyChar => tcx.types.char,
-                    hir::TyInt(it) => tcx.mk_mach_int(it),
-                    hir::TyUint(uit) => tcx.mk_mach_uint(uit),
-                    hir::TyFloat(ft) => tcx.mk_mach_float(ft),
-                    hir::TyStr => tcx.mk_str()
+                    hir::Bool => tcx.types.bool,
+                    hir::Char => tcx.types.char,
+                    hir::Int(it) => tcx.mk_mach_int(it),
+                    hir::Uint(uit) => tcx.mk_mach_uint(uit),
+                    hir::Float(ft) => tcx.mk_mach_float(ft),
+                    hir::Str => tcx.mk_str()
                 }
             }
             Def::Err => {
@@ -1474,7 +1441,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
             }
             hir::TyKind::Rptr(ref region, ref mt) => {
                 let r = self.ast_region_to_region(region, None);
-                debug!("TyRef r={:?}", r);
+                debug!("Ref r={:?}", r);
                 let t = self.ast_ty_to_ty(&mt.ty);
                 tcx.mk_ref(r, ty::TypeAndMut {ty: t, mutbl: mt.mutbl})
             }
@@ -1513,7 +1480,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                 let length_def_id = tcx.hir.local_def_id(length.id);
                 let substs = Substs::identity_for_item(tcx, length_def_id);
                 let length = ty::Const::unevaluated(tcx, length_def_id, substs, tcx.types.usize);
-                let array_ty = tcx.mk_ty(ty::TyArray(self.ast_ty_to_ty(&ty), length));
+                let array_ty = tcx.mk_ty(ty::Array(self.ast_ty_to_ty(&ty), length));
                 self.normalize_ty(ast_ty.span, array_ty)
             }
             hir::TyKind::Typeof(ref _e) => {
@@ -1525,7 +1492,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
                 tcx.types.err
             }
             hir::TyKind::Infer => {
-                // TyInfer also appears as the type of arguments or return
+                // Infer also appears as the type of arguments or return
                 // values in a ExprKind::Closure, or as
                 // the type of local variables. Both of these cases are
                 // handled specially and will not descend into this routine.
@@ -1576,7 +1543,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
         });
         debug!("impl_trait_ty_to_ty: final substs = {:?}", substs);
 
-        let ty = tcx.mk_anon(def_id, substs);
+        let ty = tcx.mk_opaque(def_id, substs);
         debug!("impl_trait_ty_to_ty: {}", ty);
         ty
     }
@@ -1608,7 +1575,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
 
         let output_ty = match decl.output {
             hir::Return(ref output) => self.ast_ty_to_ty(output),
-            hir::DefaultReturn(..) => tcx.mk_nil(),
+            hir::DefaultReturn(..) => tcx.mk_unit(),
         };
 
         debug!("ty_of_fn: output_ty={:?}", output_ty);
@@ -1666,7 +1633,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx>+'o {
     /// we return `None`.
     fn compute_object_lifetime_bound(&self,
         span: Span,
-        existential_predicates: ty::Binder<&'tcx ty::Slice<ty::ExistentialPredicate<'tcx>>>)
+        existential_predicates: ty::Binder<&'tcx ty::List<ty::ExistentialPredicate<'tcx>>>)
         -> Option<ty::Region<'tcx>> // if None, use the default
     {
         let tcx = self.tcx();

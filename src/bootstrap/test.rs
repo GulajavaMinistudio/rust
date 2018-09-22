@@ -34,7 +34,7 @@ use tool::{self, Tool, SourceType};
 use toolstate::ToolState;
 use util::{self, dylib_path, dylib_path_var};
 use Crate as CargoCrate;
-use {DocTests, Mode};
+use {DocTests, Mode, GitRepo};
 
 const ADB_TEST_DIR: &str = "/data/tmp/work";
 
@@ -237,6 +237,8 @@ impl Step for Cargo {
         // Don't run cross-compile tests, we may not have cross-compiled libstd libs
         // available.
         cargo.env("CFG_DISABLE_CROSS_TESTS", "1");
+        // Disable a test that has issues with mingw.
+        cargo.env("CARGO_TEST_DISABLE_GIT_CLI", "1");
 
         try_run(
             builder,
@@ -753,10 +755,11 @@ default_test_with_compare_mode!(Ui {
     compare_mode: "nll"
 });
 
-default_test!(RunPass {
+default_test_with_compare_mode!(RunPass {
     path: "src/test/run-pass",
     mode: "run-pass",
-    suite: "run-pass"
+    suite: "run-pass",
+    compare_mode: "nll"
 });
 
 default_test!(CompileFail {
@@ -1140,7 +1143,7 @@ impl Step for Compiletest {
                     .arg("--cxx")
                     .arg(builder.cxx(target).unwrap())
                     .arg("--cflags")
-                    .arg(builder.cflags(target).join(" "))
+                    .arg(builder.cflags(target, GitRepo::Rustc).join(" "))
                     .arg("--llvm-components")
                     .arg(llvm_components.trim())
                     .arg("--llvm-cxxflags")
