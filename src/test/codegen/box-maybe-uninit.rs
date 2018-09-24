@@ -8,18 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// run-rustfix
-// compile-flags: -Z continue-parse-after-error
+// compile-flags: -O
+#![crate_type="lib"]
+#![feature(maybe_uninit)]
 
-extern "C" {
-    static C: u8; //~ ERROR extern items cannot be `const`
-}
+use std::mem::MaybeUninit;
 
-fn main() {
-    // We suggest turning the (illegal) extern `const` into an extern `static`,
-    // but this also requires `unsafe` (a deny-by-default lint at comment time,
-    // future error; Issue #36247)
-    unsafe {
-        let _x = C;
-    }
+// Boxing a `MaybeUninit` value should not copy junk from the stack
+#[no_mangle]
+pub fn box_uninitialized() -> Box<MaybeUninit<usize>> {
+    // CHECK-LABEL: @box_uninitialized
+    // CHECK-NOT: store
+    Box::new(MaybeUninit::uninitialized())
 }
