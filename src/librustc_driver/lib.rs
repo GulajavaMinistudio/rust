@@ -58,6 +58,7 @@ extern crate rustc_codegen_utils;
 extern crate rustc_typeck;
 extern crate scoped_tls;
 extern crate serialize;
+extern crate smallvec;
 #[macro_use]
 extern crate log;
 extern crate syntax;
@@ -979,6 +980,7 @@ pub fn enable_save_analysis(control: &mut CompileController) {
                                 state.expanded_crate.unwrap(),
                                 state.analysis.unwrap(),
                                 state.crate_name.unwrap(),
+                                state.input,
                                 None,
                                 DumpHandler::new(state.out_dir,
                                                  state.crate_name.unwrap()))
