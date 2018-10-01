@@ -73,16 +73,16 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
     /// ```
     /// struct Foo<T> { data: Box<T> }
     /// ```
-
+    ///
     /// then this might return that Foo<T>: Send if T: Send (encoded in the AutoTraitResult type).
     /// The analysis attempts to account for custom impls as well as other complex cases. This
     /// result is intended for use by rustdoc and other such consumers.
-
+    ///
     /// (Note that due to the coinductive nature of Send, the full and correct result is actually
     /// quite simple to generate. That is, when a type has no custom impl, it is Send iff its field
     /// types are all Send. So, in our example, we might have that Foo<T>: Send if Box<T>: Send.
     /// But this is often not the best way to present to the user.)
-
+    ///
     /// Warning: The API should be considered highly unstable, and it may be refactored or removed
     /// in the future.
     pub fn find_auto_trait_generics<A>(
@@ -288,7 +288,7 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
     // hold.
     //
     // One additional consideration is supertrait bounds. Normally, a ParamEnv is only ever
-    // consutrcted once for a given type. As part of the construction process, the ParamEnv will
+    // constructed once for a given type. As part of the construction process, the ParamEnv will
     // have any supertrait bounds normalized - e.g. if we have a type 'struct Foo<T: Copy>', the
     // ParamEnv will contain 'T: Copy' and 'T: Clone', since 'Copy: Clone'. When we construct our
     // own ParamEnv, we need to do this ourselves, through traits::elaborate_predicates, or else
@@ -483,14 +483,15 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
         }
     }
 
-    pub fn region_name(&self, region: Region) -> Option<String> {
+    pub fn region_name(&self, region: Region<'_>) -> Option<String> {
         match region {
             &ty::ReEarlyBound(r) => Some(r.name.to_string()),
             _ => None,
         }
     }
 
-    pub fn get_lifetime(&self, region: Region, names_map: &FxHashMap<String, String>) -> String {
+    pub fn get_lifetime(&self, region: Region<'_>,
+                        names_map: &FxHashMap<String, String>) -> String {
         self.region_name(region)
             .map(|name|
                 names_map.get(&name).unwrap_or_else(||
@@ -591,7 +592,7 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
         finished_map
     }
 
-    pub fn is_of_param(&self, substs: &Substs) -> bool {
+    pub fn is_of_param(&self, substs: &Substs<'_>) -> bool {
         if substs.is_noop() {
             return false;
         }
@@ -611,7 +612,7 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
         T: Iterator<Item = Obligation<'cx, ty::Predicate<'cx>>>,
     >(
         &self,
-        ty: ty::Ty,
+        ty: ty::Ty<'_>,
         nested: T,
         computed_preds: &'b mut FxHashSet<ty::Predicate<'cx>>,
         fresh_preds: &'b mut FxHashSet<ty::Predicate<'cx>>,

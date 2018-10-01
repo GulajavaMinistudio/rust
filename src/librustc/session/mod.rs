@@ -38,7 +38,7 @@ use syntax::parse;
 use syntax::parse::ParseSess;
 use syntax::{ast, source_map};
 use syntax::feature_gate::AttributeType;
-use syntax_pos::{MultiSpan, Span};
+use syntax_pos::{MultiSpan, Span, symbol::Symbol};
 use util::profiling::SelfProfiler;
 
 use rustc_target::spec::PanicStrategy;
@@ -168,6 +168,10 @@ pub struct Session {
 
     /// Cap lint level specified by a driver specifically.
     pub driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
+
+    /// All the crate names specified with `--extern`, and the builtin ones.
+    /// Starting with the Rust 2018 edition, absolute paths resolve in this set.
+    pub extern_prelude: FxHashSet<Symbol>,
 }
 
 pub struct PerfStats {
@@ -705,7 +709,7 @@ impl Session {
                 .expect("missing sysroot and default_sysroot in Session"),
         }
     }
-    pub fn target_filesearch(&self, kind: PathKind) -> filesearch::FileSearch {
+    pub fn target_filesearch(&self, kind: PathKind) -> filesearch::FileSearch<'_> {
         filesearch::FileSearch::new(
             self.sysroot(),
             self.opts.target_triple.triple(),
@@ -713,7 +717,7 @@ impl Session {
             kind,
         )
     }
-    pub fn host_filesearch(&self, kind: PathKind) -> filesearch::FileSearch {
+    pub fn host_filesearch(&self, kind: PathKind) -> filesearch::FileSearch<'_> {
         filesearch::FileSearch::new(
             self.sysroot(),
             config::host_triple(),
@@ -803,7 +807,7 @@ impl Session {
         *incr_comp_session = IncrCompSession::InvalidBecauseOfErrors { session_directory };
     }
 
-    pub fn incr_comp_session_dir(&self) -> cell::Ref<PathBuf> {
+    pub fn incr_comp_session_dir(&self) -> cell::Ref<'_, PathBuf> {
         let incr_comp_session = self.incr_comp_session.borrow();
         cell::Ref::map(
             incr_comp_session,
@@ -826,7 +830,7 @@ impl Session {
         )
     }
 
-    pub fn incr_comp_session_dir_opt(&self) -> Option<cell::Ref<PathBuf>> {
+    pub fn incr_comp_session_dir_opt(&self) -> Option<cell::Ref<'_, PathBuf>> {
         if self.opts.incremental.is_some() {
             Some(self.incr_comp_session_dir())
         } else {
@@ -1126,6 +1130,18 @@ pub fn build_session_(
         CguReuseTracker::new_disabled()
     };
 
+
+    let mut extern_prelude: FxHashSet<Symbol> =
+        sopts.externs.iter().map(|kv| Symbol::intern(kv.0)).collect();
+
+    // HACK(eddyb) this ignores the `no_{core,std}` attributes.
+    // FIXME(eddyb) warn (somewhere) if core/std is used with `no_{core,std}`.
+    // if !attr::contains_name(&krate.attrs, "no_core") {
+    // if !attr::contains_name(&krate.attrs, "no_std") {
+    extern_prelude.insert(Symbol::intern("core"));
+    extern_prelude.insert(Symbol::intern("std"));
+    extern_prelude.insert(Symbol::intern("meta"));
+
     let sess = Session {
         target: target_cfg,
         host,
@@ -1201,6 +1217,7 @@ pub fn build_session_(
         has_global_allocator: Once::new(),
         has_panic_handler: Once::new(),
         driver_lint_caps: FxHashMap(),
+        extern_prelude,
     };
 
     validate_commandline_args_with_session_available(&sess);
@@ -1253,7 +1270,7 @@ impl CrateDisambiguator {
 }
 
 impl fmt::Display for CrateDisambiguator {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         let (a, b) = self.0.as_value();
         let as_u128 = a as u128 | ((b as u128) << 64);
         f.write_str(&base_n::encode(as_u128, base_n::CASE_INSENSITIVE))

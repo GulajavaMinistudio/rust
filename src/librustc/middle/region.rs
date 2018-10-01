@@ -107,7 +107,7 @@ pub struct Scope {
 }
 
 impl fmt::Debug for Scope {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.data {
             ScopeData::Node => write!(fmt, "Node({:?})", self.id),
             ScopeData::CallSite => write!(fmt, "CallSite({:?})", self.id),
@@ -168,8 +168,6 @@ impl_stable_hash_for!(struct ::middle::region::FirstStatementIndex { private });
 
 // compilation error if size of `ScopeData` is not the same as a `u32`
 #[allow(dead_code)]
-// only works on stage 1 when the rustc_layout_scalar_valid_range attribute actually exists
-#[cfg(not(stage0))]
 static ASSERT: () = [()][!(mem::size_of::<ScopeData>() == 4) as usize];
 
 impl Scope {
@@ -181,7 +179,7 @@ impl Scope {
         self.id
     }
 
-    pub fn node_id(&self, tcx: TyCtxt, scope_tree: &ScopeTree) -> ast::NodeId {
+    pub fn node_id(&self, tcx: TyCtxt<'_, '_, '_>, scope_tree: &ScopeTree) -> ast::NodeId {
         match scope_tree.root_body {
             Some(hir_id) => {
                 tcx.hir.hir_to_node_id(hir::HirId {
@@ -196,7 +194,7 @@ impl Scope {
     /// Returns the span of this Scope.  Note that in general the
     /// returned span may not correspond to the span of any node id in
     /// the AST.
-    pub fn span(&self, tcx: TyCtxt, scope_tree: &ScopeTree) -> Span {
+    pub fn span(&self, tcx: TyCtxt<'_, '_, '_>, scope_tree: &ScopeTree) -> Span {
         let node_id = self.node_id(tcx, scope_tree);
         if node_id == ast::DUMMY_NODE_ID {
             return DUMMY_SP;
@@ -750,7 +748,7 @@ impl<'tcx> ScopeTree {
 }
 
 /// Records the lifetime of a local variable as `cx.var_parent`
-fn record_var_lifetime(visitor: &mut RegionResolutionVisitor,
+fn record_var_lifetime(visitor: &mut RegionResolutionVisitor<'_, '_>,
                        var_id: hir::ItemLocalId,
                        _sp: Span) {
     match visitor.cx.var_parent {
@@ -1385,7 +1383,7 @@ fn region_scope_tree<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId)
     Lrc::new(scope_tree)
 }
 
-pub fn provide(providers: &mut Providers) {
+pub fn provide(providers: &mut Providers<'_>) {
     *providers = Providers {
         region_scope_tree,
         ..*providers

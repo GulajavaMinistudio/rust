@@ -1135,6 +1135,8 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
         [TRACKED], "panic strategy to compile crate with"),
     incremental: Option<String> = (None, parse_opt_string, [UNTRACKED],
           "enable incremental compilation"),
+    default_linker_libraries: Option<bool> = (None, parse_opt_bool, [UNTRACKED],
+          "allow the linker to link its default libraries"),
 }
 
 options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
@@ -2379,7 +2381,7 @@ pub mod nightly_options {
 }
 
 impl fmt::Display for CrateType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             CrateType::Executable => "bin".fmt(f),
             CrateType::Dylib => "dylib".fmt(f),

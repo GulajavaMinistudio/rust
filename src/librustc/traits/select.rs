@@ -110,7 +110,7 @@ impl IntercrateAmbiguityCause {
     /// Emits notes when the overlap is caused by complex intercrate ambiguities.
     /// See #23980 for details.
     pub fn add_intercrate_ambiguity_hint<'a, 'tcx>(&self,
-                                                   err: &mut ::errors::DiagnosticBuilder) {
+                                                   err: &mut ::errors::DiagnosticBuilder<'_>) {
         err.note(&self.intercrate_ambiguity_hint());
     }
 
@@ -537,7 +537,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
     /// Wraps a commit_if_ok s.t. obligations collected during it are not returned in selection if
     /// the transaction fails and s.t. old obligations are retained.
     fn commit_if_ok<T, E, F>(&mut self, f: F) -> Result<T, E> where
-        F: FnOnce(&mut Self, &infer::CombinedSnapshot) -> Result<T, E>
+        F: FnOnce(&mut Self, &infer::CombinedSnapshot<'cx, 'tcx>) -> Result<T, E>
     {
         self.infcx.commit_if_ok(|snapshot| f(self, snapshot))
     }
@@ -582,7 +582,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
         match self.confirm_candidate(obligation, candidate) {
             Err(SelectionError::Overflow) => {
                 assert!(self.query_mode == TraitQueryMode::Canonical);
-                return Err(SelectionError::Overflow);
+                Err(SelectionError::Overflow)
             },
             Err(e) => Err(e),
             Ok(candidate) => Ok(Some(candidate))
@@ -879,7 +879,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
         // must be met of course). One obvious case this comes up is
         // marker traits like `Send`. Think of a linked list:
         //
-        //    struct List<T> { data: T, next: Option<Box<List<T>>> {
+        //    struct List<T> { data: T, next: Option<Box<List<T>>> }
         //
         // `Box<List<T>>` will be `Send` if `T` is `Send` and
         // `Option<Box<List<T>>>` is `Send`, and in turn
@@ -1221,7 +1221,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
 
         // Winnow, but record the exact outcome of evaluation, which
         // is needed for specialization. Propagate overflow if it occurs.
-        let candidates: Result<Vec<Option<EvaluatedCandidate>>, _> = candidates
+        let candidates: Result<Vec<Option<EvaluatedCandidate<'_>>>, _> = candidates
             .into_iter()
             .map(|c| match self.evaluate_candidate(stack, &c) {
                 Ok(eval) if eval.may_apply() => Ok(Some(EvaluatedCandidate {
@@ -1233,7 +1233,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
             })
             .collect();
 
-        let mut candidates: Vec<EvaluatedCandidate> =
+        let mut candidates: Vec<EvaluatedCandidate<'_>> =
             candidates?.into_iter().filter_map(|c| c).collect();
 
         debug!("winnowed to {} candidates for {:?}: {:?}",
@@ -1407,7 +1407,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                                stack: &TraitObligationStack<'o, 'tcx>)
                                -> Result<SelectionCandidateSet<'tcx>, SelectionError<'tcx>>
     {
-        let TraitObligationStack { obligation, .. } = *stack;
+        let obligation = stack.obligation;
         let ref obligation = Obligation {
             param_env: obligation.param_env,
             cause: obligation.cause.clone(),
@@ -1788,9 +1788,9 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
     }
 
     fn assemble_candidates_from_auto_impls(&mut self,
-                                              obligation: &TraitObligation<'tcx>,
-                                              candidates: &mut SelectionCandidateSet<'tcx>)
-                                              -> Result<(), SelectionError<'tcx>>
+                                           obligation: &TraitObligation<'tcx>,
+                                           candidates: &mut SelectionCandidateSet<'tcx>)
+                                           -> Result<(), SelectionError<'tcx>>
     {
         // OK to skip binder here because the tests we do below do not involve bound regions
         let self_ty = *obligation.self_ty().skip_binder();
@@ -2433,7 +2433,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
     fn confirm_candidate(&mut self,
                          obligation: &TraitObligation<'tcx>,
                          candidate: SelectionCandidate<'tcx>)
-                         -> Result<Selection<'tcx>,SelectionError<'tcx>>
+                         -> Result<Selection<'tcx>, SelectionError<'tcx>>
     {
         debug!("confirm_candidate({:?}, {:?})",
                obligation,
@@ -2612,11 +2612,11 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
         let mut obligations = self.collect_predicates_for_types(
             obligation.param_env,
             cause,
-            obligation.recursion_depth+1,
+            obligation.recursion_depth + 1,
             trait_def_id,
             nested);
 
-        let trait_obligations = self.in_snapshot(|this, snapshot| {
+        let trait_obligations: Vec<PredicateObligation<'_>> = self.in_snapshot(|this, snapshot| {
             let poly_trait_ref = obligation.predicate.to_poly_trait_ref();
             let (trait_ref, skol_map) =
                 this.infcx().skolemize_late_bound_regions(&poly_trait_ref);
@@ -2630,6 +2630,8 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                                            snapshot)
         });
 
+        // Adds the predicates from the trait.  Note that this contains a `Self: Trait`
+        // predicate as usual.  It won't have any effect since auto traits are coinductive.
         obligations.extend(trait_obligations);
 
         debug!("vtable_auto_impl: obligations={:?}", obligations);
@@ -3245,8 +3247,8 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
     }
 
     fn fast_reject_trait_refs(&mut self,
-                              obligation: &TraitObligation,
-                              impl_trait_ref: &ty::TraitRef)
+                              obligation: &TraitObligation<'_>,
+                              impl_trait_ref: &ty::TraitRef<'_>)
                               -> bool
     {
         // We can avoid creating type variables and doing the full
@@ -3536,7 +3538,7 @@ impl<'o,'tcx> Iterator for TraitObligationStackList<'o,'tcx>{
 }
 
 impl<'o,'tcx> fmt::Debug for TraitObligationStack<'o,'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TraitObligationStack({:?})", self.obligation)
     }
 }
@@ -3552,7 +3554,7 @@ impl<T: Clone> WithDepNode<T> {
         WithDepNode { dep_node, cached_value }
     }
 
-    pub fn get(&self, tcx: TyCtxt) -> T {
+    pub fn get(&self, tcx: TyCtxt<'_, '_, '_>) -> T {
         tcx.dep_graph.read_index(self.dep_node);
         self.cached_value.clone()
     }
