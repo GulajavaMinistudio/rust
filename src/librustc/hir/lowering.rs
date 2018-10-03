@@ -727,9 +727,15 @@ impl<'a> LoweringContext<'a> {
                 // Get the name we'll use to make the def-path. Note
                 // that collisions are ok here and this shouldn't
                 // really show up for end-user.
-                let str_name = match hir_name {
-                    ParamName::Plain(ident) => ident.as_interned_str(),
-                    ParamName::Fresh(_) => keywords::UnderscoreLifetime.name().as_interned_str(),
+                let (str_name, kind) = match hir_name {
+                    ParamName::Plain(ident) => (
+                        ident.as_interned_str(),
+                        hir::LifetimeParamKind::InBand,
+                    ),
+                    ParamName::Fresh(_) => (
+                        keywords::UnderscoreLifetime.name().as_interned_str(),
+                        hir::LifetimeParamKind::Elided,
+                    ),
                 };
 
                 // Add a definition for the in-band lifetime def
@@ -749,7 +755,7 @@ impl<'a> LoweringContext<'a> {
                     bounds: hir_vec![],
                     span,
                     pure_wrt_drop: false,
-                    kind: hir::GenericParamKind::Lifetime { in_band: true }
+                    kind: hir::GenericParamKind::Lifetime { kind }
                 }
             })
             .chain(in_band_ty_params.into_iter())
@@ -1509,11 +1515,15 @@ impl<'a> LoweringContext<'a> {
                         lifetime.span,
                     );
 
-                    let name = match name {
-                        hir::LifetimeName::Underscore => {
-                            hir::ParamName::Plain(keywords::UnderscoreLifetime.ident())
-                        }
-                        hir::LifetimeName::Param(param_name) => param_name,
+                    let (name, kind) = match name {
+                        hir::LifetimeName::Underscore => (
+                            hir::ParamName::Plain(keywords::UnderscoreLifetime.ident()),
+                            hir::LifetimeParamKind::Elided,
+                        ),
+                        hir::LifetimeName::Param(param_name) => (
+                            param_name,
+                            hir::LifetimeParamKind::Explicit,
+                        ),
                         _ => bug!("expected LifetimeName::Param or ParamName::Plain"),
                     };
 
@@ -1524,9 +1534,7 @@ impl<'a> LoweringContext<'a> {
                         pure_wrt_drop: false,
                         attrs: hir_vec![],
                         bounds: hir_vec![],
-                        kind: hir::GenericParamKind::Lifetime {
-                            in_band: false,
-                        }
+                        kind: hir::GenericParamKind::Lifetime { kind }
                     });
                 }
             }
@@ -2036,11 +2044,31 @@ impl<'a> LoweringContext<'a> {
             inputs,
             output,
             variadic: decl.variadic,
-            has_implicit_self: decl.inputs.get(0).map_or(false, |arg| match arg.ty.node {
-                TyKind::ImplicitSelf => true,
-                TyKind::Rptr(_, ref mt) => mt.ty.node.is_implicit_self(),
-                _ => false,
-            }),
+            implicit_self: decl.inputs.get(0).map_or(
+                hir::ImplicitSelfKind::None,
+                |arg| {
+                    let is_mutable_pat = match arg.pat.node {
+                        PatKind::Ident(BindingMode::ByValue(mt), _, _) |
+                        PatKind::Ident(BindingMode::ByRef(mt), _, _) =>
+                            mt == Mutability::Mutable,
+                        _ => false,
+                    };
+
+                    match arg.ty.node {
+                        TyKind::ImplicitSelf if is_mutable_pat => hir::ImplicitSelfKind::Mut,
+                        TyKind::ImplicitSelf => hir::ImplicitSelfKind::Imm,
+                        // Given we are only considering `ImplicitSelf` types, we needn't consider
+                        // the case where we have a mutable pattern to a reference as that would
+                        // no longer be an `ImplicitSelf`.
+                        TyKind::Rptr(_, ref mt) if mt.ty.node.is_implicit_self() &&
+                            mt.mutbl == ast::Mutability::Mutable =>
+                                hir::ImplicitSelfKind::MutRef,
+                        TyKind::Rptr(_, ref mt) if mt.ty.node.is_implicit_self() =>
+                            hir::ImplicitSelfKind::ImmRef,
+                        _ => hir::ImplicitSelfKind::None,
+                    }
+                },
+            ),
         })
     }
 
@@ -2360,7 +2388,9 @@ impl<'a> LoweringContext<'a> {
                     pure_wrt_drop: attr::contains_name(&param.attrs, "may_dangle"),
                     attrs: self.lower_attrs(&param.attrs),
                     bounds,
-                    kind: hir::GenericParamKind::Lifetime { in_band: false }
+                    kind: hir::GenericParamKind::Lifetime {
+                        kind: hir::LifetimeParamKind::Explicit,
+                    }
                 };
 
                 self.is_collecting_in_band_lifetimes = was_collecting_in_band;
