@@ -94,6 +94,7 @@ pub mod binding;
 pub mod cast;
 #[macro_use]
 pub mod codec;
+mod constness;
 pub mod error;
 mod erase_regions;
 pub mod fast_reject;
@@ -1478,18 +1479,17 @@ impl<'tcx> InstantiatedPredicates<'tcx> {
 /// region `'a` is in a subuniverse U2 of U1, because we can name it
 /// inside the fn type but not outside.
 ///
-/// Universes are related to **skolemization** -- which is a way of
-/// doing type- and trait-checking around these "forall" binders (also
-/// called **universal quantification**). The idea is that when, in
-/// the body of `bar`, we refer to `T` as a type, we aren't referring
-/// to any type in particular, but rather a kind of "fresh" type that
-/// is distinct from all other types we have actually declared. This
-/// is called a **skolemized** type, and we use universes to talk
-/// about this. In other words, a type name in universe 0 always
-/// corresponds to some "ground" type that the user declared, but a
-/// type name in a non-zero universe is a skolemized type -- an
-/// idealized representative of "types in general" that we use for
-/// checking generic functions.
+/// Universes are used to do type- and trait-checking around these
+/// "forall" binders (also called **universal quantification**). The
+/// idea is that when, in the body of `bar`, we refer to `T` as a
+/// type, we aren't referring to any type in particular, but rather a
+/// kind of "fresh" type that is distinct from all other types we have
+/// actually declared. This is called a **placeholder** type, and we
+/// use universes to talk about this. In other words, a type name in
+/// universe 0 always corresponds to some "ground" type that the user
+/// declared, but a type name in a non-zero universe is a placeholder
+/// type -- an idealized representative of "types in general" that we
+/// use for checking generic functions.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct UniverseIndex(u32);
 
@@ -1550,6 +1550,18 @@ impl From<u32> for UniverseIndex {
     fn from(index: u32) -> Self {
         UniverseIndex(index)
     }
+}
+
+/// The "placeholder index" fully defines a placeholder region.
+/// Placeholder regions are identified by both a **universe** as well
+/// as a "bound-region" within that universe. The `bound_region` is
+/// basically a name -- distinct bound regions within the same
+/// universe are just two regions with an unknown relationship to one
+/// another.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, PartialOrd, Ord)]
+pub struct Placeholder {
+    pub universe: UniverseIndex,
+    pub name: BoundRegion,
 }
 
 /// When type checking, we use the `ParamEnv` to track
@@ -1694,9 +1706,13 @@ bitflags! {
         const IS_FUNDAMENTAL      = 1 << 2;
         const IS_UNION            = 1 << 3;
         const IS_BOX              = 1 << 4;
+        /// Indicates whether the type is an `Arc`.
+        const IS_ARC              = 1 << 5;
+        /// Indicates whether the type is an `Rc`.
+        const IS_RC               = 1 << 6;
         /// Indicates whether the variant list of this ADT is `#[non_exhaustive]`.
         /// (i.e., this flag is never set unless this ADT is an enum).
-        const IS_VARIANT_LIST_NON_EXHAUSTIVE   = 1 << 5;
+        const IS_VARIANT_LIST_NON_EXHAUSTIVE   = 1 << 7;
     }
 }
 
@@ -2016,6 +2032,12 @@ impl<'a, 'gcx, 'tcx> AdtDef {
         if Some(did) == tcx.lang_items().owned_box() {
             flags = flags | AdtFlags::IS_BOX;
         }
+        if Some(did) == tcx.lang_items().arc() {
+            flags = flags | AdtFlags::IS_ARC;
+        }
+        if Some(did) == tcx.lang_items().rc() {
+            flags = flags | AdtFlags::IS_RC;
+        }
         if kind == AdtKind::Enum && tcx.has_attr(did, "non_exhaustive") {
             debug!("found non-exhaustive variant list for {:?}", did);
             flags = flags | AdtFlags::IS_VARIANT_LIST_NON_EXHAUSTIVE;
@@ -2092,6 +2114,16 @@ impl<'a, 'gcx, 'tcx> AdtDef {
     #[inline]
     pub fn is_phantom_data(&self) -> bool {
         self.flags.intersects(AdtFlags::IS_PHANTOM_DATA)
+    }
+
+    /// Returns `true` if this is `Arc<T>`.
+    pub fn is_arc(&self) -> bool {
+        self.flags.intersects(AdtFlags::IS_ARC)
+    }
+
+    /// Returns `true` if this is `Rc<T>`.
+    pub fn is_rc(&self) -> bool {
+        self.flags.intersects(AdtFlags::IS_RC)
     }
 
     /// Returns true if this is Box<T>.
@@ -2338,6 +2370,8 @@ impl<'a, 'gcx, 'tcx> AdtDef {
                 // FIXME: consider special-casing always-Sized projections
                 vec![ty]
             }
+
+            UnnormalizedProjection(..) => bug!("only used with chalk-engine"),
 
             Param(..) => {
                 // perf hack: if there is a `T: Sized` bound, then
@@ -3056,6 +3090,7 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
     erase_regions::provide(providers);
     layout::provide(providers);
     util::provide(providers);
+    constness::provide(providers);
     *providers = ty::query::Providers {
         associated_item,
         associated_item_def_ids,

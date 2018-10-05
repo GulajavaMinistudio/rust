@@ -150,6 +150,9 @@ pub enum ExprKind<'tcx> {
         ty: Ty<'tcx>,
         fun: ExprRef<'tcx>,
         args: Vec<ExprRef<'tcx>>,
+        // Whether this is from a call in HIR, rather than from an overloaded
+        // operator. True for overloaded function call.
+        from_hir_call: bool,
     },
     Deref {
         arg: ExprRef<'tcx>,
@@ -267,6 +270,16 @@ pub enum ExprKind<'tcx> {
 
         fields: Vec<FieldExprRef<'tcx>>,
         base: Option<FruInfo<'tcx>>
+    },
+    PlaceTypeAscription {
+        source: ExprRef<'tcx>,
+        /// Type that the user gave to this expression
+        user_ty: CanonicalTy<'tcx>,
+    },
+    ValueTypeAscription {
+        source: ExprRef<'tcx>,
+        /// Type that the user gave to this expression
+        user_ty: CanonicalTy<'tcx>,
     },
     Closure {
         closure_id: DefId,

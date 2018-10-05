@@ -131,7 +131,7 @@ for ty::RegionKind {
             }
             ty::ReLateBound(..) |
             ty::ReVar(..) |
-            ty::ReSkolemized(..) => {
+            ty::RePlaceholder(..) => {
                 bug!("StableHasher: unexpected region {:?}", *self)
             }
         }
@@ -873,8 +873,8 @@ for ty::TyKind<'gcx>
             Tuple(inner_tys) => {
                 inner_tys.hash_stable(hcx, hasher);
             }
-            Projection(ref projection_ty) => {
-                projection_ty.hash_stable(hcx, hasher);
+            Projection(ref data) | UnnormalizedProjection(ref data) => {
+                data.hash_stable(hcx, hasher);
             }
             Opaque(def_id, substs) => {
                 def_id.hash_stable(hcx, hasher);

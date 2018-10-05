@@ -264,7 +264,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 );
                 exit_block.unit()
             }
-            ExprKind::Call { ty, fun, args } => {
+            ExprKind::Call { ty, fun, args, from_hir_call } => {
                 // FIXME(canndrew): This is_never should probably be an is_uninhabited
                 let diverges = expr.ty.is_never();
                 let intrinsic = match ty.sty {
@@ -326,6 +326,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                             } else {
                                 Some((destination.clone(), success))
                             },
+                            from_hir_call,
                         },
                     );
                     success.unit()
@@ -345,7 +346,11 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             }
 
             // Avoid creating a temporary
-            ExprKind::VarRef { .. } | ExprKind::SelfRef | ExprKind::StaticRef { .. } => {
+            ExprKind::VarRef { .. } |
+            ExprKind::SelfRef |
+            ExprKind::StaticRef { .. } |
+            ExprKind::PlaceTypeAscription { .. } |
+            ExprKind::ValueTypeAscription { .. } => {
                 debug_assert!(Category::of(&expr.kind) == Some(Category::Place));
 
                 let place = unpack!(block = this.as_place(block, expr));
@@ -393,7 +398,14 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             | ExprKind::Literal { .. }
             | ExprKind::Yield { .. } => {
                 debug_assert!(match Category::of(&expr.kind).unwrap() {
+                    // should be handled above
                     Category::Rvalue(RvalueFunc::Into) => false,
+
+                    // must be handled above or else we get an
+                    // infinite loop in the builder; see
+                    // e.g. `ExprKind::VarRef` above
+                    Category::Place => false,
+
                     _ => true,
                 });
 

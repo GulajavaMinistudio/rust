@@ -441,10 +441,7 @@ declare_features! (
 
     // Allows macro invocations on modules expressions and statements and
     // procedural macros to expand to non-items.
-    (active, proc_macro_mod, "1.27.0", Some(54727), None),
-    (active, proc_macro_expr, "1.27.0", Some(54727), None),
-    (active, proc_macro_non_items, "1.27.0", Some(54727), None),
-    (active, proc_macro_gen, "1.27.0", Some(54727), None),
+    (active, proc_macro_hygiene, "1.30.0", Some(54727), None),
 
     // #[doc(alias = "...")]
     (active, doc_alias, "1.27.0", Some(50146), None),
@@ -541,6 +538,14 @@ declare_features! (
      Some("merged into `#![feature(slice_patterns)]`")),
     (removed, macro_reexport, "1.0.0", Some(29638), None,
      Some("subsumed by `pub use`")),
+    (removed, proc_macro_mod, "1.27.0", Some(54727), None,
+     Some("subsumed by `#![feature(proc_macro_hygiene)]`")),
+    (removed, proc_macro_expr, "1.27.0", Some(54727), None,
+     Some("subsumed by `#![feature(proc_macro_hygiene)]`")),
+    (removed, proc_macro_non_items, "1.27.0", Some(54727), None,
+     Some("subsumed by `#![feature(proc_macro_hygiene)]`")),
+    (removed, proc_macro_gen, "1.27.0", Some(54727), None,
+     Some("subsumed by `#![feature(proc_macro_hygiene)]`")),
 );
 
 declare_features! (
@@ -990,10 +995,6 @@ pub const BUILTIN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeG
                                      "the `#[rustc_test_marker]` attribute \
                                       is used internally to track tests",
                                      cfg_fn!(rustc_attrs))),
-    ("rustc_test_marker2", Normal, Gated(Stability::Unstable,
-                                         "rustc_attrs",
-                                         "temporarily used by rustc to report some errors",
-                                         cfg_fn!(rustc_attrs))),
     ("rustc_transparent_macro", Whitelisted, Gated(Stability::Unstable,
                                                    "rustc_attrs",
                                                    "used internally for testing macro hygiene",

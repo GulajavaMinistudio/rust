@@ -289,6 +289,8 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
                     self.compute_projection(data);
                 }
 
+                ty::UnnormalizedProjection(..) => bug!("only used with chalk-engine"),
+
                 ty::Adt(def, substs) => {
                     // WfNominalType
                     let obligations = self.nominal_obligations(def.did, substs);
@@ -518,7 +520,7 @@ pub fn object_region_bounds<'a, 'gcx, 'tcx>(
 {
     // Since we don't actually *know* the self type for an object,
     // this "open(err)" serves as a kind of dummy standin -- basically
-    // a skolemized type.
+    // a placeholder type.
     let open_ty = tcx.mk_infer(ty::FreshTy(0));
 
     let predicates = existential_predicates.iter().filter_map(|predicate| {

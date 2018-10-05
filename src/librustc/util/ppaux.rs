@@ -18,7 +18,7 @@ use ty::{Bool, Char, Adt};
 use ty::{Error, Str, Array, Slice, Float, FnDef, FnPtr};
 use ty::{Param, RawPtr, Ref, Never, Tuple};
 use ty::{Closure, Generator, GeneratorWitness, Foreign, Projection, Opaque};
-use ty::{Dynamic, Int, Uint, Infer};
+use ty::{UnnormalizedProjection, Dynamic, Int, Uint, Infer};
 use ty::{self, RegionVid, Ty, TyCtxt, TypeFoldable, GenericParamCount, GenericParamDefKind};
 use util::nodemap::FxHashSet;
 
@@ -803,7 +803,7 @@ define_print! {
                 }
                 ty::ReLateBound(_, br) |
                 ty::ReFree(ty::FreeRegion { bound_region: br, .. }) |
-                ty::ReSkolemized(_, br) => {
+                ty::RePlaceholder(ty::Placeholder { name: br, .. }) => {
                     write!(f, "{}", br)
                 }
                 ty::ReScope(scope) if cx.identify_regions => {
@@ -872,8 +872,8 @@ define_print! {
                     write!(f, "'?{}", c.index())
                 }
 
-                ty::ReSkolemized(universe, ref bound_region) => {
-                    write!(f, "ReSkolemized({:?}, {:?})", universe, bound_region)
+                ty::RePlaceholder(placeholder) => {
+                    write!(f, "RePlaceholder({:?})", placeholder)
                 }
 
                 ty::ReEmpty => write!(f, "ReEmpty"),
@@ -1143,6 +1143,11 @@ define_print! {
                 }
                 Foreign(def_id) => parameterized(f, subst::Substs::empty(), def_id, &[]),
                 Projection(ref data) => data.print(f, cx),
+                UnnormalizedProjection(ref data) => {
+                    write!(f, "Unnormalized(")?;
+                    data.print(f, cx)?;
+                    write!(f, ")")
+                }
                 Opaque(def_id, substs) => {
                     if cx.is_verbose {
                         return write!(f, "Opaque({:?}, {:?})", def_id, substs);

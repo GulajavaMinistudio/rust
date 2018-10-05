@@ -18,6 +18,8 @@
 #![feature(slice_sort_by_cached_key)]
 
 #[macro_use]
+extern crate bitflags;
+#[macro_use]
 extern crate log;
 #[macro_use]
 extern crate syntax;
@@ -72,11 +74,10 @@ use syntax_pos::{Span, DUMMY_SP, MultiSpan};
 use errors::{Applicability, DiagnosticBuilder, DiagnosticId};
 
 use std::cell::{Cell, RefCell};
-use std::cmp;
+use std::{cmp, fmt, iter, ptr};
 use std::collections::BTreeSet;
-use std::fmt;
-use std::iter;
 use std::mem::replace;
+use rustc_data_structures::ptr_key::PtrKey;
 use rustc_data_structures::sync::Lrc;
 
 use resolve_imports::{ImportDirective, ImportDirectiveSubclass, NameResolution, ImportResolver};
@@ -85,7 +86,7 @@ use macros::{InvocationData, LegacyBinding, ParentScope};
 // NB: This module needs to be declared first so diagnostics are
 // registered before they are used.
 mod diagnostics;
-
+mod error_reporting;
 mod macros;
 mod check_unused;
 mod build_reduced_graph;
@@ -1013,7 +1014,8 @@ pub struct ModuleData<'a> {
     normal_ancestor_id: DefId,
 
     resolutions: RefCell<FxHashMap<(Ident, Namespace), &'a RefCell<NameResolution<'a>>>>,
-    legacy_macro_resolutions: RefCell<Vec<(Ident, MacroKind, ParentScope<'a>, Option<Def>)>>,
+    legacy_macro_resolutions: RefCell<Vec<(Ident, MacroKind, ParentScope<'a>,
+                                           Option<&'a NameBinding<'a>>)>>,
     macro_resolutions: RefCell<Vec<(Box<[Ident]>, Span)>>,
     builtin_attrs: RefCell<Vec<(Ident, ParentScope<'a>)>>,
 
@@ -1114,6 +1116,17 @@ impl<'a> ModuleData<'a> {
     fn nearest_item_scope(&'a self) -> Module<'a> {
         if self.is_trait() { self.parent.unwrap() } else { self }
     }
+
+    fn is_ancestor_of(&self, mut other: &Self) -> bool {
+        while !ptr::eq(self, other) {
+            if let Some(parent) = other.parent {
+                other = parent;
+            } else {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl<'a> fmt::Debug for ModuleData<'a> {
@@ -1198,10 +1211,6 @@ impl<'a> NameBinding<'a> {
             NameBindingKind::Ambiguity { b1, .. } => b1.def_ignoring_ambiguity(),
             _ => self.def(),
         }
-    }
-
-    fn get_macro<'b: 'a>(&self, resolver: &mut Resolver<'a, 'b>) -> Lrc<SyntaxExtension> {
-        resolver.get_macro(self.def_ignoring_ambiguity())
     }
 
     // We sometimes need to treat variants as `pub` for backwards compatibility
@@ -1411,6 +1420,7 @@ pub struct Resolver<'a, 'b: 'a> {
     block_map: NodeMap<Module<'a>>,
     module_map: FxHashMap<DefId, Module<'a>>,
     extern_module_map: FxHashMap<(DefId, bool /* MacrosOnly? */), Module<'a>>,
+    binding_parent_modules: FxHashMap<PtrKey<'a, NameBinding<'a>>, Module<'a>>,
 
     pub make_glob_map: bool,
     /// Maps imports to the names of items actually imported (this actually maps
@@ -1714,6 +1724,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             module_map,
             block_map: NodeMap(),
             extern_module_map: FxHashMap(),
+            binding_parent_modules: FxHashMap(),
 
             make_glob_map: make_glob_map == MakeGlobMap::Yes,
             glob_map: NodeMap(),
@@ -3652,8 +3663,8 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                 self.resolve_ident_in_module(module, ident, ns, record_used, path_span)
             } else if opt_ns == Some(MacroNS) {
                 assert!(ns == TypeNS);
-                self.resolve_lexical_macro_path_segment(ident, ns, None, parent_scope, record_used,
-                                                        record_used, path_span).map(|(b, _)| b)
+                self.early_resolve_ident_in_lexical_scope(ident, ns, None, parent_scope,
+                                                          record_used, record_used, path_span)
             } else {
                 let record_used_id =
                     if record_used { crate_lint.node_id().or(Some(CRATE_NODE_ID)) } else { None };
@@ -4594,6 +4605,31 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
 
     fn is_accessible_from(&self, vis: ty::Visibility, module: Module<'a>) -> bool {
         vis.is_accessible_from(module.normal_ancestor_id, self)
+    }
+
+    fn set_binding_parent_module(&mut self, binding: &'a NameBinding<'a>, module: Module<'a>) {
+        if let Some(old_module) = self.binding_parent_modules.insert(PtrKey(binding), module) {
+            if !ptr::eq(module, old_module) {
+                span_bug!(binding.span, "parent module is reset for binding");
+            }
+        }
+    }
+
+    fn disambiguate_legacy_vs_modern(
+        &self,
+        legacy: &'a NameBinding<'a>,
+        modern: &'a NameBinding<'a>,
+    ) -> bool {
+        // Some non-controversial subset of ambiguities "modern macro name" vs "macro_rules"
+        // is disambiguated to mitigate regressions from macro modularization.
+        // Scoping for `macro_rules` behaves like scoping for `let` at module level, in general.
+        match (self.binding_parent_modules.get(&PtrKey(legacy)),
+               self.binding_parent_modules.get(&PtrKey(modern))) {
+            (Some(legacy), Some(modern)) =>
+                legacy.normal_ancestor_id == modern.normal_ancestor_id &&
+                modern.is_ancestor_of(legacy),
+            _ => false,
+        }
     }
 
     fn report_ambiguity_error(&self, ident: Ident, b1: &NameBinding, b2: &NameBinding) {

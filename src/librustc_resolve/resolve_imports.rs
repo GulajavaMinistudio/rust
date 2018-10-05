@@ -334,7 +334,7 @@ impl<'a, 'crateloader> Resolver<'a, 'crateloader> {
         // expansion. With restricted shadowing names from globs and macro expansions cannot
         // shadow names from outer scopes, so we can freely fallback from module search to search
         // in outer scopes. To continue search in outer scopes we have to lie a bit and return
-        // `Determined` to `resolve_lexical_macro_path_segment` even if the correct answer
+        // `Determined` to `early_resolve_ident_in_lexical_scope` even if the correct answer
         // for in-module resolution could be `Undetermined`.
         if restricted_shadowing {
             return Err(Determined);
@@ -478,6 +478,7 @@ impl<'a, 'crateloader> Resolver<'a, 'crateloader> {
                       binding: &'a NameBinding<'a>)
                       -> Result<(), &'a NameBinding<'a>> {
         self.check_reserved_macro_name(ident, ns);
+        self.set_binding_parent_module(binding, module);
         self.update_resolution(module, ident, ns, |this, resolution| {
             if let Some(old_binding) = resolution.binding {
                 if binding.is_glob_import() {
@@ -957,17 +958,13 @@ impl<'a, 'b:'a, 'c: 'b> ImportResolver<'a, 'b, 'c> {
                 return None;
             }
             PathResult::Failed(span, msg, true) => {
-                let (mut self_path, mut self_result) = (module_path.clone(), None);
-                let is_special = |ident: Ident| ident.is_path_segment_keyword() &&
-                                                ident.name != keywords::CrateRoot.name();
-                if !self_path.is_empty() && !is_special(self_path[0]) &&
-                   !(self_path.len() > 1 && is_special(self_path[1])) {
-                    self_path[0].name = keywords::SelfValue.name();
-                    self_result = Some(self.resolve_path(None, &self_path, None, false,
-                                                         span, CrateLint::No));
-                }
-                return if let Some(PathResult::Module(..)) = self_result {
-                    Some((span, format!("Did you mean `{}`?", names_to_string(&self_path[..]))))
+                return if let Some(suggested_path) = self.make_path_suggestion(
+                    span, module_path.clone()
+                ) {
+                    Some((
+                        span,
+                        format!("Did you mean `{}`?", names_to_string(&suggested_path[..]))
+                    ))
                 } else {
                     Some((span, msg))
                 };

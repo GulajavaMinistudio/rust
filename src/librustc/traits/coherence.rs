@@ -117,7 +117,7 @@ fn overlap<'cx, 'gcx, 'tcx>(selcx: &mut SelectionContext<'cx, 'gcx, 'tcx>,
 {
     debug!("overlap(a_def_id={:?}, b_def_id={:?})", a_def_id, b_def_id);
 
-    // For the purposes of this check, we don't bring any skolemized
+    // For the purposes of this check, we don't bring any placeholder
     // types into scope; instead, we replace the generic types with
     // fresh type variables, and hence we do our evaluations in an
     // empty environment.
@@ -475,6 +475,7 @@ fn ty_is_local_constructor(ty: Ty<'_>, in_crate: InCrate) -> bool {
 
         ty::Error => true,
 
+        ty::UnnormalizedProjection(..) |
         ty::Closure(..) |
         ty::Generator(..) |
         ty::GeneratorWitness(..) |
