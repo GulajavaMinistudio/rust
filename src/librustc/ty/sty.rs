@@ -126,10 +126,25 @@ pub enum TyKind<'tcx> {
     Ref(Region<'tcx>, Ty<'tcx>, hir::Mutability),
 
     /// The anonymous type of a function declaration/definition. Each
-    /// function has a unique type.
+    /// function has a unique type, which is output (for a function
+    /// named `foo` returning an `i32`) as `fn() -> i32 {foo}`.
+    ///
+    /// For example the type of `bar` here:
+    ///
+    /// ```rust
+    /// fn foo() -> i32 { 1 }
+    /// let bar = foo; // bar: fn() -> i32 {foo}
+    /// ```
     FnDef(DefId, &'tcx Substs<'tcx>),
 
     /// A pointer to a function.  Written as `fn() -> i32`.
+    ///
+    /// For example the type of `bar` here:
+    ///
+    /// ```rust
+    /// fn foo() -> i32 { 1 }
+    /// let bar: fn() -> i32 = foo;
+    /// ```
     FnPtr(PolyFnSig<'tcx>),
 
     /// A trait, defined with `trait`.
@@ -992,11 +1007,7 @@ impl<'a, 'gcx, 'tcx> ParamTy {
         // FIXME(#50125): Ignoring `Self` with `idx != 0` might lead to weird behavior elsewhere,
         // but this should only be possible when using `-Z continue-parse-after-error` like
         // `compile-fail/issue-36638.rs`.
-        if self.name == keywords::SelfType.name().as_str() && self.idx == 0 {
-            true
-        } else {
-            false
-        }
+        self.name == keywords::SelfType.name().as_str() && self.idx == 0
     }
 }
 
@@ -2043,18 +2054,14 @@ impl<'tcx> Const<'tcx> {
         tcx: TyCtxt<'_, '_, '_>,
         ty: ParamEnvAnd<'tcx, Ty<'tcx>>,
     ) -> u128 {
-        match self.assert_bits(tcx, ty) {
-            Some(val) => val,
-            None => bug!("expected bits of {}, got {:#?}", ty.value, self),
-        }
+        self.assert_bits(tcx, ty).unwrap_or_else(||
+            bug!("expected bits of {}, got {:#?}", ty.value, self))
     }
 
     #[inline]
     pub fn unwrap_usize(&self, tcx: TyCtxt<'_, '_, '_>) -> u64 {
-        match self.assert_usize(tcx) {
-            Some(val) => val,
-            None => bug!("expected constant usize, got {:#?}", self),
-        }
+        self.assert_usize(tcx).unwrap_or_else(||
+            bug!("expected constant usize, got {:#?}", self))
     }
 }
 
