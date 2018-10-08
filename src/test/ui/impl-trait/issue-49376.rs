@@ -8,16 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// run-pass
-fn iter<'a>(data: &'a [usize]) -> impl Iterator<Item = usize> + 'a {
-    data.iter()
-        .map(
-            |x| x // fn(&'a usize) -> &'(ReScope) usize
-        )
-        .map(
-            |x| *x // fn(&'(ReScope) usize) -> usize
-        )
+// compile-pass
+
+// Tests for nested self-reference which caused a stack overflow.
+
+use std::fmt::Debug;
+use std::ops::*;
+
+fn gen() -> impl PartialOrd + PartialEq + Debug { }
+
+struct Bar {}
+trait Foo<T = Self> {}
+impl Foo for Bar {}
+
+fn foo() -> impl Foo {
+    Bar {}
 }
 
-fn main() {
-}
+fn test_impl_ops() -> impl Add + Sub + Mul + Div { 1 }
+fn test_impl_assign_ops() -> impl AddAssign + SubAssign + MulAssign + DivAssign { 1 }
+
+fn main() {}

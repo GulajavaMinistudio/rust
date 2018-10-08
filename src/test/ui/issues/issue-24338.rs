@@ -7,25 +7,24 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+//
+// compile-pass
 
-// run-pass
-
-// Tests for nested self-reference which caused a stack overflow.
-
-use std::fmt::Debug;
-use std::ops::*;
-
-fn gen() -> impl PartialOrd + PartialEq + Debug { }
-
-struct Bar {}
-trait Foo<T = Self> {}
-impl Foo for Bar {}
-
-fn foo() -> impl Foo {
-    Bar {}
+trait DictLike<'a> {
+    type ItemsIterator: Iterator<Item=u8>;
+    fn get(c: Self::ItemsIterator) {
+        c.into_iter();
+    }
 }
 
-fn test_impl_ops() -> impl Add + Sub + Mul + Div { 1 }
-fn test_impl_assign_ops() -> impl AddAssign + SubAssign + MulAssign + DivAssign { 1 }
+trait DictLike2<'a> {
+    type ItemsIterator: Iterator<Item=u8>;
+
+    fn items(&self) -> Self::ItemsIterator;
+
+    fn get(&self)  {
+        for _ in self.items() {}
+    }
+}
 
 fn main() {}

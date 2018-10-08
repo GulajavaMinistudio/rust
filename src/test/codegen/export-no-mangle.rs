@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// run-pass
-// #39665
+#![crate_type = "lib"]
 
-fn batches(n: &u32) -> impl Iterator<Item=&u32> {
-    std::iter::once(n)
+mod private {
+    // CHECK: @FOO =
+    #[no_mangle]
+    pub static FOO: u32 = 3;
+
+    // CHECK: @BAR =
+    #[export_name = "BAR"]
+    static BAR: u32 = 3;
+
+    // CHECK: void @foo()
+    #[no_mangle]
+    pub extern fn foo() {}
+
+    // CHECK: void @bar()
+    #[export_name = "bar"]
+    extern fn bar() {}
 }
-
-fn main() {}
