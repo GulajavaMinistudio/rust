@@ -205,8 +205,8 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
     fn pass_argument(
         &mut self,
         skip_zst: bool,
-        caller_arg: &mut impl Iterator<Item=OpTy<'tcx>>,
-        callee_arg: PlaceTy<'tcx>,
+        caller_arg: &mut impl Iterator<Item=OpTy<'tcx, M::PointerTag>>,
+        callee_arg: PlaceTy<'tcx, M::PointerTag>,
     ) -> EvalResult<'tcx> {
         if skip_zst && callee_arg.layout.is_zst() {
             // Nothing to do.
@@ -231,8 +231,8 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
         instance: ty::Instance<'tcx>,
         span: Span,
         caller_abi: Abi,
-        args: &[OpTy<'tcx>],
-        dest: Option<PlaceTy<'tcx>>,
+        args: &[OpTy<'tcx, M::PointerTag>],
+        dest: Option<PlaceTy<'tcx, M::PointerTag>>,
         ret: Option<mir::BasicBlock>,
     ) -> EvalResult<'tcx> {
         trace!("eval_fn_call: {:#?}", instance);
@@ -287,7 +287,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
 
                 let return_place = match dest {
                     Some(place) => *place,
-                    None => Place::null(&self),
+                    None => Place::null(&self), // any access will error. good!
                 };
                 self.push_stack_frame(
                     instance,
@@ -330,7 +330,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
                     // last incoming argument.  These two iterators do not have the same type,
                     // so to keep the code paths uniform we accept an allocation
                     // (for RustCall ABI only).
-                    let caller_args : Cow<[OpTy<'tcx>]> =
+                    let caller_args : Cow<[OpTy<'tcx, M::PointerTag>]> =
                         if caller_abi == Abi::RustCall && !args.is_empty() {
                             // Untuple
                             let (&untuple_arg, args) = args.split_last().unwrap();
@@ -339,7 +339,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
                                 .chain((0..untuple_arg.layout.fields.count()).into_iter()
                                     .map(|i| self.operand_field(untuple_arg, i as u64))
                                 )
-                                .collect::<EvalResult<Vec<OpTy<'tcx>>>>()?)
+                                .collect::<EvalResult<Vec<OpTy<'tcx, M::PointerTag>>>>()?)
                         } else {
                             // Plain arg passing
                             Cow::from(args)
@@ -372,6 +372,20 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
                     if caller_iter.next().is_some() {
                         trace!("Caller has too many args over");
                         return err!(FunctionArgCountMismatch);
+                    }
+                    // Don't forget to check the return type!
+                    if let Some(caller_ret) = dest {
+                        let callee_ret = self.eval_place(&mir::Place::Local(mir::RETURN_PLACE))?;
+                        if !Self::check_argument_compat(caller_ret.layout, callee_ret.layout) {
+                            return err!(FunctionRetMismatch(
+                                caller_ret.layout.ty, callee_ret.layout.ty
+                            ));
+                        }
+                    } else {
+                        // FIXME: The caller thinks this function cannot return. How do
+                        // we verify that the callee agrees?
+                        // On the plus side, the the callee ever writes to its return place,
+                        // that will be detected as UB (because we set that to NULL above).
                     }
                     Ok(())
                 })();
@@ -412,7 +426,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> 
 
     fn drop_in_place(
         &mut self,
-        place: PlaceTy<'tcx>,
+        place: PlaceTy<'tcx, M::PointerTag>,
         instance: ty::Instance<'tcx>,
         span: Span,
         target: mir::BasicBlock,

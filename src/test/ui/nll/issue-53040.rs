@@ -1,4 +1,4 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-pass
-
-union Foo {
-    a: &'static u8,
-    b: usize,
-}
-
-// This might point to an invalid address, but that's the user's problem
-const USIZE_AS_STATIC_REF: &'static u8 = unsafe { Foo { b: 1337 }.a};
+#![feature(nll)]
 
 fn main() {
+    let mut v: Vec<()> = Vec::new();
+    || &mut v;
 }
