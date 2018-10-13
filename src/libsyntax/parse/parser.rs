@@ -678,7 +678,7 @@ impl<'a> Parser<'a> {
     /// Expect next token to be edible or inedible token.  If edible,
     /// then consume it; if inedible, then return without consuming
     /// anything.  Signal a fatal error if next token is unexpected.
-    fn expect_one_of(&mut self,
+    pub fn expect_one_of(&mut self,
                          edible: &[token::Token],
                          inedible: &[token::Token]) -> PResult<'a,  ()>{
         fn tokens_to_string(tokens: &[TokenType]) -> String {
@@ -771,6 +771,11 @@ impl<'a> Parser<'a> {
                     //   |                   |
                     //   |                   expected one of 8 possible tokens here
                     err.span_label(self.span, label_exp);
+                }
+                _ if self.prev_span == syntax_pos::DUMMY_SP => {
+                    // Account for macro context where the previous span might not be
+                    // available to avoid incorrect output (#54841).
+                    err.span_label(self.span, "unexpected token");
                 }
                 _ => {
                     err.span_label(sp, label_exp);
@@ -1429,6 +1434,23 @@ impl<'a> Parser<'a> {
                     let (inner_attrs, body) = self.parse_inner_attrs_and_block()?;
                     attrs.extend(inner_attrs.iter().cloned());
                     Some(body)
+                }
+                token::Interpolated(ref nt) => {
+                    match &nt.0 {
+                        token::NtBlock(..) => {
+                            *at_end = true;
+                            let (inner_attrs, body) = self.parse_inner_attrs_and_block()?;
+                            attrs.extend(inner_attrs.iter().cloned());
+                            Some(body)
+                        }
+                        _ => {
+                            let token_str = self.this_token_to_string();
+                            let mut err = self.fatal(&format!("expected `;` or `{{`, found `{}`",
+                                                              token_str));
+                            err.span_label(self.span, "expected `;` or `{`");
+                            return Err(err);
+                        }
+                    }
                 }
                 _ => {
                     let token_str = self.this_token_to_string();
@@ -3866,6 +3888,9 @@ impl<'a> Parser<'a> {
             // check that a comma comes after every field
             if !ate_comma {
                 let err = self.struct_span_err(self.prev_span, "expected `,`");
+                if let Some(mut delayed) = delayed_err {
+                    delayed.emit();
+                }
                 return Err(err);
             }
             ate_comma = false;
