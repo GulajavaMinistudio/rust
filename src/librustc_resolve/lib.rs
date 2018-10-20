@@ -780,7 +780,7 @@ impl<'a, 'tcx, 'cl> Visitor<'tcx> for Resolver<'a, 'cl> {
         self.label_ribs.push(Rib::new(rib_kind));
 
         // Add each argument to the rib.
-        let mut bindings_list = FxHashMap();
+        let mut bindings_list = FxHashMap::default();
         for argument in &declaration.inputs {
             self.resolve_pattern(&argument.pat, PatternSource::FnParam, &mut bindings_list);
 
@@ -930,7 +930,7 @@ struct Rib<'a> {
 impl<'a> Rib<'a> {
     fn new(kind: RibKind<'a>) -> Rib<'a> {
         Rib {
-            bindings: FxHashMap(),
+            bindings: Default::default(),
             kind,
         }
     }
@@ -1053,11 +1053,11 @@ impl<'a> ModuleData<'a> {
             parent,
             kind,
             normal_ancestor_id,
-            resolutions: RefCell::new(FxHashMap()),
+            resolutions: Default::default(),
             legacy_macro_resolutions: RefCell::new(Vec::new()),
             macro_resolutions: RefCell::new(Vec::new()),
             builtin_attrs: RefCell::new(Vec::new()),
-            unresolved_invocations: RefCell::new(FxHashSet()),
+            unresolved_invocations: Default::default(),
             no_implicit_prelude: false,
             glob_importers: RefCell::new(Vec::new()),
             globs: RefCell::new(Vec::new()),
@@ -1315,13 +1315,14 @@ impl<'a> NameBinding<'a> {
 ///
 /// All other types are defined somewhere and possibly imported, but the primitive ones need
 /// special handling, since they have no place of origin.
+#[derive(Default)]
 struct PrimitiveTypeTable {
     primitive_types: FxHashMap<Name, PrimTy>,
 }
 
 impl PrimitiveTypeTable {
     fn new() -> PrimitiveTypeTable {
-        let mut table = PrimitiveTypeTable { primitive_types: FxHashMap() };
+        let mut table = PrimitiveTypeTable::default();
 
         table.intern("bool", Bool);
         table.intern("char", Char);
@@ -1482,6 +1483,7 @@ pub struct Resolver<'a, 'b: 'a> {
 }
 
 /// Nothing really interesting here, it just provides memory for the rest of the crate.
+#[derive(Default)]
 pub struct ResolverArenas<'a> {
     modules: arena::TypedArena<ModuleData<'a>>,
     local_modules: RefCell<Vec<Module<'a>>>,
@@ -1633,19 +1635,17 @@ impl<'a, 'crateloader> Resolver<'a, 'crateloader> {
                 *def = module.def().unwrap(),
             PathResult::NonModule(path_res) if path_res.unresolved_segments() == 0 =>
                 *def = path_res.base_def(),
-            PathResult::NonModule(..) => match self.resolve_path(
-                None,
-                &path,
-                None,
-                true,
-                span,
-                CrateLint::No,
-            ) {
-                PathResult::Failed(span, msg, _) => {
+            PathResult::NonModule(..) =>
+                if let PathResult::Failed(span, msg, _) = self.resolve_path(
+                    None,
+                    &path,
+                    None,
+                    true,
+                    span,
+                    CrateLint::No,
+                ) {
                     error_callback(self, span, ResolutionError::FailedToResolve(&msg));
-                }
-                _ => {}
-            },
+                },
             PathResult::Module(ModuleOrUniformRoot::UniformRoot(_)) |
             PathResult::Indeterminate => unreachable!(),
             PathResult::Failed(span, msg, _) => {
@@ -1670,7 +1670,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             no_implicit_prelude: attr::contains_name(&krate.attrs, "no_implicit_prelude"),
             ..ModuleData::new(None, root_module_kind, root_def_id, Mark::root(), krate.span)
         });
-        let mut module_map = FxHashMap();
+        let mut module_map = FxHashMap::default();
         module_map.insert(DefId::local(CRATE_DEF_INDEX), graph_root);
 
         let mut definitions = Definitions::new();
@@ -1690,11 +1690,11 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             }
         }
 
-        let mut invocations = FxHashMap();
+        let mut invocations = FxHashMap::default();
         invocations.insert(Mark::root(),
                            arenas.alloc_invocation_data(InvocationData::root(graph_root)));
 
-        let mut macro_defs = FxHashMap();
+        let mut macro_defs = FxHashMap::default();
         macro_defs.insert(Mark::root(), root_def_id);
 
         Resolver {
@@ -1710,8 +1710,8 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             prelude: None,
             extern_prelude,
 
-            has_self: FxHashSet(),
-            field_names: FxHashMap(),
+            has_self: FxHashSet::default(),
+            field_names: FxHashMap::default(),
 
             determined_imports: Vec::new(),
             indeterminate_imports: Vec::new(),
@@ -1734,21 +1734,21 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             import_map: NodeMap(),
             freevars: NodeMap(),
             freevars_seen: NodeMap(),
-            export_map: FxHashMap(),
+            export_map: FxHashMap::default(),
             trait_map: NodeMap(),
             module_map,
             block_map: NodeMap(),
-            extern_module_map: FxHashMap(),
-            binding_parent_modules: FxHashMap(),
+            extern_module_map: FxHashMap::default(),
+            binding_parent_modules: FxHashMap::default(),
 
             make_glob_map: make_glob_map == MakeGlobMap::Yes,
             glob_map: NodeMap(),
 
-            used_imports: FxHashSet(),
+            used_imports: FxHashSet::default(),
             maybe_unused_trait_imports: NodeSet(),
             maybe_unused_extern_crates: Vec::new(),
 
-            unused_labels: FxHashMap(),
+            unused_labels: FxHashMap::default(),
 
             privacy_errors: Vec::new(),
             ambiguity_errors: Vec::new(),
@@ -1764,35 +1764,27 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             }),
 
             crate_loader,
-            macro_names: FxHashSet(),
-            builtin_macros: FxHashMap(),
-            macro_use_prelude: FxHashMap(),
-            all_macros: FxHashMap(),
-            macro_map: FxHashMap(),
+            macro_names: FxHashSet::default(),
+            builtin_macros: FxHashMap::default(),
+            macro_use_prelude: FxHashMap::default(),
+            all_macros: FxHashMap::default(),
+            macro_map: FxHashMap::default(),
             invocations,
             macro_defs,
-            local_macro_def_scopes: FxHashMap(),
-            name_already_seen: FxHashMap(),
+            local_macro_def_scopes: FxHashMap::default(),
+            name_already_seen: FxHashMap::default(),
             whitelisted_legacy_custom_derives: Vec::new(),
             potentially_unused_imports: Vec::new(),
             struct_constructors: DefIdMap(),
             found_unresolved_macro: false,
-            unused_macros: FxHashSet(),
+            unused_macros: FxHashSet::default(),
             current_type_ascription: Vec::new(),
             injected_crate: None,
         }
     }
 
     pub fn arenas() -> ResolverArenas<'a> {
-        ResolverArenas {
-            modules: arena::TypedArena::new(),
-            local_modules: RefCell::new(Vec::new()),
-            name_bindings: arena::TypedArena::new(),
-            import_directives: arena::TypedArena::new(),
-            name_resolutions: arena::TypedArena::new(),
-            invocation_data: arena::TypedArena::new(),
-            legacy_bindings: arena::TypedArena::new(),
-        }
+        Default::default()
     }
 
     /// Runs the function on each namespace.
@@ -2357,7 +2349,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                     span: prefix.span.to(use_tree.prefix.span),
                 };
 
-                if items.len() == 0 {
+                if items.is_empty() {
                     // Resolve prefix of an import with empty braces (issue #28388).
                     self.smart_resolve_path_with_crate_lint(
                         id,
@@ -2383,7 +2375,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
         match type_parameters {
             HasTypeParameters(generics, rib_kind) => {
                 let mut function_type_rib = Rib::new(rib_kind);
-                let mut seen_bindings = FxHashMap();
+                let mut seen_bindings = FxHashMap::default();
                 for param in &generics.params {
                     match param.kind {
                         GenericParamKind::Lifetime { .. } => {}
@@ -2651,7 +2643,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
         walk_list!(self, visit_expr, &local.init);
 
         // Resolve the pattern.
-        self.resolve_pattern(&local.pat, PatternSource::Let, &mut FxHashMap());
+        self.resolve_pattern(&local.pat, PatternSource::Let, &mut FxHashMap::default());
     }
 
     // build a map from pattern identifiers to binding-info's.
@@ -2659,7 +2651,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
     // that expands into an or-pattern where one 'x' was from the
     // user and one 'x' came from the macro.
     fn binding_mode_map(&mut self, pat: &Pat) -> BindingMap {
-        let mut binding_map = FxHashMap();
+        let mut binding_map = FxHashMap::default();
 
         pat.walk(&mut |pat| {
             if let PatKind::Ident(binding_mode, ident, ref sub_pat) = pat.node {
@@ -2684,8 +2676,8 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             return;
         }
 
-        let mut missing_vars = FxHashMap();
-        let mut inconsistent_vars = FxHashMap();
+        let mut missing_vars = FxHashMap::default();
+        let mut inconsistent_vars = FxHashMap::default();
         for (i, p) in pats.iter().enumerate() {
             let map_i = self.binding_mode_map(&p);
 
@@ -2696,7 +2688,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
 
                 let map_j = self.binding_mode_map(&q);
                 for (&key, &binding_i) in &map_i {
-                    if map_j.len() == 0 {                   // Account for missing bindings when
+                    if map_j.is_empty() {                   // Account for missing bindings when
                         let binding_error = missing_vars    // map_j has none.
                             .entry(key.name)
                             .or_insert(BindingError {
@@ -2749,7 +2741,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
     fn resolve_arm(&mut self, arm: &Arm) {
         self.ribs[ValueNS].push(Rib::new(NormalRibKind));
 
-        let mut bindings_list = FxHashMap();
+        let mut bindings_list = FxHashMap::default();
         for pattern in &arm.pats {
             self.resolve_pattern(&pattern, PatternSource::Match, &mut bindings_list);
         }
@@ -2757,9 +2749,8 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
         // This has to happen *after* we determine which pat_idents are variants
         self.check_consistent_bindings(&arm.pats);
 
-        match arm.guard {
-            Some(ast::Guard::If(ref expr)) => self.visit_expr(expr),
-            _ => {}
+        if let Some(ast::Guard::If(ref expr)) = arm.guard {
+            self.visit_expr(expr)
         }
         self.visit_expr(&arm.body);
 
@@ -3000,14 +2991,14 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             // Make the base error.
             let expected = source.descr_expected();
             let path_str = names_to_string(path);
-            let item_str = path[path.len() - 1];
+            let item_str = path.last().unwrap();
             let code = source.error_code(def.is_some());
             let (base_msg, fallback_label, base_span) = if let Some(def) = def {
                 (format!("expected {}, found {} `{}`", expected, def.kind_name(), path_str),
                  format!("not a {}", expected),
                  span)
             } else {
-                let item_span = path[path.len() - 1].span;
+                let item_span = path.last().unwrap().span;
                 let (mod_prefix, mod_str) = if path.len() == 1 {
                     (String::new(), "this scope".to_string())
                 } else if path.len() == 2 && path[0].name == keywords::CrateRoot.name() {
@@ -3030,10 +3021,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             let mut err = this.session.struct_span_err_with_code(base_span, &base_msg, code);
 
             // Emit help message for fake-self from other languages like `this`(javascript)
-            let fake_self: Vec<Ident> = ["this", "my"].iter().map(
-                |s| Ident::from_str(*s)
-            ).collect();
-            if fake_self.contains(&item_str)
+            if ["this", "my"].contains(&&*item_str.as_str())
                 && this.self_value_is_available(path[0].span, span) {
                 err.span_suggestion_with_applicability(
                     span,
@@ -3374,7 +3362,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                             );
                         }
                         break;
-                    } else if snippet.trim().len() != 0  {
+                    } else if !snippet.trim().is_empty() {
                         debug!("tried to find type ascription `:` token, couldn't find it");
                         break;
                     }
@@ -3936,7 +3924,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             }
             _ => {}
         }
-        return def;
+        def
     }
 
     fn lookup_assoc_candidate<FilterFn>(&mut self,
@@ -4149,7 +4137,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                 self.visit_expr(subexpression);
 
                 self.ribs[ValueNS].push(Rib::new(NormalRibKind));
-                let mut bindings_list = FxHashMap();
+                let mut bindings_list = FxHashMap::default();
                 for pat in pats {
                     self.resolve_pattern(pat, PatternSource::IfLet, &mut bindings_list);
                 }
@@ -4174,7 +4162,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                 self.with_resolved_label(label, expr.id, |this| {
                     this.visit_expr(subexpression);
                     this.ribs[ValueNS].push(Rib::new(NormalRibKind));
-                    let mut bindings_list = FxHashMap();
+                    let mut bindings_list = FxHashMap::default();
                     for pat in pats {
                         this.resolve_pattern(pat, PatternSource::WhileLet, &mut bindings_list);
                     }
@@ -4188,7 +4176,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
             ExprKind::ForLoop(ref pattern, ref subexpression, ref block, label) => {
                 self.visit_expr(subexpression);
                 self.ribs[ValueNS].push(Rib::new(NormalRibKind));
-                self.resolve_pattern(pattern, PatternSource::For, &mut FxHashMap());
+                self.resolve_pattern(pattern, PatternSource::For, &mut FxHashMap::default());
 
                 self.resolve_labeled_block(label, expr.id, block);
 
@@ -4241,7 +4229,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                 self.ribs[ValueNS].push(Rib::new(rib_kind));
                 self.label_ribs.push(Rib::new(rib_kind));
                 // Resolve arguments:
-                let mut bindings_list = FxHashMap();
+                let mut bindings_list = FxHashMap::default();
                 for argument in &fn_decl.inputs {
                     self.resolve_pattern(&argument.pat, PatternSource::FnParam, &mut bindings_list);
                     self.visit_ty(&argument.ty);
@@ -4386,10 +4374,9 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
         where FilterFn: Fn(Def) -> bool
     {
         let mut candidates = Vec::new();
-        let mut worklist = Vec::new();
-        let mut seen_modules = FxHashSet();
+        let mut seen_modules = FxHashSet::default();
         let not_local_module = crate_name != keywords::Crate.ident();
-        worklist.push((start_module, Vec::<ast::PathSegment>::new(), not_local_module));
+        let mut worklist = vec![(start_module, Vec::<ast::PathSegment>::new(), not_local_module)];
 
         while let Some((in_module,
                         path_segments,
@@ -4476,33 +4463,24 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                                           -> Vec<ImportSuggestion>
         where FilterFn: Fn(Def) -> bool
     {
-        let mut suggestions = vec![];
-
-        suggestions.extend(
-            self.lookup_import_candidates_from_module(
-                lookup_name, namespace, self.graph_root, keywords::Crate.ident(), &filter_fn
-            )
-        );
+        let mut suggestions = self.lookup_import_candidates_from_module(
+            lookup_name, namespace, self.graph_root, keywords::Crate.ident(), &filter_fn);
 
         if self.session.rust_2018() {
             let extern_prelude_names = self.extern_prelude.clone();
             for &name in extern_prelude_names.iter() {
                 let ident = Ident::with_empty_ctxt(name);
-                match self.crate_loader.maybe_process_path_extern(name, ident.span) {
-                    Some(crate_id) => {
-                        let crate_root = self.get_module(DefId {
-                            krate: crate_id,
-                            index: CRATE_DEF_INDEX,
-                        });
-                        self.populate_module_if_necessary(&crate_root);
+                if let Some(crate_id) = self.crate_loader.maybe_process_path_extern(name,
+                                                                                    ident.span)
+                {
+                    let crate_root = self.get_module(DefId {
+                        krate: crate_id,
+                        index: CRATE_DEF_INDEX,
+                    });
+                    self.populate_module_if_necessary(&crate_root);
 
-                        suggestions.extend(
-                            self.lookup_import_candidates_from_module(
-                                lookup_name, namespace, crate_root, ident, &filter_fn
-                            )
-                        );
-                    }
-                    None => {}
+                    suggestions.extend(self.lookup_import_candidates_from_module(
+                        lookup_name, namespace, crate_root, ident, &filter_fn));
                 }
             }
         }
@@ -4515,9 +4493,8 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                    -> Option<(Module<'a>, ImportSuggestion)>
     {
         let mut result = None;
-        let mut worklist = Vec::new();
-        let mut seen_modules = FxHashSet();
-        worklist.push((self.graph_root, Vec::new()));
+        let mut seen_modules = FxHashSet::default();
+        let mut worklist = vec![(self.graph_root, Vec::new())];
 
         while let Some((in_module, path_segments)) = worklist.pop() {
             // abort if the module is already found
@@ -4690,7 +4667,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
 
     fn report_errors(&mut self, krate: &Crate) {
         self.report_with_use_injections(krate);
-        let mut reported_spans = FxHashSet();
+        let mut reported_spans = FxHashSet::default();
 
         for &(span_use, span_def) in &self.macro_expanded_macro_export_errors {
             let msg = "macro-expanded `macro_export` macros from the current crate \

@@ -32,7 +32,7 @@ for &'gcx ty::List<T>
                                           hasher: &mut StableHasher<W>) {
         thread_local! {
             static CACHE: RefCell<FxHashMap<(usize, usize), Fingerprint>> =
-                RefCell::new(FxHashMap());
+                RefCell::new(Default::default());
         }
 
         let hash = CACHE.with(|cache| {
@@ -755,8 +755,9 @@ for ::middle::resolve_lifetime::Set1<T>
 }
 
 impl_stable_hash_for!(enum ::middle::resolve_lifetime::LifetimeDefOrigin {
-    Explicit,
-    InBand
+    ExplicitOrElided,
+    InBand,
+    Error,
 });
 
 impl_stable_hash_for!(enum ::middle::resolve_lifetime::Region {
@@ -1395,9 +1396,15 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for traits::Goal<'tcx> {
 
 impl_stable_hash_for!(
     impl<'tcx> for struct traits::ProgramClause<'tcx> {
-        goal, hypotheses
+        goal, hypotheses, category
     }
 );
+
+impl_stable_hash_for!(enum traits::ProgramClauseCategory {
+    ImpliedBound,
+    WellFormed,
+    Other,
+});
 
 impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for traits::Clause<'tcx> {
     fn hash_stable<W: StableHasherResult>(&self,
@@ -1422,3 +1429,8 @@ impl_stable_hash_for!(struct ty::subst::UserSubsts<'tcx> { substs, user_self_ty 
 
 impl_stable_hash_for!(struct ty::subst::UserSelfTy<'tcx> { impl_def_id, self_ty });
 
+impl_stable_hash_for!(
+    impl<'tcx> for struct traits::Environment<'tcx> {
+        clauses,
+    }
+);

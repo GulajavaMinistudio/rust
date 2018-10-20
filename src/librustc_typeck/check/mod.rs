@@ -2357,6 +2357,24 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         t
     }
 
+    pub fn to_ty_saving_user_provided_ty(&self, ast_ty: &hir::Ty) -> Ty<'tcx> {
+        let ty = self.to_ty(ast_ty);
+
+        // If the type given by the user has free regions, save it for
+        // later, since NLL would like to enforce those. Also pass in
+        // types that involve projections, since those can resolve to
+        // `'static` bounds (modulo #54940, which hopefully will be
+        // fixed by the time you see this comment, dear reader,
+        // although I have my doubts). Other sorts of things are
+        // already sufficiently enforced with erased regions. =)
+        if ty.has_free_regions() || ty.has_projections() {
+            let c_ty = self.infcx.canonicalize_response(&ty);
+            self.tables.borrow_mut().user_provided_tys_mut().insert(ast_ty.hir_id, c_ty);
+        }
+
+        ty
+    }
+
     pub fn node_ty(&self, id: hir::HirId) -> Ty<'tcx> {
         match self.tables.borrow().node_types().get(id) {
             Some(&t) => t,
@@ -3115,7 +3133,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             Ok(formal_args.iter().map(|ty| {
                 self.resolve_type_vars_if_possible(ty)
             }).collect())
-        }).unwrap_or(Vec::new());
+        }).unwrap_or_default();
         debug!("expected_inputs_for_expected_output(formal={:?} -> {:?}, expected={:?} -> {:?})",
                formal_args, formal_ret,
                expect_args, expected_ret);
@@ -3492,12 +3510,12 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             _ => span_bug!(span, "non-ADT passed to check_expr_struct_fields")
         };
 
-        let mut remaining_fields = FxHashMap();
+        let mut remaining_fields = FxHashMap::default();
         for (i, field) in variant.fields.iter().enumerate() {
             remaining_fields.insert(field.ident.modern(), (i, field));
         }
 
-        let mut seen_fields = FxHashMap();
+        let mut seen_fields = FxHashMap::default();
 
         let mut error_happened = false;
 
@@ -4133,7 +4151,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     // [1]
                     self.tcx.sess.delay_span_bug(body.span, "no coercion, but loop may not break");
                 }
-                ctxt.coerce.map(|c| c.complete(self)).unwrap_or(self.tcx.mk_unit())
+                ctxt.coerce.map(|c| c.complete(self)).unwrap_or_else(|| self.tcx.mk_unit())
             }
             hir::ExprKind::Match(ref discrim, ref arms, match_src) => {
                 self.check_match(expr, &discrim, arms, expected, match_src)
@@ -4153,7 +4171,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             hir::ExprKind::Cast(ref e, ref t) => {
                 // Find the type of `e`. Supply hints based on the type we are casting to,
                 // if appropriate.
-                let t_cast = self.to_ty(t);
+                let t_cast = self.to_ty_saving_user_provided_ty(t);
                 let t_cast = self.resolve_type_vars_if_possible(&t_cast);
                 let t_expr = self.check_expr_with_expectation(e, ExpectCastableToType(t_cast));
                 let t_cast = self.resolve_type_vars_if_possible(&t_cast);
@@ -4176,10 +4194,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
             }
             hir::ExprKind::Type(ref e, ref t) => {
-                let ty = self.to_ty(&t);
+                let ty = self.to_ty_saving_user_provided_ty(&t);
                 self.check_expr_eq_type(&e, ty);
-                let c_ty = self.infcx.canonicalize_response(&ty);
-                self.tables.borrow_mut().user_provided_tys_mut().insert(t.hir_id, c_ty);
                 ty
             }
             hir::ExprKind::Array(ref args) => {

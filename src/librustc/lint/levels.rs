@@ -59,7 +59,7 @@ impl LintLevelSets {
 
     fn process_command_line(&mut self, sess: &Session) {
         let store = sess.lint_store.borrow();
-        let mut specs = FxHashMap();
+        let mut specs = FxHashMap::default();
         self.lint_cap = sess.opts.lint_cap.unwrap_or(Level::Forbid);
 
         for &(ref lint_name, level) in &sess.opts.lint_opts {
@@ -97,7 +97,7 @@ impl LintLevelSets {
 
         // If `level` is none then we actually assume the default level for this
         // lint.
-        let mut level = level.unwrap_or(lint.default_level(sess));
+        let mut level = level.unwrap_or_else(|| lint.default_level(sess));
 
         // If we're about to issue a warning, check at the last minute for any
         // directives against the warnings "lint". If, for example, there's an
@@ -175,7 +175,7 @@ impl<'a> LintLevelsBuilder<'a> {
             sess,
             sets,
             cur: 0,
-            id_to_set: FxHashMap(),
+            id_to_set: Default::default(),
             warn_about_weird_lints: sess.buffered_lints.borrow().is_some(),
         }
     }
@@ -195,7 +195,7 @@ impl<'a> LintLevelsBuilder<'a> {
     ///
     /// Don't forget to call `pop`!
     pub fn push(&mut self, attrs: &[ast::Attribute]) -> BuilderPush {
-        let mut specs = FxHashMap();
+        let mut specs = FxHashMap::default();
         let store = self.sess.lint_store.borrow();
         let sess = self.sess;
         let bad_attr = |span| {

@@ -352,7 +352,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         obligation: &PredicateObligation<'tcx>,
     ) -> OnUnimplementedNote {
         let def_id = self.impl_similar_to(trait_ref, obligation)
-            .unwrap_or(trait_ref.def_id());
+            .unwrap_or_else(|| trait_ref.def_id());
         let trait_ref = *trait_ref.skip_binder();
 
         let mut flags = vec![];
@@ -377,6 +377,9 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                 flags.push(("from_method".to_owned(), None));
                 flags.push(("from_method".to_owned(), Some(method.to_string())));
             }
+        }
+        if let Some(t) = self.get_parent_trait_ref(&obligation.cause.code) {
+            flags.push(("parent_trait".to_owned(), Some(t.to_string())));
         }
 
         if let Some(k) = obligation.cause.span.compiler_desugaring_kind() {
@@ -636,7 +639,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                         let (post_message, pre_message) =
                             self.get_parent_trait_ref(&obligation.cause.code)
                                 .map(|t| (format!(" in `{}`", t), format!("within `{}`, ", t)))
-                            .unwrap_or((String::new(), String::new()));
+                            .unwrap_or_default();
 
                         let OnUnimplementedNote { message, label, note }
                             = self.on_unimplemented_note(trait_ref, obligation);
@@ -1255,7 +1258,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             trait_str);
         err.span_label(span, format!("the trait `{}` cannot be made into an object", trait_str));
 
-        let mut reported_violations = FxHashSet();
+        let mut reported_violations = FxHashSet::default();
         for violation in violations {
             if reported_violations.insert(violation.clone()) {
                 err.note(&violation.error_msg());
@@ -1401,7 +1404,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
             let cleaned_pred = pred.fold_with(&mut ParamToVarFolder {
                 infcx: self,
-                var_map: FxHashMap()
+                var_map: Default::default()
             });
 
             let cleaned_pred = super::project::normalize(

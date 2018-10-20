@@ -154,7 +154,7 @@ pub fn from_fn_attrs(
     id: Option<DefId>,
 ) {
     let codegen_fn_attrs = id.map(|id| cx.tcx.codegen_fn_attrs(id))
-        .unwrap_or(CodegenFnAttrs::new());
+        .unwrap_or_else(|| CodegenFnAttrs::new());
 
     inline(cx, llfn, codegen_fn_attrs.inline);
 
@@ -297,7 +297,7 @@ pub fn provide_extern(providers: &mut Providers) {
             }
         ).collect::<FxHashMap<_, _>>();
 
-        let mut ret = FxHashMap();
+        let mut ret = FxHashMap::default();
         for lib in tcx.foreign_modules(cnum).iter() {
             let module = def_id_to_native_lib
                 .get(&lib.def_id)

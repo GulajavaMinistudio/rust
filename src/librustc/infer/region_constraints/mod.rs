@@ -149,7 +149,7 @@ pub struct Verify<'tcx> {
     pub bound: VerifyBound<'tcx>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub enum GenericKind<'tcx> {
     Param(ty::ParamTy),
     Projection(ty::ProjectionTy<'tcx>),
@@ -345,8 +345,8 @@ impl<'tcx> RegionConstraintCollector<'tcx> {
         RegionConstraintCollector {
             var_infos: VarInfos::default(),
             data: RegionConstraintData::default(),
-            lubs: FxHashMap(),
-            glbs: FxHashMap(),
+            lubs: Default::default(),
+            glbs: Default::default(),
             bound_count: 0,
             undo_log: Vec::new(),
             unification_table: ut::UnificationTable::new(),
