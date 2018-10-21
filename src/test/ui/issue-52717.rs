@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,10 +7,15 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-
-#![allow(unused_parens)]
-#![deny(unreachable_code)]
+enum A {
+  A {
+    foo: usize,
+  }
+}
 
 fn main() {
-    match (return) { } //~ ERROR unreachable expression
+  let x = A::A { foo: 3 };
+  match x {
+    A::A { fob } => { println!("{}", fob); }
+  }
 }
