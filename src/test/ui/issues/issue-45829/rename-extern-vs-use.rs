@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,20 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(warnings)]
+// aux-build:issue_45829_b.rs
 
-// Make sure this related feature didn't accidentally enable this
-#![feature(in_band_lifetimes)]
+mod foo {
+    pub mod bar {}
+}
 
-trait MyTrait<'a> { }
-
-impl MyTrait<'a> for &u32 { }
-//~^ ERROR missing lifetime specifier
-
-struct MyStruct;
-trait MarkerTrait {}
-
-impl MarkerTrait for &'_ MyStruct { }
-//~^ ERROR missing lifetime specifier
+use foo::bar;
+extern crate issue_45829_b as bar;
 
 fn main() {}

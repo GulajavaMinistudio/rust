@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(warnings)]
+// aux-build:issue_45829_b.rs
 
-trait MyTrait<'a> { }
-
-impl<'a> MyTrait<'a> for &u32 { }
-//~^ ERROR missing lifetime specifier
-
-impl<'a> MyTrait<'_> for &'a f32 { }
-//~^ ERROR missing lifetime specifier
+extern crate issue_45829_b;
+use std as issue_45829_b;
 
 fn main() {}
