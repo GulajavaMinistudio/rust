@@ -469,7 +469,7 @@ pub enum BorrowKind {
     ///     }
     ///
     /// This can't be a shared borrow because mutably borrowing (*x as Some).0
-    /// should not prevent `if let None = x { ... }`, for example, becase the
+    /// should not prevent `if let None = x { ... }`, for example, because the
     /// mutating `(*x as Some).0` can't affect the discriminant of `x`.
     /// We can also report errors with this kind of borrow differently.
     Shallow,
@@ -2065,9 +2065,8 @@ pub struct SourceScopeLocalData {
 ///////////////////////////////////////////////////////////////////////////
 // Operands
 
-/// These are values that can appear inside an rvalue (or an index
-/// place). They are intentionally limited to prevent rvalues from
-/// being nested in one another.
+/// These are values that can appear inside an rvalue. They are intentionally
+/// limited to prevent rvalues from being nested in one another.
 #[derive(Clone, PartialEq, RustcEncodable, RustcDecodable)]
 pub enum Operand<'tcx> {
     /// Copy: The value must be available for use afterwards.
@@ -2433,6 +2432,14 @@ pub enum UserTypeAnnotation<'tcx> {
 
 EnumTypeFoldableImpl! {
     impl<'tcx> TypeFoldable<'tcx> for UserTypeAnnotation<'tcx> {
+        (UserTypeAnnotation::Ty)(ty),
+        (UserTypeAnnotation::TypeOf)(def, substs),
+    }
+}
+
+EnumLiftImpl! {
+    impl<'a, 'tcx> Lift<'tcx> for UserTypeAnnotation<'a> {
+        type Lifted = UserTypeAnnotation<'tcx>;
         (UserTypeAnnotation::Ty)(ty),
         (UserTypeAnnotation::TypeOf)(def, substs),
     }
