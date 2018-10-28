@@ -35,7 +35,7 @@ use rustc::infer::outlives::env::RegionBoundPairs;
 use rustc::infer::{InferCtxt, InferOk, LateBoundRegionConversionTime};
 use rustc::mir::interpret::EvalErrorKind::BoundsCheck;
 use rustc::mir::tcx::PlaceTy;
-use rustc::mir::visit::{PlaceContext, Visitor};
+use rustc::mir::visit::{PlaceContext, Visitor, MutatingUseContext, NonMutatingUseContext};
 use rustc::mir::*;
 use rustc::traits::query::type_op;
 use rustc::traits::query::type_op::custom::CustomTypeOp;
@@ -284,7 +284,7 @@ impl<'a, 'b, 'gcx, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'gcx, 'tcx> {
             if let Err(terr) = self.cx.relate_type_and_user_type(
                 constant.ty,
                 ty::Variance::Invariant,
-                user_ty,
+                &UserTypeProjection { base: user_ty, projs: vec![], },
                 location.to_locations(),
                 ConstraintCategory::Boring,
             ) {
@@ -310,12 +310,12 @@ impl<'a, 'b, 'gcx, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'gcx, 'tcx> {
         self.super_local_decl(local, local_decl);
         self.sanitize_type(local_decl, local_decl.ty);
 
-        if let Some((user_ty, span)) = local_decl.user_ty {
+        for (user_ty, span) in local_decl.user_ty.projections_and_spans() {
             if let Err(terr) = self.cx.relate_type_and_user_type(
                 local_decl.ty,
                 ty::Variance::Invariant,
                 user_ty,
-                Locations::All(span),
+                Locations::All(*span),
                 ConstraintCategory::TypeAnnotation,
             ) {
                 span_mirbug!(
@@ -472,9 +472,9 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
             }
             Place::Projection(ref proj) => {
                 let base_context = if context.is_mutating_use() {
-                    PlaceContext::Projection(Mutability::Mut)
+                    PlaceContext::MutatingUse(MutatingUseContext::Projection)
                 } else {
-                    PlaceContext::Projection(Mutability::Not)
+                    PlaceContext::NonMutatingUse(NonMutatingUseContext::Projection)
                 };
                 let base_ty = self.sanitize_place(&proj.base, location, base_context);
                 if let PlaceTy::Ty { ty } = base_ty {
@@ -488,7 +488,7 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
                 self.sanitize_projection(base_ty, &proj.elem, place, location)
             }
         };
-        if let PlaceContext::Copy = context {
+        if let PlaceContext::NonMutatingUse(NonMutatingUseContext::Copy) = context {
             let tcx = self.tcx();
             let trait_ref = ty::TraitRef {
                 def_id: tcx.lang_items().copy_trait().unwrap(),
@@ -971,7 +971,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
         &mut self,
         a: Ty<'tcx>,
         v: ty::Variance,
-        user_ty: UserTypeAnnotation<'tcx>,
+        user_ty: &UserTypeProjection<'tcx>,
         locations: Locations,
         category: ConstraintCategory,
     ) -> Fallible<()> {
@@ -980,7 +980,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
             a, v, user_ty, locations,
         );
 
-        match user_ty {
+        match user_ty.base {
             UserTypeAnnotation::Ty(canonical_ty) => {
                 let (ty, _) = self.infcx
                     .instantiate_canonical_with_fresh_inference_vars(DUMMY_SP, &canonical_ty);
@@ -989,6 +989,20 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                 // variables" appear in the "a" side, so flip `Contravariant`
                 // ambient variance to get the right relationship.
                 let v1 = ty::Contravariant.xform(v);
+
+                let tcx = self.infcx.tcx;
+                let mut projected_ty = PlaceTy::from_ty(ty);
+                for proj in &user_ty.projs {
+                    projected_ty = projected_ty.projection_ty_core(
+                        tcx, proj, |this, field, &()| {
+                            let ty = this.field_ty(tcx, field);
+                            self.normalize(ty, locations)
+                        });
+                }
+                debug!("user_ty base: {:?} freshened: {:?} projs: {:?} yields: {:?}",
+                       user_ty.base, ty, user_ty.projs, projected_ty);
+
+                let ty = projected_ty.to_ty(tcx);
 
                 self.relate_types(ty, v1, a, locations, category)?;
             }
@@ -999,11 +1013,12 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                 ) = self.infcx
                     .instantiate_canonical_with_fresh_inference_vars(DUMMY_SP, &canonical_substs);
 
+                let projs = self.infcx.tcx.intern_projs(&user_ty.projs);
                 self.fully_perform_op(
                     locations,
                     category,
                     self.param_env.and(type_op::ascribe_user_type::AscribeUserType::new(
-                        a, v, def_id, user_substs,
+                        a, v, def_id, user_substs, projs,
                     )),
                 )?;
             }
@@ -1172,7 +1187,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                     if let Err(terr) = self.relate_type_and_user_type(
                         rv_ty,
                         ty::Variance::Invariant,
-                        user_ty,
+                        &UserTypeProjection { base: user_ty, projs: vec![], },
                         location.to_locations(),
                         ConstraintCategory::Boring,
                     ) {
@@ -1225,7 +1240,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                     );
                 };
             }
-            StatementKind::AscribeUserType(ref place, variance, c_ty) => {
+            StatementKind::AscribeUserType(ref place, variance, box ref c_ty) => {
                 let place_ty = place.ty(mir, tcx).to_ty(tcx);
                 if let Err(terr) = self.relate_type_and_user_type(
                     place_ty,

@@ -27,7 +27,7 @@ use middle::lang_items::{FnTraitLangItem, FnMutTraitLangItem, FnOnceTraitLangIte
 use middle::privacy::AccessLevels;
 use middle::resolve_lifetime::ObjectLifetimeDefault;
 use mir::Mir;
-use mir::interpret::GlobalId;
+use mir::interpret::{GlobalId, ErrorHandled};
 use mir::GeneratorLayout;
 use session::CrateDisambiguator;
 use traits::{self, Reveal};
@@ -1928,7 +1928,7 @@ impl ReprOptions {
         let mut max_align = 0;
         let mut min_pack = 0;
         for attr in tcx.get_attrs(did).iter() {
-            for r in attr::find_repr_attrs(tcx.sess.diagnostic(), attr) {
+            for r in attr::find_repr_attrs(&tcx.sess.parse_sess, attr) {
                 flags.insert(match r {
                     attr::ReprC => ReprFlags::IS_C,
                     attr::ReprPacked(pack) => {
@@ -2191,11 +2191,7 @@ impl<'a, 'gcx, 'tcx> AdtDef {
                     None
                 }
             }
-            Err(err) => {
-                err.report_as_error(
-                    tcx.at(tcx.def_span(expr_did)),
-                    "could not evaluate enum discriminant",
-                );
+            Err(ErrorHandled::Reported) => {
                 if !expr_did.is_local() {
                     span_bug!(tcx.def_span(expr_did),
                         "variant discriminant evaluation succeeded \
@@ -2203,6 +2199,10 @@ impl<'a, 'gcx, 'tcx> AdtDef {
                 }
                 None
             }
+            Err(ErrorHandled::TooGeneric) => span_bug!(
+                tcx.def_span(expr_did),
+                "enum discriminant depends on generic arguments",
+            ),
         }
     }
 
@@ -2761,6 +2761,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             ty::InstanceDef::Item(did) => {
                 self.optimized_mir(did)
             }
+            ty::InstanceDef::VtableShim(..) |
             ty::InstanceDef::Intrinsic(..) |
             ty::InstanceDef::FnPtrShim(..) |
             ty::InstanceDef::Virtual(..) |

@@ -43,6 +43,15 @@ fn make_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let mut result = match instance {
         ty::InstanceDef::Item(..) =>
             bug!("item {:?} passed to make_shim", instance),
+        ty::InstanceDef::VtableShim(def_id) => {
+            build_call_shim(
+                tcx,
+                def_id,
+                Adjustment::DerefMove,
+                CallKind::Direct(def_id),
+                None,
+            )
+        }
         ty::InstanceDef::FnPtrShim(def_id, ty) => {
             let trait_ = tcx.trait_of_item(def_id).unwrap();
             let adjustment = match tcx.lang_items().fn_trait_kind(trait_) {
@@ -128,6 +137,7 @@ fn make_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 enum Adjustment {
     Identity,
     Deref,
+    DerefMove,
     RefMut,
 }
 
@@ -142,7 +152,7 @@ fn temp_decl(mutability: Mutability, ty: Ty, span: Span) -> LocalDecl {
     LocalDecl {
         mutability,
         ty,
-        user_ty: None,
+        user_ty: UserTypeProjections::none(),
         name: None,
         source_info,
         visibility_scope: source_info.scope,
@@ -547,7 +557,7 @@ impl<'a, 'tcx> CloneShimBuilder<'a, 'tcx> {
         // `dest[i] = Clone::clone(src[beg])`;
         // Goto #3 if ok, #5 if unwinding happens.
         let dest_field = dest.clone().index(beg);
-        let src_field = src.clone().index(beg);
+        let src_field = src.index(beg);
         self.make_clone_call(dest_field, src_field, ty, BasicBlock::new(3),
                              BasicBlock::new(5));
 
@@ -701,6 +711,14 @@ fn build_call_shim<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let rcvr = match rcvr_adjustment {
         Adjustment::Identity => Operand::Move(rcvr_l),
         Adjustment::Deref => Operand::Copy(rcvr_l.deref()),
+        Adjustment::DerefMove => {
+            // fn(Self, ...) -> fn(*mut Self, ...)
+            let arg_ty = local_decls[rcvr_arg].ty;
+            assert!(arg_ty.is_self());
+            local_decls[rcvr_arg].ty = tcx.mk_mut_ptr(arg_ty);
+
+            Operand::Move(rcvr_l.deref())
+        }
         Adjustment::RefMut => {
             // let rcvr = &mut rcvr;
             let ref_rcvr = local_decls.push(temp_decl(

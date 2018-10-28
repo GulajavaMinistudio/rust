@@ -520,6 +520,7 @@ pub fn opt_loan_path_is_field<'tcx>(cmt: &mc::cmt_<'tcx>) -> (Option<Rc<LoanPath
 
     match cmt.cat {
         Categorization::Rvalue(..) |
+        Categorization::ThreadLocal(..) |
         Categorization::StaticItem => {
             (None, false)
         }
@@ -695,7 +696,7 @@ impl<'a, 'tcx> BorrowckCtxt<'a, 'tcx> {
                 let mut err = self.cannot_act_on_moved_value(use_span,
                                                              verb,
                                                              msg,
-                                                             Some(nl.to_string()),
+                                                             Some(nl),
                                                              Origin::Ast);
                 let need_note = match lp.ty.sty {
                     ty::Closure(id, _) => {
