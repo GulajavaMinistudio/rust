@@ -455,7 +455,6 @@ impl<'a, 'tcx> Lift<'tcx> for ty::error::TypeError<'a> {
             ProjectionMismatched(x) => ProjectionMismatched(x),
             ProjectionBoundsLength(x) => ProjectionBoundsLength(x),
             Sorts(ref x) => return tcx.lift(x).map(Sorts),
-            OldStyleLUB(ref x) => return tcx.lift(x).map(OldStyleLUB),
             ExistentialMismatch(ref x) => return tcx.lift(x).map(ExistentialMismatch)
         })
     }
@@ -735,9 +734,19 @@ impl<'tcx> TypeFoldable<'tcx> for Ty<'tcx> {
                 ty::UnnormalizedProjection(data.fold_with(folder))
             }
             ty::Opaque(did, substs) => ty::Opaque(did, substs.fold_with(folder)),
-            ty::Bool | ty::Char | ty::Str | ty::Int(_) |
-            ty::Uint(_) | ty::Float(_) | ty::Error | ty::Infer(_) |
-            ty::Param(..) | ty::Never | ty::Foreign(..) => return self
+
+            ty::Bool |
+            ty::Char |
+            ty::Str |
+            ty::Int(_) |
+            ty::Uint(_) |
+            ty::Float(_) |
+            ty::Error |
+            ty::Infer(_) |
+            ty::Param(..) |
+            ty::Bound(..) |
+            ty::Never |
+            ty::Foreign(..) => return self
         };
 
         if self.sty == sty {
@@ -772,9 +781,19 @@ impl<'tcx> TypeFoldable<'tcx> for Ty<'tcx> {
                 data.visit_with(visitor)
             }
             ty::Opaque(_, ref substs) => substs.visit_with(visitor),
-            ty::Bool | ty::Char | ty::Str | ty::Int(_) |
-            ty::Uint(_) | ty::Float(_) | ty::Error | ty::Infer(_) |
-            ty::Param(..) | ty::Never | ty::Foreign(..) => false,
+
+            ty::Bool |
+            ty::Char |
+            ty::Str |
+            ty::Int(_) |
+            ty::Uint(_) |
+            ty::Float(_) |
+            ty::Error |
+            ty::Infer(_) |
+            ty::Bound(..) |
+            ty::Param(..) |
+            ty::Never |
+            ty::Foreign(..) => false,
         }
     }
 
@@ -1003,7 +1022,6 @@ EnumTypeFoldableImpl! {
         (ty::error::TypeError::ProjectionBoundsLength)(x),
         (ty::error::TypeError::Sorts)(x),
         (ty::error::TypeError::ExistentialMismatch)(x),
-        (ty::error::TypeError::OldStyleLUB)(x),
     }
 }
 

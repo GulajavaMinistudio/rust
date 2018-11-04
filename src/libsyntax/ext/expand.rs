@@ -252,7 +252,7 @@ impl Invocation {
 
 pub struct MacroExpander<'a, 'b:'a> {
     pub cx: &'a mut ExtCtxt<'b>,
-    monotonic: bool, // c.f. `cx.monotonic_expander()`
+    monotonic: bool, // cf. `cx.monotonic_expander()`
 }
 
 impl<'a, 'b> MacroExpander<'a, 'b> {
@@ -387,6 +387,8 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                         add_derived_markers(&mut self.cx, item.span(), &traits, item.clone());
                     let derives = derives.entry(invoc.expansion_data.mark).or_default();
 
+                    derives.reserve(traits.len());
+                    invocations.reserve(traits.len());
                     for path in &traits {
                         let mark = Mark::fresh(self.cx.current_expansion.mark);
                         derives.push(mark);
@@ -687,7 +689,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                         "proc_macro_hygiene",
                         self.span,
                         GateIssue::Language,
-                        &format!("procedural macros cannot expand to macro definitions"),
+                        "procedural macros cannot expand to macro definitions",
                     );
                 }
                 visit::walk_item(self, i);

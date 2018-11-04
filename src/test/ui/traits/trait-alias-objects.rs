@@ -1,4 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// See comments in build.rs for why this exists
-int pthread_atfork(void* prefork,
-                   void* postfork_parent,
-                   void* postfork_child) {
-  return 0;
+#![feature(trait_alias)]
+
+trait EqAlias = Eq;
+trait IteratorAlias = Iterator;
+
+fn main() {
+    let _: &dyn EqAlias = &123;
+    let _: &dyn IteratorAlias = &vec![123].into_iter();
 }

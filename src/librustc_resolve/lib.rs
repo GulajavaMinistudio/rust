@@ -538,9 +538,9 @@ impl<'a> PathSource<'a> {
         match self {
             PathSource::Type => match def {
                 Def::Struct(..) | Def::Union(..) | Def::Enum(..) |
-                Def::Trait(..) | Def::TyAlias(..) | Def::AssociatedTy(..) |
-                Def::PrimTy(..) | Def::TyParam(..) | Def::SelfTy(..) |
-                Def::Existential(..) |
+                Def::Trait(..) | Def::TraitAlias(..) | Def::TyAlias(..) |
+                Def::AssociatedTy(..) | Def::PrimTy(..) | Def::TyParam(..) |
+                Def::SelfTy(..) | Def::Existential(..) |
                 Def::ForeignTy(..) => true,
                 _ => false,
             },
@@ -3122,7 +3122,10 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                         return (err, candidates);
                     }
                     (Def::TyAlias(..), PathSource::Trait(_)) => {
-                        err.span_label(span, "type aliases cannot be used for traits");
+                        err.span_label(span, "type aliases cannot be used as traits");
+                        if nightly_options::is_nightly_build() {
+                            err.note("did you mean to use a trait alias?");
+                        }
                         return (err, candidates);
                     }
                     (Def::Mod(..), PathSource::Expr(Some(parent))) => match parent.node {
@@ -3589,7 +3592,17 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
         );
 
         for (i, &Segment { ident, id }) in path.iter().enumerate() {
-            debug!("resolve_path ident {} {:?}", i, ident);
+            debug!("resolve_path ident {} {:?} {:?}", i, ident, id);
+            let record_segment_def = |this: &mut Self, def| {
+                if record_used {
+                    if let Some(id) = id {
+                        if !this.def_map.contains_key(&id) {
+                            assert!(id != ast::DUMMY_NODE_ID, "Trying to resolve dummy id");
+                            this.record_def(id, PathResolution::new(def));
+                        }
+                    }
+                }
+            };
 
             let is_last = i == path.len() - 1;
             let ns = if is_last { opt_ns.unwrap_or(TypeNS) } else { TypeNS };
@@ -3673,6 +3686,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                     // we found a local variable or type param
                     Some(LexicalScopeBinding::Def(def))
                             if opt_ns == Some(TypeNS) || opt_ns == Some(ValueNS) => {
+                        record_segment_def(self, def);
                         return PathResult::NonModule(PathResolution::with_unresolved_segments(
                             def, path.len() - 1
                         ));
@@ -3690,14 +3704,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                     let maybe_assoc = opt_ns != Some(MacroNS) && PathSource::Type.is_expected(def);
                     if let Some(next_module) = binding.module() {
                         module = Some(ModuleOrUniformRoot::Module(next_module));
-                        if record_used {
-                            if let Some(id) = id {
-                                if !self.def_map.contains_key(&id) {
-                                    assert!(id != ast::DUMMY_NODE_ID, "Trying to resolve dummy id");
-                                    self.record_def(id, PathResolution::new(def));
-                                }
-                            }
-                        }
+                        record_segment_def(self, def);
                     } else if def == Def::ToolMod && i + 1 != path.len() {
                         let def = Def::NonMacroAttr(NonMacroAttrKind::Tool);
                         return PathResult::NonModule(PathResolution::new(def));
@@ -3884,7 +3891,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                             // report an error.
                             if record_used {
                                 resolve_error(self, span,
-                                        ResolutionError::CannotCaptureDynamicEnvironmentInFnItem);
+                                    ResolutionError::CannotCaptureDynamicEnvironmentInFnItem);
                             }
                             return Def::Err;
                         }
@@ -3892,7 +3899,7 @@ impl<'a, 'crateloader: 'a> Resolver<'a, 'crateloader> {
                             // Still doesn't deal with upvars
                             if record_used {
                                 resolve_error(self, span,
-                                        ResolutionError::AttemptToUseNonConstantValueInConstant);
+                                    ResolutionError::AttemptToUseNonConstantValueInConstant);
                             }
                             return Def::Err;
                         }
@@ -4944,7 +4951,7 @@ fn show_candidates(err: &mut DiagnosticBuilder,
         err.span_suggestions_with_applicability(
             span,
             &msg,
-            path_strings,
+            path_strings.into_iter(),
             Applicability::Unspecified,
         );
     } else {

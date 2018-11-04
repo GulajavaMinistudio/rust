@@ -653,8 +653,8 @@ impl<'a, 'gcx, 'tcx> Inherited<'a, 'gcx, 'tcx> {
 
     fn register_predicate(&self, obligation: traits::PredicateObligation<'tcx>) {
         debug!("register_predicate({:?})", obligation);
-        if obligation.has_escaping_regions() {
-            span_bug!(obligation.cause.span, "escaping regions in predicate {:?}",
+        if obligation.has_escaping_bound_vars() {
+            span_bug!(obligation.cause.span, "escaping bound vars in predicate {:?}",
                       obligation);
         }
         self.fulfillment_cx
@@ -976,7 +976,7 @@ impl<'a, 'gcx, 'tcx> Visitor<'gcx> for GatherLocalsVisitor<'a, 'gcx, 'tcx> {
                     o_ty
                 };
 
-                let c_ty = self.fcx.inh.infcx.canonicalize_response(&revealed_ty);
+                let c_ty = self.fcx.inh.infcx.canonicalize_user_type_annotation(&revealed_ty);
                 debug!("visit_local: ty.hir_id={:?} o_ty={:?} revealed_ty={:?} c_ty={:?}",
                        ty.hir_id, o_ty, revealed_ty, c_ty);
                 self.fcx.tables.borrow_mut().user_provided_tys_mut().insert(ty.hir_id, c_ty);
@@ -1928,7 +1928,7 @@ impl<'a, 'gcx, 'tcx> AstConv<'gcx, 'tcx> for FnCtxt<'a, 'gcx, 'tcx> {
     }
 
     fn normalize_ty(&self, span: Span, ty: Ty<'tcx>) -> Ty<'tcx> {
-        if ty.has_escaping_regions() {
+        if ty.has_escaping_bound_vars() {
             ty // FIXME: normalization and escaping regions
         } else {
             self.normalize_associated_types_in(span, &ty)
@@ -2137,7 +2137,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                             method.substs[i]
                         }
                     });
-                    self.infcx.canonicalize_response(&UserSubsts {
+                    self.infcx.canonicalize_user_type_annotation(&UserSubsts {
                         substs: just_method_substs,
                         user_self_ty: None, // not relevant here
                     })
@@ -2181,7 +2181,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         );
 
         if !substs.is_noop() {
-            let user_substs = self.infcx.canonicalize_response(&UserSubsts {
+            let user_substs = self.infcx.canonicalize_user_type_annotation(&UserSubsts {
                 substs,
                 user_self_ty,
             });
@@ -2431,7 +2431,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                           cause: traits::ObligationCause<'tcx>,
                                           predicates: &ty::InstantiatedPredicates<'tcx>)
     {
-        assert!(!predicates.has_escaping_regions());
+        assert!(!predicates.has_escaping_bound_vars());
 
         debug!("add_obligations_for_parameters(predicates={:?})",
                predicates);
@@ -4744,7 +4744,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         } else if !self.check_for_cast(err, expr, found, expected) {
             let methods = self.get_conversion_methods(expr.span, expected, found);
             if let Ok(expr_text) = self.sess().source_map().span_to_snippet(expr.span) {
-                let suggestions = iter::repeat(&expr_text).zip(methods.iter())
+                let mut suggestions = iter::repeat(&expr_text).zip(methods.iter())
                     .filter_map(|(receiver, method)| {
                         let method_call = format!(".{}()", method.ident);
                         if receiver.ends_with(&method_call) {
@@ -4760,8 +4760,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                 Some(format!("{}{}", receiver, method_call))
                             }
                         }
-                    }).collect::<Vec<_>>();
-                if !suggestions.is_empty() {
+                    }).peekable();
+                if suggestions.peek().is_some() {
                     err.span_suggestions_with_applicability(
                         expr.span,
                         "try using a conversion method",
@@ -5188,8 +5188,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
             },
         );
-        assert!(!substs.has_escaping_regions());
-        assert!(!ty.has_escaping_regions());
+        assert!(!substs.has_escaping_bound_vars());
+        assert!(!ty.has_escaping_bound_vars());
 
         // Write the "user substs" down first thing for later.
         let hir_id = self.tcx.hir.node_to_hir_id(node_id);

@@ -250,7 +250,6 @@
 #![feature(cfg_target_vendor)]
 #![feature(char_error_internals)]
 #![feature(compiler_builtins_lib)]
-#![cfg_attr(stage0, feature(min_const_fn))]
 #![feature(const_int_ops)]
 #![feature(const_ip)]
 #![feature(const_raw_ptr_deref)]
@@ -284,6 +283,7 @@
 #![feature(prelude_import)]
 #![feature(ptr_internals)]
 #![feature(raw)]
+#![feature(hash_raw_entry)]
 #![feature(rustc_attrs)]
 #![feature(rustc_const_unstable)]
 #![feature(std_internals)]
@@ -313,14 +313,7 @@
 
 #![default_lib_allocator]
 
-// Always use alloc_system during stage0 since we don't know if the alloc_*
-// crate the stage0 compiler will pick by default is enabled (e.g.
-// if the user has disabled jemalloc in `./configure`).
-// `force_alloc_system` is *only* intended as a workaround for local rebuilds
-// with a rustc without jemalloc.
-// FIXME(#44236) shouldn't need MSVC logic
-#[cfg(all(not(target_env = "msvc"),
-          any(all(stage0, not(test)), feature = "force_alloc_system")))]
+#[cfg(stage0)]
 #[global_allocator]
 static ALLOC: alloc_system::System = alloc_system::System;
 

@@ -859,7 +859,6 @@ impl Step for Src {
             "src/build_helper",
             "src/dlmalloc",
             "src/liballoc",
-            "src/liballoc_jemalloc",
             "src/liballoc_system",
             "src/libbacktrace",
             "src/libcompiler_builtins",
@@ -878,13 +877,12 @@ impl Step for Src {
             "src/rustc/dlmalloc_shim",
             "src/libtest",
             "src/libterm",
-            "src/jemalloc",
             "src/libprofiler_builtins",
             "src/stdsimd",
+            "src/libproc_macro",
         ];
         let std_src_dirs_exclude = [
             "src/libcompiler_builtins/compiler-rt/test",
-            "src/jemalloc/test/unit",
         ];
 
         copy_src_dirs(builder, &std_src_dirs[..], &std_src_dirs_exclude[..], &dst_src);
@@ -911,7 +909,7 @@ impl Step for Src {
     }
 }
 
-const CARGO_VENDOR_VERSION: &str = "0.1.4";
+const CARGO_VENDOR_VERSION: &str = "0.1.19";
 
 #[derive(Debug, PartialOrd, Ord, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct PlainSourceTarball;

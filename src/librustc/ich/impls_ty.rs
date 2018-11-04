@@ -100,9 +100,6 @@ for ty::RegionKind {
             ty::ReEmpty => {
                 // No variant fields to hash for these ...
             }
-            ty::ReCanonical(c) => {
-                c.hash_stable(hcx, hasher);
-            }
             ty::ReLateBound(db, ty::BrAnon(i)) => {
                 db.hash_stable(hcx, hasher);
                 i.hash_stable(hcx, hasher);
@@ -147,7 +144,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for ty::RegionVid {
     }
 }
 
-impl<'gcx> HashStable<StableHashingContext<'gcx>> for ty::BoundTyIndex {
+impl<'gcx> HashStable<StableHashingContext<'gcx>> for ty::BoundVar {
     #[inline]
     fn hash_stable<W: StableHasherResult>(&self,
                                           hcx: &mut StableHashingContext<'gcx>,
@@ -852,6 +849,9 @@ for ty::TyKind<'gcx>
             Param(param_ty) => {
                 param_ty.hash_stable(hcx, hasher);
             }
+            Bound(bound_ty) => {
+                bound_ty.hash_stable(hcx, hasher);
+            }
             Foreign(def_id) => {
                 def_id.hash_stable(hcx, hasher);
             }
@@ -869,7 +869,6 @@ impl_stable_hash_for!(enum ty::InferTy {
     FreshTy(a),
     FreshIntTy(a),
     FreshFloatTy(a),
-    BoundTy(a),
 });
 
 impl<'a, 'gcx> HashStable<StableHashingContext<'a>>
@@ -1119,6 +1118,7 @@ for traits::Vtable<'gcx, N> where N: HashStable<StableHashingContext<'a>> {
             &VtableClosure(ref table_closure) => table_closure.hash_stable(hcx, hasher),
             &VtableFnPointer(ref table_fn_pointer) => table_fn_pointer.hash_stable(hcx, hasher),
             &VtableGenerator(ref table_generator) => table_generator.hash_stable(hcx, hasher),
+            &VtableTraitAlias(ref table_alias) => table_alias.hash_stable(hcx, hasher),
         }
     }
 }
@@ -1227,9 +1227,25 @@ for traits::VtableGeneratorData<'gcx, N> where N: HashStable<StableHashingContex
     }
 }
 
+impl<'a, 'gcx, N> HashStable<StableHashingContext<'a>>
+for traits::VtableTraitAliasData<'gcx, N> where N: HashStable<StableHashingContext<'a>> {
+    fn hash_stable<W: StableHasherResult>(&self,
+                                          hcx: &mut StableHashingContext<'a>,
+                                          hasher: &mut StableHasher<W>) {
+        let traits::VtableTraitAliasData {
+            alias_def_id,
+            substs,
+            ref nested,
+        } = *self;
+        alias_def_id.hash_stable(hcx, hasher);
+        substs.hash_stable(hcx, hasher);
+        nested.hash_stable(hcx, hasher);
+    }
+}
+
 impl_stable_hash_for!(
     impl<'tcx, V> for struct infer::canonical::Canonical<'tcx, V> {
-        variables, value
+        max_universe, variables, value
     }
 );
 
@@ -1245,7 +1261,8 @@ impl_stable_hash_for!(struct infer::canonical::CanonicalVarInfo {
 
 impl_stable_hash_for!(enum infer::canonical::CanonicalVarKind {
     Ty(k),
-    Region
+    Region(ui),
+    PlaceholderRegion(placeholder),
 });
 
 impl_stable_hash_for!(enum infer::canonical::CanonicalTyVarKind {

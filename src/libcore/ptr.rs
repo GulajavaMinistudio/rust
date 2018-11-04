@@ -75,7 +75,7 @@
 
 use convert::From;
 use intrinsics;
-use ops::CoerceUnsized;
+use ops::{CoerceUnsized, DispatchFromDyn};
 use fmt;
 use hash;
 use marker::{PhantomData, Unsize};
@@ -209,7 +209,7 @@ pub unsafe fn drop_in_place<T: ?Sized>(to_drop: *mut T) {
 /// ```
 #[inline]
 #[stable(feature = "rust1", since = "1.0.0")]
-#[cfg_attr(not(stage0), rustc_promotable)]
+#[rustc_promotable]
 pub const fn null<T>() -> *const T { 0 as *const T }
 
 /// Creates a null mutable raw pointer.
@@ -224,7 +224,7 @@ pub const fn null<T>() -> *const T { 0 as *const T }
 /// ```
 #[inline]
 #[stable(feature = "rust1", since = "1.0.0")]
-#[cfg_attr(not(stage0), rustc_promotable)]
+#[rustc_promotable]
 pub const fn null_mut<T>() -> *mut T { 0 as *mut T }
 
 /// Swaps the values at two mutable locations of the same type, without
@@ -2796,6 +2796,9 @@ impl<T: ?Sized> Copy for Unique<T> { }
 impl<T: ?Sized, U: ?Sized> CoerceUnsized<Unique<U>> for Unique<T> where T: Unsize<U> { }
 
 #[unstable(feature = "ptr_internals", issue = "0")]
+impl<T: ?Sized, U: ?Sized> DispatchFromDyn<Unique<U>> for Unique<T> where T: Unsize<U> { }
+
+#[unstable(feature = "ptr_internals", issue = "0")]
 impl<T: ?Sized> fmt::Pointer for Unique<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Pointer::fmt(&self.as_ptr(), f)
@@ -2950,6 +2953,9 @@ impl<T: ?Sized> Copy for NonNull<T> { }
 
 #[unstable(feature = "coerce_unsized", issue = "27732")]
 impl<T: ?Sized, U: ?Sized> CoerceUnsized<NonNull<U>> for NonNull<T> where T: Unsize<U> { }
+
+#[unstable(feature = "dispatch_from_dyn", issue = "0")]
+impl<T: ?Sized, U: ?Sized> DispatchFromDyn<NonNull<U>> for NonNull<T> where T: Unsize<U> { }
 
 #[stable(feature = "nonnull", since = "1.25.0")]
 impl<T: ?Sized> fmt::Debug for NonNull<T> {
