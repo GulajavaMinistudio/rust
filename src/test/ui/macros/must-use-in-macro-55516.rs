@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// compile-flags: -Z parse-only
+// compile-pass
+// compile-flags: -Wunused
+
+// make sure write!() can't hide its unused Result
 
 fn main() {
-    let foo =
-        match //~ NOTE while parsing this match expression
-        Some(4).unwrap_or_else(5)
-        //~^ NOTE expected one of `.`, `?`, `{`, or an operator here
-        ; //~ NOTE unexpected token
-        //~^ ERROR expected one of `.`, `?`, `{`, or an operator, found `;`
-
-    println!("{}", foo)
+    use std::fmt::Write;
+    let mut example = String::new();
+    write!(&mut example, "{}", 42); //~WARN must be used
 }
+
