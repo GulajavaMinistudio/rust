@@ -112,7 +112,6 @@ pub struct Session {
     /// The metadata::creader module may inject an allocator/panic_runtime
     /// dependency if it didn't already find one, and this tracks what was
     /// injected.
-    pub injected_allocator: Once<Option<CrateNum>>,
     pub allocator_kind: Once<Option<AllocatorKind>>,
     pub injected_panic_runtime: Once<Option<CrateNum>>,
 
@@ -963,6 +962,10 @@ impl Session {
         self.opts.debugging_opts.teach && self.diagnostic().must_teach(code)
     }
 
+    pub fn rust_2015(&self) -> bool {
+        self.opts.edition == Edition::Edition2015
+    }
+
     /// Are we allowed to use features from the Rust 2018 edition?
     pub fn rust_2018(&self) -> bool {
         self.opts.edition >= Edition::Edition2018
@@ -1158,7 +1161,6 @@ pub fn build_session_(
         type_length_limit: Once::new(),
         const_eval_stack_frame_limit: 100,
         next_node_id: OneThread::new(Cell::new(NodeId::new(1))),
-        injected_allocator: Once::new(),
         allocator_kind: Once::new(),
         injected_panic_runtime: Once::new(),
         imported_macro_spans: OneThread::new(RefCell::new(FxHashMap::default())),

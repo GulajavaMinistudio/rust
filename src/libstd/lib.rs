@@ -235,7 +235,6 @@
 #![cfg_attr(test, feature(test, update_panic_count))]
 #![feature(alloc)]
 #![feature(alloc_error_handler)]
-#![feature(alloc_system)]
 #![feature(allocator_api)]
 #![feature(allocator_internals)]
 #![feature(allow_internal_unsafe)]
@@ -316,7 +315,7 @@
 
 #[cfg(stage0)]
 #[global_allocator]
-static ALLOC: alloc_system::System = alloc_system::System;
+static ALLOC: alloc::System = alloc::System;
 
 // Explicitly import the prelude. The compiler uses this same unstable attribute
 // to import the prelude implicitly when building crates that depend on std.
@@ -337,7 +336,6 @@ pub use core::{unreachable, unimplemented, write, writeln, try};
 #[allow(unused_imports)] // macros from `alloc` are not used on all platforms
 #[macro_use]
 extern crate alloc as alloc_crate;
-extern crate alloc_system;
 #[doc(masked)]
 extern crate libc;
 
@@ -495,7 +493,7 @@ mod memchr;
 // compiler
 pub mod rt;
 
-// Pull in the the `stdsimd` crate directly into libstd. This is the same as
+// Pull in the `stdsimd` crate directly into libstd. This is the same as
 // libcore's arch/simd modules where the source of truth here is in a different
 // repository, but we pull things in here manually to get it into libstd.
 //
