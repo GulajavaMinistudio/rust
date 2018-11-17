@@ -67,7 +67,7 @@ macro_rules! try_validation {
     }}
 }
 
-/// We want to show a nice path to the invalid field for diagnotsics,
+/// We want to show a nice path to the invalid field for diagnostics,
 /// but avoid string operations in the happy case where no error happens.
 /// So we track a `Vec<PathElem>` where `PathElem` contains all the data we
 /// need to later print something for the user.
@@ -373,13 +373,10 @@ impl<'rt, 'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>>
                         }
                     }
                 }
-                // Turn ptr into place.
-                // `ref_to_mplace` also calls the machine hook for (re)activating the tag,
-                // which in turn will (in full miri) check if the pointer is dereferencable.
-                let place = self.ecx.ref_to_mplace(value)?;
                 // Recursive checking
                 if let Some(ref mut ref_tracking) = self.ref_tracking {
                     assert!(self.const_mode, "We should only do recursie checking in const mode");
+                    let place = self.ecx.ref_to_mplace(value)?;
                     if size != Size::ZERO {
                         // Non-ZST also have to be dereferencable
                         let ptr = try_validation!(place.ptr.to_ptr(),
