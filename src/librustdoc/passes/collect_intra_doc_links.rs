@@ -477,7 +477,7 @@ fn macro_resolve(cx: &DocContext, path_str: &str) -> Option<Def> {
     let mut resolver = cx.resolver.borrow_mut();
     let parent_scope = resolver.dummy_parent_scope();
     if let Ok(def) = resolver.resolve_macro_to_def_inner(&path, MacroKind::Bang,
-                                                         &parent_scope, false) {
+                                                         &parent_scope, false, false) {
         if let SyntaxExtension::DeclMacro { .. } = *resolver.get_macro(def) {
             return Some(def);
         }
@@ -527,7 +527,7 @@ fn resolution_failure(
                 doc_comment_padding +
                     // Each subsequent leading whitespace and `///`
                     code_dox.lines().skip(1).take(line_offset - 1).fold(0, |sum, line| {
-                        sum + doc_comment_padding + line.len() - line.trim().len()
+                        sum + doc_comment_padding + line.len() - line.trim_start().len()
                     })
             };
 
