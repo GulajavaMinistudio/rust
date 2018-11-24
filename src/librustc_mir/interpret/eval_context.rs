@@ -316,7 +316,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
         layout: TyLayout<'tcx>,
     ) -> EvalResult<'tcx, Option<(Size, Align)>> {
         if !layout.is_unsized() {
-            return Ok(Some(layout.size_and_align()));
+            return Ok(Some((layout.size, layout.align.abi)));
         }
         match layout.ty.sty {
             ty::Adt(..) | ty::Tuple(..) => {
@@ -328,7 +328,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
                 trace!("DST layout: {:?}", layout);
 
                 let sized_size = layout.fields.offset(layout.fields.count() - 1);
-                let sized_align = layout.align;
+                let sized_align = layout.align.abi;
                 trace!(
                     "DST {} statically sized prefix size: {:?} align: {:?}",
                     layout.ty,
@@ -381,7 +381,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
                 //
                 //   `(size + (align-1)) & -align`
 
-                Ok(Some((size.abi_align(align), align)))
+                Ok(Some((size.align_to(align), align)))
             }
             ty::Dynamic(..) => {
                 let vtable = metadata.expect("dyn trait fat ptr must have vtable").to_ptr()?;
@@ -391,8 +391,8 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
 
             ty::Slice(_) | ty::Str => {
                 let len = metadata.expect("slice fat ptr must have vtable").to_usize(self)?;
-                let (elem_size, align) = layout.field(self, 0)?.size_and_align();
-                Ok(Some((elem_size * len, align)))
+                let elem = layout.field(self, 0)?;
+                Ok(Some((elem.size * len, elem.align.abi)))
             }
 
             ty::Foreign(_) => {
@@ -504,15 +504,14 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
         let frame = self.stack.pop().expect(
             "tried to pop a stack frame, but there were none",
         );
+        // Abort early if we do not want to clean up: We also avoid validation in that case,
+        // because this is CTFE and the final value will be thoroughly validated anyway.
         match frame.return_to_block {
-            StackPopCleanup::Goto(block) => {
-                self.goto_block(block)?;
-            }
+            StackPopCleanup::Goto(_) => {},
             StackPopCleanup::None { cleanup } => {
                 if !cleanup {
-                    // Leak the locals. Also skip validation, this is only used by
-                    // static/const computation which does its own (stronger) final
-                    // validation.
+                    assert!(self.stack.is_empty(), "only the topmost frame should ever be leaked");
+                    // Leak the locals, skip validation.
                     return Ok(());
                 }
             }
@@ -521,7 +520,8 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
         for local in frame.locals {
             self.deallocate_local(local)?;
         }
-        // Validate the return value.
+        // Validate the return value. Do this after deallocating so that we catch dangling
+        // references.
         if let Some(return_place) = frame.return_place {
             if M::enforce_validity(self) {
                 // Data got changed, better make sure it matches the type!
@@ -541,6 +541,13 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
         } else {
             // Uh, that shouldn't happen... the function did not intend to return
             return err!(Unreachable);
+        }
+        // Jump to new block -- *after* validation so that the spans make more sense.
+        match frame.return_to_block {
+            StackPopCleanup::Goto(block) => {
+                self.goto_block(block)?;
+            }
+            StackPopCleanup::None { .. } => {}
         }
 
         if self.stack.len() > 1 { // FIXME should be "> 0", printing topmost frame crashes rustc...
@@ -636,7 +643,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
                         let (ptr, align) = mplace.to_scalar_ptr_align();
                         match ptr {
                             Scalar::Ptr(ptr) => {
-                                write!(msg, " by align({}) ref:", align.abi()).unwrap();
+                                write!(msg, " by align({}) ref:", align.bytes()).unwrap();
                                 allocs.push(ptr.alloc_id);
                             }
                             ptr => write!(msg, " by integral ref: {:?}", ptr).unwrap(),
@@ -665,7 +672,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tc
             Place::Ptr(mplace) => {
                 match mplace.ptr {
                     Scalar::Ptr(ptr) => {
-                        trace!("by align({}) ref:", mplace.align.abi());
+                        trace!("by align({}) ref:", mplace.align.bytes());
                         self.memory.dump_alloc(ptr.alloc_id);
                     }
                     ptr => trace!(" integral by ref: {:?}", ptr),
