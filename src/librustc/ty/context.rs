@@ -1055,7 +1055,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     /// Allocates a byte or string literal for `mir::interpret`, read-only
     pub fn allocate_bytes(self, bytes: &[u8]) -> interpret::AllocId {
         // create an allocation that just contains these bytes
-        let alloc = interpret::Allocation::from_byte_aligned_bytes(bytes);
+        let alloc = interpret::Allocation::from_byte_aligned_bytes(bytes, ());
         let alloc = self.intern_const_alloc(alloc);
         self.alloc_map.lock().allocate(alloc)
     }
@@ -1478,15 +1478,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     /// done with either: `-Ztwo-phase-borrows`, `#![feature(nll)]`,
     /// or by opting into an edition after 2015.
     pub fn two_phase_borrows(self) -> bool {
-        if self.features().nll || self.sess.opts.debugging_opts.two_phase_borrows {
-            return true;
-        }
-
-        match self.sess.edition() {
-            Edition::Edition2015 => false,
-            Edition::Edition2018 => true,
-            _ => true,
-        }
+        self.sess.rust_2018() || self.features().nll ||
+        self.sess.opts.debugging_opts.two_phase_borrows
     }
 
     /// What mode(s) of borrowck should we run? AST? MIR? both?
