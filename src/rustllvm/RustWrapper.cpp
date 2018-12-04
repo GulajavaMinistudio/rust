@@ -533,6 +533,14 @@ extern "C" uint32_t LLVMRustVersionMinor() { return LLVM_VERSION_MINOR; }
 
 extern "C" uint32_t LLVMRustVersionMajor() { return LLVM_VERSION_MAJOR; }
 
+extern "C" bool LLVMRustIsRustLLVM() {
+#ifdef LLVM_RUSTLLVM
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 extern "C" void LLVMRustAddModuleFlag(LLVMModuleRef M, const char *Name,
                                       uint32_t Value) {
   unwrap(M)->addModuleFlag(Module::Warning, Name, Value);
@@ -824,11 +832,13 @@ LLVMRustDIBuilderCreateNameSpace(LLVMRustDIBuilderRef Builder,
 }
 
 extern "C" void
-LLVMRustDICompositeTypeSetTypeArray(LLVMRustDIBuilderRef Builder,
-                                    LLVMMetadataRef CompositeTy,
-                                    LLVMMetadataRef TyArray) {
+LLVMRustDICompositeTypeReplaceArrays(LLVMRustDIBuilderRef Builder,
+                                     LLVMMetadataRef CompositeTy,
+                                     LLVMMetadataRef Elements,
+                                     LLVMMetadataRef Params) {
   DICompositeType *Tmp = unwrapDI<DICompositeType>(CompositeTy);
-  Builder->replaceArrays(Tmp, DINodeArray(unwrap<MDTuple>(TyArray)));
+  Builder->replaceArrays(Tmp, DINodeArray(unwrap<MDTuple>(Elements)),
+                         DINodeArray(unwrap<MDTuple>(Params)));
 }
 
 extern "C" LLVMValueRef
