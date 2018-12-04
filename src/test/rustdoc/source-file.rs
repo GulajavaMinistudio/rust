@@ -8,12 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub fn main(){
-    let maybe = Some(vec![true, true]);
-    loop {
-        if let Some(thing) = maybe {
-//~^ ERROR use of partially moved value
-//~| ERROR use of moved value
-        }
-    }
-}
+#![crate_name = "foo"]
+
+// @has source-files.js source-file.rs
+
+pub struct Foo;

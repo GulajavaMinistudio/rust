@@ -8,31 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Various examples of structs whose fields are not well-formed.
+#![crate_name = "foo"]
 
-#![allow(dead_code)]
+// @has foo/struct.SomeStruct.html '//*[@class="sidebar-links"]/a[@href="#method.some_fn-1"]' \
+//          "some_fn"
+pub struct SomeStruct<T> { _inner: T }
 
-trait Trait<'a, T> {
-    type Out;
-}
-trait Trait1<'a, 'b, T> {
-    type Out;
-}
-
-impl<'a, T> Trait<'a, T> for usize {
-    type Out = &'a T;
+impl SomeStruct<()> {
+    pub fn some_fn(&self) {}
 }
 
-struct RefOk<'a, T:'a> {
-    field: &'a T
+impl SomeStruct<usize> {
+    pub fn some_fn(&self) {}
 }
-
-impl<'a, T> Trait<'a, T> for u32 {
-    type Out = RefOk<'a, T>;
-}
-
-impl<'a, 'b, T> Trait1<'a, 'b, T> for u32 {
-    type Out = &'a &'b T;
-}
-
-fn main() { }
