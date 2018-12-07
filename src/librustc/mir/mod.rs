@@ -25,7 +25,7 @@ use rustc_data_structures::graph::{self, GraphPredecessors, GraphSuccessors};
 use rustc_data_structures::indexed_vec::{Idx, IndexVec};
 use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::sync::MappedReadGuard;
-use rustc_serialize as serialize;
+use rustc_serialize::{self as serialize};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter, Write};
@@ -1778,6 +1778,10 @@ pub enum StatementKind<'tcx> {
         /// `fn_entry` indicates whether this is the initial retag that happens in the
         /// function prolog.
         fn_entry: bool,
+        /// `two_phase` indicates whether this is just the reservation action of
+        /// a two-phase borrow.
+        two_phase: bool,
+        /// The place to retag
         place: Place<'tcx>,
     },
 
@@ -1841,8 +1845,12 @@ impl<'tcx> Debug for Statement<'tcx> {
         match self.kind {
             Assign(ref place, ref rv) => write!(fmt, "{:?} = {:?}", place, rv),
             FakeRead(ref cause, ref place) => write!(fmt, "FakeRead({:?}, {:?})", cause, place),
-            Retag { fn_entry, ref place } =>
-                write!(fmt, "Retag({}{:?})", if fn_entry { "[fn entry] " } else { "" }, place),
+            Retag { fn_entry, two_phase, ref place } =>
+                write!(fmt, "Retag({}{}{:?})",
+                    if fn_entry { "[fn entry] " } else { "" },
+                    if two_phase { "[2phase] " } else { "" },
+                    place,
+                ),
             EscapeToRaw(ref place) => write!(fmt, "EscapeToRaw({:?})", place),
             StorageLive(ref place) => write!(fmt, "StorageLive({:?})", place),
             StorageDead(ref place) => write!(fmt, "StorageDead({:?})", place),
@@ -2770,8 +2778,11 @@ impl Location {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
 pub enum UnsafetyViolationKind {
     General,
-    /// unsafety is not allowed at all in min const fn
-    MinConstFn,
+    /// Right now function calls to `const unsafe fn` are only permitted behind a feature gate
+    /// Also, even `const unsafe fn` need an `unsafe` block to do the allowed operations.
+    GatedConstFnCall,
+    /// Permitted in const fn and regular fns
+    GeneralAndConstFn,
     ExternStatic(ast::NodeId),
     BorrowPacked(ast::NodeId),
 }
@@ -3019,7 +3030,7 @@ EnumTypeFoldableImpl! {
         (StatementKind::StorageLive)(a),
         (StatementKind::StorageDead)(a),
         (StatementKind::InlineAsm) { asm, outputs, inputs },
-        (StatementKind::Retag) { fn_entry, place },
+        (StatementKind::Retag) { fn_entry, two_phase, place },
         (StatementKind::EscapeToRaw)(place),
         (StatementKind::AscribeUserType)(a, v, b),
         (StatementKind::Nop),

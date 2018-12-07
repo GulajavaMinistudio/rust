@@ -356,10 +356,10 @@ pub fn compile_input(
 
     if sess.opts.debugging_opts.self_profile {
         sess.print_profiler_results();
+    }
 
-        if sess.opts.debugging_opts.profile_json {
-            sess.save_json_results();
-        }
+    if sess.opts.debugging_opts.profile_json {
+        sess.save_json_results();
     }
 
     controller_entry_point!(
@@ -908,7 +908,6 @@ where
         }
     });
 
-    let whitelisted_legacy_custom_derives = registry.take_whitelisted_custom_derives();
     let Registry {
         syntax_exts,
         early_lint_passes,
@@ -955,7 +954,6 @@ where
         crate_loader,
         &resolver_arenas,
     );
-    resolver.whitelisted_legacy_custom_derives = whitelisted_legacy_custom_derives;
     syntax_ext::register_builtins(&mut resolver, syntax_exts, sess.features_untracked().quote);
 
     // Expand all macros

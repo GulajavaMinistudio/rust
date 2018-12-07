@@ -204,7 +204,7 @@ fn macro_bang_format(path: &ast::Path) -> ExpnFormat {
             path_str.push_str("::");
         }
 
-        if segment.ident.name != keywords::CrateRoot.name() &&
+        if segment.ident.name != keywords::PathRoot.name() &&
             segment.ident.name != keywords::DollarCrate.name()
         {
             path_str.push_str(&segment.ident.as_str())
@@ -1134,12 +1134,6 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
         let (mut attr, mut traits, mut after_derive) = (None, Vec::new(), false);
 
         item = item.map_attrs(|mut attrs| {
-            if let Some(legacy_attr_invoc) = self.cx.resolver.find_legacy_attr_invoc(&mut attrs,
-                                                                                     true) {
-                attr = Some(legacy_attr_invoc);
-                return attrs;
-            }
-
             attr = self.find_attr_invoc(&mut attrs, &mut after_derive);
             traits = collect_derives(&mut self.cx, &mut attrs);
             attrs
@@ -1156,12 +1150,6 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
         let (mut attr, mut after_derive) = (None, false);
 
         item = item.map_attrs(|mut attrs| {
-            if let Some(legacy_attr_invoc) = self.cx.resolver.find_legacy_attr_invoc(&mut attrs,
-                                                                                     false) {
-                attr = Some(legacy_attr_invoc);
-                return attrs;
-            }
-
             attr = self.find_attr_invoc(&mut attrs, &mut after_derive);
             attrs
         });
@@ -1623,7 +1611,6 @@ impl<'feat> ExpansionConfig<'feat> {
     }
 
     feature_tests! {
-        fn enable_quotes = quote,
         fn enable_asm = asm,
         fn enable_custom_test_frameworks = custom_test_frameworks,
         fn enable_global_asm = global_asm,
@@ -1631,7 +1618,6 @@ impl<'feat> ExpansionConfig<'feat> {
         fn enable_concat_idents = concat_idents,
         fn enable_trace_macros = trace_macros,
         fn enable_allow_internal_unstable = allow_internal_unstable,
-        fn enable_custom_derive = custom_derive,
         fn enable_format_args_nl = format_args_nl,
         fn macros_in_extern_enabled = macros_in_extern,
         fn proc_macro_hygiene = proc_macro_hygiene,
