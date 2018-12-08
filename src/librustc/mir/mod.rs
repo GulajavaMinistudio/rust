@@ -339,7 +339,7 @@ impl<'tcx> Mir<'tcx> {
     #[inline]
     pub fn args_iter(&self) -> impl Iterator<Item = Local> {
         let arg_count = self.arg_count;
-        (1..arg_count + 1).map(Local::new)
+        (1..=arg_count).map(Local::new)
     }
 
     /// Returns an iterator over all user-defined variables and compiler-generated temporaries (all
@@ -2376,17 +2376,17 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     }
 
                     AggregateKind::Closure(def_id, _) => ty::tls::with(|tcx| {
-                        if let Some(node_id) = tcx.hir.as_local_node_id(def_id) {
+                        if let Some(node_id) = tcx.hir().as_local_node_id(def_id) {
                             let name = if tcx.sess.opts.debugging_opts.span_free_formats {
                                 format!("[closure@{:?}]", node_id)
                             } else {
-                                format!("[closure@{:?}]", tcx.hir.span(node_id))
+                                format!("[closure@{:?}]", tcx.hir().span(node_id))
                             };
                             let mut struct_fmt = fmt.debug_struct(&name);
 
                             tcx.with_freevars(node_id, |freevars| {
                                 for (freevar, place) in freevars.iter().zip(places) {
-                                    let var_name = tcx.hir.name(freevar.var_id());
+                                    let var_name = tcx.hir().name(freevar.var_id());
                                     struct_fmt.field(&var_name.as_str(), place);
                                 }
                             });
@@ -2398,13 +2398,13 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     }),
 
                     AggregateKind::Generator(def_id, _, _) => ty::tls::with(|tcx| {
-                        if let Some(node_id) = tcx.hir.as_local_node_id(def_id) {
-                            let name = format!("[generator@{:?}]", tcx.hir.span(node_id));
+                        if let Some(node_id) = tcx.hir().as_local_node_id(def_id) {
+                            let name = format!("[generator@{:?}]", tcx.hir().span(node_id));
                             let mut struct_fmt = fmt.debug_struct(&name);
 
                             tcx.with_freevars(node_id, |freevars| {
                                 for (freevar, place) in freevars.iter().zip(places) {
-                                    let var_name = tcx.hir.name(freevar.var_id());
+                                    let var_name = tcx.hir().name(freevar.var_id());
                                     struct_fmt.field(&var_name.as_str(), place);
                                 }
                                 struct_fmt.field("$state", &places[freevars.len()]);
@@ -2905,6 +2905,7 @@ pub struct ClosureOutlivesRequirement<'tcx> {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub enum ConstraintCategory {
     Return,
+    Yield,
     UseAsConst,
     UseAsStatic,
     TypeAnnotation,
