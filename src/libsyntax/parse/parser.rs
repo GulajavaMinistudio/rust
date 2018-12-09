@@ -92,12 +92,12 @@ pub enum PathStyle {
     /// `x<y>` - comparisons, `x::<y>` - unambiguously a path.
     Expr,
     /// In other contexts, notably in types, no ambiguity exists and paths can be written
-    /// without the disambiguator, e.g. `x<y>` - unambiguously a path.
+    /// without the disambiguator, e.g., `x<y>` - unambiguously a path.
     /// Paths with disambiguators are still accepted, `x::<Y>` - unambiguously a path too.
     Type,
-    /// A path with generic arguments disallowed, e.g. `foo::bar::Baz`, used in imports,
+    /// A path with generic arguments disallowed, e.g., `foo::bar::Baz`, used in imports,
     /// visibilities or attributes.
-    /// Technically, this variant is unnecessary and e.g. `Expr` can be used instead
+    /// Technically, this variant is unnecessary and e.g., `Expr` can be used instead
     /// (paths in "mod" contexts have to be checked later for absence of generic arguments
     /// anyway, due to macros), but it is used to avoid weird suggestions about expected
     /// tokens when something goes wrong.
@@ -1917,7 +1917,7 @@ impl<'a> Parser<'a> {
         self.parse_arg_general(true)
     }
 
-    /// Parse an argument in a lambda header e.g. |arg, arg|
+    /// Parse an argument in a lambda header e.g., |arg, arg|
     fn parse_fn_block_arg(&mut self) -> PResult<'a, Arg> {
         let pat = self.parse_pat(Some("argument name"))?;
         let t = if self.eat(&token::Colon) {
@@ -2334,7 +2334,7 @@ impl<'a> Parser<'a> {
     /// parse things like parenthesized exprs,
     /// macros, return, etc.
     ///
-    /// NB: This does not parse outer attributes,
+    /// N.B., this does not parse outer attributes,
     ///     and is private because it only works
     ///     correctly if called from parse_dot_or_call_expr().
     fn parse_bottom_expr(&mut self) -> PResult<'a, P<Expr>> {
@@ -3732,7 +3732,7 @@ impl<'a> Parser<'a> {
         self.with_res(r, |this| this.parse_assoc_expr(already_parsed_attrs))
     }
 
-    /// Parse the RHS of a local variable declaration (e.g. '= 14;')
+    /// Parse the RHS of a local variable declaration (e.g., '= 14;')
     fn parse_initializer(&mut self, skip_eq: bool) -> PResult<'a, Option<P<Expr>>> {
         if self.eat(&token::Eq) {
             Ok(Some(self.parse_expr()?))
@@ -4114,7 +4114,7 @@ impl<'a> Parser<'a> {
         self.parse_pat_with_range_pat(true, expected)
     }
 
-    /// Parse a pattern, with a setting whether modern range patterns e.g. `a..=b`, `a..b` are
+    /// Parse a pattern, with a setting whether modern range patterns e.g., `a..=b`, `a..b` are
     /// allowed.
     fn parse_pat_with_range_pat(
         &mut self,
@@ -4456,7 +4456,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a statement. This stops just before trailing semicolons on everything but items.
-    /// e.g. a `StmtKind::Semi` parses to a `StmtKind::Expr`, leaving the trailing `;` unconsumed.
+    /// e.g., a `StmtKind::Semi` parses to a `StmtKind::Expr`, leaving the trailing `;` unconsumed.
     pub fn parse_stmt(&mut self) -> PResult<'a, Option<Stmt>> {
         Ok(self.parse_stmt_(true))
     }
@@ -5053,9 +5053,9 @@ impl<'a> Parser<'a> {
 
     // Parse bounds of a type parameter `BOUND + BOUND + BOUND`, possibly with trailing `+`.
     // BOUND = TY_BOUND | LT_BOUND
-    // LT_BOUND = LIFETIME (e.g. `'a`)
+    // LT_BOUND = LIFETIME (e.g., `'a`)
     // TY_BOUND = TY_BOUND_NOPAREN | (TY_BOUND_NOPAREN)
-    // TY_BOUND_NOPAREN = [?] [for<LT_PARAM_DEFS>] SIMPLE_PATH (e.g. `?for<'a: 'b> m::Trait<'a>`)
+    // TY_BOUND_NOPAREN = [?] [for<LT_PARAM_DEFS>] SIMPLE_PATH (e.g., `?for<'a: 'b> m::Trait<'a>`)
     fn parse_generic_bounds_common(&mut self, allow_plus: bool) -> PResult<'a, GenericBounds> {
         let mut bounds = Vec::new();
         loop {
@@ -5110,7 +5110,7 @@ impl<'a> Parser<'a> {
     }
 
     // Parse bounds of a lifetime parameter `BOUND + BOUND + BOUND`, possibly with trailing `+`.
-    // BOUND = LT_BOUND (e.g. `'a`)
+    // BOUND = LT_BOUND (e.g., `'a`)
     fn parse_lt_param_bounds(&mut self) -> GenericBounds {
         let mut lifetimes = Vec::new();
         while self.check_lifetime() {
@@ -5811,20 +5811,14 @@ impl<'a> Parser<'a> {
     }
 
     fn complain_if_pub_macro(&mut self, vis: &VisibilityKind, sp: Span) {
-        if let Err(mut err) = self.complain_if_pub_macro_diag(vis, sp) {
-            err.emit();
-        }
-    }
-
-    fn complain_if_pub_macro_diag(&mut self, vis: &VisibilityKind, sp: Span) -> PResult<'a, ()> {
         match *vis {
-            VisibilityKind::Inherited => Ok(()),
+            VisibilityKind::Inherited => {}
             _ => {
                 let is_macro_rules: bool = match self.token {
                     token::Ident(sid, _) => sid.name == Symbol::intern("macro_rules"),
                     _ => false,
                 };
-                if is_macro_rules {
+                let mut err = if is_macro_rules {
                     let mut err = self.diagnostic()
                         .struct_span_err(sp, "can't qualify macro_rules invocation with `pub`");
                     err.span_suggestion_with_applicability(
@@ -5833,13 +5827,14 @@ impl<'a> Parser<'a> {
                         "#[macro_export]".to_owned(),
                         Applicability::MaybeIncorrect // speculative
                     );
-                    Err(err)
+                    err
                 } else {
                     let mut err = self.diagnostic()
                         .struct_span_err(sp, "can't qualify macro invocation with `pub`");
                     err.help("try adjusting the macro to put `pub` inside the invocation");
-                    Err(err)
-                }
+                    err
+                };
+                err.emit();
             }
         }
     }
@@ -6148,9 +6143,6 @@ impl<'a> Parser<'a> {
 
     fn consume_block(&mut self, delim: token::DelimToken) {
         let mut brace_depth = 0;
-        if !self.eat(&token::OpenDelim(delim)) {
-            return;
-        }
         loop {
             if self.eat(&token::OpenDelim(delim)) {
                 brace_depth += 1;
@@ -6161,7 +6153,7 @@ impl<'a> Parser<'a> {
                     brace_depth -= 1;
                     continue;
                 }
-            } else if self.eat(&token::Eof) || self.eat(&token::CloseDelim(token::NoDelim)) {
+            } else if self.token == token::Eof || self.eat(&token::CloseDelim(token::NoDelim)) {
                 return;
             } else {
                 self.bump();
@@ -6293,7 +6285,7 @@ impl<'a> Parser<'a> {
 
     /// Parse `pub`, `pub(crate)` and `pub(in path)` plus shortcuts `crate` for `pub(crate)`,
     /// `pub(self)` for `pub(in self)` and `pub(super)` for `pub(in super)`.
-    /// If the following element can't be a tuple (i.e. it's a function definition,
+    /// If the following element can't be a tuple (i.e., it's a function definition,
     /// it's not a tuple struct field) and the contents within the parens
     /// isn't valid, emit a proper diagnostic.
     pub fn parse_visibility(&mut self, can_take_tuple: bool) -> PResult<'a, Visibility> {
@@ -7410,17 +7402,27 @@ impl<'a> Parser<'a> {
                 return Err(err);
             } else if self.look_ahead(1, |t| *t == token::OpenDelim(token::Paren)) {
                 let ident = self.parse_ident().unwrap();
+                self.bump();  // `(`
+                let kw_name = if let Ok(Some(_)) = self.parse_self_arg() {
+                    "method"
+                } else {
+                    "function"
+                };
                 self.consume_block(token::Paren);
-                let (kw, kw_name, ambiguous) = if self.check(&token::RArrow) ||
-                    self.check(&token::OpenDelim(token::Brace))
-                {
-                    ("fn", "method", false)
+                let (kw, kw_name, ambiguous) = if self.check(&token::RArrow) {
+                    self.eat_to_tokens(&[&token::OpenDelim(token::Brace)]);
+                    self.bump();  // `{`
+                    ("fn", kw_name, false)
+                } else if self.check(&token::OpenDelim(token::Brace)) {
+                    self.bump();  // `{`
+                    ("fn", kw_name, false)
                 } else if self.check(&token::Colon) {
                     let kw = "struct";
                     (kw, kw, false)
                 } else {
-                    ("fn` or `struct", "method or struct", true)
+                    ("fn` or `struct", "function or struct", true)
                 };
+                self.consume_block(token::Brace);
 
                 let msg = format!("missing `{}` for {} definition", kw, kw_name);
                 let mut err = self.diagnostic().struct_span_err(sp, &msg);
@@ -7445,6 +7447,32 @@ impl<'a> Parser<'a> {
                         err.help("if you meant to call a macro, remove the `pub` \
                                   and add a trailing `!` after the identifier");
                     }
+                }
+                return Err(err);
+            } else if self.look_ahead(1, |t| *t == token::Lt) {
+                let ident = self.parse_ident().unwrap();
+                self.eat_to_tokens(&[&token::Gt]);
+                self.bump();  // `>`
+                let (kw, kw_name, ambiguous) = if self.eat(&token::OpenDelim(token::Paren)) {
+                    if let Ok(Some(_)) = self.parse_self_arg() {
+                        ("fn", "method", false)
+                    } else {
+                        ("fn", "function", false)
+                    }
+                } else if self.check(&token::OpenDelim(token::Brace)) {
+                    ("struct", "struct", false)
+                } else {
+                    ("fn` or `struct", "function or struct", true)
+                };
+                let msg = format!("missing `{}` for {} definition", kw, kw_name);
+                let mut err = self.diagnostic().struct_span_err(sp, &msg);
+                if !ambiguous {
+                    err.span_suggestion_short_with_applicability(
+                        sp,
+                        &format!("add `{}` here to parse `{}` as a public {}", kw, ident, kw_name),
+                        format!(" {} ", kw),
+                        Applicability::MachineApplicable,
+                    );
                 }
                 return Err(err);
             }

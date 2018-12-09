@@ -1272,7 +1272,13 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
     arg_align_attributes: bool = (false, parse_bool, [TRACKED],
         "emit align metadata for reference arguments"),
     dump_mir: Option<String> = (None, parse_opt_string, [UNTRACKED],
-        "dump MIR state at various points in transforms"),
+        "dump MIR state to file.
+        `val` is used to select which passes and functions to dump. For example:
+        `all` matches all passes and functions,
+        `foo` matches all passes for functions whose name contains 'foo',
+        `foo & ConstProp` only the 'ConstProp' pass for function names containing 'foo',
+        `foo | bar` all passes for function names containing 'foo' or 'bar'."),
+
     dump_mir_dir: String = (String::from("mir_dump"), parse_string, [UNTRACKED],
         "the directory the MIR is dumped into"),
     dump_mir_graphviz: bool = (false, parse_bool, [UNTRACKED],
@@ -1280,7 +1286,7 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
     dump_mir_exclude_pass_number: bool = (false, parse_bool, [UNTRACKED],
         "if set, exclude the pass number when dumping MIR (used in tests)"),
     mir_emit_retag: bool = (false, parse_bool, [TRACKED],
-        "emit Retagging MIR statements, interpreted e.g. by miri; implies -Zmir-opt-level=0"),
+        "emit Retagging MIR statements, interpreted e.g., by miri; implies -Zmir-opt-level=0"),
     perf_stats: bool = (false, parse_bool, [UNTRACKED],
         "print some performance-related statistics"),
     hir_stats: bool = (false, parse_bool, [UNTRACKED],
@@ -1532,7 +1538,7 @@ impl RustcOptGroup {
 // adds extra rustc-specific metadata to each option; such metadata
 // is exposed by .  The public
 // functions below ending with `_u` are the functions that return
-// *unstable* options, i.e. options that are only enabled when the
+// *unstable* options, i.e., options that are only enabled when the
 // user also passes the `-Z unstable-options` debugging flag.
 mod opt {
     // The `fn opt_u` etc below are written so that we can use them
@@ -2380,7 +2386,7 @@ impl fmt::Display for CrateType {
 /// tracking are hashed into a single value that determines whether the
 /// incremental compilation cache can be re-used or not. This hashing is done
 /// via the DepTrackingHash trait defined below, since the standard Hash
-/// implementation might not be suitable (e.g. arguments are stored in a Vec,
+/// implementation might not be suitable (e.g., arguments are stored in a Vec,
 /// the hash of which is order dependent, but we might not want the order of
 /// arguments to make a difference for the hash).
 ///
