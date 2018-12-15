@@ -271,6 +271,7 @@
 #![feature(libc)]
 #![feature(link_args)]
 #![feature(linkage)]
+#![cfg_attr(not(stage0), feature(min_const_unsafe_fn))]
 #![feature(needs_panic_runtime)]
 #![feature(never_type)]
 #![feature(nll)]
@@ -316,10 +317,6 @@
                                         decl_macro, coerce_unsized))]
 
 #![default_lib_allocator]
-
-#[cfg(stage0)]
-#[global_allocator]
-static ALLOC: alloc::System = alloc::System;
 
 // Explicitly import the prelude. The compiler uses this same unstable attribute
 // to import the prelude implicitly when building crates that depend on std.

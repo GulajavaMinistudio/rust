@@ -698,7 +698,7 @@ fn build_index(krate: &clean::Crate, cache: &mut Cache) -> String {
                 ty: item.type_(),
                 name: item.name.clone().unwrap(),
                 path: fqp[..fqp.len() - 1].join("::"),
-                desc: plain_summary_line(item.doc_value()),
+                desc: plain_summary_line_short(item.doc_value()),
                 parent: Some(did),
                 parent_idx: None,
                 search_type: get_index_search_type(&item),
@@ -736,7 +736,7 @@ fn build_index(krate: &clean::Crate, cache: &mut Cache) -> String {
     }
 
     let crate_doc = krate.module.as_ref().map(|module| {
-        plain_summary_line(module.doc_value())
+        plain_summary_line_short(module.doc_value())
     }).unwrap_or(String::new());
 
     let mut crate_data = BTreeMap::new();
@@ -771,6 +771,9 @@ fn write_shared(
                  options.enable_minification)?;
     write_minify(cx.dst.join(&format!("settings{}.css", cx.shared.resource_suffix)),
                  static_files::SETTINGS_CSS,
+                 options.enable_minification)?;
+    write_minify(cx.dst.join(&format!("noscript{}.css", cx.shared.resource_suffix)),
+                 static_files::NOSCRIPT_CSS,
                  options.enable_minification)?;
 
     // To avoid "light.css" to be overwritten, we'll first run over the received themes and only
@@ -865,9 +868,8 @@ themePicker.onblur = handleThemeButtonsBlur;
     }
 
     {
-        let mut data = format!("var resourcesSuffix = \"{}\";\n",
-                               cx.shared.resource_suffix);
-        data.push_str(static_files::STORAGE_JS);
+        let mut data = static_files::STORAGE_JS.to_owned();
+        data.push_str(&format!("var resourcesSuffix = \"{}\";", cx.shared.resource_suffix));
         write_minify(cx.dst.join(&format!("storage{}.js", cx.shared.resource_suffix)),
                      &data,
                      options.enable_minification)?;
@@ -1481,7 +1483,7 @@ impl DocFolder for Cache {
                             ty: item.type_(),
                             name: s.to_string(),
                             path: path.join("::"),
-                            desc: plain_summary_line(item.doc_value()),
+                            desc: plain_summary_line_short(item.doc_value()),
                             parent,
                             parent_idx: None,
                             search_type: get_index_search_type(&item),
@@ -1512,7 +1514,8 @@ impl DocFolder for Cache {
             clean::FunctionItem(..) | clean::ModuleItem(..) |
             clean::ForeignFunctionItem(..) | clean::ForeignStaticItem(..) |
             clean::ConstantItem(..) | clean::StaticItem(..) |
-            clean::UnionItem(..) | clean::ForeignTypeItem | clean::MacroItem(..)
+            clean::UnionItem(..) | clean::ForeignTypeItem |
+            clean::MacroItem(..) | clean::ProcMacroItem(..)
             if !self.stripped_mod => {
                 // Re-exported items mean that the same id can show up twice
                 // in the rustdoc ast that we're looking at. We know,
@@ -1673,7 +1676,7 @@ impl<'a> Cache {
                                 ty: item.type_(),
                                 name: item_name.to_string(),
                                 path: path.clone(),
-                                desc: plain_summary_line(item.doc_value()),
+                                desc: plain_summary_line_short(item.doc_value()),
                                 parent: None,
                                 parent_idx: None,
                                 search_type: get_index_search_type(&item),
@@ -2388,7 +2391,13 @@ fn shorter<'a>(s: Option<&'a str>) -> String {
 #[inline]
 fn plain_summary_line(s: Option<&str>) -> String {
     let line = shorter(s).replace("\n", " ");
-    markdown::plain_summary_line(&line[..])
+    markdown::plain_summary_line_full(&line[..], false)
+}
+
+#[inline]
+fn plain_summary_line_short(s: Option<&str>) -> String {
+    let line = shorter(s).replace("\n", " ");
+    markdown::plain_summary_line_full(&line[..], true)
 }
 
 fn document(w: &mut fmt::Formatter, cx: &Context, item: &clean::Item) -> fmt::Result {
@@ -3006,6 +3015,22 @@ fn item_trait(
     // Trait documentation
     document(w, cx, it)?;
 
+    fn write_small_section_header(
+        w: &mut fmt::Formatter,
+        id: &str,
+        title: &str,
+        extra_content: &str,
+    ) -> fmt::Result {
+        write!(w, "
+            <h2 id='{0}' class='small-section-header'>\
+              {1}<a href='#{0}' class='anchor'></a>\
+            </h2>{2}", id, title, extra_content)
+    }
+
+    fn write_loading_content(w: &mut fmt::Formatter, extra_content: &str) -> fmt::Result {
+        write!(w, "{}<span class='loading-content'>Loading content...</span>", extra_content)
+    }
+
     fn trait_item(w: &mut fmt::Formatter, cx: &Context, m: &clean::Item, t: &clean::Item)
                   -> fmt::Result {
         let name = m.name.as_ref().unwrap();
@@ -3026,74 +3051,45 @@ fn item_trait(
     }
 
     if !types.is_empty() {
-        write!(w, "
-            <h2 id='associated-types' class='small-section-header'>
-              Associated Types<a href='#associated-types' class='anchor'></a>
-            </h2>
-            <div class='methods'>
-        ")?;
+        write_small_section_header(w, "associated-types", "Associated Types",
+                                   "<div class='methods'>")?;
         for t in &types {
             trait_item(w, cx, *t, it)?;
         }
-        write!(w, "</div>")?;
+        write_loading_content(w, "</div>")?;
     }
 
     if !consts.is_empty() {
-        write!(w, "
-            <h2 id='associated-const' class='small-section-header'>
-              Associated Constants<a href='#associated-const' class='anchor'></a>
-            </h2>
-            <div class='methods'>
-        ")?;
+        write_small_section_header(w, "associated-const", "Associated Constants",
+                                   "<div class='methods'>")?;
         for t in &consts {
             trait_item(w, cx, *t, it)?;
         }
-        write!(w, "</div>")?;
+        write_loading_content(w, "</div>")?;
     }
 
     // Output the documentation for each function individually
     if !required.is_empty() {
-        write!(w, "
-            <h2 id='required-methods' class='small-section-header'>
-              Required Methods<a href='#required-methods' class='anchor'></a>
-            </h2>
-            <div class='methods'>
-        ")?;
+        write_small_section_header(w, "required-methods", "Required methods",
+                                   "<div class='methods'>")?;
         for m in &required {
             trait_item(w, cx, *m, it)?;
         }
-        write!(w, "</div>")?;
+        write_loading_content(w, "</div>")?;
     }
     if !provided.is_empty() {
-        write!(w, "
-            <h2 id='provided-methods' class='small-section-header'>
-              Provided Methods<a href='#provided-methods' class='anchor'></a>
-            </h2>
-            <div class='methods'>
-        ")?;
+        write_small_section_header(w, "provided-methods", "Provided methods",
+                                   "<div class='methods'>")?;
         for m in &provided {
             trait_item(w, cx, *m, it)?;
         }
-        write!(w, "</div>")?;
+        write_loading_content(w, "</div>")?;
     }
 
     // If there are methods directly on this trait object, render them here.
     render_assoc_items(w, cx, it, it.def_id, AssocItemRender::All)?;
 
     let cache = cache();
-    let impl_header = "\
-        <h2 id='implementors' class='small-section-header'>\
-          Implementors<a href='#implementors' class='anchor'></a>\
-        </h2>\
-        <div class='item-list' id='implementors-list'>\
-    ";
-
-    let synthetic_impl_header = "\
-        <h2 id='synthetic-implementors' class='small-section-header'>\
-          Auto implementors<a href='#synthetic-implementors' class='anchor'></a>\
-        </h2>\
-        <div class='item-list' id='synthetic-implementors-list'>\
-    ";
 
     let mut synthetic_types = Vec::new();
 
@@ -3130,11 +3126,7 @@ fn item_trait(
         concrete.sort_by(compare_impl);
 
         if !foreign.is_empty() {
-            write!(w, "
-                <h2 id='foreign-impls' class='small-section-header'>
-                  Implementations on Foreign Types<a href='#foreign-impls' class='anchor'></a>
-                </h2>
-            ")?;
+            write_small_section_header(w, "foreign-impls", "Implementations on Foreign Types", "")?;
 
             for implementor in foreign {
                 let assoc_link = AssocItemLink::GotoSource(
@@ -3145,33 +3137,38 @@ fn item_trait(
                             RenderMode::Normal, implementor.impl_item.stable_since(), false,
                             None)?;
             }
+            write_loading_content(w, "")?;
         }
 
-        write!(w, "{}", impl_header)?;
+        write_small_section_header(w, "implementors", "Implementors",
+                                   "<div class='item-list' id='implementors-list'>")?;
         for implementor in concrete {
             render_implementor(cx, implementor, w, &implementor_dups)?;
         }
-        write!(w, "</div>")?;
+        write_loading_content(w, "</div>")?;
 
         if t.auto {
-            write!(w, "{}", synthetic_impl_header)?;
+            write_small_section_header(w, "synthetic-implementors", "Auto implementors",
+                                       "<div class='item-list' id='synthetic-implementors-list'>")?;
             for implementor in synthetic {
                 synthetic_types.extend(
                     collect_paths_for_type(implementor.inner_impl().for_.clone())
                 );
                 render_implementor(cx, implementor, w, &implementor_dups)?;
             }
-            write!(w, "</div>")?;
+            write_loading_content(w, "</div>")?;
         }
     } else {
         // even without any implementations to write in, we still want the heading and list, so the
         // implementors javascript file pulled in below has somewhere to write the impls into
-        write!(w, "{}", impl_header)?;
-        write!(w, "</div>")?;
+        write_small_section_header(w, "implementors", "Implementors",
+                                   "<div class='item-list' id='implementors-list'>")?;
+        write_loading_content(w, "</div>")?;
 
         if t.auto {
-            write!(w, "{}", synthetic_impl_header)?;
-            write!(w, "</div>")?;
+            write_small_section_header(w, "synthetic-implementors", "Auto implementors",
+                                       "<div class='item-list' id='synthetic-implementors-list'>")?;
+            write_loading_content(w, "</div>")?;
         }
     }
     write!(w, r#"<script type="text/javascript">window.inlined_types=new Set({});</script>"#,
