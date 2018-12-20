@@ -55,9 +55,9 @@ pub use rustc::session::search_paths::SearchPath;
 
 pub type ExternalPaths = FxHashMap<DefId, (Vec<String>, clean::TypeKind)>;
 
-pub struct DocContext<'a, 'tcx: 'a, 'rcx: 'a, 'cstore: 'rcx> {
+pub struct DocContext<'a, 'tcx: 'a, 'rcx: 'a> {
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
-    pub resolver: &'a RefCell<resolve::Resolver<'rcx, 'cstore>>,
+    pub resolver: &'a RefCell<resolve::Resolver<'rcx>>,
     /// The stack of module NodeIds up till this point
     pub crate_name: Option<String>,
     pub cstore: Rc<CStore>,
@@ -88,7 +88,7 @@ pub struct DocContext<'a, 'tcx: 'a, 'rcx: 'a, 'cstore: 'rcx> {
     pub all_traits: Vec<DefId>,
 }
 
-impl<'a, 'tcx, 'rcx, 'cstore> DocContext<'a, 'tcx, 'rcx, 'cstore> {
+impl<'a, 'tcx, 'rcx> DocContext<'a, 'tcx, 'rcx> {
     pub fn sess(&self) -> &session::Session {
         &self.tcx.sess
     }
@@ -485,7 +485,7 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
             glob_map: if resolver.make_glob_map { Some(resolver.glob_map.clone()) } else { None },
         };
 
-        let arenas = AllArenas::new();
+        let mut arenas = AllArenas::new();
         let hir_map = hir_map::map_crate(&sess, &*cstore, &mut hir_forest, &defs);
         let output_filenames = driver::build_output_filenames(&input,
                                                             &None,
@@ -501,7 +501,7 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
                                                         hir_map,
                                                         analysis,
                                                         resolutions,
-                                                        &arenas,
+                                                        &mut arenas,
                                                         &name,
                                                         &output_filenames,
                                                         |tcx, analysis, _, result| {
