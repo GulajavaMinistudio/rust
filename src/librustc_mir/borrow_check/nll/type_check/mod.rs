@@ -123,7 +123,7 @@ pub(crate) fn type_check<'gcx, 'tcx>(
     location_table: &LocationTable,
     borrow_set: &BorrowSet<'tcx>,
     all_facts: &mut Option<AllFacts>,
-    flow_inits: &mut FlowAtLocation<MaybeInitializedPlaces<'_, 'gcx, 'tcx>>,
+    flow_inits: &mut FlowAtLocation<'tcx, MaybeInitializedPlaces<'_, 'gcx, 'tcx>>,
     move_data: &MoveData<'tcx>,
     elements: &Rc<RegionValueElements>,
 ) -> MirTypeckResults<'tcx> {
@@ -1316,7 +1316,6 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
             | StatementKind::StorageDead(..)
             | StatementKind::InlineAsm { .. }
             | StatementKind::Retag { .. }
-            | StatementKind::EscapeToRaw { .. }
             | StatementKind::Nop => {}
         }
     }

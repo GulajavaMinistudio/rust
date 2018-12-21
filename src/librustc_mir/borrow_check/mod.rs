@@ -63,7 +63,7 @@ mod move_errors;
 mod mutability_errors;
 mod path_utils;
 crate mod place_ext;
-mod places_conflict;
+crate mod places_conflict;
 mod prefixes;
 mod used_muts;
 
@@ -590,7 +590,6 @@ impl<'cx, 'gcx, 'tcx> DataflowResultsConsumer<'cx, 'tcx> for MirBorrowckCtxt<'cx
             StatementKind::Nop
             | StatementKind::AscribeUserType(..)
             | StatementKind::Retag { .. }
-            | StatementKind::EscapeToRaw { .. }
             | StatementKind::StorageLive(..) => {
                 // `Nop`, `AscribeUserType`, `Retag`, and `StorageLive` are irrelevant
                 // to borrow check.
@@ -1369,7 +1368,8 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
             place,
             borrow.kind,
             root_place,
-            sd
+            sd,
+            places_conflict::PlaceConflictBias::Overlap,
         ) {
             debug!("check_for_invalidation_at_exit({:?}): INVALID", place);
             // FIXME: should be talking about the region lifetime instead

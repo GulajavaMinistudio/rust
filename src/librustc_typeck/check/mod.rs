@@ -102,10 +102,11 @@ use rustc::hir::intravisit::{self, Visitor, NestedVisitorMap};
 use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use middle::lang_items;
 use namespace::Namespace;
+use rustc::infer::{self, InferCtxt, InferOk, InferResult, RegionVariableOrigin};
+use rustc::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
 use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::sync::Lrc;
 use rustc_target::spec::abi::Abi;
-use rustc::infer::{self, InferCtxt, InferOk, RegionVariableOrigin};
 use rustc::infer::opaque_types::OpaqueTypeDecl;
 use rustc::infer::type_variable::{TypeVariableOrigin};
 use rustc::middle::region;
@@ -113,8 +114,8 @@ use rustc::mir::interpret::{ConstValue, GlobalId};
 use rustc::ty::subst::{CanonicalUserSubsts, UnpackedKind, Subst, Substs,
                        UserSelfTy, UserSubsts};
 use rustc::traits::{self, ObligationCause, ObligationCauseCode, TraitEngine};
-use rustc::ty::{self, AdtKind, Ty, TyCtxt, GenericParamDefKind, Visibility, ToPredicate,
-                RegionKind};
+use rustc::ty::{self, AdtKind, Ty, TyCtxt, GenericParamDefKind, RegionKind, Visibility,
+                ToPolyTraitRef, ToPredicate};
 use rustc::ty::adjustment::{Adjust, Adjustment, AllowTwoPhase, AutoBorrow, AutoBorrowMutability};
 use rustc::ty::fold::TypeFoldable;
 use rustc::ty::query::Providers;
@@ -142,6 +143,7 @@ use require_c_abi_if_variadic;
 use session::{CompileIncomplete, config, Session};
 use TypeAndSubsts;
 use lint;
+use util::captures::Captures;
 use util::common::{ErrorReported, indenter};
 use util::nodemap::{DefIdMap, DefIdSet, FxHashMap, FxHashSet, NodeMap};
 
@@ -2555,7 +2557,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         while result.is_none() && autoderef.next().is_some() {
             result = self.try_index_step(expr, base_expr, &autoderef, needs, idx_ty);
         }
-        autoderef.finalize();
+        autoderef.finalize(self);
         result
     }
 
@@ -2572,7 +2574,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                       index_ty: Ty<'tcx>)
                       -> Option<(/*index type*/ Ty<'tcx>, /*element type*/ Ty<'tcx>)>
     {
-        let adjusted_ty = autoderef.unambiguous_final_ty();
+        let adjusted_ty = autoderef.unambiguous_final_ty(self);
         debug!("try_index_step(expr={:?}, base_expr={:?}, adjusted_ty={:?}, \
                                index_ty={:?})",
                expr,
@@ -2602,7 +2604,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 debug!("try_index_step: success, using overloaded indexing");
                 let method = self.register_infer_ok_obligations(ok);
 
-                let mut adjustments = autoderef.adjust_steps(needs);
+                let mut adjustments = autoderef.adjust_steps(self, needs);
                 if let ty::Ref(region, _, r_mutbl) = method.sig.inputs()[0].sty {
                     let mutbl = match r_mutbl {
                         hir::MutImmutable => AutoBorrowMutability::Immutable,
@@ -2729,6 +2731,72 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                   args_no_rcvr, method.sig.variadic, tuple_arguments,
                                   self.tcx.hir().span_if_local(method.def_id));
         method.sig.output()
+    }
+
+    fn self_type_matches_expected_vid(
+        &self,
+        trait_ref: ty::PolyTraitRef<'tcx>,
+        expected_vid: ty::TyVid,
+    ) -> bool {
+        let self_ty = self.shallow_resolve(trait_ref.self_ty());
+        debug!(
+            "self_type_matches_expected_vid(trait_ref={:?}, self_ty={:?}, expected_vid={:?})",
+            trait_ref, self_ty, expected_vid
+        );
+        match self_ty.sty {
+            ty::Infer(ty::TyVar(found_vid)) => {
+                // FIXME: consider using `sub_root_var` here so we
+                // can see through subtyping.
+                let found_vid = self.root_var(found_vid);
+                debug!("self_type_matches_expected_vid - found_vid={:?}", found_vid);
+                expected_vid == found_vid
+            }
+            _ => false
+        }
+    }
+
+    fn obligations_for_self_ty<'b>(&'b self, self_ty: ty::TyVid)
+        -> impl Iterator<Item=(ty::PolyTraitRef<'tcx>, traits::PredicateObligation<'tcx>)>
+           + Captures<'gcx> + 'b
+    {
+        // FIXME: consider using `sub_root_var` here so we
+        // can see through subtyping.
+        let ty_var_root = self.root_var(self_ty);
+        debug!("obligations_for_self_ty: self_ty={:?} ty_var_root={:?} pending_obligations={:?}",
+               self_ty, ty_var_root,
+               self.fulfillment_cx.borrow().pending_obligations());
+
+        self.fulfillment_cx
+            .borrow()
+            .pending_obligations()
+            .into_iter()
+            .filter_map(move |obligation| match obligation.predicate {
+                ty::Predicate::Projection(ref data) =>
+                    Some((data.to_poly_trait_ref(self.tcx), obligation)),
+                ty::Predicate::Trait(ref data) =>
+                    Some((data.to_poly_trait_ref(), obligation)),
+                ty::Predicate::Subtype(..) => None,
+                ty::Predicate::RegionOutlives(..) => None,
+                ty::Predicate::TypeOutlives(..) => None,
+                ty::Predicate::WellFormed(..) => None,
+                ty::Predicate::ObjectSafe(..) => None,
+                ty::Predicate::ConstEvaluatable(..) => None,
+                // N.B., this predicate is created by breaking down a
+                // `ClosureType: FnFoo()` predicate, where
+                // `ClosureType` represents some `Closure`. It can't
+                // possibly be referring to the current closure,
+                // because we haven't produced the `Closure` for
+                // this closure yet; this is exactly why the other
+                // code is looking for a self type of a unresolved
+                // inference variable.
+                ty::Predicate::ClosureKind(..) => None,
+            }).filter(move |(tr, _)| self.self_type_matches_expected_vid(*tr, ty_var_root))
+    }
+
+    fn type_var_is_sized(&self, self_ty: ty::TyVid) -> bool {
+        self.obligations_for_self_ty(self_ty).any(|(tr, _)| {
+            Some(tr.def_id()) == self.tcx.lang_items().sized_trait()
+        })
     }
 
     /// Generic function that factors out common logic from function calls,
@@ -3296,9 +3364,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         // of error recovery.
                         self.write_field_index(expr.id, index);
                         if field.vis.is_accessible_from(def_scope, self.tcx) {
-                            let adjustments = autoderef.adjust_steps(needs);
+                            let adjustments = autoderef.adjust_steps(self, needs);
                             self.apply_adjustments(base, adjustments);
-                            autoderef.finalize();
+                            autoderef.finalize(self);
 
                             self.tcx.check_stability(field.did, Some(expr.id), expr.span);
                             return field_ty;
@@ -3311,9 +3379,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     if let Ok(index) = fstr.parse::<usize>() {
                         if fstr == index.to_string() {
                             if let Some(field_ty) = tys.get(index) {
-                                let adjustments = autoderef.adjust_steps(needs);
+                                let adjustments = autoderef.adjust_steps(self, needs);
                                 self.apply_adjustments(base, adjustments);
-                                autoderef.finalize();
+                                autoderef.finalize(self);
 
                                 self.write_field_index(expr.id, index);
                                 return field_ty;
@@ -3324,7 +3392,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 _ => {}
             }
         }
-        autoderef.unambiguous_final_ty();
+        autoderef.unambiguous_final_ty(self);
 
         if let Some((did, field_ty)) = private_candidate {
             let struct_path = self.tcx().item_path_str(did);
@@ -5371,6 +5439,22 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             enclosing_breakables.stack.pop().expect("missing breakable context")
         };
         (ctxt, result)
+    }
+
+    /// Instantiate a QueryResponse in a probe context, without a
+    /// good ObligationCause.
+    fn probe_instantiate_query_response(
+        &self,
+        span: Span,
+        original_values: &OriginalQueryValues<'tcx>,
+        query_result: &Canonical<'tcx, QueryResponse<'tcx, Ty<'tcx>>>,
+    ) -> InferResult<'tcx, Ty<'tcx>>
+    {
+        self.instantiate_query_response_and_region_obligations(
+            &traits::ObligationCause::misc(span, self.body_id),
+            self.param_env,
+            original_values,
+            query_result)
     }
 }
 
