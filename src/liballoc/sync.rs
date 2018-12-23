@@ -24,7 +24,7 @@ use core::fmt;
 use core::cmp::Ordering;
 use core::intrinsics::abort;
 use core::mem::{self, align_of_val, size_of_val};
-use core::ops::Deref;
+use core::ops::{Deref, Receiver};
 use core::ops::{CoerceUnsized, DispatchFromDyn};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
@@ -767,6 +767,9 @@ impl<T: ?Sized> Deref for Arc<T> {
     }
 }
 
+#[unstable(feature = "receiver_trait", issue = "0")]
+impl<T: ?Sized> Receiver for Arc<T> {}
+
 impl<T: Clone> Arc<T> {
     /// Makes a mutable reference into the given `Arc`.
     ///
@@ -952,6 +955,8 @@ unsafe impl<#[may_dangle] T: ?Sized> Drop for Arc<T> {
     /// drop(foo);    // Doesn't print anything
     /// drop(foo2);   // Prints "dropped!"
     /// ```
+    ///
+    /// [`Weak`]: ../../std/sync/struct.Weak.html
     #[inline]
     fn drop(&mut self) {
         // Because `fetch_sub` is already atomic, we do not need to synchronize
@@ -1219,10 +1224,11 @@ impl<T: ?Sized> Clone for Weak<T> {
 #[stable(feature = "downgraded_weak", since = "1.10.0")]
 impl<T> Default for Weak<T> {
     /// Constructs a new `Weak<T>`, without allocating memory.
-    /// Calling [`upgrade`][Weak::upgrade] on the return value always
+    /// Calling [`upgrade`] on the return value always
     /// gives [`None`].
     ///
     /// [`None`]: ../../std/option/enum.Option.html#variant.None
+    /// [`upgrade`]: ../../std/sync/struct.Weak.html#method.upgrade
     ///
     /// # Examples
     ///

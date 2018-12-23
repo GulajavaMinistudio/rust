@@ -253,7 +253,7 @@ use core::intrinsics::abort;
 use core::marker;
 use core::marker::{Unpin, Unsize, PhantomData};
 use core::mem::{self, align_of_val, forget, size_of_val};
-use core::ops::Deref;
+use core::ops::{Deref, Receiver};
 use core::ops::{CoerceUnsized, DispatchFromDyn};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
@@ -813,6 +813,9 @@ impl<T: ?Sized> Deref for Rc<T> {
     }
 }
 
+#[unstable(feature = "receiver_trait", issue = "0")]
+impl<T: ?Sized> Receiver for Rc<T> {}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 unsafe impl<#[may_dangle] T: ?Sized> Drop for Rc<T> {
     /// Drops the `Rc`.
@@ -840,6 +843,8 @@ unsafe impl<#[may_dangle] T: ?Sized> Drop for Rc<T> {
     /// drop(foo);    // Doesn't print anything
     /// drop(foo2);   // Prints "dropped!"
     /// ```
+    ///
+    /// [`Weak`]: ../../std/rc/struct.Weak.html
     fn drop(&mut self) {
         unsafe {
             self.dec_strong();
@@ -1419,9 +1424,10 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for Weak<T> {
 #[stable(feature = "downgraded_weak", since = "1.10.0")]
 impl<T> Default for Weak<T> {
     /// Constructs a new `Weak<T>`, allocating memory for `T` without initializing
-    /// it. Calling [`upgrade`][Weak::upgrade] on the return value always gives [`None`].
+    /// it. Calling [`upgrade`] on the return value always gives [`None`].
     ///
     /// [`None`]: ../../std/option/enum.Option.html
+    /// [`upgrade`]: ../../std/rc/struct.Weak.html#method.upgrade
     ///
     /// # Examples
     ///
