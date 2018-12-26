@@ -1,13 +1,3 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Optional values.
 //!
 //! Type [`Option`] represents an optional value: every [`Option`]
@@ -881,6 +871,48 @@ impl<T> Option<T> {
     #[stable(feature = "option_replace", since = "1.31.0")]
     pub fn replace(&mut self, value: T) -> Option<T> {
         mem::replace(self, Some(value))
+    }
+}
+
+impl<'a, T: Copy> Option<&'a T> {
+    /// Maps an `Option<&T>` to an `Option<T>` by copying the contents of the
+    /// option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(copied)]
+    ///
+    /// let x = 12;
+    /// let opt_x = Some(&x);
+    /// assert_eq!(opt_x, Some(&12));
+    /// let copied = opt_x.copied();
+    /// assert_eq!(copied, Some(12));
+    /// ```
+    #[unstable(feature = "copied", issue = "57126")]
+    pub fn copied(self) -> Option<T> {
+        self.map(|&t| t)
+    }
+}
+
+impl<'a, T: Copy> Option<&'a mut T> {
+    /// Maps an `Option<&mut T>` to an `Option<T>` by copying the contents of the
+    /// option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(copied)]
+    ///
+    /// let mut x = 12;
+    /// let opt_x = Some(&mut x);
+    /// assert_eq!(opt_x, Some(&mut 12));
+    /// let copied = opt_x.copied();
+    /// assert_eq!(copied, Some(12));
+    /// ```
+    #[unstable(feature = "copied", issue = "57126")]
+    pub fn copied(self) -> Option<T> {
+        self.map(|&mut t| t)
     }
 }
 
