@@ -248,7 +248,7 @@
 #![feature(const_cstr_unchecked)]
 #![feature(core_intrinsics)]
 #![feature(dropck_eyepatch)]
-#![feature(duration_as_u128)]
+#![cfg_attr(stage0, feature(duration_as_u128))]
 #![feature(exact_size_is_empty)]
 #![feature(external_doc)]
 #![feature(fixed_size_array)]
@@ -304,7 +304,8 @@
 #![feature(alloc_layout_extra)]
 #![feature(maybe_uninit)]
 #![cfg_attr(target_env = "sgx", feature(global_asm, range_contains, slice_index_methods,
-                                        decl_macro, coerce_unsized, sgx_platform))]
+                                        decl_macro, coerce_unsized, sgx_platform,
+                                        min_const_unsafe_fn))]
 
 #![default_lib_allocator]
 
