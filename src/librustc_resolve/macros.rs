@@ -1,6 +1,6 @@
 use {AmbiguityError, AmbiguityKind, AmbiguityErrorMisc};
 use {CrateLint, Resolver, ResolutionError, ScopeSet, Weak};
-use {Module, NameBinding, NameBindingKind, PathResult, Segment, ToNameBinding};
+use {Module, ModuleKind, NameBinding, NameBindingKind, PathResult, Segment, ToNameBinding};
 use {is_known_tool, resolve_error};
 use ModuleOrUniformRoot;
 use Namespace::*;
@@ -15,12 +15,13 @@ use syntax::ast::{self, Ident};
 use syntax::attr;
 use syntax::errors::DiagnosticBuilder;
 use syntax::ext::base::{self, Determinacy};
-use syntax::ext::base::{MacroKind, SyntaxExtension};
+use syntax::ext::base::{Annotatable, MacroKind, SyntaxExtension};
 use syntax::ext::expand::{AstFragment, Invocation, InvocationKind};
 use syntax::ext::hygiene::{self, Mark};
 use syntax::ext::tt::macro_rules;
 use syntax::feature_gate::{feature_err, is_builtin_attr_name, GateIssue};
 use syntax::symbol::{Symbol, keywords};
+use syntax::visit::Visitor;
 use syntax::util::lev_distance::find_best_match_for_name;
 use syntax_pos::{Span, DUMMY_SP};
 use errors::Applicability;
@@ -126,6 +127,26 @@ impl<'a> base::Resolver for Resolver<'a> {
         mark
     }
 
+    fn resolve_dollar_crates(&mut self, annotatable: &Annotatable) {
+        pub struct ResolveDollarCrates<'a, 'b: 'a> {
+            pub resolver: &'a mut Resolver<'b>,
+        }
+        impl<'a> Visitor<'a> for ResolveDollarCrates<'a, '_> {
+            fn visit_ident(&mut self, ident: Ident) {
+                if ident.name == keywords::DollarCrate.name() {
+                    let name = match self.resolver.resolve_crate_root(ident).kind {
+                        ModuleKind::Def(_, name) if name != keywords::Invalid.name() => name,
+                        _ => keywords::Crate.name(),
+                    };
+                    ident.span.ctxt().set_dollar_crate_name(name);
+                }
+            }
+            fn visit_mac(&mut self, _: &ast::Mac) {}
+        }
+
+        annotatable.visit_with(&mut ResolveDollarCrates { resolver: self });
+    }
+
     fn visit_ast_fragment_with_placeholders(&mut self, mark: Mark, fragment: &AstFragment,
                                             derives: &[Mark]) {
         let invocation = self.invocations[&mark];
@@ -182,7 +203,14 @@ impl<'a> base::Resolver for Resolver<'a> {
         };
 
         let parent_scope = self.invoc_parent_scope(invoc_id, derives_in_scope);
-        let (def, ext) = self.resolve_macro_to_def(path, kind, &parent_scope, true, force)?;
+        let (def, ext) = match self.resolve_macro_to_def(path, kind, &parent_scope, true, force) {
+            Ok((def, ext)) => (def, ext),
+            Err(Determinacy::Determined) if kind == MacroKind::Attr => {
+                // Replace unresolved attributes with used inert attributes for better recovery.
+                return Ok(Some(Lrc::new(SyntaxExtension::NonMacroAttr { mark_used: true })));
+            }
+            Err(determinacy) => return Err(determinacy),
+        };
 
         if let Def::Macro(def_id, _) = def {
             if after_derive {
@@ -337,7 +365,6 @@ impl<'a> Resolver<'a> {
                 }
                 PathResult::Indeterminate if !force => return Err(Determinacy::Undetermined),
                 PathResult::NonModule(..) | PathResult::Indeterminate | PathResult::Failed(..) => {
-                    self.found_unresolved_macro = true;
                     Err(Determinacy::Determined)
                 }
                 PathResult::Module(..) => unreachable!(),
@@ -353,10 +380,8 @@ impl<'a> Resolver<'a> {
             let binding = self.early_resolve_ident_in_lexical_scope(
                 path[0].ident, ScopeSet::Macro(kind), parent_scope, false, force, path_span
             );
-            match binding {
-                Ok(..) => {}
-                Err(Determinacy::Determined) => self.found_unresolved_macro = true,
-                Err(Determinacy::Undetermined) => return Err(Determinacy::Undetermined),
+            if let Err(Determinacy::Undetermined) = binding {
+                return Err(Determinacy::Undetermined);
             }
 
             if trace {
@@ -858,14 +883,23 @@ impl<'a> Resolver<'a> {
     pub fn finalize_current_module_macro_resolutions(&mut self) {
         let module = self.current_module;
 
-        let check_consistency = |this: &mut Self, path: &[Segment], span,
-                                 kind: MacroKind, initial_def, def| {
+        let check_consistency = |this: &mut Self, path: &[Segment], span, kind: MacroKind,
+                                 initial_def: Option<Def>, def: Def| {
             if let Some(initial_def) = initial_def {
                 if def != initial_def && def != Def::Err && this.ambiguity_errors.is_empty() {
                     // Make sure compilation does not succeed if preferred macro resolution
                     // has changed after the macro had been expanded. In theory all such
                     // situations should be reported as ambiguity errors, so this is a bug.
-                    span_bug!(span, "inconsistent resolution for a macro");
+                    if initial_def == Def::NonMacroAttr(NonMacroAttrKind::Custom) {
+                        // Yeah, legacy custom attributes are implemented using forced resolution
+                        // (which is a best effort error recovery tool, basically), so we can't
+                        // promise their resolution won't change later.
+                        let msg = format!("inconsistent resolution for a macro: first {}, then {}",
+                                          initial_def.kind_name(), def.kind_name());
+                        this.session.span_err(span, &msg);
+                    } else {
+                        span_bug!(span, "inconsistent resolution for a macro");
+                    }
                 }
             } else {
                 // It's possible that the macro was unresolved (indeterminate) and silently

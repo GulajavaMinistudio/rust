@@ -666,7 +666,7 @@ impl<'a, 'b> Context<'a, 'b> {
                     "X" => "UpperHex",
                     _ => {
                         ecx.span_err(sp, &format!("unknown format trait `{}`", *tyname));
-                        "Dummy"
+                        return DummyResult::raw_expr(sp, true);
                     }
                 }
             }
@@ -713,7 +713,6 @@ pub fn expand_format_args_nl<'cx>(
                                        sp,
                                        feature_gate::GateIssue::Language,
                                        feature_gate::EXPLAIN_FORMAT_ARGS_NL);
-        return base::DummyResult::expr(sp);
     }
     sp = sp.apply_mark(ecx.current_expansion.mark);
     match parse_args(ecx, sp, tts) {
@@ -761,7 +760,7 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
                 Applicability::MaybeIncorrect,
             );
             err.emit();
-            return DummyResult::raw_expr(sp);
+            return DummyResult::raw_expr(sp, true);
         }
     };
 
@@ -857,11 +856,13 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
             e.span_label(sp, label);
         }
         e.emit();
-        return DummyResult::raw_expr(sp);
+        return DummyResult::raw_expr(sp, true);
     }
 
     let arg_spans = parser.arg_places.iter()
-        .map(|&(start, end)| fmt.span.from_inner_byte_pos(start, end))
+        .map(|&(parse::SpanIndex(start), parse::SpanIndex(end))| {
+            fmt.span.from_inner_byte_pos(start, end)
+        })
         .collect();
 
     let mut cx = Context {
@@ -955,13 +956,18 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt,
         let mut diag = {
             if errs_len == 1 {
                 let (sp, msg) = errs.into_iter().next().unwrap();
-                cx.ecx.struct_span_err(sp, msg)
+                let mut diag = cx.ecx.struct_span_err(sp, msg);
+                diag.span_label(sp, msg);
+                diag
             } else {
                 let mut diag = cx.ecx.struct_span_err(
                     errs.iter().map(|&(sp, _)| sp).collect::<Vec<Span>>(),
                     "multiple unused formatting arguments",
                 );
                 diag.span_label(cx.fmtsp, "multiple missing formatting specifiers");
+                for (sp, msg) in errs {
+                    diag.span_label(sp, msg);
+                }
                 diag
             }
         };
