@@ -304,7 +304,7 @@ impl<'a> Resolver<'a> {
                     let features = self.session.features_untracked();
                     if attr_kind == NonMacroAttrKind::Custom {
                         assert!(path.segments.len() == 1);
-                        let name = path.segments[0].ident.name.as_str();
+                        let name = path.segments[0].ident.as_str();
                         if name.starts_with("rustc_") {
                             if !features.rustc_attrs {
                                 let msg = "unless otherwise specified, attributes with the prefix \
@@ -929,7 +929,7 @@ impl<'a> Resolver<'a> {
                     let def = path_res.base_def();
                     check_consistency(self, &path, path_span, kind, initial_def, def);
                 }
-                path_res @ PathResult::NonModule(..) | path_res @  PathResult::Failed(..) => {
+                path_res @ PathResult::NonModule(..) | path_res @ PathResult::Failed(..) => {
                     let (span, msg) = if let PathResult::Failed(span, msg, ..) = path_res {
                         (span, msg)
                     } else {

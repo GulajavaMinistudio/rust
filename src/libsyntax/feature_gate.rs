@@ -111,7 +111,7 @@ declare_features! (
     (active, concat_idents, "1.0.0", Some(29599), None),
     (active, link_args, "1.0.0", Some(29596), None),
     (active, log_syntax, "1.0.0", Some(29598), None),
-    (active, non_ascii_idents, "1.0.0", Some(28979), None),
+    (active, non_ascii_idents, "1.0.0", Some(55467), None),
     (active, plugin_registrar, "1.0.0", Some(29597), None),
     (active, thread_local, "1.0.0", Some(29594), None),
     (active, trace_macros, "1.0.0", Some(29598), None),
@@ -471,11 +471,14 @@ declare_features! (
     // Allows `const _: TYPE = VALUE`.
     (active, underscore_const_names, "1.31.0", Some(54912), None),
 
-    // `reason = ` in lint attributes and `expect` lint attribute
+    // Adds `reason` and `expect` lint attributes.
     (active, lint_reasons, "1.31.0", Some(54503), None),
 
     // `extern crate self as foo;` puts local crate root into extern prelude under name `foo`.
     (active, extern_crate_self, "1.31.0", Some(56409), None),
+
+    // Allows paths to enum variants on type aliases.
+    (active, type_alias_enum_variants, "1.31.0", Some(49683), None),
 );
 
 declare_features! (
