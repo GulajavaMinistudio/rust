@@ -418,9 +418,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     Some(format!("[{}]", self.tcx.type_of(def.did).to_string())),
                 ));
                 let tcx = self.tcx;
-                if let Some(len) = len.val.try_to_scalar().and_then(|scalar| {
-                    scalar.to_usize(&tcx).ok()
-                }) {
+                if let Some(len) = len.assert_usize(tcx) {
                     flags.push((
                         "_Self".to_owned(),
                         Some(format!("[{}; {}]", self.tcx.type_of(def.did).to_string(), len)),
@@ -728,12 +726,9 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     }
 
                     ty::Predicate::RegionOutlives(ref predicate) => {
-                        let predicate = self.resolve_type_vars_if_possible(predicate);
-                        let err = self.region_outlives_predicate(&obligation.cause,
-                                                                 &predicate).err().unwrap();
-                        struct_span_err!(self.tcx.sess, span, E0279,
-                            "the requirement `{}` is not satisfied (`{}`)",
-                            predicate, err)
+                        // These errors should show up as region
+                        // inference failures.
+                        panic!("region outlives {:?} failed", predicate);
                     }
 
                     ty::Predicate::Projection(..) | ty::Predicate::TypeOutlives(..) => {

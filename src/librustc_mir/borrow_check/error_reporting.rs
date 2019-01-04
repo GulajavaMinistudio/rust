@@ -12,7 +12,7 @@ use rustc::mir::{
     TerminatorKind, VarBindingForm,
 };
 use rustc::ty::{self, DefIdTree};
-use rustc::util::ppaux::with_highlight_region_for_bound_region;
+use rustc::util::ppaux::RegionHighlightMode;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::sync::Lrc;
@@ -1380,7 +1380,10 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         );
         if let TerminatorKind::Call {
             func: Operand::Constant(box Constant {
-                literal: ty::Const { ty: &ty::TyS { sty: ty::TyKind::FnDef(id, _), ..  }, ..  },
+                literal: ty::LazyConst::Evaluated(ty::Const {
+                    ty: &ty::TyS { sty: ty::TyKind::FnDef(id, _), ..  },
+                    ..
+                }),
                 ..
             }),
             args,
@@ -2177,7 +2180,7 @@ impl<'tcx> AnnotatedBorrowFnSignature<'tcx> {
                 ty::RegionKind::RePlaceholder(ty::PlaceholderRegion { name: br, .. }),
                 _,
                 _,
-            ) => with_highlight_region_for_bound_region(*br, counter, || ty.to_string()),
+            ) => RegionHighlightMode::highlighting_bound_region(*br, counter, || ty.to_string()),
             _ => ty.to_string(),
         }
     }
@@ -2189,7 +2192,11 @@ impl<'tcx> AnnotatedBorrowFnSignature<'tcx> {
             ty::TyKind::Ref(region, _, _) => match region {
                 ty::RegionKind::ReLateBound(_, br)
                 | ty::RegionKind::RePlaceholder(ty::PlaceholderRegion { name: br, .. }) => {
-                    with_highlight_region_for_bound_region(*br, counter, || region.to_string())
+                    RegionHighlightMode::highlighting_bound_region(
+                        *br,
+                        counter,
+                        || region.to_string(),
+                    )
                 }
                 _ => region.to_string(),
             },

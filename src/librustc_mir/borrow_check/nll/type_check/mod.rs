@@ -382,6 +382,11 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
             constant, location
         );
 
+        let literal = match constant.literal {
+            ty::LazyConst::Evaluated(lit) => lit,
+            ty::LazyConst::Unevaluated(..) => return,
+        };
+
         // FIXME(#46702) -- We need some way to get the predicates
         // associated with the "pre-evaluated" form of the
         // constant. For example, consider that the constant
@@ -390,7 +395,7 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
         // constraints on `'a` and `'b`. These constraints
         // would be lost if we just look at the normalized
         // value.
-        if let ty::FnDef(def_id, substs) = constant.literal.ty.sty {
+        if let ty::FnDef(def_id, substs) = literal.ty.sty {
             let tcx = self.tcx();
             let type_checker = &mut self.cx;
 
@@ -411,10 +416,10 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
             );
         }
 
-        debug!("sanitize_constant: expected_ty={:?}", constant.literal.ty);
+        debug!("sanitize_constant: expected_ty={:?}", literal.ty);
 
         if let Err(terr) = self.cx.eq_types(
-            constant.literal.ty,
+            literal.ty,
             constant.ty,
             location.to_locations(),
             ConstraintCategory::Boring,
@@ -424,7 +429,7 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
                 constant,
                 "constant {:?} should have type {:?} but has {:?} ({:?})",
                 constant,
-                constant.literal.ty,
+                literal.ty,
                 constant.ty,
                 terr,
             );
@@ -503,13 +508,17 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
                 substs: tcx.mk_substs_trait(place_ty.to_ty(tcx), &[]),
             };
 
-            // In order to have a Copy operand, the type T of the value must be Copy. Note that we
-            // prove that T: Copy, rather than using the type_moves_by_default test. This is
-            // important because type_moves_by_default ignores the resulting region obligations and
-            // assumes they pass. This can result in bounds from Copy impls being unsoundly ignored
-            // (e.g., #29149). Note that we decide to use Copy before knowing whether the bounds
-            // fully apply: in effect, the rule is that if a value of some type could implement
-            // Copy, then it must.
+            // In order to have a Copy operand, the type T of the
+            // value must be Copy. Note that we prove that T: Copy,
+            // rather than using the `is_copy_modulo_regions`
+            // test. This is important because
+            // `is_copy_modulo_regions` ignores the resulting region
+            // obligations and assumes they pass. This can result in
+            // bounds from Copy impls being unsoundly ignored (e.g.,
+            // #29149). Note that we decide to use Copy before knowing
+            // whether the bounds fully apply: in effect, the rule is
+            // that if a value of some type could implement Copy, then
+            // it must.
             self.cx.prove_trait_ref(
                 trait_ref,
                 location.to_locations(),
