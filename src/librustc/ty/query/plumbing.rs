@@ -974,7 +974,7 @@ macro_rules! define_queries_inner {
                         // HACK(eddyb) it's possible crates may be loaded after
                         // the query engine is created, and because crate loading
                         // is not yet integrated with the query engine, such crates
-                        // would be be missing appropriate entries in `providers`.
+                        // would be missing appropriate entries in `providers`.
                         .unwrap_or(&tcx.queries.fallback_extern_providers)
                         .$name;
                     provider(tcx.global_tcx(), key)
@@ -1275,6 +1275,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::AdtDefOfItem => { force!(adt_def, def_id!()); }
         DepKind::ImplTraitRef => { force!(impl_trait_ref, def_id!()); }
         DepKind::ImplPolarity => { force!(impl_polarity, def_id!()); }
+        DepKind::Issue33140SelfTy => { force!(issue33140_self_ty, def_id!()); }
         DepKind::FnSignature => { force!(fn_sig, def_id!()); }
         DepKind::CoerceUnsizedInfo => { force!(coerce_unsized_info, def_id!()); }
         DepKind::ItemVariances => { force!(variances_of, def_id!()); }

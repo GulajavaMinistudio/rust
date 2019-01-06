@@ -11,7 +11,6 @@ use traits::{self, Normalized, SelectionContext, Obligation, ObligationCause};
 use traits::IntercrateMode;
 use traits::select::IntercrateAmbiguityCause;
 use ty::{self, Ty, TyCtxt};
-use ty::relate::TraitObjectMode;
 use ty::fold::TypeFoldable;
 use ty::subst::Subst;
 
@@ -55,7 +54,6 @@ pub fn overlapping_impls<'gcx, F1, F2, R>(
     impl1_def_id: DefId,
     impl2_def_id: DefId,
     intercrate_mode: IntercrateMode,
-    trait_object_mode: TraitObjectMode,
     on_overlap: F1,
     no_overlap: F2,
 ) -> R
@@ -66,14 +64,12 @@ where
     debug!("overlapping_impls(\
            impl1_def_id={:?}, \
            impl2_def_id={:?},
-           intercrate_mode={:?},
-           trait_object_mode={:?})",
+           intercrate_mode={:?})",
            impl1_def_id,
            impl2_def_id,
-           intercrate_mode,
-           trait_object_mode);
+           intercrate_mode);
 
-    let overlaps = tcx.infer_ctxt().with_trait_object_mode(trait_object_mode).enter(|infcx| {
+    let overlaps = tcx.infer_ctxt().enter(|infcx| {
         let selcx = &mut SelectionContext::intercrate(&infcx, intercrate_mode);
         overlap(selcx, impl1_def_id, impl2_def_id).is_some()
     });
@@ -85,7 +81,7 @@ where
     // In the case where we detect an error, run the check again, but
     // this time tracking intercrate ambuiguity causes for better
     // diagnostics. (These take time and can lead to false errors.)
-    tcx.infer_ctxt().with_trait_object_mode(trait_object_mode).enter(|infcx| {
+    tcx.infer_ctxt().enter(|infcx| {
         let selcx = &mut SelectionContext::intercrate(&infcx, intercrate_mode);
         selcx.enable_tracking_intercrate_ambiguity_causes();
         on_overlap(overlap(selcx, impl1_def_id, impl2_def_id).unwrap())
@@ -371,43 +367,68 @@ fn orphan_check_trait_ref<'tcx>(tcx: TyCtxt<'_, '_, '_>,
              trait_ref);
     }
 
-    // First, create an ordered iterator over all the type parameters to the trait, with the self
-    // type appearing first.
-    // Find the first input type that either references a type parameter OR
-    // some local type.
-    for input_ty in trait_ref.input_types() {
-        if ty_is_local(tcx, input_ty, in_crate) {
-            debug!("orphan_check_trait_ref: ty_is_local `{:?}`", input_ty);
+    if tcx.features().re_rebalance_coherence {
+        // Given impl<P1..=Pn> Trait<T1..=Tn> for T0, an impl is valid only
+        // if at least one of the following is true:
+        //
+        // - Trait is a local trait
+        // (already checked in orphan_check prior to calling this function)
+        // - All of
+        //     - At least one of the types T0..=Tn must be a local type.
+        //      Let Ti be the first such type.
+        //     - No uncovered type parameters P1..=Pn may appear in T0..Ti (excluding Ti)
+        //
+        for input_ty in trait_ref.input_types() {
+            debug!("orphan_check_trait_ref: check ty `{:?}`", input_ty);
+            if ty_is_local(tcx, input_ty, in_crate) {
+                debug!("orphan_check_trait_ref: ty_is_local `{:?}`", input_ty);
+                return Ok(());
+            } else if let ty::Param(_) = input_ty.sty {
+                debug!("orphan_check_trait_ref: uncovered ty: `{:?}`", input_ty);
+                return Err(OrphanCheckErr::UncoveredTy(input_ty))
+            }
+        }
+        // If we exit above loop, never found a local type.
+        debug!("orphan_check_trait_ref: no local type");
+        Err(OrphanCheckErr::NoLocalInputType)
+    } else {
+        // First, create an ordered iterator over all the type
+        // parameters to the trait, with the self type appearing
+        // first.  Find the first input type that either references a
+        // type parameter OR some local type.
+        for input_ty in trait_ref.input_types() {
+            if ty_is_local(tcx, input_ty, in_crate) {
+                debug!("orphan_check_trait_ref: ty_is_local `{:?}`", input_ty);
 
-            // First local input type. Check that there are no
-            // uncovered type parameters.
-            let uncovered_tys = uncovered_tys(tcx, input_ty, in_crate);
-            for uncovered_ty in uncovered_tys {
-                if let Some(param) = uncovered_ty.walk()
-                    .find(|t| is_possibly_remote_type(t, in_crate))
-                {
-                    debug!("orphan_check_trait_ref: uncovered type `{:?}`", param);
-                    return Err(OrphanCheckErr::UncoveredTy(param));
+                // First local input type. Check that there are no
+                // uncovered type parameters.
+                let uncovered_tys = uncovered_tys(tcx, input_ty, in_crate);
+                for uncovered_ty in uncovered_tys {
+                    if let Some(param) = uncovered_ty.walk()
+                        .find(|t| is_possibly_remote_type(t, in_crate))
+                    {
+                        debug!("orphan_check_trait_ref: uncovered type `{:?}`", param);
+                        return Err(OrphanCheckErr::UncoveredTy(param));
+                    }
                 }
+
+                // OK, found local type, all prior types upheld invariant.
+                return Ok(());
             }
 
-            // OK, found local type, all prior types upheld invariant.
-            return Ok(());
+            // Otherwise, enforce invariant that there are no type
+            // parameters reachable.
+            if let Some(param) = input_ty.walk()
+                .find(|t| is_possibly_remote_type(t, in_crate))
+            {
+                debug!("orphan_check_trait_ref: uncovered type `{:?}`", param);
+                return Err(OrphanCheckErr::UncoveredTy(param));
+            }
         }
-
-        // Otherwise, enforce invariant that there are no type
-        // parameters reachable.
-        if let Some(param) = input_ty.walk()
-            .find(|t| is_possibly_remote_type(t, in_crate))
-        {
-            debug!("orphan_check_trait_ref: uncovered type `{:?}`", param);
-            return Err(OrphanCheckErr::UncoveredTy(param));
-        }
+        // If we exit above loop, never found a local type.
+        debug!("orphan_check_trait_ref: no local type");
+        Err(OrphanCheckErr::NoLocalInputType)
     }
-
-    // If we exit above loop, never found a local type.
-    debug!("orphan_check_trait_ref: no local type");
-    return Err(OrphanCheckErr::NoLocalInputType);
 }
 
 fn uncovered_tys<'tcx>(tcx: TyCtxt<'_, '_, '_>, ty: Ty<'tcx>, in_crate: InCrate)
@@ -485,7 +506,13 @@ fn ty_is_local_constructor(ty: Ty<'_>, in_crate: InCrate) -> bool {
         ty::Adt(def, _) => def_id_is_local(def.did, in_crate),
         ty::Foreign(did) => def_id_is_local(did, in_crate),
 
-        ty::Dynamic(ref tt, ..) => def_id_is_local(tt.principal().def_id(), in_crate),
+        ty::Dynamic(ref tt, ..) => {
+            if let Some(principal) = tt.principal() {
+                def_id_is_local(principal.def_id(), in_crate)
+            } else {
+                false
+            }
+        }
 
         ty::Error => true,
 
