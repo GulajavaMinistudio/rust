@@ -402,14 +402,15 @@ pub struct CompileController<'a> {
 
     /// Allows overriding default rustc query providers,
     /// after `default_provide` has installed them.
-    pub provide: Box<dyn Fn(&mut ty::query::Providers) + 'a>,
+    pub provide: Box<dyn Fn(&mut ty::query::Providers) + 'a + sync::Send>,
     /// Same as `provide`, but only for non-local crates,
     /// applied after `default_provide_extern`.
-    pub provide_extern: Box<dyn Fn(&mut ty::query::Providers) + 'a>,
+    pub provide_extern: Box<dyn Fn(&mut ty::query::Providers) + 'a + sync::Send>,
 }
 
 impl<'a> CompileController<'a> {
     pub fn basic() -> CompileController<'a> {
+        sync::assert_send::<Self>();
         CompileController {
             after_parse: PhaseController::basic(),
             after_expand: PhaseController::basic(),
@@ -499,7 +500,7 @@ pub struct PhaseController<'a> {
     // If true then the compiler will try to run the callback even if the phase
     // ends with an error. Note that this is not always possible.
     pub run_callback_on_error: bool,
-    pub callback: Box<dyn Fn(&mut CompileState) + 'a>,
+    pub callback: Box<dyn Fn(&mut CompileState) + 'a + sync::Send>,
 }
 
 impl<'a> PhaseController<'a> {
@@ -1098,23 +1099,20 @@ where
         ast_validation::check_crate(sess, &krate)
     });
 
-    time(sess, "name resolution", || -> CompileResult {
+    time(sess, "name resolution", || {
         resolver.resolve_crate(&krate);
-        Ok(())
-    })?;
+    });
 
     // Needs to go *after* expansion to be able to check the results of macro expansion.
     time(sess, "complete gated feature checking", || {
-        sess.track_errors(|| {
-            syntax::feature_gate::check_crate(
-                &krate,
-                &sess.parse_sess,
-                &sess.features_untracked(),
-                &attributes,
-                sess.opts.unstable_features,
-            );
-        })
-    })?;
+        syntax::feature_gate::check_crate(
+            &krate,
+            &sess.parse_sess,
+            &sess.features_untracked(),
+            &attributes,
+            sess.opts.unstable_features,
+        );
+    });
 
     // Lower ast -> hir.
     // First, we need to collect the dep_graph.
