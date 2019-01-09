@@ -1248,7 +1248,11 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
         sync::assert_send_val(&gcx);
 
-        tls::enter_global(gcx, f)
+        let r = tls::enter_global(gcx, f);
+
+        gcx.queries.record_computed_queries(s);
+
+        r
     }
 
     pub fn consider_optimizing<T: Fn() -> String>(&self, msg: T) -> bool {
@@ -1670,7 +1674,7 @@ impl<'gcx> GlobalCtxt<'gcx> {
                 tcx,
                 query: icx.query.clone(),
                 layout_depth: icx.layout_depth,
-                task: icx.task,
+                task_deps: icx.task_deps,
             };
             ty::tls::enter_context(&new_icx, |_| {
                 f(tcx)
@@ -1778,7 +1782,7 @@ pub mod tls {
     use errors::{Diagnostic, TRACK_DIAGNOSTICS};
     use rustc_data_structures::OnDrop;
     use rustc_data_structures::sync::{self, Lrc, Lock};
-    use dep_graph::OpenTask;
+    use dep_graph::TaskDeps;
 
     #[cfg(not(parallel_queries))]
     use std::cell::Cell;
@@ -1806,7 +1810,7 @@ pub mod tls {
 
         /// The current dep graph task. This is used to add dependencies to queries
         /// when executing them
-        pub task: &'a OpenTask,
+        pub task_deps: Option<&'a Lock<TaskDeps>>,
     }
 
     /// Sets Rayon's thread local variable which is preserved for Rayon jobs
@@ -1935,7 +1939,7 @@ pub mod tls {
                 tcx,
                 query: None,
                 layout_depth: 0,
-                task: &OpenTask::Ignore,
+                task_deps: None,
             };
             enter_context(&icx, |_| {
                 f(tcx)
@@ -1965,7 +1969,7 @@ pub mod tls {
             query: None,
             tcx,
             layout_depth: 0,
-            task: &OpenTask::Ignore,
+            task_deps: None,
         };
         enter_context(&icx, |_| f(tcx))
     }
