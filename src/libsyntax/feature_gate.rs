@@ -193,9 +193,6 @@ declare_features! (
     // Allows the definition of `const` functions with some advanced features.
     (active, const_fn, "1.2.0", Some(24111), None),
 
-    // Allows let bindings and destructuring in `const` functions and constants.
-    (active, const_let, "1.22.1", Some(48821), None),
-
     // Allows accessing fields of unions inside `const` functions.
     (active, const_fn_union, "1.27.0", Some(51909), None),
 
@@ -384,9 +381,6 @@ declare_features! (
     // Infer static outlives requirements (RFC 2093).
     (active, infer_static_outlives_requirements, "1.26.0", Some(54185), None),
 
-    // Multiple patterns with `|` in `if let` and `while let`.
-    (active, if_while_or_patterns, "1.26.0", Some(48215), None),
-
     // Allows macro invocations in `extern {}` blocks.
     (active, macros_in_extern, "1.27.0", Some(49476), None),
 
@@ -414,9 +408,6 @@ declare_features! (
     // `#[doc(alias = "...")]`
     (active, doc_alias, "1.27.0", Some(50146), None),
 
-    // Allows irrefutable patterns in `if let` and `while let` statements (RFC 2086).
-    (active, irrefutable_let_patterns, "1.27.0", Some(44495), None),
-
     // inconsistent bounds in where clauses
     (active, trivial_bounds, "1.28.0", Some(48214), None),
 
@@ -442,9 +433,6 @@ declare_features! (
 
     // support for arbitrary delimited token streams in non-macro attributes
     (active, unrestricted_attribute_tokens, "1.30.0", Some(55208), None),
-
-    // Allows `use x::y;` to resolve through `self::x`, not just `::x`.
-    (active, uniform_paths, "1.30.0", Some(53130), None),
 
     // Allows unsized rvalues at arguments and parameters.
     (active, unsized_locals, "1.30.0", Some(48055), None),
@@ -684,10 +672,20 @@ declare_features! (
     (accepted, underscore_imports, "1.33.0", Some(48216), None),
     // Allows `#[repr(packed(N))]` attribute on structs.
     (accepted, repr_packed, "1.33.0", Some(33158), None),
+    // Allows irrefutable patterns in `if let` and `while let` statements (RFC 2086).
+    (accepted, irrefutable_let_patterns, "1.33.0", Some(44495), None),
     // Allows calling `const unsafe fn` inside `unsafe` blocks in `const fn` functions.
     (accepted, min_const_unsafe_fn, "1.33.0", Some(55607), None),
+    // Allows let bindings, assignments and destructuring in `const` functions and constants.
+    // As long as control flow is not implemented in const eval, `&&` and `||` may not be used
+    // at the same time as let bindings.
+    (accepted, const_let, "1.33.0", Some(48821), None),
     // `#[cfg_attr(predicate, multiple, attributes, here)]`
     (accepted, cfg_attr_multi, "1.33.0", Some(54881), None),
+    // Top level or-patterns (`p | q`) in `if let` and `while let`.
+    (accepted, if_while_or_patterns, "1.33.0", Some(48215), None),
+    // Allows `use x::y;` to search `x` in the current scope.
+    (accepted, uniform_paths, "1.32.0", Some(53130), None),
 );
 
 // If you change this, please modify `src/doc/unstable-book` as well. You must
@@ -1700,12 +1698,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             }
             ast::ExprKind::TryBlock(_) => {
                 gate_feature_post!(&self, try_blocks, e.span, "`try` expression is experimental");
-            }
-            ast::ExprKind::IfLet(ref pats, ..) | ast::ExprKind::WhileLet(ref pats, ..) => {
-                if pats.len() > 1 {
-                    gate_feature_post!(&self, if_while_or_patterns, e.span,
-                                    "multiple patterns in `if let` and `while let` are unstable");
-                }
             }
             ast::ExprKind::Block(_, opt_label) => {
                 if let Some(label) = opt_label {
