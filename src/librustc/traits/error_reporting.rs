@@ -1444,15 +1444,15 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         match *cause_code {
             ObligationCauseCode::ExprAssignable |
             ObligationCauseCode::MatchExpressionArm { .. } |
-            ObligationCauseCode::IfExpression |
+            ObligationCauseCode::MatchExpressionArmPattern { .. } |
+            ObligationCauseCode::IfExpression { .. } |
             ObligationCauseCode::IfExpressionWithNoElse |
             ObligationCauseCode::MainFunctionType |
             ObligationCauseCode::StartFunctionType |
             ObligationCauseCode::IntrinsicType |
             ObligationCauseCode::MethodReceiver |
             ObligationCauseCode::ReturnNoExpression |
-            ObligationCauseCode::MiscObligation => {
-            }
+            ObligationCauseCode::MiscObligation => {}
             ObligationCauseCode::SliceOrArrayElem => {
                 err.note("slice and array elements must have `Sized` type");
             }
