@@ -3369,180 +3369,6 @@ extern "platform-intrinsic" {
 ```
 "##,
 
-E0440: r##"
-A platform-specific intrinsic function has the wrong number of type
-parameters. Erroneous code example:
-
-```compile_fail,E0440
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct f64x2(f64, f64);
-
-extern "platform-intrinsic" {
-    fn x86_mm_movemask_pd<T>(x: f64x2) -> i32;
-    // error: platform-specific intrinsic has wrong number of type
-    //        parameters
-}
-```
-
-Please refer to the function declaration to see if it corresponds
-with yours. Example:
-
-```
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct f64x2(f64, f64);
-
-extern "platform-intrinsic" {
-    fn x86_mm_movemask_pd(x: f64x2) -> i32;
-}
-```
-"##,
-
-E0441: r##"
-An unknown platform-specific intrinsic function was used. Erroneous
-code example:
-
-```compile_fail,E0441
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct i16x8(i16, i16, i16, i16, i16, i16, i16, i16);
-
-extern "platform-intrinsic" {
-    fn x86_mm_adds_ep16(x: i16x8, y: i16x8) -> i16x8;
-    // error: unrecognized platform-specific intrinsic function
-}
-```
-
-Please verify that the function name wasn't misspelled, and ensure
-that it is declared in the rust source code (in the file
-src/librustc_platform_intrinsics/x86.rs). Example:
-
-```
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct i16x8(i16, i16, i16, i16, i16, i16, i16, i16);
-
-extern "platform-intrinsic" {
-    fn x86_mm_adds_epi16(x: i16x8, y: i16x8) -> i16x8; // ok!
-}
-```
-"##,
-
-E0442: r##"
-Intrinsic argument(s) and/or return value have the wrong type.
-Erroneous code example:
-
-```compile_fail,E0442
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct i8x16(i8, i8, i8, i8, i8, i8, i8, i8,
-             i8, i8, i8, i8, i8, i8, i8, i8);
-#[repr(simd)]
-struct i32x4(i32, i32, i32, i32);
-#[repr(simd)]
-struct i64x2(i64, i64);
-
-extern "platform-intrinsic" {
-    fn x86_mm_adds_epi16(x: i8x16, y: i32x4) -> i64x2;
-    // error: intrinsic arguments/return value have wrong type
-}
-```
-
-To fix this error, please refer to the function declaration to give
-it the awaited types. Example:
-
-```
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct i16x8(i16, i16, i16, i16, i16, i16, i16, i16);
-
-extern "platform-intrinsic" {
-    fn x86_mm_adds_epi16(x: i16x8, y: i16x8) -> i16x8; // ok!
-}
-```
-"##,
-
-E0443: r##"
-Intrinsic argument(s) and/or return value have the wrong type.
-Erroneous code example:
-
-```compile_fail,E0443
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct i16x8(i16, i16, i16, i16, i16, i16, i16, i16);
-#[repr(simd)]
-struct i64x8(i64, i64, i64, i64, i64, i64, i64, i64);
-
-extern "platform-intrinsic" {
-    fn x86_mm_adds_epi16(x: i16x8, y: i16x8) -> i64x8;
-    // error: intrinsic argument/return value has wrong type
-}
-```
-
-To fix this error, please refer to the function declaration to give
-it the awaited types. Example:
-
-```
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct i16x8(i16, i16, i16, i16, i16, i16, i16, i16);
-
-extern "platform-intrinsic" {
-    fn x86_mm_adds_epi16(x: i16x8, y: i16x8) -> i16x8; // ok!
-}
-```
-"##,
-
-E0444: r##"
-A platform-specific intrinsic function has wrong number of arguments.
-Erroneous code example:
-
-```compile_fail,E0444
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct f64x2(f64, f64);
-
-extern "platform-intrinsic" {
-    fn x86_mm_movemask_pd(x: f64x2, y: f64x2, z: f64x2) -> i32;
-    // error: platform-specific intrinsic has invalid number of arguments
-}
-```
-
-Please refer to the function declaration to see if it corresponds
-with yours. Example:
-
-```
-#![feature(repr_simd)]
-#![feature(platform_intrinsics)]
-
-#[repr(simd)]
-struct f64x2(f64, f64);
-
-extern "platform-intrinsic" {
-    fn x86_mm_movemask_pd(x: f64x2) -> i32; // ok!
-}
-```
-"##,
-
 E0516: r##"
 The `typeof` keyword is currently reserved but unimplemented.
 Erroneous code example:
@@ -3783,29 +3609,6 @@ fn main() {}
 
 For more information about the inline attribute, https:
 read://doc.rust-lang.org/reference.html#inline-attributes
-"##,
-
-E0558: r##"
-The `export_name` attribute was malformed.
-
-Erroneous code example:
-
-```ignore (error-emitted-at-codegen-which-cannot-be-handled-by-compile_fail)
-#[export_name] // error: `export_name` attribute has invalid format
-pub fn something() {}
-
-fn main() {}
-```
-
-The `export_name` attribute expects a string in order to determine the name of
-the exported symbol. Example:
-
-```
-#[export_name = "some_function"] // ok!
-pub fn something() {}
-
-fn main() {}
-```
 "##,
 
 E0559: r##"
@@ -4896,6 +4699,7 @@ register_diagnostics! {
 //  E0372, // coherence not object safe
     E0377, // the trait `CoerceUnsized` may only be implemented for a coercion
            // between structures with the same definition
+//  E0558, // replaced with a generic attribute input check
     E0533, // `{}` does not name a unit variant, unit struct or a constant
 //  E0563, // cannot determine a type for this `impl Trait`: {} // removed in 6383de15
     E0564, // only named lifetimes are allowed in `impl Trait`,
