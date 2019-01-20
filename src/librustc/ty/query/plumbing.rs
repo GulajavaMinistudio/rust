@@ -1248,6 +1248,9 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::CheckModLoops => { force!(check_mod_loops, def_id!()); }
         DepKind::CheckModUnstableApiUsage => { force!(check_mod_unstable_api_usage, def_id!()); }
         DepKind::CheckModItemTypes => { force!(check_mod_item_types, def_id!()); }
+        DepKind::CheckModPrivacy => { force!(check_mod_privacy, def_id!()); }
+        DepKind::CheckModIntrinsics => { force!(check_mod_intrinsics, def_id!()); }
+        DepKind::CheckModLiveness => { force!(check_mod_liveness, def_id!()); }
         DepKind::CollectModItemTypes => { force!(collect_mod_item_types, def_id!()); }
         DepKind::Reachability => { force!(reachable_set, LOCAL_CRATE); }
         DepKind::MirKeys => { force!(mir_keys, LOCAL_CRATE); }
@@ -1329,6 +1332,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::CheckImplItemWellFormed => { force!(check_impl_item_well_formed, def_id!()); }
         DepKind::ReachableNonGenerics => { force!(reachable_non_generics, krate!()); }
         DepKind::NativeLibraries => { force!(native_libraries, krate!()); }
+        DepKind::EntryFn => { force!(entry_fn, krate!()); }
         DepKind::PluginRegistrarFn => { force!(plugin_registrar_fn, krate!()); }
         DepKind::ProcMacroDeclsStatic => { force!(proc_macro_decls_static, krate!()); }
         DepKind::CrateDisambiguator => { force!(crate_disambiguator, krate!()); }
@@ -1380,6 +1384,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::MaybeUnusedTraitImport => {
             force!(maybe_unused_trait_import, def_id!());
         }
+        DepKind::NamesImportedByGlobUse => { force!(names_imported_by_glob_use, def_id!()); }
         DepKind::MaybeUnusedExternCrates => { force!(maybe_unused_extern_crates, LOCAL_CRATE); }
         DepKind::StabilityIndex => { force!(stability_index, LOCAL_CRATE); }
         DepKind::AllTraits => { force!(all_traits, LOCAL_CRATE); }
