@@ -55,6 +55,10 @@ impl TypeLimits {
 }
 
 impl LintPass for TypeLimits {
+    fn name(&self) -> &'static str {
+        "TypeLimits"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNUSED_COMPARISONS,
                     OVERFLOWING_LITERALS)
@@ -139,7 +143,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
                                                              OVERFLOWING_LITERALS,
                                                              parent_expr.span,
                                                              "only u8 can be cast into char");
-                                        err.span_suggestion_with_applicability(
+                                        err.span_suggestion(
                                             parent_expr.span,
                                             &"use a char literal instead",
                                             format!("'\\u{{{:X}}}'", lit_val),
@@ -397,7 +401,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
             {
                 if let Some(pos) = repr_str.chars().position(|c| c == 'i' || c == 'u') {
                     let (sans_suffix, _) = repr_str.split_at(pos);
-                    err.span_suggestion_with_applicability(
+                    err.span_suggestion(
                         expr.span,
                         &format!("consider using `{}` instead", sugg_ty),
                         format!("{}{}", sans_suffix, sugg_ty),
@@ -785,6 +789,10 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
 pub struct ImproperCTypes;
 
 impl LintPass for ImproperCTypes {
+    fn name(&self) -> &'static str {
+        "ImproperCTypes"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(IMPROPER_CTYPES)
     }
@@ -811,6 +819,10 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ImproperCTypes {
 pub struct VariantSizeDifferences;
 
 impl LintPass for VariantSizeDifferences {
+    fn name(&self) -> &'static str {
+        "VariantSizeDifferences"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(VARIANT_SIZE_DIFFERENCES)
     }

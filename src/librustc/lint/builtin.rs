@@ -380,6 +380,10 @@ declare_lint! {
 pub struct HardwiredLints;
 
 impl LintPass for HardwiredLints {
+    fn name(&self) -> &'static str {
+        "HardwiredLints"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(
             ILLEGAL_FLOATING_POINT_LITERAL_PATTERN,
@@ -469,7 +473,7 @@ impl BuiltinLintDiagnostics {
                     Ok(s) => (format!("dyn {}", s), Applicability::MachineApplicable),
                     Err(_) => ("dyn <type>".to_string(), Applicability::HasPlaceholders)
                 };
-                db.span_suggestion_with_applicability(span, "use `dyn`", sugg, app);
+                db.span_suggestion(span, "use `dyn`", sugg, app);
             }
             BuiltinLintDiagnostics::AbsPathWithModule(span) => {
                 let (sugg, app) = match sess.source_map().span_to_snippet(span) {
@@ -486,7 +490,7 @@ impl BuiltinLintDiagnostics {
                     }
                     Err(_) => ("crate::<path>".to_string(), Applicability::HasPlaceholders)
                 };
-                db.span_suggestion_with_applicability(span, "use `crate`", sugg, app);
+                db.span_suggestion(span, "use `crate`", sugg, app);
             }
             BuiltinLintDiagnostics::DuplicatedMacroExports(ident, earlier_span, later_span) => {
                 db.span_label(later_span, format!("`{}` already exported", ident));
@@ -527,7 +531,7 @@ impl BuiltinLintDiagnostics {
                         (insertion_span, anon_lts)
                     }
                 };
-                db.span_suggestion_with_applicability(
+                db.span_suggestion(
                     replace_span,
                     &format!("indicate the anonymous lifetime{}", if n >= 2 { "s" } else { "" }),
                     suggestion,
@@ -535,12 +539,7 @@ impl BuiltinLintDiagnostics {
                 );
             }
             BuiltinLintDiagnostics::UnknownCrateTypes(span, note, sugg) => {
-                db.span_suggestion_with_applicability(
-                    span,
-                    &note,
-                    sugg,
-                    Applicability::MaybeIncorrect
-                );
+                db.span_suggestion(span, &note, sugg, Applicability::MaybeIncorrect);
             }
         }
     }

@@ -33,6 +33,10 @@ declare_lint! {
 pub struct UnusedResults;
 
 impl LintPass for UnusedResults {
+    fn name(&self) -> &'static str {
+        "UnusedResults"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNUSED_MUST_USE, UNUSED_RESULTS)
     }
@@ -198,6 +202,10 @@ declare_lint! {
 pub struct PathStatements;
 
 impl LintPass for PathStatements {
+    fn name(&self) -> &'static str {
+        "PathStatements"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(PATH_STATEMENTS)
     }
@@ -223,6 +231,10 @@ declare_lint! {
 pub struct UnusedAttributes;
 
 impl LintPass for UnusedAttributes {
+    fn name(&self) -> &'static str {
+        "UnusedAttributes"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNUSED_ATTRIBUTES)
     }
@@ -354,17 +366,21 @@ impl UnusedParens {
                     _ => false,
                 }
             }).to_owned();
-        err.span_suggestion_short_with_applicability(
-                span,
-                "remove these parentheses",
-                parens_removed,
-                Applicability::MachineApplicable
-            );
+        err.span_suggestion_short(
+            span,
+            "remove these parentheses",
+            parens_removed,
+            Applicability::MachineApplicable,
+        );
         err.emit();
     }
 }
 
 impl LintPass for UnusedParens {
+    fn name(&self) -> &'static str {
+        "UnusedParens"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNUSED_PARENS)
     }
@@ -483,6 +499,10 @@ impl UnusedImportBraces {
 }
 
 impl LintPass for UnusedImportBraces {
+    fn name(&self) -> &'static str {
+        "UnusedImportBraces"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNUSED_IMPORT_BRACES)
     }
@@ -506,6 +526,10 @@ declare_lint! {
 pub struct UnusedAllocation;
 
 impl LintPass for UnusedAllocation {
+    fn name(&self) -> &'static str {
+        "UnusedAllocation"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNUSED_ALLOCATION)
     }

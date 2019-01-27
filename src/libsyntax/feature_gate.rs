@@ -453,14 +453,14 @@ declare_features! (
     // Adds `reason` and `expect` lint attributes.
     (active, lint_reasons, "1.31.0", Some(54503), None),
 
-    // `extern crate self as foo;` puts local crate root into extern prelude under name `foo`.
-    (active, extern_crate_self, "1.31.0", Some(56409), None),
-
     // Allows paths to enum variants on type aliases.
     (active, type_alias_enum_variants, "1.31.0", Some(49683), None),
 
     // Re-Rebalance coherence
     (active, re_rebalance_coherence, "1.32.0", Some(55437), None),
+
+    // #[optimize(X)]
+    (active, optimize_attribute, "1.34.0", Some(54882), None),
 );
 
 declare_features! (
@@ -686,6 +686,8 @@ declare_features! (
     (accepted, uniform_paths, "1.32.0", Some(53130), None),
     // Allows `cfg(target_vendor = "...")`.
     (accepted, cfg_target_vendor, "1.33.0", Some(29718), None),
+    // `extern crate self as foo;` puts local crate root into extern prelude under name `foo`.
+    (accepted, extern_crate_self, "1.34.0", Some(56409), None),
 );
 
 // If you change this, please modify `src/doc/unstable-book` as well. You must
@@ -1221,6 +1223,12 @@ pub const BUILTIN_ATTRIBUTES: &[(&str, AttributeType, AttributeTemplate, Attribu
                            "alloc_error_handler",
                            "#[alloc_error_handler] is an unstable feature",
                            cfg_fn!(alloc_error_handler))),
+
+    // RFC 2412
+    ("optimize", Whitelisted, template!(List: "size|speed"), Gated(Stability::Unstable,
+                               "optimize_attribute",
+                               "#[optimize] attribute is an unstable feature",
+                               cfg_fn!(optimize_attribute))),
 
     // Crate level attributes
     ("crate_name", CrateLevel, template!(NameValueStr: "name"), Ungated),

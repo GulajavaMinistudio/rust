@@ -58,6 +58,8 @@ pub enum OptLevel {
     SizeMin,    // -Oz
 }
 
+impl_stable_hash_via_hash!(OptLevel);
+
 /// This is what the `LtoCli` values get mapped to after resolving defaults and
 /// and taking other command line options into account.
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]
@@ -1380,6 +1382,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "don't run LLVM in parallel (while keeping codegen-units and ThinLTO)"),
     no_leak_check: bool = (false, parse_bool, [UNTRACKED],
         "disables the 'leak check' for subtyping; unsound, but useful for tests"),
+    no_interleave_lints: bool = (false, parse_bool, [UNTRACKED],
+        "don't interleave execution of lints; allows benchmarking individual lints"),
     crate_attr: Vec<String> = (Vec::new(), parse_string_push, [TRACKED],
         "inject the given attribute in the crate"),
     self_profile: bool = (false, parse_bool, [UNTRACKED],

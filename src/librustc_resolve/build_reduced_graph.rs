@@ -32,7 +32,7 @@ use syntax::ext::base::{MacroKind, SyntaxExtension};
 use syntax::ext::base::Determinacy::Undetermined;
 use syntax::ext::hygiene::Mark;
 use syntax::ext::tt::macro_rules;
-use syntax::feature_gate::{is_builtin_attr, emit_feature_err, GateIssue};
+use syntax::feature_gate::is_builtin_attr;
 use syntax::parse::token::{self, Token};
 use syntax::std_inject::injected_crate_name;
 use syntax::symbol::keywords;
@@ -347,7 +347,7 @@ impl<'a> Resolver<'a> {
                 let module = if orig_name.is_none() && ident.name == keywords::SelfLower.name() {
                     self.session
                         .struct_span_err(item.span, "`extern crate self;` requires renaming")
-                        .span_suggestion_with_applicability(
+                        .span_suggestion(
                             item.span,
                             "try",
                             "extern crate self as name;".into(),
@@ -356,10 +356,6 @@ impl<'a> Resolver<'a> {
                         .emit();
                     return;
                 } else if orig_name == Some(keywords::SelfLower.name()) {
-                    if !self.session.features_untracked().extern_crate_self {
-                        emit_feature_err(&self.session.parse_sess, "extern_crate_self", item.span,
-                                         GateIssue::Language, "`extern crate self` is unstable");
-                    }
                     self.graph_root
                 } else {
                     let crate_id = self.crate_loader.process_extern_crate(item, &self.definitions);

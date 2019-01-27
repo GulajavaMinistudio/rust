@@ -60,6 +60,10 @@ declare_lint! {
 pub struct WhileTrue;
 
 impl LintPass for WhileTrue {
+    fn name(&self) -> &'static str {
+        "WhileTrue"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(WHILE_TRUE)
     }
@@ -74,7 +78,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for WhileTrue {
                         let msg = "denote infinite loops with `loop { ... }`";
                         let condition_span = cx.tcx.sess.source_map().def_span(e.span);
                         let mut err = cx.struct_span_lint(WHILE_TRUE, condition_span, msg);
-                        err.span_suggestion_short_with_applicability(
+                        err.span_suggestion_short(
                             condition_span,
                             "use `loop`",
                             "loop".to_owned(),
@@ -109,6 +113,10 @@ impl BoxPointers {
 }
 
 impl LintPass for BoxPointers {
+    fn name(&self) -> &'static str {
+        "BoxPointers"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(BOX_POINTERS)
     }
@@ -158,6 +166,10 @@ declare_lint! {
 pub struct NonShorthandFieldPatterns;
 
 impl LintPass for NonShorthandFieldPatterns {
+    fn name(&self) -> &'static str {
+        "NonShorthandFieldPatterns"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(NON_SHORTHAND_FIELD_PATTERNS)
     }
@@ -187,7 +199,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for NonShorthandFieldPatterns {
                                      &format!("the `{}:` in this pattern is redundant", ident));
                         let subspan = cx.tcx.sess.source_map().span_through_char(fieldpat.span,
                                                                                  ':');
-                        err.span_suggestion_short_with_applicability(
+                        err.span_suggestion_short(
                             subspan,
                             "remove this",
                             ident.to_string(),
@@ -211,6 +223,10 @@ declare_lint! {
 pub struct UnsafeCode;
 
 impl LintPass for UnsafeCode {
+    fn name(&self) -> &'static str {
+        "UnsafeCode"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNSAFE_CODE)
     }
@@ -373,6 +389,10 @@ impl MissingDoc {
 }
 
 impl LintPass for MissingDoc {
+    fn name(&self) -> &'static str {
+        "MissingDoc"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(MISSING_DOCS)
     }
@@ -519,6 +539,10 @@ declare_lint! {
 pub struct MissingCopyImplementations;
 
 impl LintPass for MissingCopyImplementations {
+    fn name(&self) -> &'static str {
+        "MissingCopyImplementations"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(MISSING_COPY_IMPLEMENTATIONS)
     }
@@ -586,6 +610,10 @@ impl MissingDebugImplementations {
 }
 
 impl LintPass for MissingDebugImplementations {
+    fn name(&self) -> &'static str {
+        "MissingDebugImplementations"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(MISSING_DEBUG_IMPLEMENTATIONS)
     }
@@ -643,6 +671,10 @@ declare_lint! {
 pub struct AnonymousParameters;
 
 impl LintPass for AnonymousParameters {
+    fn name(&self) -> &'static str {
+        "AnonymousParameters"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(ANONYMOUS_PARAMETERS)
     }
@@ -672,7 +704,7 @@ impl EarlyLintPass for AnonymousParameters {
                                     arg.pat.span,
                                     "anonymous parameters are deprecated and will be \
                                      removed in the next edition."
-                                ).span_suggestion_with_applicability(
+                                ).span_suggestion(
                                     arg.pat.span,
                                     "Try naming the parameter or explicitly \
                                     ignoring it",
@@ -707,6 +739,10 @@ impl DeprecatedAttr {
 }
 
 impl LintPass for DeprecatedAttr {
+    fn name(&self) -> &'static str {
+        "DeprecatedAttr"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!()
     }
@@ -723,7 +759,7 @@ impl EarlyLintPass for DeprecatedAttr {
                     let msg = format!("use of deprecated attribute `{}`: {}. See {}",
                                       name, reason, link);
                     let mut err = cx.struct_span_lint(DEPRECATED, attr.span, &msg);
-                    err.span_suggestion_short_with_applicability(
+                    err.span_suggestion_short(
                         attr.span,
                         suggestion.unwrap_or("remove this attribute"),
                         String::new(),
@@ -747,6 +783,10 @@ declare_lint! {
 pub struct UnusedDocComment;
 
 impl LintPass for UnusedDocComment {
+    fn name(&self) -> &'static str {
+        "UnusedDocComment"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array![UNUSED_DOC_COMMENTS]
     }
@@ -787,6 +827,10 @@ declare_lint! {
 pub struct PluginAsLibrary;
 
 impl LintPass for PluginAsLibrary {
+    fn name(&self) -> &'static str {
+        "PluginAsLibrary"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array![PLUGIN_AS_LIBRARY]
     }
@@ -839,6 +883,10 @@ declare_lint! {
 pub struct InvalidNoMangleItems;
 
 impl LintPass for InvalidNoMangleItems {
+    fn name(&self) -> &'static str {
+        "InvalidNoMangleItems"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(NO_MANGLE_CONST_ITEMS,
                     NO_MANGLE_GENERIC_ITEMS)
@@ -858,7 +906,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidNoMangleItems {
                                                                   it.span,
                                                                   "functions generic over \
                                                                    types must be mangled");
-                                err.span_suggestion_short_with_applicability(
+                                err.span_suggestion_short(
                                     no_mangle_attr.span,
                                     "remove this attribute",
                                     String::new(),
@@ -886,7 +934,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidNoMangleItems {
                         .unwrap_or(0) as u32;
                     // `const` is 5 chars
                     let const_span = it.span.with_hi(BytePos(it.span.lo().0 + start + 5));
-                    err.span_suggestion_with_applicability(
+                    err.span_suggestion(
                         const_span,
                         "try a static value",
                         "pub static".to_owned(),
@@ -910,6 +958,10 @@ declare_lint! {
 }
 
 impl LintPass for MutableTransmutes {
+    fn name(&self) -> &'static str {
+        "MutableTransmutes"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(MUTABLE_TRANSMUTES)
     }
@@ -970,6 +1022,10 @@ declare_lint! {
 }
 
 impl LintPass for UnstableFeatures {
+    fn name(&self) -> &'static str {
+        "UnstableFeatures"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNSTABLE_FEATURES)
     }
@@ -997,6 +1053,10 @@ declare_lint! {
 }
 
 impl LintPass for UnionsWithDropFields {
+    fn name(&self) -> &'static str {
+        "UnionsWithDropFields"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNIONS_WITH_DROP_FIELDS)
     }
@@ -1029,6 +1089,10 @@ declare_lint! {
 }
 
 impl LintPass for UnreachablePub {
+    fn name(&self) -> &'static str {
+        "UnreachablePub"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNREACHABLE_PUB)
     }
@@ -1052,10 +1116,12 @@ impl UnreachablePub {
                     "pub(crate)"
                 }.to_owned();
 
-                err.span_suggestion_with_applicability(vis.span,
-                                                       "consider restricting its visibility",
-                                                       replacement,
-                                                       applicability);
+                err.span_suggestion(
+                    vis.span,
+                    "consider restricting its visibility",
+                    replacement,
+                    applicability,
+                );
                 if exportable {
                     err.help("or consider exporting it for use by other crates");
                 }
@@ -1099,6 +1165,10 @@ declare_lint! {
 }
 
 impl LintPass for TypeAliasBounds {
+    fn name(&self) -> &'static str {
+        "TypeAliasBounds"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(TYPE_ALIAS_BOUNDS)
     }
@@ -1203,6 +1273,10 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeAliasBounds {
 pub struct UnusedBrokenConst;
 
 impl LintPass for UnusedBrokenConst {
+    fn name(&self) -> &'static str {
+        "UnusedBrokenConst"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!()
     }
@@ -1249,6 +1323,10 @@ declare_lint! {
 }
 
 impl LintPass for TrivialConstraints {
+    fn name(&self) -> &'static str {
+        "TrivialConstraints"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(TRIVIAL_BOUNDS)
     }
@@ -1303,6 +1381,10 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TrivialConstraints {
 pub struct SoftLints;
 
 impl LintPass for SoftLints {
+    fn name(&self) -> &'static str {
+        "SoftLints"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(
             WHILE_TRUE,
@@ -1337,6 +1419,10 @@ declare_lint! {
 pub struct EllipsisInclusiveRangePatterns;
 
 impl LintPass for EllipsisInclusiveRangePatterns {
+    fn name(&self) -> &'static str {
+        "EllipsisInclusiveRangePatterns"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(ELLIPSIS_INCLUSIVE_RANGE_PATTERNS)
     }
@@ -1368,7 +1454,7 @@ impl EarlyLintPass for EllipsisInclusiveRangePatterns {
             if parenthesise {
                 *visit_subpats = false;
                 let mut err = cx.struct_span_lint(ELLIPSIS_INCLUSIVE_RANGE_PATTERNS, pat.span, msg);
-                err.span_suggestion_with_applicability(
+                err.span_suggestion(
                     pat.span,
                     suggestion,
                     format!("&({}..={})", expr_to_string(&start), expr_to_string(&end)),
@@ -1377,7 +1463,7 @@ impl EarlyLintPass for EllipsisInclusiveRangePatterns {
                 err.emit();
             } else {
                 let mut err = cx.struct_span_lint(ELLIPSIS_INCLUSIVE_RANGE_PATTERNS, join, msg);
-                err.span_suggestion_short_with_applicability(
+                err.span_suggestion_short(
                     join,
                     suggestion,
                     "..=".to_owned(),
@@ -1411,6 +1497,10 @@ impl UnnameableTestItems {
 }
 
 impl LintPass for UnnameableTestItems {
+    fn name(&self) -> &'static str {
+        "UnnameableTestItems"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNNAMEABLE_TEST_ITEMS)
     }
@@ -1454,6 +1544,10 @@ declare_lint! {
 pub struct KeywordIdents;
 
 impl LintPass for KeywordIdents {
+    fn name(&self) -> &'static str {
+        "KeywordIdents"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(KEYWORD_IDENTS)
     }
@@ -1521,7 +1615,7 @@ impl EarlyLintPass for KeywordIdents {
                         E0721,
                         "`await` is a keyword in the {} edition", cur_edition,
                     );
-                    err.span_suggestion_with_applicability(
+                    err.span_suggestion(
                         ident.span,
                         "you can use a raw identifier to stay compatible",
                         "r#await".to_string(),
@@ -1545,7 +1639,7 @@ impl EarlyLintPass for KeywordIdents {
                      ident.as_str(),
                      next_edition),
         );
-        lint.span_suggestion_with_applicability(
+        lint.span_suggestion(
             ident.span,
             "you can use a raw identifier to stay compatible",
             format!("r#{}", ident.as_str()),
@@ -1559,6 +1653,10 @@ impl EarlyLintPass for KeywordIdents {
 pub struct ExplicitOutlivesRequirements;
 
 impl LintPass for ExplicitOutlivesRequirements {
+    fn name(&self) -> &'static str {
+        "ExplicitOutlivesRequirements"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array![EXPLICIT_OUTLIVES_REQUIREMENTS]
     }
@@ -1769,7 +1867,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ExplicitOutlivesRequirements {
                     lint_spans.clone(),
                     "outlives requirements can be inferred"
                 );
-                err.multipart_suggestion_with_applicability(
+                err.multipart_suggestion(
                     if bound_count == 1 {
                         "remove this bound"
                     } else {
