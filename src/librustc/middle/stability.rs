@@ -9,13 +9,13 @@ use hir::def::Def;
 use hir::def_id::{CrateNum, CRATE_DEF_INDEX, DefId, LOCAL_CRATE};
 use hir::intravisit::{self, Visitor, NestedVisitorMap};
 use ty::query::Providers;
-use ty::query::queries;
 use middle::privacy::AccessLevels;
 use session::{DiagnosticMessageId, Session};
 use syntax::symbol::Symbol;
 use syntax_pos::{Span, MultiSpan};
 use syntax::ast;
 use syntax::ast::{NodeId, Attribute};
+use syntax::errors::Applicability;
 use syntax::feature_gate::{GateIssue, emit_feature_err};
 use syntax::attr::{self, Stability, Deprecation};
 use ty::{self, TyCtxt};
@@ -458,7 +458,7 @@ impl<'a, 'tcx> Index<'tcx> {
 
 pub fn check_unstable_api_usage<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
     for &module in tcx.hir().krate().modules.keys() {
-        queries::check_mod_unstable_api_usage::ensure(tcx, tcx.hir().local_def_id(module));
+        tcx.ensure().check_mod_unstable_api_usage(tcx.hir().local_def_id(module));
     }
 }
 
@@ -569,6 +569,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         let lint_deprecated = |def_id: DefId,
                                id: NodeId,
                                note: Option<Symbol>,
+                               suggestion: Option<Symbol>,
                                message: &str,
                                lint: &'static Lint| {
             let msg = if let Some(note) = note {
@@ -577,7 +578,18 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                 format!("{}", message)
             };
 
-            self.lint_node(lint, id, span, &msg);
+            let mut diag = self.struct_span_lint_node(lint, id, span, &msg);
+            if let Some(suggestion) = suggestion {
+                if let hir::Node::Expr(_) = self.hir().get(id) {
+                    diag.span_suggestion(
+                        span,
+                        &msg,
+                        suggestion.to_string(),
+                        Applicability::MachineApplicable,
+                    );
+                }
+            }
+            diag.emit();
             if id == ast::DUMMY_NODE_ID {
                 span_bug!(span, "emitted a {} lint with dummy node id: {:?}", lint.name, def_id);
             }
@@ -613,6 +625,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                     lint_deprecated(def_id,
                                     id,
                                     depr_entry.attr.note,
+                                    None,
                                     &message,
                                     lint::builtin::DEPRECATED_IN_FUTURE);
                 } else if !skip {
@@ -621,6 +634,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                     lint_deprecated(def_id,
                                     id,
                                     depr_entry.attr.note,
+                                    None,
                                     &message,
                                     lint::builtin::DEPRECATED);
                 }
@@ -639,27 +653,30 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         debug!("stability: \
                 inspecting def_id={:?} span={:?} of stability={:?}", def_id, span, stability);
 
-        if let Some(&Stability{rustc_depr: Some(attr::RustcDeprecation { reason, since }), ..})
-                = stability {
-            if let Some(id) = id {
-                let path = self.item_path_str(def_id);
-                if deprecation_in_effect(&since.as_str()) {
-                    let message = format!("use of deprecated item '{}'", path);
-                    lint_deprecated(def_id,
-                                    id,
-                                    Some(reason),
-                                    &message,
-                                    lint::builtin::DEPRECATED);
-                } else {
-                    let message = format!("use of item '{}' \
-                                           that will be deprecated in future version {}",
-                                          path,
-                                          since);
-                    lint_deprecated(def_id,
-                                    id,
-                                    Some(reason),
-                                    &message,
-                                    lint::builtin::DEPRECATED_IN_FUTURE);
+        if let Some(id) = id {
+            if let Some(stability) = stability {
+                if let Some(depr) = &stability.rustc_depr {
+                    let path = self.item_path_str(def_id);
+                    if deprecation_in_effect(&depr.since.as_str()) {
+                        let message = format!("use of deprecated item '{}'", path);
+                        lint_deprecated(def_id,
+                                        id,
+                                        Some(depr.reason),
+                                        depr.suggestion,
+                                        &message,
+                                        lint::builtin::DEPRECATED);
+                    } else {
+                        let message = format!("use of item '{}' \
+                                                that will be deprecated in future version {}",
+                                                path,
+                                                depr.since);
+                        lint_deprecated(def_id,
+                                        id,
+                                        Some(depr.reason),
+                                        depr.suggestion,
+                                        &message,
+                                        lint::builtin::DEPRECATED_IN_FUTURE);
+                    }
                 }
             }
         }
