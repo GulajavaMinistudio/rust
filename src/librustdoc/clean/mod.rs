@@ -1210,8 +1210,7 @@ impl Lifetime {
 impl Clean<Lifetime> for hir::Lifetime {
     fn clean(&self, cx: &DocContext) -> Lifetime {
         if self.id != ast::DUMMY_NODE_ID {
-            let hir_id = cx.tcx.hir().node_to_hir_id(self.id);
-            let def = cx.tcx.named_region(hir_id);
+            let def = cx.tcx.named_region(self.hir_id);
             match def {
                 Some(rl::Region::EarlyBound(_, node_id, _)) |
                 Some(rl::Region::LateBound(_, node_id, _)) |
@@ -1271,7 +1270,10 @@ impl Clean<Option<Lifetime>> for ty::RegionKind {
             ty::RePlaceholder(..) |
             ty::ReEmpty |
             ty::ReClosureBound(_) |
-            ty::ReErased => None
+            ty::ReErased => {
+                debug!("Cannot clean region {:?}", self);
+                None
+            }
         }
     }
 }
@@ -1310,16 +1312,16 @@ impl Clean<WherePredicate> for hir::WherePredicate {
     }
 }
 
-impl<'a> Clean<WherePredicate> for ty::Predicate<'a> {
-    fn clean(&self, cx: &DocContext) -> WherePredicate {
+impl<'a> Clean<Option<WherePredicate>> for ty::Predicate<'a> {
+    fn clean(&self, cx: &DocContext) -> Option<WherePredicate> {
         use rustc::ty::Predicate;
 
         match *self {
-            Predicate::Trait(ref pred) => pred.clean(cx),
-            Predicate::Subtype(ref pred) => pred.clean(cx),
+            Predicate::Trait(ref pred) => Some(pred.clean(cx)),
+            Predicate::Subtype(ref pred) => Some(pred.clean(cx)),
             Predicate::RegionOutlives(ref pred) => pred.clean(cx),
             Predicate::TypeOutlives(ref pred) => pred.clean(cx),
-            Predicate::Projection(ref pred) => pred.clean(cx),
+            Predicate::Projection(ref pred) => Some(pred.clean(cx)),
 
             Predicate::WellFormed(..) |
             Predicate::ObjectSafe(..) |
@@ -1345,24 +1347,39 @@ impl<'tcx> Clean<WherePredicate> for ty::SubtypePredicate<'tcx> {
     }
 }
 
-impl<'tcx> Clean<WherePredicate> for ty::OutlivesPredicate<ty::Region<'tcx>, ty::Region<'tcx>> {
-    fn clean(&self, cx: &DocContext) -> WherePredicate {
+impl<'tcx> Clean<Option<WherePredicate>> for
+    ty::OutlivesPredicate<ty::Region<'tcx>,ty::Region<'tcx>> {
+
+    fn clean(&self, cx: &DocContext) -> Option<WherePredicate> {
         let ty::OutlivesPredicate(ref a, ref b) = *self;
-        WherePredicate::RegionPredicate {
+
+        match (a, b) {
+            (ty::ReEmpty, ty::ReEmpty) => {
+                return None;
+            },
+            _ => {}
+        }
+
+        Some(WherePredicate::RegionPredicate {
             lifetime: a.clean(cx).expect("failed to clean lifetime"),
             bounds: vec![GenericBound::Outlives(b.clean(cx).expect("failed to clean bounds"))]
-        }
+        })
     }
 }
 
-impl<'tcx> Clean<WherePredicate> for ty::OutlivesPredicate<Ty<'tcx>, ty::Region<'tcx>> {
-    fn clean(&self, cx: &DocContext) -> WherePredicate {
+impl<'tcx> Clean<Option<WherePredicate>> for ty::OutlivesPredicate<Ty<'tcx>, ty::Region<'tcx>> {
+    fn clean(&self, cx: &DocContext) -> Option<WherePredicate> {
         let ty::OutlivesPredicate(ref ty, ref lt) = *self;
 
-        WherePredicate::BoundPredicate {
+        match lt {
+            ty::ReEmpty => return None,
+            _ => {}
+        }
+
+        Some(WherePredicate::BoundPredicate {
             ty: ty.clean(cx),
             bounds: vec![GenericBound::Outlives(lt.clean(cx).expect("failed to clean lifetimes"))]
-        }
+        })
     }
 }
 
@@ -1579,7 +1596,7 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics,
         }).collect::<Vec<GenericParamDef>>();
 
         let mut where_predicates = preds.predicates.iter()
-            .map(|(p, _)| p.clean(cx))
+            .flat_map(|(p, _)| p.clean(cx))
             .collect::<Vec<_>>();
 
         // Type parameters and have a Sized bound by default unless removed with
