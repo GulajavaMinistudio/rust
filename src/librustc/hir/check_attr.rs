@@ -5,12 +5,12 @@
 //! item.
 
 
-use ty::TyCtxt;
-use ty::query::Providers;
+use crate::ty::TyCtxt;
+use crate::ty::query::Providers;
 
-use hir;
-use hir::def_id::DefId;
-use hir::intravisit::{self, Visitor, NestedVisitorMap};
+use crate::hir;
+use crate::hir::def_id::DefId;
+use crate::hir::intravisit::{self, Visitor, NestedVisitorMap};
 use std::fmt::{self, Display};
 use syntax_pos::Span;
 
@@ -186,8 +186,8 @@ impl<'a, 'tcx> CheckAttrVisitor<'a, 'tcx> {
             };
 
             let (article, allowed_targets) = match &*name.as_str() {
-                "C" => {
-                    is_c = true;
+                "C" | "align" => {
+                    is_c |= name == "C";
                     if target != Target::Struct &&
                             target != Target::Union &&
                             target != Target::Enum {
@@ -208,14 +208,6 @@ impl<'a, 'tcx> CheckAttrVisitor<'a, 'tcx> {
                     is_simd = true;
                     if target != Target::Struct {
                         ("a", "struct")
-                    } else {
-                        continue
-                    }
-                }
-                "align" => {
-                    if target != Target::Struct &&
-                            target != Target::Union {
-                        ("a", "struct or union")
                     } else {
                         continue
                     }

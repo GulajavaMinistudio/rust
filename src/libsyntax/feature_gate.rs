@@ -12,21 +12,23 @@
 //! gate usage is added, *do not remove it again* even once the feature
 //! becomes stable.
 
-use self::AttributeType::*;
-use self::AttributeGate::*;
+use AttributeType::*;
+use AttributeGate::*;
+
+use crate::ast::{self, NodeId, PatKind, RangeEnd};
+use crate::attr;
+use crate::early_buffered_lints::BufferedEarlyLintId;
+use crate::source_map::Spanned;
+use crate::edition::{ALL_EDITIONS, Edition};
+use crate::errors::{DiagnosticBuilder, Handler};
+use crate::visit::{self, FnKind, Visitor};
+use crate::parse::ParseSess;
+use crate::symbol::Symbol;
 
 use rustc_data_structures::fx::FxHashMap;
 use rustc_target::spec::abi::Abi;
-use ast::{self, NodeId, PatKind, RangeEnd};
-use attr;
-use early_buffered_lints::BufferedEarlyLintId;
-use source_map::Spanned;
-use edition::{ALL_EDITIONS, Edition};
 use syntax_pos::{Span, DUMMY_SP};
-use errors::{DiagnosticBuilder, Handler};
-use visit::{self, FnKind, Visitor};
-use parse::ParseSess;
-use symbol::Symbol;
+use log::debug;
 
 use std::env;
 
@@ -462,6 +464,9 @@ declare_features! (
 
     // #[optimize(X)]
     (active, optimize_attribute, "1.34.0", Some(54882), None),
+
+    // #[repr(align(X))] on enums
+    (active, repr_align_enum, "1.34.0", Some(57996), None),
 );
 
 declare_features! (
@@ -778,8 +783,8 @@ pub enum Stability {
 }
 
 // fn() is not Debug
-impl ::std::fmt::Debug for AttributeGate {
-    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+impl std::fmt::Debug for AttributeGate {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             Gated(ref stab, name, expl, _) =>
                 write!(fmt, "Gated({:?}, {}, {})", stab, name, expl),
@@ -1693,6 +1698,17 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                         if item.check_name("simd") {
                             gate_feature_post!(&self, repr_simd, attr.span,
                                                "SIMD types are experimental and possibly buggy");
+                        }
+                    }
+                }
+            }
+
+            ast::ItemKind::Enum(..) => {
+                for attr in attr::filter_by_name(&i.attrs[..], "repr") {
+                    for item in attr.meta_item_list().unwrap_or_else(Vec::new) {
+                        if item.check_name("align") {
+                            gate_feature_post!(&self, repr_align_enum, attr.span,
+                                               "`#[repr(align(x))]` on enums is experimental");
                         }
                     }
                 }

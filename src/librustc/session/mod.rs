@@ -1,19 +1,19 @@
 pub use self::code_stats::{DataTypeKind, SizeKind, FieldInfo, VariantInfo};
 use self::code_stats::CodeStats;
 
-use dep_graph::cgu_reuse_tracker::CguReuseTracker;
-use hir::def_id::CrateNum;
+use crate::dep_graph::cgu_reuse_tracker::CguReuseTracker;
+use crate::hir::def_id::CrateNum;
 use rustc_data_structures::fingerprint::Fingerprint;
 
-use lint;
-use lint::builtin::BuiltinLintDiagnostics;
-use middle::allocator::AllocatorKind;
-use middle::dependency_format;
-use session::config::{OutputType, Lto};
-use session::search_paths::{PathKind, SearchPath};
-use util::nodemap::{FxHashMap, FxHashSet};
-use util::common::{duration_to_secs_str, ErrorReported};
-use util::common::ProfileQueriesMsg;
+use crate::lint;
+use crate::lint::builtin::BuiltinLintDiagnostics;
+use crate::middle::allocator::AllocatorKind;
+use crate::middle::dependency_format;
+use crate::session::config::{OutputType, Lto};
+use crate::session::search_paths::{PathKind, SearchPath};
+use crate::util::nodemap::{FxHashMap, FxHashSet};
+use crate::util::common::{duration_to_secs_str, ErrorReported};
+use crate::util::common::ProfileQueriesMsg;
 
 use rustc_data_structures::base_n;
 use rustc_data_structures::sync::{
@@ -21,8 +21,8 @@ use rustc_data_structures::sync::{
     Ordering::SeqCst,
 };
 
-use errors::{self, DiagnosticBuilder, DiagnosticId, Applicability};
-use errors::emitter::{Emitter, EmitterWriter};
+use crate::errors::{self, DiagnosticBuilder, DiagnosticId, Applicability};
+use crate::errors::emitter::{Emitter, EmitterWriter};
 use syntax::ast::{self, NodeId};
 use syntax::edition::Edition;
 use syntax::feature_gate::{self, AttributeType};
@@ -30,7 +30,7 @@ use syntax::json::JsonEmitter;
 use syntax::source_map;
 use syntax::parse::{self, ParseSess};
 use syntax_pos::{MultiSpan, Span};
-use util::profiling::SelfProfiler;
+use crate::util::profiling::SelfProfiler;
 
 use rustc_target::spec::{PanicStrategy, RelroLevel, Target, TargetTriple};
 use rustc_data_structures::flock;
@@ -85,7 +85,7 @@ pub struct Session {
     /// in order to avoid redundantly verbose output (Issue #24690, #44953).
     pub one_time_diagnostics: Lock<FxHashSet<(DiagnosticMessageId, Option<Span>, String)>>,
     pub plugin_llvm_passes: OneThread<RefCell<Vec<String>>>,
-    pub plugin_attributes: OneThread<RefCell<Vec<(String, AttributeType)>>>,
+    pub plugin_attributes: Lock<Vec<(String, AttributeType)>>,
     pub crate_types: Once<Vec<config::CrateType>>,
     pub dependency_formats: Once<dependency_format::Dependencies>,
     /// The crate_disambiguator is constructed out of all the `-C metadata`
@@ -1178,7 +1178,7 @@ pub fn build_session_(
         buffered_lints: Lock::new(Some(Default::default())),
         one_time_diagnostics: Default::default(),
         plugin_llvm_passes: OneThread::new(RefCell::new(Vec::new())),
-        plugin_attributes: OneThread::new(RefCell::new(Vec::new())),
+        plugin_attributes: Lock::new(Vec::new()),
         crate_types: Once::new(),
         dependency_formats: Once::new(),
         crate_disambiguator: Once::new(),
