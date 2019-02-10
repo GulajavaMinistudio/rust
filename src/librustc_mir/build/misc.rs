@@ -1,7 +1,7 @@
 //! Miscellaneous builder routines that are not specific to building any particular
 //! kind of thing.
 
-use build::Builder;
+use crate::build::Builder;
 
 use rustc::ty::{self, Ty};
 
@@ -33,7 +33,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
             span,
             ty,
             user_ty: None,
-            literal: self.hir.tcx().intern_lazy_const(ty::LazyConst::Evaluated(literal)),
+            literal: self.hir.tcx().mk_lazy_const(ty::LazyConst::Evaluated(literal)),
         };
         Operand::Constant(constant)
     }

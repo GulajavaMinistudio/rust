@@ -19,15 +19,10 @@
 
 #![recursion_limit="256"]
 
-#[macro_use]
-extern crate syntax;
+#![deny(rust_2018_idioms)]
+
 #[macro_use]
 extern crate rustc;
-#[macro_use]
-extern crate log;
-extern crate rustc_target;
-extern crate syntax_pos;
-extern crate rustc_data_structures;
 
 mod diagnostics;
 mod nonstandard_style;
@@ -49,7 +44,6 @@ use rustc::lint::builtin::{
     parser::ILL_FORMED_ATTRIBUTE_INPUT,
 };
 use rustc::session;
-use rustc::util;
 use rustc::hir;
 
 use syntax::ast;
@@ -352,6 +346,11 @@ pub fn register_builtins(store: &mut lint::LintStore, sess: Option<&Session>) {
         FutureIncompatibleInfo {
             id: LintId::of(AMBIGUOUS_ASSOCIATED_ITEMS),
             reference: "issue #57644 <https://github.com/rust-lang/rust/issues/57644>",
+            edition: None,
+        },
+        FutureIncompatibleInfo {
+            id: LintId::of(DUPLICATE_MATCHER_BINDING_NAME),
+            reference: "issue #57593 <https://github.com/rust-lang/rust/issues/57593>",
             edition: None,
         },
         ]);

@@ -10,6 +10,7 @@ use crate::print::pprust;
 use crate::ptr::P;
 use crate::symbol::keywords;
 use crate::syntax::parse::parse_stream_from_source_str;
+use crate::syntax::parse::parser::emit_unclosed_delims;
 use crate::tokenstream::{self, DelimSpan, TokenStream, TokenTree};
 
 use serialize::{Decodable, Decoder, Encodable, Encoder};
@@ -279,6 +280,20 @@ impl Token {
         }
     }
 
+    /// Returns `true` if the token can appear at the start of a const param.
+    pub fn can_begin_const_arg(&self) -> bool {
+        match self {
+            OpenDelim(Brace) => true,
+            Interpolated(ref nt) => match nt.0 {
+                NtExpr(..) => true,
+                NtBlock(..) => true,
+                NtLiteral(..) => true,
+                _ => false,
+            }
+            _ => self.can_begin_literal_or_bool(),
+        }
+    }
+
     /// Returns `true` if the token can appear at the start of a generic bound.
     crate fn can_begin_bound(&self) -> bool {
         self.is_path_start() || self.is_lifetime() || self.is_keyword(keywords::For) ||
@@ -293,7 +308,7 @@ impl Token {
         }
     }
 
-    /// Returns `true` if the token is any literal, a minus (which can follow a literal,
+    /// Returns `true` if the token is any literal, a minus (which can prefix a literal,
     /// for example a '-42', or one of the boolean idents).
     crate fn can_begin_literal_or_bool(&self) -> bool {
         match *self {
@@ -487,8 +502,8 @@ impl Token {
     /// Enables better error recovery when the wrong token is found.
     crate fn similar_tokens(&self) -> Option<Vec<Token>> {
         match *self {
-            Comma => Some(vec![Dot, Lt]),
-            Semi => Some(vec![Colon]),
+            Comma => Some(vec![Dot, Lt, Semi]),
+            Semi => Some(vec![Colon, Comma]),
             _ => None
         }
     }
@@ -545,7 +560,10 @@ impl Token {
             // FIXME(#43081): Avoid this pretty-print + reparse hack
             let source = pprust::token_to_string(self);
             let filename = FileName::macro_expansion_source_code(&source);
-            parse_stream_from_source_str(filename, source, sess, Some(span))
+            let (tokens, errors) = parse_stream_from_source_str(
+                filename, source, sess, Some(span));
+            emit_unclosed_delims(&errors, &sess.span_diagnostic);
+            tokens
         });
 
         // During early phases of the compiler the AST could get modified
@@ -786,12 +804,13 @@ fn prepend_attrs(sess: &ParseSess,
         let source = pprust::attr_to_string(attr);
         let macro_filename = FileName::macro_expansion_source_code(&source);
         if attr.is_sugared_doc {
-            let stream = parse_stream_from_source_str(
+            let (stream, errors) = parse_stream_from_source_str(
                 macro_filename,
                 source,
                 sess,
                 Some(span),
             );
+            emit_unclosed_delims(&errors, &sess.span_diagnostic);
             builder.push(stream);
             continue
         }
@@ -808,12 +827,13 @@ fn prepend_attrs(sess: &ParseSess,
         // ... and for more complicated paths, fall back to a reparse hack that
         // should eventually be removed.
         } else {
-            let stream = parse_stream_from_source_str(
+            let (stream, errors) = parse_stream_from_source_str(
                 macro_filename,
                 source,
                 sess,
                 Some(span),
             );
+            emit_unclosed_delims(&errors, &sess.span_diagnostic);
             brackets.push(stream);
         }
 
