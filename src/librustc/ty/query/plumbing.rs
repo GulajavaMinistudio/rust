@@ -113,7 +113,7 @@ impl<'a, 'tcx, Q: QueryDescription<'tcx>> JobOwner<'a, 'tcx, Q> {
             let mut lock = cache.borrow_mut();
             if let Some(value) = lock.results.get(key) {
                 profq_msg!(tcx, ProfileQueriesMsg::CacheHit);
-                tcx.sess.profiler(|p| p.record_query_hit(Q::CATEGORY));
+                tcx.sess.profiler(|p| p.record_query_hit(Q::NAME, Q::CATEGORY));
                 let result = Ok((value.value.clone(), value.index));
                 #[cfg(debug_assertions)]
                 {
@@ -375,7 +375,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
         if dep_node.kind.is_anon() {
             profq_msg!(self, ProfileQueriesMsg::ProviderBegin);
-            self.sess.profiler(|p| p.start_activity(Q::CATEGORY));
+            self.sess.profiler(|p| p.start_query(Q::NAME, Q::CATEGORY));
 
             let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
                 job.start(self, diagnostics, |tcx| {
@@ -385,7 +385,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                 })
             });
 
-            self.sess.profiler(|p| p.end_activity(Q::CATEGORY));
+            self.sess.profiler(|p| p.end_query(Q::NAME, Q::CATEGORY));
             profq_msg!(self, ProfileQueriesMsg::ProviderEnd);
 
             self.dep_graph.read_index(dep_node_index);
@@ -452,14 +452,14 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
         let result = if let Some(result) = result {
             profq_msg!(self, ProfileQueriesMsg::CacheHit);
-            self.sess.profiler(|p| p.record_query_hit(Q::CATEGORY));
+            self.sess.profiler(|p| p.record_query_hit(Q::NAME, Q::CATEGORY));
 
             result
         } else {
             // We could not load a result from the on-disk cache, so
             // recompute.
 
-            self.sess.profiler(|p| p.start_activity(Q::CATEGORY));
+            self.sess.profiler(|p| p.start_query(Q::NAME, Q::CATEGORY));
 
             // The diagnostics for this query have already been
             // promoted to the current session during
@@ -472,7 +472,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                 })
             });
 
-            self.sess.profiler(|p| p.end_activity(Q::CATEGORY));
+            self.sess.profiler(|p| p.end_query(Q::NAME, Q::CATEGORY));
             result
         };
 
@@ -499,7 +499,6 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         dep_node: &DepNode,
         dep_node_index: DepNodeIndex,
     ) {
-        use rustc_data_structures::stable_hasher::{StableHasher, HashStable};
         use crate::ich::Fingerprint;
 
         assert!(Some(self.dep_graph.fingerprint_of(dep_node_index)) ==
@@ -509,11 +508,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
         debug!("BEGIN verify_ich({:?})", dep_node);
         let mut hcx = self.create_stable_hashing_context();
-        let mut hasher = StableHasher::new();
 
-        result.hash_stable(&mut hcx, &mut hasher);
-
-        let new_hash: Fingerprint = hasher.finish();
+        let new_hash = Q::hash_result(&mut hcx, result).unwrap_or(Fingerprint::ZERO);
         debug!("END verify_ich({:?})", dep_node);
 
         let old_hash = self.dep_graph.fingerprint_of(dep_node_index);
@@ -541,7 +537,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                 key, dep_node);
 
         profq_msg!(self, ProfileQueriesMsg::ProviderBegin);
-        self.sess.profiler(|p| p.start_activity(Q::CATEGORY));
+        self.sess.profiler(|p| p.start_query(Q::NAME, Q::CATEGORY));
 
         let ((result, dep_node_index), diagnostics) = with_diagnostics(|diagnostics| {
             job.start(self, diagnostics, |tcx| {
@@ -549,17 +545,19 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                     tcx.dep_graph.with_eval_always_task(dep_node,
                                                         tcx,
                                                         key,
-                                                        Q::compute)
+                                                        Q::compute,
+                                                        Q::hash_result)
                 } else {
                     tcx.dep_graph.with_task(dep_node,
                                             tcx,
                                             key,
-                                            Q::compute)
+                                            Q::compute,
+                                            Q::hash_result)
                 }
             })
         });
 
-        self.sess.profiler(|p| p.end_activity(Q::CATEGORY));
+        self.sess.profiler(|p| p.end_query(Q::NAME, Q::CATEGORY));
         profq_msg!(self, ProfileQueriesMsg::ProviderEnd);
 
         if unlikely!(self.sess.opts.debugging_opts.query_dep_graph) {
@@ -602,7 +600,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             let _ = self.get_query::<Q>(DUMMY_SP, key);
         } else {
             profq_msg!(self, ProfileQueriesMsg::CacheHit);
-            self.sess.profiler(|p| p.record_query_hit(Q::CATEGORY));
+            self.sess.profiler(|p| p.record_query_hit(Q::NAME, Q::CATEGORY));
         }
     }
 
@@ -679,6 +677,18 @@ macro_rules! handle_cycle_error {
     };
 }
 
+macro_rules! hash_result {
+    ([][$hcx:expr, $result:expr]) => {{
+        dep_graph::hash_result($hcx, &$result)
+    }};
+    ([no_hash$(, $modifiers:ident)*][$hcx:expr, $result:expr]) => {{
+        None
+    }};
+    ([$other:ident$(, $modifiers:ident)*][$($args:tt)*]) => {
+        hash_result!([$($modifiers),*][$($args)*])
+    };
+}
+
 macro_rules! define_queries {
     (<$tcx:tt> $($category:tt {
         $($(#[$attr:meta])* [$($modifiers:tt)*] fn $name:ident: $node:ident($K:ty) -> $V:ty,)*
@@ -729,6 +739,7 @@ macro_rules! define_queries_inner {
                 sess.profiler(|p| {
                     $(
                         p.record_computed_queries(
+                            <queries::$name<'_> as QueryConfig<'_>>::NAME,
                             <queries::$name<'_> as QueryConfig<'_>>::CATEGORY,
                             self.$name.lock().results.len()
                         );
@@ -964,6 +975,13 @@ macro_rules! define_queries_inner {
                         .$name;
                     provider(tcx.global_tcx(), key)
                 })
+            }
+
+            fn hash_result(
+                _hcx: &mut StableHashingContext<'_>,
+                _result: &Self::Value
+            ) -> Option<Fingerprint> {
+                hash_result!([$($modifiers)*][_hcx, _result])
             }
 
             fn handle_cycle_error(tcx: TyCtxt<'_, 'tcx, '_>) -> Self::Value {
