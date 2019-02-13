@@ -51,7 +51,7 @@ enum AnnotationKind {
 pub struct DeprecationEntry {
     /// The metadata of the attribute associated with this entry.
     pub attr: Deprecation,
-    /// The def id where the attr was originally attached. `None` for non-local
+    /// The `DefId` where the attr was originally attached. `None` for non-local
     /// `DefId`'s.
     origin: Option<HirId>,
 }
@@ -475,7 +475,7 @@ pub fn provide(providers: &mut Providers<'_>) {
     };
 }
 
-/// Check whether an item marked with `deprecated(since="X")` is currently
+/// Checks whether an item marked with `deprecated(since="X")` is currently
 /// deprecated (i.e., whether X is not greater than the current rustc version).
 pub fn deprecation_in_effect(since: &str) -> bool {
     fn parse_version(ver: &str) -> Vec<u32> {
@@ -561,11 +561,6 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     /// deprecated. If the item is indeed deprecated, we will emit a deprecation lint attached to
     /// `id`.
     pub fn eval_stability(self, def_id: DefId, id: Option<NodeId>, span: Span) -> EvalResult {
-        if span.allows_unstable() {
-            debug!("stability: skipping span={:?} since it is internal", span);
-            return EvalResult::Allow;
-        }
-
         let lint_deprecated = |def_id: DefId,
                                id: NodeId,
                                note: Option<Symbol>,
@@ -694,6 +689,10 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
         match stability {
             Some(&Stability { level: attr::Unstable { reason, issue }, feature, .. }) => {
+                if span.allows_unstable(&feature.as_str()) {
+                    debug!("stability: skipping span={:?} since it is internal", span);
+                    return EvalResult::Allow;
+                }
                 if self.stability().active_features.contains(&feature) {
                     return EvalResult::Allow;
                 }

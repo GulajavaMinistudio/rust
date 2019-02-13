@@ -176,18 +176,18 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
         }
     }
 
-    /// Add the given qualification to self.qualif.
+    /// Adds the given qualification to `self.qualif`.
     fn add(&mut self, qualif: Qualif) {
         self.qualif = self.qualif | qualif;
     }
 
-    /// Add the given type's qualification to self.qualif.
+    /// Adds the given type's qualification to `self.qualif`.
     fn add_type(&mut self, ty: Ty<'tcx>) {
         self.add(Qualif::MUTABLE_INTERIOR | Qualif::NEEDS_DROP);
         self.qualif.restrict(ty, self.tcx, self.param_env);
     }
 
-    /// Within the provided closure, self.qualif will start
+    /// Within the provided closure, `self.qualif` will start
     /// out empty, and its value after the closure returns will
     /// be combined with the value before the call to nest.
     fn nest<F: FnOnce(&mut Self)>(&mut self, f: F) {
@@ -836,6 +836,8 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                                 | "add_with_overflow"
                                 | "sub_with_overflow"
                                 | "mul_with_overflow"
+                                | "saturating_add"
+                                | "saturating_sub"
                                 // no need to check feature gates, intrinsics are only callable
                                 // from the libstd or with forever unstable feature gates
                                 => is_const_fn = true,
@@ -907,7 +909,7 @@ impl<'a, 'tcx> Visitor<'tcx> for Qualifier<'a, 'tcx, 'tcx> {
                                     // Check `#[unstable]` const fns or `#[rustc_const_unstable]`
                                     // functions without the feature gate active in this crate in
                                     // order to report a better error message than the one below.
-                                    if self.span.allows_unstable() {
+                                    if self.span.allows_unstable(&feature.as_str()) {
                                         // `allow_internal_unstable` can make such calls stable.
                                         is_const_fn = true;
                                     } else {

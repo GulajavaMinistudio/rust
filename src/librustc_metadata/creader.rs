@@ -513,7 +513,7 @@ impl<'a> CrateLoader<'a> {
         }
     }
 
-    /// Load custom derive macros.
+    /// Loads custom derive macros.
     ///
     /// Note that this is intentionally similar to how we load plugins today,
     /// but also intentionally separate. Plugins are likely always going to be
@@ -570,7 +570,7 @@ impl<'a> CrateLoader<'a> {
                 ProcMacro::Bang { name, client } => {
                     (name, SyntaxExtension::ProcMacro {
                         expander: Box::new(BangProcMacro { client }),
-                        allow_internal_unstable: false,
+                        allow_internal_unstable: None,
                         edition: root.edition,
                     })
                 }

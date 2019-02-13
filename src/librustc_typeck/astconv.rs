@@ -3,13 +3,13 @@
 //! instance of `AstConv`.
 
 use errors::{Applicability, DiagnosticId};
-use hir::{self, GenericArg, GenericArgs};
-use hir::def::Def;
-use hir::def_id::DefId;
-use hir::HirVec;
-use lint;
-use middle::resolve_lifetime as rl;
-use namespace::Namespace;
+use crate::hir::{self, GenericArg, GenericArgs};
+use crate::hir::def::Def;
+use crate::hir::def_id::DefId;
+use crate::hir::HirVec;
+use crate::lint;
+use crate::middle::resolve_lifetime as rl;
+use crate::namespace::Namespace;
 use rustc::lint::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;
 use rustc::traits;
 use rustc::ty::{self, Ty, TyCtxt, ToPredicate, TypeFoldable};
@@ -18,15 +18,15 @@ use rustc::ty::subst::{Kind, Subst, Substs};
 use rustc::ty::wf::object_region_bounds;
 use rustc_data_structures::sync::Lrc;
 use rustc_target::spec::abi;
-use require_c_abi_if_variadic;
+use crate::require_c_abi_if_variadic;
 use smallvec::SmallVec;
 use syntax::ast;
 use syntax::feature_gate::{GateIssue, emit_feature_err};
 use syntax::ptr::P;
 use syntax::util::lev_distance::find_best_match_for_name;
 use syntax_pos::{DUMMY_SP, Span, MultiSpan};
-use util::common::ErrorReported;
-use util::nodemap::FxHashMap;
+use crate::util::common::ErrorReported;
+use crate::util::nodemap::FxHashMap;
 
 use std::collections::BTreeSet;
 use std::iter;
@@ -224,7 +224,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx> + 'o {
         impl_trait
     }
 
-    /// Check that the correct number of generic arguments have been provided.
+    /// Checks that the correct number of generic arguments have been provided.
     /// Used specifically for function calls.
     pub fn check_generic_arg_count_for_call(
         tcx: TyCtxt,
@@ -256,7 +256,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx> + 'o {
         ).0
     }
 
-    /// Check that the correct number of generic arguments have been provided.
+    /// Checks that the correct number of generic arguments have been provided.
     /// This is used both for datatypes and function calls.
     fn check_generic_arg_count(
         tcx: TyCtxt,
@@ -400,8 +400,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx> + 'o {
 
     /// Creates the relevant generic argument substitutions
     /// corresponding to a set of generic parameters. This is a
-    /// rather complex little function. Let me try to explain the
-    /// role of each of its parameters:
+    /// rather complex function. Let us try to explain the role
+    /// of each of its parameters:
     ///
     /// To start, we are given the `def_id` of the thing we are
     /// creating the substitutions for, and a partial set of
@@ -417,9 +417,9 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx> + 'o {
     /// we can append those and move on. Otherwise, it invokes the
     /// three callback functions:
     ///
-    /// - `args_for_def_id`: given the def-id `P`, supplies back the
+    /// - `args_for_def_id`: given the `DefId` `P`, supplies back the
     ///   generic arguments that were given to that parent from within
-    ///   the path; so e.g., if you have `<T as Foo>::Bar`, the def-id
+    ///   the path; so e.g., if you have `<T as Foo>::Bar`, the `DefId`
     ///   might refer to the trait `Foo`, and the arguments might be
     ///   `[T]`. The boolean value indicates whether to infer values
     ///   for arguments whose values were not explicitly provided.
@@ -680,7 +680,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> dyn AstConv<'gcx, 'tcx> + 'o {
     /// bound to a valid trait type. Returns the def_id for the defining trait.
     /// The type _cannot_ be a type other than a trait type.
     ///
-    /// If the `projections` argument is `None`, then assoc type bindings like `Foo<T=X>`
+    /// If the `projections` argument is `None`, then assoc type bindings like `Foo<T = X>`
     /// are disallowed. Otherwise, they are pushed onto the vector given.
     pub fn instantiate_mono_trait_ref(&self,
         trait_ref: &hir::TraitRef,

@@ -737,7 +737,7 @@ pub struct AttributeTemplate {
 }
 
 impl AttributeTemplate {
-    /// Check that the given meta-item is compatible with this template.
+    /// Checks that the given meta-item is compatible with this template.
     fn compatible(&self, meta_item_kind: &ast::MetaItemKind) -> bool {
         match meta_item_kind {
             ast::MetaItemKind::Word => self.word,
@@ -749,7 +749,7 @@ impl AttributeTemplate {
 }
 
 /// A convenience macro for constructing attribute templates.
-/// E.g. `template!(Word, List: "description")` means that the attribute
+/// E.g., `template!(Word, List: "description")` means that the attribute
 /// supports forms `#[attr]` and `#[attr(description)]`.
 macro_rules! template {
     (Word) => { template!(@ true, None, None) };
@@ -1091,7 +1091,8 @@ pub const BUILTIN_ATTRIBUTES: &[(&str, AttributeType, AttributeTemplate, Attribu
                                               stable",
                                              cfg_fn!(profiler_runtime))),
 
-    ("allow_internal_unstable", Normal, template!(Word), Gated(Stability::Unstable,
+    ("allow_internal_unstable", Normal, template!(Word, List: "feat1, feat2, ..."),
+                                              Gated(Stability::Unstable,
                                               "allow_internal_unstable",
                                               EXPLAIN_ALLOW_INTERNAL_UNSTABLE,
                                               cfg_fn!(allow_internal_unstable))),
@@ -1199,7 +1200,7 @@ pub const BUILTIN_ATTRIBUTES: &[(&str, AttributeType, AttributeTemplate, Attribu
     ("proc_macro", Normal, template!(Word), Ungated),
 
     ("rustc_proc_macro_decls", Normal, template!(Word), Gated(Stability::Unstable,
-                                             "rustc_proc_macro_decls",
+                                             "rustc_attrs",
                                              "used internally by rustc",
                                              cfg_fn!(rustc_attrs))),
 
@@ -1284,7 +1285,7 @@ impl GatedCfg {
 
     pub fn check_and_emit(&self, sess: &ParseSess, features: &Features) {
         let (cfg, feature, has_feature) = GATED_CFGS[self.index];
-        if !has_feature(features) && !self.span.allows_unstable() {
+        if !has_feature(features) && !self.span.allows_unstable(feature) {
             let explain = format!("`cfg({})` is experimental and subject to change", cfg);
             emit_feature_err(sess, feature, self.span, GateIssue::Language, &explain);
         }
@@ -1303,7 +1304,7 @@ macro_rules! gate_feature_fn {
              name, explain, level) = ($cx, $has_feature, $span, $name, $explain, $level);
         let has_feature: bool = has_feature(&$cx.features);
         debug!("gate_feature(feature = {:?}, span = {:?}); has? {}", name, span, has_feature);
-        if !has_feature && !span.allows_unstable() {
+        if !has_feature && !span.allows_unstable($name) {
             leveled_feature_err(cx.parse_sess, name, span, GateIssue::Language, explain, level)
                 .emit();
         }
@@ -1328,7 +1329,11 @@ impl<'a> Context<'a> {
         for &(n, ty, _template, ref gateage) in BUILTIN_ATTRIBUTES {
             if name == n {
                 if let Gated(_, name, desc, ref has_feature) = *gateage {
-                    gate_feature_fn!(self, has_feature, attr.span, name, desc, GateStrength::Hard);
+                    if !attr.span.allows_unstable(name) {
+                        gate_feature_fn!(
+                            self, has_feature, attr.span, name, desc, GateStrength::Hard
+                        );
+                    }
                 } else if name == "doc" {
                     if let Some(content) = attr.meta_item_list() {
                         if content.iter().any(|c| c.check_name("include")) {
@@ -1493,13 +1498,13 @@ struct PostExpansionVisitor<'a> {
 macro_rules! gate_feature_post {
     ($cx: expr, $feature: ident, $span: expr, $explain: expr) => {{
         let (cx, span) = ($cx, $span);
-        if !span.allows_unstable() {
+        if !span.allows_unstable(stringify!($feature)) {
             gate_feature!(cx.context, $feature, span, $explain)
         }
     }};
     ($cx: expr, $feature: ident, $span: expr, $explain: expr, $level: expr) => {{
         let (cx, span) = ($cx, $span);
-        if !span.allows_unstable() {
+        if !span.allows_unstable(stringify!($feature)) {
             gate_feature!(cx.context, $feature, span, $explain, $level)
         }
     }}
@@ -1610,10 +1615,8 @@ impl<'a> PostExpansionVisitor<'a> {
 
 impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
     fn visit_attribute(&mut self, attr: &ast::Attribute) {
-        if !attr.span.allows_unstable() {
-            // check for gated attributes
-            self.context.check_attribute(attr, false);
-        }
+        // check for gated attributes
+        self.context.check_attribute(attr, false);
 
         if attr.check_name("doc") {
             if let Some(content) = attr.meta_item_list() {
@@ -2145,8 +2148,7 @@ pub fn check_crate(krate: &ast::Crate,
 
 #[derive(Clone, Copy, Hash)]
 pub enum UnstableFeatures {
-    /// Hard errors for unstable features are active, as on
-    /// beta/stable channels.
+    /// Hard errors for unstable features are active, as on beta/stable channels.
     Disallow,
     /// Allow features to be activated, as on nightly.
     Allow,
