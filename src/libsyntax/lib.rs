@@ -15,7 +15,6 @@
 #![feature(rustc_attrs)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(slice_sort_by_cached_key)]
-#![feature(str_escape)]
 #![feature(step_trait)]
 #![feature(try_trait)]
 #![feature(unicode_internals)]
@@ -25,7 +24,7 @@
 #[allow(unused_extern_crates)]
 extern crate serialize as rustc_serialize; // used by deriving
 
-pub use rustc_errors as errors;
+pub use errors;
 use rustc_data_structures::sync::Lock;
 use rustc_data_structures::bit_set::GrowableBitSet;
 pub use rustc_data_structures::thin_vec::ThinVec;
@@ -38,7 +37,7 @@ use ast::AttrId;
 macro_rules! panictry {
     ($e:expr) => ({
         use std::result::Result::{Ok, Err};
-        use crate::errors::FatalError;
+        use errors::FatalError;
         match $e {
             Ok(e) => e,
             Err(mut e) => {
@@ -53,7 +52,7 @@ macro_rules! panictry {
 macro_rules! panictry_buffer {
     ($handler:expr, $e:expr) => ({
         use std::result::Result::{Ok, Err};
-        use crate::errors::{FatalError, DiagnosticBuilder};
+        use errors::{FatalError, DiagnosticBuilder};
         match $e {
             Ok(e) => e,
             Err(errs) => {
