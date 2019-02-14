@@ -72,7 +72,7 @@ pub mod print;
 /// the `local_id` part of the `HirId` changing, which is a very useful property in
 /// incremental compilation where we have to persist things through changes to
 /// the code base.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct HirId {
     pub owner: DefIndex,
     pub local_id: ItemLocalId,
@@ -1234,7 +1234,7 @@ pub enum UnsafeSource {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug)]
 pub struct BodyId {
-    pub node_id: NodeId,
+    pub hir_id: HirId,
 }
 
 /// The body of a function, closure, or constant value. In the case of
@@ -1268,7 +1268,7 @@ pub struct Body {
 impl Body {
     pub fn id(&self) -> BodyId {
         BodyId {
-            node_id: self.value.id
+            hir_id: self.value.hir_id,
         }
     }
 }
@@ -1318,6 +1318,10 @@ pub struct Expr {
     pub attrs: ThinVec<Attribute>,
     pub hir_id: HirId,
 }
+
+// `Expr` is used a lot. Make sure it doesn't unintentionally get bigger.
+#[cfg(target_arch = "x86_64")]
+static_assert!(MEM_SIZE_OF_EXPR: std::mem::size_of::<Expr>() == 72);
 
 impl Expr {
     pub fn precedence(&self) -> ExprPrecedence {
@@ -1438,7 +1442,7 @@ pub enum ExprKind {
     /// and the remaining elements are the rest of the arguments.
     /// Thus, `x.foo::<Bar, Baz>(a, b, c, d)` is represented as
     /// `ExprKind::MethodCall(PathSegment { foo, [Bar, Baz] }, [x, a, b, c, d])`.
-    MethodCall(PathSegment, Span, HirVec<Expr>),
+    MethodCall(P<PathSegment>, Span, HirVec<Expr>),
     /// A tuple (e.g., `(a, b, c ,d)`).
     Tup(HirVec<Expr>),
     /// A binary operation (e.g., `a + b`, `a * b`).
@@ -1506,7 +1510,7 @@ pub enum ExprKind {
     ///
     /// For example, `Foo {x: 1, y: 2}`, or
     /// `Foo {x: 1, .. base}`, where `base` is the `Option<Expr>`.
-    Struct(QPath, HirVec<Field>, Option<P<Expr>>),
+    Struct(P<QPath>, HirVec<Field>, Option<P<Expr>>),
 
     /// An array literal constructed from one repeated element.
     ///
@@ -2290,7 +2294,7 @@ impl ItemKind {
             ItemKind::Union(..) => "union",
             ItemKind::Trait(..) => "trait",
             ItemKind::TraitAlias(..) => "trait alias",
-            ItemKind::Impl(..) => "item",
+            ItemKind::Impl(..) => "impl",
         }
     }
 
