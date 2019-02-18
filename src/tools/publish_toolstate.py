@@ -15,7 +15,7 @@ except ImportError:
 # List of people to ping when the status of a tool changed.
 MAINTAINERS = {
     'miri': '@oli-obk @RalfJung @eddyb',
-    'clippy-driver': '@Manishearth @llogiq @mcarton @oli-obk',
+    'clippy-driver': '@Manishearth @llogiq @mcarton @oli-obk @phansch',
     'rls': '@nrc @Xanewok',
     'rustfmt': '@nrc @topecongiro',
     'book': '@carols10cents @steveklabnik',
@@ -140,12 +140,12 @@ def update_latest(
                         tool, MAINTAINERS.get(tool),
                         relevant_pr_number, relevant_pr_user, pr_reviewer,
                     )
-                except IOError as (errno, strerror):
+                except IOError as e:
                     # network errors will simply end up not creating an issue, but that's better
                     # than failing the entire build job
-                    print "I/O error({0}): {1}".format(errno, strerror)
+                    print("I/O error: {0}".format(e))
                 except:
-                    print "Unexpected error:", sys.exc_info()[0]
+                    print("Unexpected error: {0}".format(sys.exc_info()[0]))
                     raise
 
             if changed:
