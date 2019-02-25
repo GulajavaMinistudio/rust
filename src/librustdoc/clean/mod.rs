@@ -976,11 +976,13 @@ impl Attributes {
                                 "https://doc.rust-lang.org/nightly",
                         };
                         // This is a primitive so the url is done "by hand".
+                        let tail = fragment.find('#').unwrap_or_else(|| fragment.len());
                         Some((s.clone(),
-                              format!("{}{}std/primitive.{}.html",
+                              format!("{}{}std/primitive.{}.html{}",
                                       url,
                                       if !url.ends_with('/') { "/" } else { "" },
-                                      fragment)))
+                                      &fragment[..tail],
+                                      &fragment[tail..])))
                     } else {
                         panic!("This isn't a primitive?!");
                     }
@@ -2564,9 +2566,9 @@ impl Clean<Type> for hir::Ty {
                 let mut alias = None;
                 if let Def::TyAlias(def_id) = path.def {
                     // Substitute private type aliases
-                    if let Some(node_id) = cx.tcx.hir().as_local_node_id(def_id) {
+                    if let Some(hir_id) = cx.tcx.hir().as_local_hir_id(def_id) {
                         if !cx.renderinfo.borrow().access_levels.is_exported(def_id) {
-                            alias = Some(&cx.tcx.hir().expect_item(node_id).node);
+                            alias = Some(&cx.tcx.hir().expect_item_by_hir_id(hir_id).node);
                         }
                     }
                 };
