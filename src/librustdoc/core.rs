@@ -193,7 +193,6 @@ impl<'a, 'tcx, 'rcx> DocContext<'a, 'tcx, 'rcx> {
         };
 
         hir::Ty {
-            id: ast::DUMMY_NODE_ID,
             node: hir::TyKind::Path(hir::QPath::Resolved(None, P(new_path))),
             span: DUMMY_SP,
             hir_id: hir::DUMMY_HIR_ID,
@@ -213,7 +212,6 @@ impl<'a, 'tcx, 'rcx> DocContext<'a, 'tcx, 'rcx> {
                     };
 
                     args.push(hir::GenericArg::Lifetime(hir::Lifetime {
-                        id: ast::DUMMY_NODE_ID,
                         hir_id: hir::DUMMY_HIR_ID,
                         span: DUMMY_SP,
                         name: hir::LifetimeName::Param(name),
@@ -235,7 +233,6 @@ impl<'a, 'tcx, 'rcx> DocContext<'a, 'tcx, 'rcx> {
     pub fn ty_param_to_ty(&self, param: ty::GenericParamDef) -> hir::Ty {
         debug!("ty_param_to_ty({:?}) {:?}", param, param.def_id);
         hir::Ty {
-            id: ast::DUMMY_NODE_ID,
             node: hir::TyKind::Path(hir::QPath::Resolved(
                 None,
                 P(hir::Path {
@@ -606,10 +603,12 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
                 passes::defaults(default_passes).iter().map(|p| p.to_string()).collect();
             passes.extend(manual_passes);
 
+            info!("Executing passes");
+
             for pass in &passes {
-                // the "unknown pass" error will be reported when late passes are run
-                if let Some(pass) = passes::find_pass(pass).and_then(|p| p.early_fn()) {
-                    krate = pass(krate, &ctxt);
+                match passes::find_pass(pass).map(|p| p.pass) {
+                    Some(pass) => krate = pass(krate, &ctxt),
+                    None => error!("unknown pass {}, skipping", *pass),
                 }
             }
 
