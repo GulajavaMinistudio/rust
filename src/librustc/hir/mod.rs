@@ -122,15 +122,15 @@ impl fmt::Display for HirId {
 // hack to ensure that we don't try to access the private parts of `ItemLocalId` in this module
 mod item_local_id_inner {
     use rustc_data_structures::indexed_vec::Idx;
-    /// An `ItemLocalId` uniquely identifies something within a given "item-like",
-    /// that is within a hir::Item, hir::TraitItem, or hir::ImplItem. There is no
-    /// guarantee that the numerical value of a given `ItemLocalId` corresponds to
-    /// the node's position within the owning item in any way, but there is a
-    /// guarantee that the `LocalItemId`s within an owner occupy a dense range of
-    /// integers starting at zero, so a mapping that maps all or most nodes within
-    /// an "item-like" to something else can be implement by a `Vec` instead of a
-    /// tree or hash map.
     newtype_index! {
+        /// An `ItemLocalId` uniquely identifies something within a given "item-like",
+        /// that is within a hir::Item, hir::TraitItem, or hir::ImplItem. There is no
+        /// guarantee that the numerical value of a given `ItemLocalId` corresponds to
+        /// the node's position within the owning item in any way, but there is a
+        /// guarantee that the `LocalItemId`s within an owner occupy a dense range of
+        /// integers starting at zero, so a mapping that maps all or most nodes within
+        /// an "item-like" to something else can be implement by a `Vec` instead of a
+        /// tree or hash map.
         pub struct ItemLocalId { .. }
     }
 }
@@ -328,7 +328,6 @@ pub struct PathSegment {
     // therefore will not have 'jump to def' in IDEs, but otherwise will not be
     // affected. (In general, we don't bother to get the defs for synthesized
     // segments, only for segments which have come from the AST).
-    pub id: Option<NodeId>,
     pub hir_id: Option<HirId>,
     pub def: Option<Def>,
 
@@ -351,7 +350,6 @@ impl PathSegment {
     pub fn from_ident(ident: Ident) -> PathSegment {
         PathSegment {
             ident,
-            id: None,
             hir_id: None,
             def: None,
             infer_types: true,
@@ -361,7 +359,6 @@ impl PathSegment {
 
     pub fn new(
         ident: Ident,
-        id: Option<NodeId>,
         hir_id: Option<HirId>,
         def: Option<Def>,
         args: GenericArgs,
@@ -369,7 +366,6 @@ impl PathSegment {
     ) -> Self {
         PathSegment {
             ident,
-            id,
             hir_id,
             def,
             infer_types,
@@ -941,10 +937,10 @@ pub enum PatKind {
     Wild,
 
     /// A fresh binding `ref mut binding @ OPT_SUBPATTERN`.
-    /// The `NodeId` is the canonical ID for the variable being bound,
+    /// The `HirId` is the canonical ID for the variable being bound,
     /// (e.g., in `Ok(x) | Err(x)`, both `x` use the same canonical ID),
     /// which is the pattern ID of the first `x`.
-    Binding(BindingAnnotation, NodeId, HirId, Ident, Option<P<Pat>>),
+    Binding(BindingAnnotation, HirId, Ident, Option<P<Pat>>),
 
     /// A struct or struct variant pattern (e.g., `Variant {x, y, ..}`).
     /// The `bool` is `true` in the presence of a `..`.
@@ -1623,7 +1619,7 @@ pub struct Destination {
 
     // These errors are caught and then reported during the diagnostics pass in
     // librustc_passes/loops.rs
-    pub target_id: Result<NodeId, LoopIdError>,
+    pub target_id: Result<HirId, LoopIdError>,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]

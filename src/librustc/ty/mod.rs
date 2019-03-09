@@ -5,7 +5,7 @@ pub use self::IntVarValue::*;
 pub use self::fold::TypeFoldable;
 
 use crate::hir::{map as hir_map, FreevarMap, GlobMap, TraitMap};
-use crate::hir::Node;
+use crate::hir::{HirId, Node};
 use crate::hir::def::{Def, CtorKind, ExportMap};
 use crate::hir::def_id::{CrateNum, DefId, LocalDefId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use crate::hir::map::DefPathData;
@@ -1512,42 +1512,42 @@ impl<'tcx> InstantiatedPredicates<'tcx> {
     }
 }
 
-/// "Universes" are used during type- and trait-checking in the
-/// presence of `for<..>` binders to control what sets of names are
-/// visible. Universes are arranged into a tree: the root universe
-/// contains names that are always visible. Each child then adds a new
-/// set of names that are visible, in addition to those of its parent.
-/// We say that the child universe "extends" the parent universe with
-/// new names.
-///
-/// To make this more concrete, consider this program:
-///
-/// ```
-/// struct Foo { }
-/// fn bar<T>(x: T) {
-///   let y: for<'a> fn(&'a u8, Foo) = ...;
-/// }
-/// ```
-///
-/// The struct name `Foo` is in the root universe U0. But the type
-/// parameter `T`, introduced on `bar`, is in an extended universe U1
-/// -- i.e., within `bar`, we can name both `T` and `Foo`, but outside
-/// of `bar`, we cannot name `T`. Then, within the type of `y`, the
-/// region `'a` is in a universe U2 that extends U1, because we can
-/// name it inside the fn type but not outside.
-///
-/// Universes are used to do type- and trait-checking around these
-/// "forall" binders (also called **universal quantification**). The
-/// idea is that when, in the body of `bar`, we refer to `T` as a
-/// type, we aren't referring to any type in particular, but rather a
-/// kind of "fresh" type that is distinct from all other types we have
-/// actually declared. This is called a **placeholder** type, and we
-/// use universes to talk about this. In other words, a type name in
-/// universe 0 always corresponds to some "ground" type that the user
-/// declared, but a type name in a non-zero universe is a placeholder
-/// type -- an idealized representative of "types in general" that we
-/// use for checking generic functions.
 newtype_index! {
+    /// "Universes" are used during type- and trait-checking in the
+    /// presence of `for<..>` binders to control what sets of names are
+    /// visible. Universes are arranged into a tree: the root universe
+    /// contains names that are always visible. Each child then adds a new
+    /// set of names that are visible, in addition to those of its parent.
+    /// We say that the child universe "extends" the parent universe with
+    /// new names.
+    ///
+    /// To make this more concrete, consider this program:
+    ///
+    /// ```
+    /// struct Foo { }
+    /// fn bar<T>(x: T) {
+    ///   let y: for<'a> fn(&'a u8, Foo) = ...;
+    /// }
+    /// ```
+    ///
+    /// The struct name `Foo` is in the root universe U0. But the type
+    /// parameter `T`, introduced on `bar`, is in an extended universe U1
+    /// -- i.e., within `bar`, we can name both `T` and `Foo`, but outside
+    /// of `bar`, we cannot name `T`. Then, within the type of `y`, the
+    /// region `'a` is in a universe U2 that extends U1, because we can
+    /// name it inside the fn type but not outside.
+    ///
+    /// Universes are used to do type- and trait-checking around these
+    /// "forall" binders (also called **universal quantification**). The
+    /// idea is that when, in the body of `bar`, we refer to `T` as a
+    /// type, we aren't referring to any type in particular, but rather a
+    /// kind of "fresh" type that is distinct from all other types we have
+    /// actually declared. This is called a **placeholder** type, and we
+    /// use universes to talk about this. In other words, a type name in
+    /// universe 0 always corresponds to some "ground" type that the user
+    /// declared, but a type name in a non-zero universe is a placeholder
+    /// type -- an idealized representative of "types in general" that we
+    /// use for checking generic functions.
     pub struct UniverseIndex {
         DEBUG_FORMAT = "U{}",
     }
@@ -2726,8 +2726,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     }
 
     pub fn opt_associated_item(self, def_id: DefId) -> Option<AssociatedItem> {
-        let is_associated_item = if let Some(node_id) = self.hir().as_local_node_id(def_id) {
-            match self.hir().get(node_id) {
+        let is_associated_item = if let Some(hir_id) = self.hir().as_local_hir_id(def_id) {
+            match self.hir().get_by_hir_id(hir_id) {
                 Node::TraitItem(_) | Node::ImplItem(_) => true,
                 _ => false,
             }
@@ -3048,10 +3048,10 @@ impl Iterator for AssociatedItemsIterator<'_, '_, '_> {
 }
 
 impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
-    pub fn with_freevars<T, F>(self, fid: NodeId, f: F) -> T where
+    pub fn with_freevars<T, F>(self, fid: HirId, f: F) -> T where
         F: FnOnce(&[hir::Freevar]) -> T,
     {
-        let def_id = self.hir().local_def_id(fid);
+        let def_id = self.hir().local_def_id_from_hir_id(fid);
         match self.freevars(def_id) {
             None => f(&[]),
             Some(d) => f(&d),
@@ -3163,8 +3163,8 @@ fn trait_of_item<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId) -> Option
 
 /// Yields the parent function's `DefId` if `def_id` is an `impl Trait` definition.
 pub fn is_impl_trait_defn(tcx: TyCtxt<'_, '_, '_>, def_id: DefId) -> Option<DefId> {
-    if let Some(node_id) = tcx.hir().as_local_node_id(def_id) {
-        if let Node::Item(item) = tcx.hir().get(node_id) {
+    if let Some(hir_id) = tcx.hir().as_local_hir_id(def_id) {
+        if let Node::Item(item) = tcx.hir().get_by_hir_id(hir_id) {
             if let hir::ItemKind::Existential(ref exist_ty) = item.node {
                 return exist_ty.impl_trait_fn;
             }

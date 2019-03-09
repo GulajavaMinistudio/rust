@@ -1619,10 +1619,10 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             _ => return None, // not a free region
         };
 
-        let node_id = self.hir()
-            .as_local_node_id(suitable_region_binding_scope)
+        let hir_id = self.hir()
+            .as_local_hir_id(suitable_region_binding_scope)
             .unwrap();
-        let is_impl_item = match self.hir().find(node_id) {
+        let is_impl_item = match self.hir().find_by_hir_id(hir_id) {
             Some(Node::Item(..)) | Some(Node::TraitItem(..)) => false,
             Some(Node::ImplItem(..)) => {
                 self.is_bound_region_in_impl_item(suitable_region_binding_scope)
@@ -1642,8 +1642,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         scope_def_id: DefId,
     ) -> Option<Ty<'tcx>> {
         // HACK: `type_of_def_id()` will fail on these (#55796), so return None
-        let node_id = self.hir().as_local_node_id(scope_def_id).unwrap();
-        match self.hir().get(node_id) {
+        let hir_id = self.hir().as_local_hir_id(scope_def_id).unwrap();
+        match self.hir().get_by_hir_id(hir_id) {
             Node::Item(item) => {
                 match item.node {
                     ItemKind::Fn(..) => { /* type_of_def_id() will work */ }
@@ -1892,9 +1892,11 @@ pub mod tls {
         rayon_core::tlv::get()
     }
 
-    /// A thread local variable which stores a pointer to the current ImplicitCtxt
     #[cfg(not(parallel_compiler))]
-    thread_local!(static TLV: Cell<usize> = Cell::new(0));
+    thread_local! {
+        /// A thread local variable which stores a pointer to the current ImplicitCtxt.
+        static TLV: Cell<usize> = Cell::new(0);
+    }
 
     /// Sets TLV to `value` during the call to `f`.
     /// It is restored to its previous value after.
@@ -2011,10 +2013,11 @@ pub mod tls {
         })
     }
 
-    /// Stores a pointer to the GlobalCtxt if one is available.
-    /// This is used to access the GlobalCtxt in the deadlock handler
-    /// given to Rayon.
-    scoped_thread_local!(pub static GCX_PTR: Lock<usize>);
+    scoped_thread_local! {
+        /// Stores a pointer to the GlobalCtxt if one is available.
+        /// This is used to access the GlobalCtxt in the deadlock handler given to Rayon.
+        pub static GCX_PTR: Lock<usize>
+    }
 
     /// Creates a TyCtxt and ImplicitCtxt based on the GCX_PTR thread local.
     /// This is used in the deadlock handler.
