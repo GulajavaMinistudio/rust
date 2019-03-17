@@ -24,8 +24,8 @@ pub struct StripUnconfigured<'a> {
 }
 
 // `cfg_attr`-process the crate's attributes and compute the crate's features.
-pub fn features(mut krate: ast::Crate, sess: &ParseSess, edition: Edition)
-                -> (ast::Crate, Features) {
+pub fn features(mut krate: ast::Crate, sess: &ParseSess, edition: Edition,
+                allow_features: &Option<Vec<String>>) -> (ast::Crate, Features) {
     let features;
     {
         let mut strip_unconfigured = StripUnconfigured {
@@ -43,7 +43,7 @@ pub fn features(mut krate: ast::Crate, sess: &ParseSess, edition: Edition)
             return (krate, Features::new());
         }
 
-        features = get_features(&sess.span_diagnostic, &krate.attrs, edition);
+        features = get_features(&sess.span_diagnostic, &krate.attrs, edition, allow_features);
 
         // Avoid reconfiguring malformed `cfg_attr`s
         if err_count == sess.span_diagnostic.err_count() {
@@ -181,13 +181,13 @@ impl<'a> StripUnconfigured<'a> {
             if nested_meta_items.is_empty() {
                 return error(meta_item.span, "`cfg` predicate is not specified", "");
             } else if nested_meta_items.len() > 1 {
-                return error(nested_meta_items.last().unwrap().span,
+                return error(nested_meta_items.last().unwrap().span(),
                              "multiple `cfg` predicates are specified", "");
             }
 
             match nested_meta_items[0].meta_item() {
                 Some(meta_item) => attr::cfg_matches(meta_item, self.sess, self.features),
-                None => error(nested_meta_items[0].span,
+                None => error(nested_meta_items[0].span(),
                               "`cfg` predicate key cannot be a literal", ""),
             }
         })
