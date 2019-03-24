@@ -60,20 +60,27 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         }
     }
 
-    pub fn report_method_error<'b>(&self,
-                                   span: Span,
-                                   rcvr_ty: Ty<'tcx>,
-                                   item_name: ast::Ident,
-                                   source: SelfSource<'b>,
-                                   error: MethodError<'tcx>,
-                                   args: Option<&'gcx [hir::Expr]>) {
+    pub fn report_method_error<'b>(
+        &self,
+        span: Span,
+        rcvr_ty: Ty<'tcx>,
+        item_name: ast::Ident,
+        source: SelfSource<'b>,
+        error: MethodError<'tcx>,
+        args: Option<&'gcx [hir::Expr]>,
+    ) {
+        let orig_span = span;
+        let mut span = span;
         // Avoid suggestions when we don't know what's going on.
         if rcvr_ty.references_error() {
             return;
         }
 
-        let report_candidates = |err: &mut DiagnosticBuilder<'_>,
-                                 mut sources: Vec<CandidateSource>| {
+        let report_candidates = |
+            span: Span,
+            err: &mut DiagnosticBuilder<'_>,
+            mut sources: Vec<CandidateSource>,
+        | {
             sources.sort();
             sources.dedup();
             // Dynamic limit to avoid hiding just one candidate, which is silly.
@@ -291,9 +298,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         err.emit();
                         return;
                     } else {
+                        span = item_name.span;
                         let mut err = struct_span_err!(
                             tcx.sess,
-                            item_name.span,
+                            span,
                             E0599,
                             "no {} named `{}` found for type `{}` in the current scope",
                             item_kind,
@@ -303,7 +311,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         if let Some(suggestion) = suggestion {
                             // enum variant
                             err.span_suggestion(
-                                item_name.span,
+                                span,
                                 "did you mean",
                                 suggestion.to_string(),
                                 Applicability::MaybeIncorrect,
@@ -332,47 +340,65 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 // If the method name is the name of a field with a function or closure type,
                 // give a helping note that it has to be called as `(x.f)(...)`.
                 if let SelfSource::MethodCall(expr) = source {
-                    for (ty, _) in self.autoderef(span, rcvr_ty) {
-                        if let ty::Adt(def, substs) = ty.sty {
-                            if !def.is_enum() {
+                    let field_receiver = self
+                        .autoderef(span, rcvr_ty)
+                        .find_map(|(ty, _)| match ty.sty {
+                            ty::Adt(def, substs) if !def.is_enum() => {
                                 let variant = &def.non_enum_variant();
-                                if let Some(index) = self.tcx.find_field_index(item_name, variant) {
+                                self.tcx.find_field_index(item_name, variant).map(|index| {
                                     let field = &variant.fields[index];
-                                    let snippet = tcx.sess.source_map().span_to_snippet(expr.span);
-                                    let expr_string = match snippet {
-                                        Ok(expr_string) => expr_string,
-                                        _ => "s".into(), // Default to a generic placeholder for the
-                                                         // expression when we can't generate a
-                                                         // string snippet.
-                                    };
-
                                     let field_ty = field.ty(tcx, substs);
-                                    let scope = self.tcx.hir().get_module_parent_by_hir_id(
-                                        self.body_id);
-                                    if field.vis.is_accessible_from(scope, self.tcx) {
-                                        if self.is_fn_ty(&field_ty, span) {
-                                            err.help(&format!("use `({0}.{1})(...)` if you \
-                                                               meant to call the function \
-                                                               stored in the `{1}` field",
-                                                              expr_string,
-                                                              item_name));
-                                        } else {
-                                            err.help(&format!("did you mean to write `{0}.{1}` \
-                                                               instead of `{0}.{1}(...)`?",
-                                                              expr_string,
-                                                              item_name));
-                                        }
-                                        err.span_label(span, "field, not a method");
-                                    } else {
-                                        err.span_label(span, "private field, not a method");
-                                    }
-                                    break;
-                                }
+                                    (field, field_ty)
+                                })
+                            }
+                            _ => None,
+                        });
+
+                    if let Some((field, field_ty)) = field_receiver {
+                        let scope = self.tcx.hir().get_module_parent_by_hir_id(self.body_id);
+                        let is_accessible = field.vis.is_accessible_from(scope, self.tcx);
+
+                        if is_accessible {
+                            if self.is_fn_ty(&field_ty, span) {
+                                let expr_span = expr.span.to(item_name.span);
+                                err.multipart_suggestion(
+                                    &format!(
+                                        "to call the function stored in `{}`, \
+                                         surround the field access with parentheses",
+                                        item_name,
+                                    ),
+                                    vec![
+                                        (expr_span.shrink_to_lo(), '('.to_string()),
+                                        (expr_span.shrink_to_hi(), ')'.to_string()),
+                                    ],
+                                    Applicability::MachineApplicable,
+                                );
+                            } else {
+                                let call_expr = self.tcx.hir().expect_expr_by_hir_id(
+                                    self.tcx.hir().get_parent_node_by_hir_id(expr.hir_id),
+                                );
+
+                                let span = call_expr.span.trim_start(item_name.span).unwrap();
+
+                                err.span_suggestion(
+                                    span,
+                                    "remove the arguments",
+                                    String::new(),
+                                    Applicability::MaybeIncorrect,
+                                );
                             }
                         }
+
+                        let field_kind = if is_accessible {
+                            "field"
+                        } else {
+                            "private field"
+                        };
+                        err.span_label(item_name.span, format!("{}, not a method", field_kind));
                     }
                 } else {
                     err.span_label(span, format!("{} not found in `{}`", item_kind, ty_str));
+                    self.tcx.sess.trait_methods_not_found.borrow_mut().insert(orig_span);
                 }
 
                 if self.is_fn_ty(&rcvr_ty, span) {
@@ -414,9 +440,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                           self.ty_to_string(actual), item_name));
                     }
 
-                    report_candidates(&mut err, static_sources);
+                    report_candidates(span, &mut err, static_sources);
                 } else if static_sources.len() > 1 {
-                    report_candidates(&mut err, static_sources);
+                    report_candidates(span, &mut err, static_sources);
                 }
 
                 if !unsatisfied_predicates.is_empty() {
@@ -461,7 +487,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                                                "multiple applicable items in scope");
                 err.span_label(span, format!("multiple `{}` found", item_name));
 
-                report_candidates(&mut err, sources);
+                report_candidates(span, &mut err, sources);
                 err.emit();
             }
 

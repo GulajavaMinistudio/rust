@@ -702,15 +702,11 @@ fn check_mod_item_types<'tcx>(tcx: TyCtxt<'_, 'tcx, 'tcx>, module_def_id: DefId)
     tcx.hir().visit_item_likes_in_module(module_def_id, &mut CheckItemTypesVisitor { tcx });
 }
 
-fn typeck_item_bodies<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_num: CrateNum)
-                                -> Result<(), ErrorReported>
-{
+fn typeck_item_bodies<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_num: CrateNum) {
     debug_assert!(crate_num == LOCAL_CRATE);
-    Ok(tcx.sess.track_errors(|| {
-        tcx.par_body_owners(|body_owner_def_id| {
-            tcx.ensure().typeck_tables_of(body_owner_def_id);
-        });
-    })?)
+    tcx.par_body_owners(|body_owner_def_id| {
+        tcx.ensure().typeck_tables_of(body_owner_def_id);
+    });
 }
 
 fn check_item_well_formed<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId) {
@@ -3734,12 +3730,17 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                            field, expr_t)
     }
 
-    fn report_unknown_field(&self,
-                            ty: Ty<'tcx>,
-                            variant: &'tcx ty::VariantDef,
-                            field: &hir::Field,
-                            skip_fields: &[hir::Field],
-                            kind_name: &str) {
+    fn report_unknown_field(
+        &self,
+        ty: Ty<'tcx>,
+        variant: &'tcx ty::VariantDef,
+        field: &hir::Field,
+        skip_fields: &[hir::Field],
+        kind_name: &str,
+    ) {
+        if variant.recovered {
+            return;
+        }
         let mut err = self.type_error_struct_with_diag(
             field.ident.span,
             |actual| match ty.sty {
@@ -5011,10 +5012,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     // that highlight errors inline.
                     let mut sp = blk.span;
                     let mut fn_span = None;
-                    let blk_node_id = self.tcx.hir().hir_to_node_id(blk.hir_id);
-                    if let Some((decl, ident)) = self.get_parent_fn_decl(blk_node_id) {
+                    if let Some((decl, ident)) = self.get_parent_fn_decl(blk.hir_id) {
                         let ret_sp = decl.output.span();
-                        if let Some(block_sp) = self.parent_item_span(blk_node_id) {
+                        if let Some(block_sp) = self.parent_item_span(blk.hir_id) {
                             // HACK: on some cases (`ui/liveness/liveness-issue-2163.rs`) the
                             // output would otherwise be incorrect and even misleading. Make sure
                             // the span we're aiming at correspond to a `fn` body.
@@ -5054,8 +5054,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         ty
     }
 
-    fn parent_item_span(&self, id: ast::NodeId) -> Option<Span> {
-        let node = self.tcx.hir().get(self.tcx.hir().get_parent(id));
+    fn parent_item_span(&self, id: hir::HirId) -> Option<Span> {
+        let node = self.tcx.hir().get_by_hir_id(self.tcx.hir().get_parent_item(id));
         match node {
             Node::Item(&hir::Item {
                 node: hir::ItemKind::Fn(_, _, _, body_id), ..
@@ -5073,9 +5073,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         None
     }
 
-    /// Given a function block's `NodeId`, returns its `FnDecl` if it exists, or `None` otherwise.
-    fn get_parent_fn_decl(&self, blk_id: ast::NodeId) -> Option<(hir::FnDecl, ast::Ident)> {
-        let parent = self.tcx.hir().get(self.tcx.hir().get_parent(blk_id));
+    /// Given a function block's `HirId`, returns its `FnDecl` if it exists, or `None` otherwise.
+    fn get_parent_fn_decl(&self, blk_id: hir::HirId) -> Option<(hir::FnDecl, ast::Ident)> {
+        let parent = self.tcx.hir().get_by_hir_id(self.tcx.hir().get_parent_item(blk_id));
         self.get_node_fn_decl(parent).map(|(fn_decl, ident, _)| (fn_decl, ident))
     }
 

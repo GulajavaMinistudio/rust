@@ -89,8 +89,7 @@ pub struct LoweringContext<'a> {
     bodies: BTreeMap<hir::BodyId, hir::Body>,
     exported_macros: Vec<hir::MacroDef>,
 
-    trait_impls: BTreeMap<DefId, Vec<NodeId>>,
-    trait_auto_impl: BTreeMap<DefId, NodeId>,
+    trait_impls: BTreeMap<DefId, Vec<hir::HirId>>,
 
     modules: BTreeMap<NodeId, hir::ModuleItems>,
 
@@ -233,7 +232,6 @@ pub fn lower_crate(
         impl_items: BTreeMap::new(),
         bodies: BTreeMap::new(),
         trait_impls: BTreeMap::new(),
-        trait_auto_impl: BTreeMap::new(),
         modules: BTreeMap::new(),
         exported_macros: Vec::new(),
         catch_scopes: Vec::new(),
@@ -514,7 +512,6 @@ impl<'a> LoweringContext<'a> {
             bodies: self.bodies,
             body_ids,
             trait_impls: self.trait_impls,
-            trait_auto_impl: self.trait_auto_impl,
             modules: self.modules,
         }
     }
@@ -2672,7 +2669,7 @@ impl<'a> LoweringContext<'a> {
 
     fn lower_variant_data(&mut self, vdata: &VariantData) -> hir::VariantData {
         match *vdata {
-            VariantData::Struct(ref fields, id) => {
+            VariantData::Struct(ref fields, id, recovered) => {
                 let LoweredNodeId { node_id: _, hir_id } = self.lower_node_id(id);
 
                 hir::VariantData::Struct(
@@ -2682,6 +2679,7 @@ impl<'a> LoweringContext<'a> {
                         .map(|f| self.lower_struct_field(f))
                         .collect(),
                     hir_id,
+                    recovered,
                 )
             },
             VariantData::Tuple(ref fields, id) => {
@@ -2967,6 +2965,7 @@ impl<'a> LoweringContext<'a> {
                 // method, it will not be considered an in-band
                 // lifetime to be added, but rather a reference to a
                 // parent lifetime.
+                let lowered_trait_impl_id = self.lower_node_id(id).hir_id;
                 let (generics, (trait_ref, lowered_ty)) = self.add_in_band_defs(
                     ast_generics,
                     def_id,
@@ -2978,7 +2977,8 @@ impl<'a> LoweringContext<'a> {
 
                         if let Some(ref trait_ref) = trait_ref {
                             if let Def::Trait(def_id) = trait_ref.path.def {
-                                this.trait_impls.entry(def_id).or_default().push(id);
+                                this.trait_impls.entry(def_id).or_default().push(
+                                    lowered_trait_impl_id);
                             }
                         }
 

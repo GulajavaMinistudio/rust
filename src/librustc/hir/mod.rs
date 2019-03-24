@@ -727,8 +727,7 @@ pub struct Crate {
     pub trait_items: BTreeMap<TraitItemId, TraitItem>,
     pub impl_items: BTreeMap<ImplItemId, ImplItem>,
     pub bodies: BTreeMap<BodyId, Body>,
-    pub trait_impls: BTreeMap<DefId, Vec<NodeId>>,
-    pub trait_auto_impl: BTreeMap<DefId, NodeId>,
+    pub trait_impls: BTreeMap<DefId, Vec<HirId>>,
 
     /// A list of the body ids written out in the order in which they
     /// appear in the crate. If you're going to process all the bodies
@@ -816,6 +815,9 @@ pub struct MacroDef {
     pub legacy: bool,
 }
 
+/// A block of statements `{ .. }`, which may have a label (in this case the
+/// `targeted_by_break` field will be `true`) and may be `unsafe` by means of
+/// the `rules` being anything but `DefaultBlock`.
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub struct Block {
     /// Statements in a block.
@@ -1178,6 +1180,7 @@ impl fmt::Debug for Stmt {
     }
 }
 
+/// The contents of a statement.
 #[derive(Clone, RustcEncodable, RustcDecodable, HashStable)]
 pub enum StmtKind {
     /// A local (`let`) binding.
@@ -1208,21 +1211,28 @@ impl StmtKind {
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub struct Local {
     pub pat: P<Pat>,
+    /// Type annotation, if any (otherwise the type will be inferred).
     pub ty: Option<P<Ty>>,
     /// Initializer expression to set the value, if any.
     pub init: Option<P<Expr>>,
     pub hir_id: HirId,
     pub span: Span,
     pub attrs: ThinVec<Attribute>,
+    /// Can be `ForLoopDesugar` if the `let` statement is part of a `for` loop
+    /// desugaring. Otherwise will be `Normal`.
     pub source: LocalSource,
 }
 
-/// Represents a single arm of a `match` expression.
+/// Represents a single arm of a `match` expression, e.g.
+/// `<pats> (if <guard>) => <body>`.
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub struct Arm {
     pub attrs: HirVec<Attribute>,
+    /// Multiple patterns can be combined with `|`
     pub pats: HirVec<P<Pat>>,
+    /// Optional guard clause.
     pub guard: Option<Guard>,
+    /// The expression the arm evaluates to if this arm matches.
     pub body: P<Expr>,
 }
 
@@ -2173,7 +2183,7 @@ impl StructField {
 /// Id of the whole struct lives in `Item`.
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub enum VariantData {
-    Struct(HirVec<StructField>, HirId),
+    Struct(HirVec<StructField>, HirId, /* recovered */ bool),
     Tuple(HirVec<StructField>, HirId),
     Unit(HirId),
 }
@@ -2187,7 +2197,7 @@ impl VariantData {
     }
     pub fn hir_id(&self) -> HirId {
         match *self {
-            VariantData::Struct(_, hir_id)
+            VariantData::Struct(_, hir_id, _)
             | VariantData::Tuple(_, hir_id)
             | VariantData::Unit(hir_id) => hir_id,
         }

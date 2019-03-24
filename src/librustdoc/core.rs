@@ -236,8 +236,16 @@ impl<'tcx> DocContext<'tcx> {
                 ty::GenericParamDefKind::Type { .. } => {
                     args.push(hir::GenericArg::Type(self.ty_param_to_ty(param.clone())));
                 }
-                ty::GenericParamDefKind::Const { .. } => {
-                    unimplemented!() // FIXME(const_generics)
+                ty::GenericParamDefKind::Const => {
+                    args.push(hir::GenericArg::Const(hir::ConstArg {
+                        value: hir::AnonConst {
+                            hir_id: hir::DUMMY_HIR_ID,
+                            body: hir::BodyId {
+                                hir_id: hir::DUMMY_HIR_ID,
+                            }
+                        },
+                        span: DUMMY_SP,
+                    }))
                 }
             }
         }
@@ -461,11 +469,11 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
             sess.abort_if_errors();
 
             let access_levels = tcx.privacy_access_levels(LOCAL_CRATE);
-            // Convert from a NodeId set to a DefId set since we don't always have easy access
-            // to the map from defid -> nodeid
+            // Convert from a HirId set to a DefId set since we don't always have easy access
+            // to the map from defid -> hirid
             let access_levels = AccessLevels {
                 map: access_levels.map.iter()
-                                    .map(|(&k, &v)| (tcx.hir().local_def_id(k), v))
+                                    .map(|(&k, &v)| (tcx.hir().local_def_id_from_hir_id(k), v))
                                     .collect()
             };
 
