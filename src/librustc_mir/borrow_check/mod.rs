@@ -75,8 +75,8 @@ fn mir_borrowck<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId) -> BorrowC
     // Return early if we are not supposed to use MIR borrow checker for this function.
     return_early = !tcx.has_attr(def_id, "rustc_mir") && !tcx.use_mir_borrowck();
 
-    if tcx.is_struct_constructor(def_id) {
-        // We are not borrow checking the automatically generated struct constructors
+    if tcx.is_constructor(def_id) {
+        // We are not borrow checking the automatically generated struct/variant constructors
         // because we want to accept structs such as this (taken from the `linked-hash-map`
         // crate):
         // ```rust
@@ -156,7 +156,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     let mut flow_inits = FlowAtLocation::new(do_dataflow(
         tcx,
         mir,
-        id,
+        def_id,
         &attributes,
         &dead_unwinds,
         MaybeInitializedPlaces::new(tcx, mir, &mdpe),
@@ -191,7 +191,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     let flow_borrows = FlowAtLocation::new(do_dataflow(
         tcx,
         mir,
-        id,
+        def_id,
         &attributes,
         &dead_unwinds,
         Borrows::new(tcx, mir, regioncx.clone(), &borrow_set),
@@ -200,7 +200,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     let flow_uninits = FlowAtLocation::new(do_dataflow(
         tcx,
         mir,
-        id,
+        def_id,
         &attributes,
         &dead_unwinds,
         MaybeUninitializedPlaces::new(tcx, mir, &mdpe),
@@ -209,7 +209,7 @@ fn do_mir_borrowck<'a, 'gcx, 'tcx>(
     let flow_ever_inits = FlowAtLocation::new(do_dataflow(
         tcx,
         mir,
-        id,
+        def_id,
         &attributes,
         &dead_unwinds,
         EverInitializedPlaces::new(tcx, mir, &mdpe),

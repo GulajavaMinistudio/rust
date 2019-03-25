@@ -880,10 +880,7 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
                 Ok(binding) => {
                     let imported_binding = this.import(binding, directive);
                     target_bindings[ns].set(Some(imported_binding));
-                    let conflict = this.try_define(parent, target, ns, imported_binding);
-                    if let Err(old_binding) = conflict {
-                        this.report_conflict(parent, target, ns, imported_binding, old_binding);
-                    }
+                    this.define(parent, target, ns, imported_binding);
                 }
             }
         });
@@ -1295,9 +1292,11 @@ impl<'a, 'b:'a> ImportResolver<'a, 'b> {
                 None => continue,
             };
 
-            // Filter away "empty import canaries" and ambiguous imports.
+            // Filter away ambiguous and gensymed imports. Gensymed imports
+            // (e.g. implicitly injected `std`) cannot be properly encoded in metadata,
+            // so they can cause name conflict errors downstream.
             let is_good_import = binding.is_import() && !binding.is_ambiguity() &&
-                                 binding.vis != ty::Visibility::Invisible;
+                                 !(ident.name.is_gensymed() && ident.name != "_");
             if is_good_import || binding.is_macro_def() {
                 let def = binding.def();
                 if def != Def::Err {
