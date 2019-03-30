@@ -10,7 +10,6 @@ use crate::monomorphize::partitioning::CodegenUnit;
 use crate::type_::Type;
 use crate::type_of::PointeeInfo;
 use rustc_codegen_ssa::traits::*;
-use libc::c_uint;
 
 use rustc_data_structures::base_n;
 use rustc_data_structures::small_c_str::SmallCStr;
@@ -154,7 +153,7 @@ pub unsafe fn create_module(
 
     // Ensure the data-layout values hardcoded remain the defaults.
     if sess.target.target.options.is_builtin {
-        let tm = crate::back::write::create_target_machine(tcx, false);
+        let tm = crate::back::write::create_informational_target_machine(&tcx.sess, false);
         llvm::LLVMRustSetDataLayoutFromTargetMachine(llmod, tm);
         llvm::LLVMRustDisposeTargetMachine(tm);
 
@@ -324,10 +323,6 @@ impl MiscMethods<'tcx> for CodegenCx<'ll, 'tcx> {
 
     fn get_fn(&self, instance: Instance<'tcx>) -> &'ll Value {
         get_fn(self, instance)
-    }
-
-    fn get_param(&self, llfn: &'ll Value, index: c_uint) -> &'ll Value {
-        llvm::get_param(llfn, index)
     }
 
     fn eh_personality(&self) -> &'ll Value {
