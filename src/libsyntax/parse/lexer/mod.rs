@@ -1,10 +1,9 @@
 use crate::ast::{self, Ident};
-use crate::source_map::{SourceMap, FilePathMapping};
 use crate::parse::{token, ParseSess};
 use crate::symbol::Symbol;
 
 use errors::{Applicability, FatalError, Diagnostic, DiagnosticBuilder};
-use syntax_pos::{BytePos, CharPos, Pos, Span, NO_EXPANSION};
+use syntax_pos::{BytePos, Pos, Span, NO_EXPANSION};
 use core::unicode::property::Pattern_White_Space;
 
 use std::borrow::Cow;
@@ -43,16 +42,16 @@ pub struct UnmatchedBrace {
 }
 
 pub struct StringReader<'a> {
-    pub sess: &'a ParseSess,
+    crate sess: &'a ParseSess,
     /// The absolute offset within the source_map of the next character to read
-    pub next_pos: BytePos,
+    crate next_pos: BytePos,
     /// The absolute offset within the source_map of the current character
-    pub pos: BytePos,
+    crate pos: BytePos,
     /// The current character (which has been read from self.pos)
-    pub ch: Option<char>,
-    pub source_file: Lrc<syntax_pos::SourceFile>,
+    crate ch: Option<char>,
+    crate source_file: Lrc<syntax_pos::SourceFile>,
     /// Stop reading src at this index.
-    pub end_src_index: usize,
+    crate end_src_index: usize,
     // cached:
     peek_tok: token::Token,
     peek_span: Span,
@@ -126,7 +125,7 @@ impl<'a> StringReader<'a> {
     }
 
     /// Immutably extract string if found at current position with given delimiters
-    pub fn peek_delimited(&self, from_ch: char, to_ch: char) -> Option<String> {
+    fn peek_delimited(&self, from_ch: char, to_ch: char) -> Option<String> {
         let mut pos = self.pos;
         let mut idx = self.src_index(pos);
         let mut ch = char_at(&self.src, idx);
@@ -191,7 +190,7 @@ impl<'a> StringReader<'a> {
         self.fatal_span(self.peek_span, m)
     }
 
-    pub fn emit_fatal_errors(&mut self) {
+    crate fn emit_fatal_errors(&mut self) {
         for err in &mut self.fatal_errs {
             err.emit();
         }
@@ -667,14 +666,9 @@ impl<'a> StringReader<'a> {
                     return None;
                 }
 
-                // I guess this is the only way to figure out if
-                // we're at the beginning of the file...
-                let smap = SourceMap::new(FilePathMapping::empty());
-                smap.files.borrow_mut().source_files.push(self.source_file.clone());
-                let loc = smap.lookup_char_pos_adj(self.pos);
-                debug!("Skipping a shebang");
-                if loc.line == 1 && loc.col == CharPos(0) {
-                    // FIXME: Add shebang "token", return it
+                let is_beginning_of_file = self.pos == self.source_file.start_pos;
+                if is_beginning_of_file {
+                    debug!("Skipping a shebang");
                     let start = self.pos;
                     while !self.ch_is('\n') && !self.is_eof() {
                         self.bump();
@@ -1911,7 +1905,7 @@ mod tests {
 
     use crate::ast::{Ident, CrateConfig};
     use crate::symbol::Symbol;
-    use crate::source_map::SourceMap;
+    use crate::source_map::{SourceMap, FilePathMapping};
     use crate::feature_gate::UnstableFeatures;
     use crate::parse::token;
     use crate::diagnostics::plugin::ErrorMap;
