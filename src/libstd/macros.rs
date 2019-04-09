@@ -346,7 +346,7 @@ macro_rules! r#await {
         let mut pinned = $e;
         loop {
             if let $crate::task::Poll::Ready(x) =
-                $crate::future::poll_with_tls_waker(unsafe {
+                $crate::future::poll_with_tls_context(unsafe {
                     $crate::pin::Pin::new_unchecked(&mut pinned)
                 })
             {
@@ -836,8 +836,10 @@ mod builtin {
     /// boolean expression evaluation of configuration flags. This frequently
     /// leads to less duplicated code.
     ///
-    /// The syntax given to this macro is the same syntax as the `cfg`
+    /// The syntax given to this macro is the same syntax as the [`cfg`]
     /// attribute.
+    ///
+    /// [`cfg`]: ../reference/conditional-compilation.html#the-cfg-attribute
     ///
     /// # Examples
     ///
