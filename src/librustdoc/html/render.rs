@@ -1013,7 +1013,7 @@ themePicker.onblur = handleThemeButtonsBlur;
                 })
     }
 
-    let dst = cx.dst.join("aliases.js");
+    let dst = cx.dst.join(&format!("aliases{}.js", cx.shared.resource_suffix));
     {
         let (mut all_aliases, _, _) = try_err!(collect(&dst, &krate.name, "ALIASES", false), &dst);
         let mut w = try_err!(File::create(&dst), &dst);
@@ -1064,11 +1064,22 @@ themePicker.onblur = handleThemeButtonsBlur;
                                                         .expect("invalid osstring conversion")))
                                       .collect::<Vec<_>>();
             files.sort_unstable_by(|a, b| a.cmp(b));
-            // FIXME(imperio): we could avoid to generate "dirs" and "files" if they're empty.
-            format!("{{\"name\":\"{name}\",\"dirs\":[{subs}],\"files\":[{files}]}}",
+            let subs = subs.iter().map(|s| s.to_json_string()).collect::<Vec<_>>().join(",");
+            let dirs = if subs.is_empty() {
+                String::new()
+            } else {
+                format!(",\"dirs\":[{}]", subs)
+            };
+            let files = files.join(",");
+            let files = if files.is_empty() {
+                String::new()
+            } else {
+                format!(",\"files\":[{}]", files)
+            };
+            format!("{{\"name\":\"{name}\"{dirs}{files}}}",
                     name=self.elem.to_str().expect("invalid osstring conversion"),
-                    subs=subs.iter().map(|s| s.to_json_string()).collect::<Vec<_>>().join(","),
-                    files=files.join(","))
+                    dirs=dirs,
+                    files=files)
         }
     }
 
@@ -1099,7 +1110,7 @@ themePicker.onblur = handleThemeButtonsBlur;
             }
         }
 
-        let dst = cx.dst.join("source-files.js");
+        let dst = cx.dst.join(&format!("source-files{}.js", cx.shared.resource_suffix));
         let (mut all_sources, _krates, _) = try_err!(collect(&dst, &krate.name, "sourcesIndex",
                                                              false),
                                                      &dst);
@@ -1115,7 +1126,7 @@ themePicker.onblur = handleThemeButtonsBlur;
     }
 
     // Update the search index
-    let dst = cx.dst.join("search-index.js");
+    let dst = cx.dst.join(&format!("search-index{}.js", cx.shared.resource_suffix));
     let (mut all_indexes, mut krates, variables) = try_err!(collect(&dst,
                                                                     &krate.name,
                                                                     "searchIndex",
@@ -1483,7 +1494,7 @@ impl<'a> SourceCollector<'a> {
             description: &desc,
             keywords: BASIC_KEYWORDS,
             resource_suffix: &self.scx.resource_suffix,
-            extra_scripts: &["source-files"],
+            extra_scripts: &[&format!("source-files{}", self.scx.resource_suffix)],
             static_extra_scripts: &[&format!("source-script{}", self.scx.resource_suffix)],
         };
         layout::render(&mut w, &self.scx.layout,
@@ -3136,7 +3147,6 @@ fn item_trait(
             // FIXME: we should be using a derived_id for the Anchors here
             write!(w, "{{\n")?;
             for t in &types {
-                write!(w, "    ")?;
                 render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 write!(w, ";\n")?;
             }
@@ -3144,7 +3154,6 @@ fn item_trait(
                 w.write_str("\n")?;
             }
             for t in &consts {
-                write!(w, "    ")?;
                 render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 write!(w, ";\n")?;
             }
@@ -3152,7 +3161,6 @@ fn item_trait(
                 w.write_str("\n")?;
             }
             for (pos, m) in required.iter().enumerate() {
-                write!(w, "    ")?;
                 render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 write!(w, ";\n")?;
 
@@ -3164,7 +3172,6 @@ fn item_trait(
                 w.write_str("\n")?;
             }
             for (pos, m) in provided.iter().enumerate() {
-                write!(w, "    ")?;
                 render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait)?;
                 match m.inner {
                     clean::MethodItem(ref inner) if !inner.generics.where_predicates.is_empty() => {
@@ -3473,8 +3480,9 @@ fn render_assoc_item(w: &mut fmt::Formatter<'_>,
             (0, true)
         };
         render_attributes(w, meth)?;
-        write!(w, "{}{}{}{}{}{}fn <a href='{href}' class='fnname'>{name}</a>\
+        write!(w, "{}{}{}{}{}{}{}fn <a href='{href}' class='fnname'>{name}</a>\
                    {generics}{decl}{where_clause}",
+               if parent == ItemType::Trait { "    " } else { "" },
                VisSpace(&meth.visibility),
                ConstnessSpace(header.constness),
                UnsafetySpace(header.unsafety),
@@ -3775,7 +3783,7 @@ const ATTRIBUTE_WHITELIST: &'static [&'static str] = &[
     "non_exhaustive"
 ];
 
-fn render_attributes(w: &mut fmt::Formatter<'_>, it: &clean::Item) -> fmt::Result {
+fn render_attributes(w: &mut dyn fmt::Write, it: &clean::Item) -> fmt::Result {
     let mut attrs = String::new();
 
     for attr in &it.attrs.other_attrs {

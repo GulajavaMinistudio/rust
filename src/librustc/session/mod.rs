@@ -46,8 +46,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::sync::{Arc, mpsc};
 
-use parking_lot::Mutex as PlMutex;
-
 mod code_stats;
 pub mod config;
 pub mod filesearch;
@@ -130,7 +128,7 @@ pub struct Session {
     pub profile_channel: Lock<Option<mpsc::Sender<ProfileQueriesMsg>>>,
 
     /// Used by -Z self-profile
-    pub self_profiling: Option<Arc<PlMutex<SelfProfiler>>>,
+    pub self_profiling: Option<Arc<SelfProfiler>>,
 
     /// Some measurements that are being gathered during compilation.
     pub perf_stats: PerfStats,
@@ -166,7 +164,7 @@ pub struct Session {
     pub driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
 
     /// `Span`s of trait methods that weren't found to avoid emitting object safety errors
-    pub trait_methods_not_found: OneThread<RefCell<FxHashSet<Span>>>,
+    pub trait_methods_not_found: Lock<FxHashSet<Span>>,
 }
 
 pub struct PerfStats {
@@ -838,19 +836,17 @@ impl Session {
 
     #[inline(never)]
     #[cold]
-    fn profiler_active<F: FnOnce(&mut SelfProfiler) -> ()>(&self, f: F) {
+    fn profiler_active<F: FnOnce(&SelfProfiler) -> ()>(&self, f: F) {
         match &self.self_profiling {
             None => bug!("profiler_active() called but there was no profiler active"),
             Some(profiler) => {
-                let mut p = profiler.lock();
-
-                f(&mut p);
+                f(&profiler);
             }
         }
     }
 
     #[inline(always)]
-    pub fn profiler<F: FnOnce(&mut SelfProfiler) -> ()>(&self, f: F) {
+    pub fn profiler<F: FnOnce(&SelfProfiler) -> ()>(&self, f: F) {
         if unlikely!(self.self_profiling.is_some()) {
             self.profiler_active(f)
         }
@@ -1138,7 +1134,19 @@ fn build_session_(
     driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
 ) -> Session {
     let self_profiler =
-        if sopts.debugging_opts.self_profile { Some(Arc::new(PlMutex::new(SelfProfiler::new()))) }
+        if sopts.debugging_opts.self_profile {
+            let profiler = SelfProfiler::new();
+            match profiler {
+                Ok(profiler) => {
+                    crate::ty::query::QueryName::register_with_profiler(&profiler);
+                    Some(Arc::new(profiler))
+                },
+                Err(e) => {
+                    early_warn(sopts.error_format, &format!("failed to create profiler: {}", e));
+                    None
+                }
+            }
+        }
         else { None };
 
     let host_triple = TargetTriple::from_triple(config::host_triple());
@@ -1236,7 +1244,7 @@ fn build_session_(
         has_global_allocator: Once::new(),
         has_panic_handler: Once::new(),
         driver_lint_caps,
-        trait_methods_not_found: OneThread::new(RefCell::new(Default::default())),
+        trait_methods_not_found: Lock::new(Default::default()),
     };
 
     validate_commandline_args_with_session_available(&sess);
