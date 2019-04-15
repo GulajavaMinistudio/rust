@@ -68,6 +68,18 @@ pub struct Path {
     pub segments: Vec<PathSegment>,
 }
 
+impl PartialEq<Symbol> for Path {
+    fn eq(&self, symbol: &Symbol) -> bool {
+        self.segments.len() == 1 && {
+            let name = self.segments[0].ident.name;
+            // Make sure these symbols are pure strings
+            debug_assert!(!symbol.is_gensymed());
+            debug_assert!(!name.is_gensymed());
+            name == *symbol
+        }
+    }
+}
+
 impl<'a> PartialEq<&'a str> for Path {
     fn eq(&self, string: &&'a str) -> bool {
         self.segments.len() == 1 && self.segments[0].ident.name == *string
@@ -946,7 +958,7 @@ pub struct Expr {
 
 // `Expr` is used a lot. Make sure it doesn't unintentionally get bigger.
 #[cfg(target_arch = "x86_64")]
-static_assert!(MEM_SIZE_OF_EXPR: std::mem::size_of::<Expr>() == 88);
+static_assert!(MEM_SIZE_OF_EXPR: std::mem::size_of::<Expr>() == 96);
 
 impl Expr {
     /// Whether this expression would be valid somewhere that expects a value; for example, an `if`

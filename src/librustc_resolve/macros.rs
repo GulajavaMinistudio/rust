@@ -8,7 +8,7 @@ use crate::build_reduced_graph::{BuildReducedGraphVisitor, IsMacroExport};
 use crate::resolve_imports::ImportResolver;
 use rustc::hir::def_id::{DefId, CRATE_DEF_INDEX, DefIndex,
                          CrateNum, DefIndexAddressSpace};
-use rustc::hir::def::{Def, NonMacroAttrKind};
+use rustc::hir::def::{self, NonMacroAttrKind};
 use rustc::hir::map::{self, DefCollector};
 use rustc::{ty, lint};
 use rustc::{bug, span_bug};
@@ -32,6 +32,8 @@ use errors::Applicability;
 use std::cell::Cell;
 use std::{mem, ptr};
 use rustc_data_structures::sync::Lrc;
+
+type Def = def::Def<ast::NodeId>;
 
 #[derive(Clone, Debug)]
 pub struct InvocationData<'a> {
@@ -358,8 +360,8 @@ impl<'a> Resolver<'a> {
 
         let attr_candidates = BUILTIN_ATTRIBUTES
             .iter()
-            .filter_map(|(name, _, _, gate)| {
-                if name.starts_with("rustc_") && !features.rustc_attrs {
+            .filter_map(|&(name, _, _, ref gate)| {
+                if name.as_str().starts_with("rustc_") && !features.rustc_attrs {
                     return None;
                 }
 
@@ -374,7 +376,6 @@ impl<'a> Resolver<'a> {
                     _ => None,
                 }
             })
-            .map(|name| Symbol::intern(name))
             .chain(
                 // Add built-in macro attributes as well.
                 self.builtin_macros.iter().filter_map(|(name, binding)| {
