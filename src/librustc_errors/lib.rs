@@ -6,7 +6,7 @@
 #![feature(nll)]
 #![feature(optin_builtin_traits)]
 #![deny(rust_2018_idioms)]
-#![cfg_attr(not(stage0), deny(internal))]
+#![deny(internal)]
 
 #[allow(unused_extern_crates)]
 extern crate serialize as rustc_serialize; // used by deriving
@@ -304,17 +304,17 @@ pub struct Handler {
     continue_after_error: AtomicBool,
     delayed_span_bugs: Lock<Vec<Diagnostic>>,
 
-    // This set contains the `DiagnosticId` of all emitted diagnostics to avoid
-    // emitting the same diagnostic with extended help (`--teach`) twice, which
-    // would be uneccessary repetition.
+    /// This set contains the `DiagnosticId` of all emitted diagnostics to avoid
+    /// emitting the same diagnostic with extended help (`--teach`) twice, which
+    /// would be uneccessary repetition.
     taught_diagnostics: Lock<FxHashSet<DiagnosticId>>,
 
     /// Used to suggest rustc --explain <error code>
     emitted_diagnostic_codes: Lock<FxHashSet<DiagnosticId>>,
 
-    // This set contains a hash of every diagnostic that has been emitted by
-    // this handler. These hashes is used to avoid emitting the same error
-    // twice.
+    /// This set contains a hash of every diagnostic that has been emitted by
+    /// this handler. These hashes is used to avoid emitting the same error
+    /// twice.
     emitted_diagnostics: Lock<FxHashSet<u128>>,
 }
 
