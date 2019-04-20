@@ -2,12 +2,12 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use convert::{TryFrom, Infallible};
-use fmt;
-use intrinsics;
-use mem;
-use ops;
-use str::FromStr;
+use crate::convert::{TryFrom, Infallible};
+use crate::fmt;
+use crate::intrinsics;
+use crate::mem;
+use crate::ops;
+use crate::str::FromStr;
 
 macro_rules! impl_nonzero_fmt {
     ( #[$stability: meta] ( $( $Trait: ident ),+ ) for $Ty: ident ) => {
@@ -15,7 +15,7 @@ macro_rules! impl_nonzero_fmt {
             #[$stability]
             impl fmt::$Trait for $Ty {
                 #[inline]
-                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                     self.get().fmt(f)
                 }
             }
@@ -164,42 +164,42 @@ pub struct Wrapping<T>(#[stable(feature = "rust1", since = "1.0.0")]
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: fmt::Debug> fmt::Debug for Wrapping<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
 #[stable(feature = "wrapping_display", since = "1.10.0")]
 impl<T: fmt::Display> fmt::Display for Wrapping<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
 #[stable(feature = "wrapping_fmt", since = "1.11.0")]
 impl<T: fmt::Binary> fmt::Binary for Wrapping<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
 #[stable(feature = "wrapping_fmt", since = "1.11.0")]
 impl<T: fmt::Octal> fmt::Octal for Wrapping<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
 #[stable(feature = "wrapping_fmt", since = "1.11.0")]
 impl<T: fmt::LowerHex> fmt::LowerHex for Wrapping<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
 #[stable(feature = "wrapping_fmt", since = "1.11.0")]
 impl<T: fmt::UpperHex> fmt::UpperHex for Wrapping<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
@@ -3939,7 +3939,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_alphabetic(&self) -> bool {
         match *self {
-            b'A'...b'Z' | b'a'...b'z' => true,
+            b'A'..=b'Z' | b'a'..=b'z' => true,
             _ => false
         }
     }
@@ -3974,7 +3974,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_uppercase(&self) -> bool {
         match *self {
-            b'A'...b'Z' => true,
+            b'A'..=b'Z' => true,
             _ => false
         }
     }
@@ -4009,7 +4009,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_lowercase(&self) -> bool {
         match *self {
-            b'a'...b'z' => true,
+            b'a'..=b'z' => true,
             _ => false
         }
     }
@@ -4047,7 +4047,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_alphanumeric(&self) -> bool {
         match *self {
-            b'0'...b'9' | b'A'...b'Z' | b'a'...b'z' => true,
+            b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' => true,
             _ => false
         }
     }
@@ -4082,7 +4082,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_digit(&self) -> bool {
         match *self {
-            b'0'...b'9' => true,
+            b'0'..=b'9' => true,
             _ => false
         }
     }
@@ -4120,7 +4120,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_hexdigit(&self) -> bool {
         match *self {
-            b'0'...b'9' | b'A'...b'F' | b'a'...b'f' => true,
+            b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f' => true,
             _ => false
         }
     }
@@ -4159,7 +4159,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_punctuation(&self) -> bool {
         match *self {
-            b'!'...b'/' | b':'...b'@' | b'['...b'`' | b'{'...b'~' => true,
+            b'!'..=b'/' | b':'..=b'@' | b'['..=b'`' | b'{'..=b'~' => true,
             _ => false
         }
     }
@@ -4194,7 +4194,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_graphic(&self) -> bool {
         match *self {
-            b'!'...b'~' => true,
+            b'!'..=b'~' => true,
             _ => false
         }
     }
@@ -4283,7 +4283,7 @@ impl u8 {
     #[inline]
     pub fn is_ascii_control(&self) -> bool {
         match *self {
-            b'\0'...b'\x1F' | b'\x7F' => true,
+            b'\0'..=b'\x1F' | b'\x7F' => true,
             _ => false
         }
     }
@@ -4423,7 +4423,7 @@ impl TryFromIntError {
 
 #[stable(feature = "try_from", since = "1.34.0")]
 impl fmt::Display for TryFromIntError {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.__description().fmt(fmt)
     }
 }
@@ -4573,7 +4573,7 @@ try_from_lower_bounded!(isize, usize);
 #[cfg(target_pointer_width = "16")]
 mod ptr_try_from_impls {
     use super::TryFromIntError;
-    use convert::TryFrom;
+    use crate::convert::TryFrom;
 
     try_from_upper_bounded!(usize, u8);
     try_from_unbounded!(usize, u16, u32, u64, u128);
@@ -4596,7 +4596,7 @@ mod ptr_try_from_impls {
 #[cfg(target_pointer_width = "32")]
 mod ptr_try_from_impls {
     use super::TryFromIntError;
-    use convert::TryFrom;
+    use crate::convert::TryFrom;
 
     try_from_upper_bounded!(usize, u8, u16);
     try_from_unbounded!(usize, u32, u64, u128);
@@ -4622,7 +4622,7 @@ mod ptr_try_from_impls {
 #[cfg(target_pointer_width = "64")]
 mod ptr_try_from_impls {
     use super::TryFromIntError;
-    use convert::TryFrom;
+    use crate::convert::TryFrom;
 
     try_from_upper_bounded!(usize, u8, u16, u32);
     try_from_unbounded!(usize, u64, u128);
@@ -4820,13 +4820,13 @@ impl ParseIntError {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Display for ParseIntError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.__description().fmt(f)
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use num::dec2flt::ParseFloatError;
+pub use crate::num::dec2flt::ParseFloatError;
 
 // Conversion traits for primitive integer and float types
 // Conversions T -> T are covered by a blanket impl and therefore excluded

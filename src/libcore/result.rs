@@ -230,9 +230,9 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use fmt;
-use iter::{FromIterator, FusedIterator, TrustedLen};
-use ops::{self, Deref};
+use crate::fmt;
+use crate::iter::{FromIterator, FusedIterator, TrustedLen};
+use crate::ops::{self, Deref};
 
 /// `Result` is a type that represents either success ([`Ok`]) or failure ([`Err`]).
 ///
@@ -544,7 +544,7 @@ impl<T, E> Result<T, E> {
     /// ```
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         Iter { inner: self.as_ref().ok() }
     }
 
@@ -569,7 +569,7 @@ impl<T, E> Result<T, E> {
     /// ```
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn iter_mut(&mut self) -> IterMut<T> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         IterMut { inner: self.as_mut().ok() }
     }
 

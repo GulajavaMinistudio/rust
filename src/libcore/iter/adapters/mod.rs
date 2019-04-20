@@ -1,8 +1,9 @@
-use cmp;
-use fmt;
-use ops::Try;
-use usize;
-use intrinsics;
+use crate::cmp;
+use crate::fmt;
+use crate::ops::Try;
+use crate::usize;
+use crate::intrinsics;
+
 use super::{Iterator, DoubleEndedIterator, ExactSizeIterator, FusedIterator, TrustedLen};
 use super::LoopState;
 
@@ -552,7 +553,7 @@ impl<I, F> Map<I, F> {
 
 #[stable(feature = "core_impl_debug", since = "1.9.0")]
 impl<I: fmt::Debug, F> fmt::Debug for Map<I, F> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Map")
             .field("iter", &self.iter)
             .finish()
@@ -668,7 +669,7 @@ impl<I, P> Filter<I, P> {
 
 #[stable(feature = "core_impl_debug", since = "1.9.0")]
 impl<I: fmt::Debug, P> fmt::Debug for Filter<I, P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Filter")
             .field("iter", &self.iter)
             .finish()
@@ -792,7 +793,7 @@ impl<I, F> FilterMap<I, F> {
 
 #[stable(feature = "core_impl_debug", since = "1.9.0")]
 impl<I: fmt::Debug, F> fmt::Debug for FilterMap<I, F> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FilterMap")
             .field("iter", &self.iter)
             .finish()
@@ -973,6 +974,16 @@ impl<I> DoubleEndedIterator for Enumerate<I> where
     #[inline]
     fn next_back(&mut self) -> Option<(usize, <I as Iterator>::Item)> {
         self.iter.next_back().map(|a| {
+            let len = self.iter.len();
+            // Can safely add, `ExactSizeIterator` promises that the number of
+            // elements fits into a `usize`.
+            (self.count + len, a)
+        })
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<(usize, <I as Iterator>::Item)> {
+        self.iter.nth_back(n).map(|a| {
             let len = self.iter.len();
             // Can safely add, `ExactSizeIterator` promises that the number of
             // elements fits into a `usize`.
@@ -1221,7 +1232,7 @@ impl<I, P> SkipWhile<I, P> {
 
 #[stable(feature = "core_impl_debug", since = "1.9.0")]
 impl<I: fmt::Debug, P> fmt::Debug for SkipWhile<I, P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SkipWhile")
             .field("iter", &self.iter)
             .field("flag", &self.flag)
@@ -1309,7 +1320,7 @@ impl<I, P> TakeWhile<I, P> {
 
 #[stable(feature = "core_impl_debug", since = "1.9.0")]
 impl<I: fmt::Debug, P> fmt::Debug for TakeWhile<I, P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TakeWhile")
             .field("iter", &self.iter)
             .field("flag", &self.flag)
@@ -1633,7 +1644,7 @@ impl<I, St, F> Scan<I, St, F> {
 
 #[stable(feature = "core_impl_debug", since = "1.9.0")]
 impl<I: fmt::Debug, St: fmt::Debug, F> fmt::Debug for Scan<I, St, F> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Scan")
             .field("iter", &self.iter)
             .field("state", &self.state)
@@ -1790,6 +1801,17 @@ impl<I> DoubleEndedIterator for Fuse<I> where I: DoubleEndedIterator {
     }
 
     #[inline]
+    default fn nth_back(&mut self, n: usize) -> Option<<I as Iterator>::Item> {
+        if self.done {
+            None
+        } else {
+            let nth = self.iter.nth_back(n);
+            self.done = nth.is_none();
+            nth
+        }
+    }
+
+    #[inline]
     default fn try_rfold<Acc, Fold, R>(&mut self, init: Acc, fold: Fold) -> R where
         Self: Sized, Fold: FnMut(Acc, Self::Item) -> R, R: Try<Ok=Acc>
     {
@@ -1878,6 +1900,11 @@ impl<I> DoubleEndedIterator for Fuse<I>
     }
 
     #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<<I as Iterator>::Item> {
+        self.iter.nth_back(n)
+    }
+
+    #[inline]
     fn try_rfold<Acc, Fold, R>(&mut self, init: Acc, fold: Fold) -> R where
         Self: Sized, Fold: FnMut(Acc, Self::Item) -> R, R: Try<Ok=Acc>
     {
@@ -1927,7 +1954,7 @@ impl<I, F> Inspect<I, F> {
 
 #[stable(feature = "core_impl_debug", since = "1.9.0")]
 impl<I: fmt::Debug, F> fmt::Debug for Inspect<I, F> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Inspect")
             .field("iter", &self.iter)
             .finish()

@@ -9,13 +9,13 @@
                       integer constants",
             issue = "27778")]
 
-use borrow::{Borrow, BorrowMut};
-use cmp::Ordering;
-use convert::TryFrom;
-use fmt;
-use hash::{Hash, self};
-use marker::Unsize;
-use slice::{Iter, IterMut};
+use crate::borrow::{Borrow, BorrowMut};
+use crate::cmp::Ordering;
+use crate::convert::TryFrom;
+use crate::fmt;
+use crate::hash::{Hash, self};
+use crate::marker::Unsize;
+use crate::slice::{Iter, IterMut};
 
 /// Utility trait implemented only on arrays of fixed size
 ///
@@ -55,7 +55,7 @@ pub struct TryFromSliceError(());
 
 impl fmt::Display for TryFromSliceError {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self.__description(), f)
     }
 }
@@ -184,7 +184,7 @@ macro_rules! array_impls {
 
             #[stable(feature = "rust1", since = "1.0.0")]
             impl<T: fmt::Debug> fmt::Debug for [T; $N] {
-                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                     fmt::Debug::fmt(&&self[..], f)
                 }
             }

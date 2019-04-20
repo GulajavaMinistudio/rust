@@ -1,4 +1,4 @@
-use fmt;
+use crate::fmt;
 
 struct PadAdapter<'a> {
     buf: &'a mut (dyn fmt::Write + 'a),
@@ -6,7 +6,7 @@ struct PadAdapter<'a> {
 }
 
 impl<'a> PadAdapter<'a> {
-    fn wrap<'b, 'c: 'a+'b>(fmt: &'c mut fmt::Formatter, slot: &'b mut Option<Self>)
+    fn wrap<'b, 'c: 'a+'b>(fmt: &'c mut fmt::Formatter<'_>, slot: &'b mut Option<Self>)
                         -> fmt::Formatter<'b> {
         fmt.wrap_buf(move |buf| {
             *slot = Some(PadAdapter {

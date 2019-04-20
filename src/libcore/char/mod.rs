@@ -37,12 +37,12 @@ pub use self::decode::{decode_utf16, DecodeUtf16, DecodeUtf16Error};
 
 // unstable re-exports
 #[unstable(feature = "unicode_version", issue = "49726")]
-pub use unicode::tables::UNICODE_VERSION;
+pub use crate::unicode::tables::UNICODE_VERSION;
 #[unstable(feature = "unicode_version", issue = "49726")]
-pub use unicode::version::UnicodeVersion;
+pub use crate::unicode::version::UnicodeVersion;
 
-use fmt::{self, Write};
-use iter::FusedIterator;
+use crate::fmt::{self, Write};
+use crate::iter::FusedIterator;
 
 // UTF-8 ranges and tags for encoding characters
 const TAG_CONT: u8     = 0b1000_0000;
@@ -220,7 +220,7 @@ impl FusedIterator for EscapeUnicode {}
 
 #[stable(feature = "char_struct_display", since = "1.16.0")]
 impl fmt::Display for EscapeUnicode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for c in self.clone() {
             f.write_char(c)?;
         }
@@ -333,7 +333,7 @@ impl FusedIterator for EscapeDefault {}
 
 #[stable(feature = "char_struct_display", since = "1.16.0")]
 impl fmt::Display for EscapeDefault {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for c in self.clone() {
             f.write_char(c)?;
         }
@@ -367,7 +367,7 @@ impl FusedIterator for EscapeDebug {}
 
 #[stable(feature = "char_escape_debug", since = "1.20.0")]
 impl fmt::Display for EscapeDebug {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
 }
@@ -482,7 +482,7 @@ impl Iterator for CaseMappingIter {
 }
 
 impl fmt::Display for CaseMappingIter {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             CaseMappingIter::Three(a, b, c) => {
                 f.write_char(a)?;
@@ -503,14 +503,14 @@ impl fmt::Display for CaseMappingIter {
 
 #[stable(feature = "char_struct_display", since = "1.16.0")]
 impl fmt::Display for ToLowercase {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
 }
 
 #[stable(feature = "char_struct_display", since = "1.16.0")]
 impl fmt::Display for ToUppercase {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
 }

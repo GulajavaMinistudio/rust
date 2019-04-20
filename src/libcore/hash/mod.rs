@@ -81,8 +81,8 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use fmt;
-use marker;
+use crate::fmt;
+use crate::marker;
 
 #[stable(feature = "rust1", since = "1.0.0")]
 #[allow(deprecated)]
@@ -500,7 +500,7 @@ pub struct BuildHasherDefault<H>(marker::PhantomData<H>);
 
 #[stable(since = "1.9.0", feature = "core_impl_debug")]
 impl<H> fmt::Debug for BuildHasherDefault<H> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("BuildHasherDefault")
     }
 }
@@ -541,8 +541,9 @@ impl<H> Eq for BuildHasherDefault<H> {}
 //////////////////////////////////////////////////////////////////////////////
 
 mod impls {
-    use mem;
-    use slice;
+    use crate::mem;
+    use crate::slice;
+
     use super::*;
 
     macro_rules! impl_write {

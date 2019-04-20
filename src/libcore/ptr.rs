@@ -63,24 +63,24 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use convert::From;
-use intrinsics;
-use ops::{CoerceUnsized, DispatchFromDyn};
-use fmt;
-use hash;
-use marker::{PhantomData, Unsize};
-use mem::{self, MaybeUninit};
+use crate::convert::From;
+use crate::intrinsics;
+use crate::ops::{CoerceUnsized, DispatchFromDyn};
+use crate::fmt;
+use crate::hash;
+use crate::marker::{PhantomData, Unsize};
+use crate::mem::{self, MaybeUninit};
 
-use cmp::Ordering::{self, Less, Equal, Greater};
-
-#[stable(feature = "rust1", since = "1.0.0")]
-pub use intrinsics::copy_nonoverlapping;
+use crate::cmp::Ordering::{self, Less, Equal, Greater};
 
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use intrinsics::copy;
+pub use crate::intrinsics::copy_nonoverlapping;
 
 #[stable(feature = "rust1", since = "1.0.0")]
-pub use intrinsics::write_bytes;
+pub use crate::intrinsics::copy;
+
+#[stable(feature = "rust1", since = "1.0.0")]
+pub use crate::intrinsics::write_bytes;
 
 /// Executes the destructor (if any) of the pointed-to value.
 ///
@@ -2402,7 +2402,7 @@ pub(crate) unsafe fn align_offset<T: Sized>(p: *const T, a: usize) -> usize {
         }
     }
 
-    let stride = ::mem::size_of::<T>();
+    let stride = mem::size_of::<T>();
     let a_minus_one = a.wrapping_sub(1);
     let pmoda = p as usize & a_minus_one;
 
@@ -2580,7 +2580,7 @@ pub fn eq<T: ?Sized>(a: *const T, b: *const T) -> bool {
 /// ```
 #[stable(feature = "ptr_hash", since = "1.35.0")]
 pub fn hash<T: ?Sized, S: hash::Hasher>(hashee: *const T, into: &mut S) {
-    use hash::Hash;
+    use crate::hash::Hash;
     hashee.hash(into);
 }
 
@@ -2623,14 +2623,14 @@ macro_rules! fnptr_impls_safety_abi {
 
         #[stable(feature = "fnptr_impls", since = "1.4.0")]
         impl<Ret, $($Arg),*> fmt::Pointer for $FnTy {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 fmt::Pointer::fmt(&(*self as *const ()), f)
             }
         }
 
         #[stable(feature = "fnptr_impls", since = "1.4.0")]
         impl<Ret, $($Arg),*> fmt::Debug for $FnTy {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 fmt::Pointer::fmt(&(*self as *const ()), f)
             }
         }
@@ -2776,7 +2776,7 @@ pub struct Unique<T: ?Sized> {
 
 #[unstable(feature = "ptr_internals", issue = "0")]
 impl<T: ?Sized> fmt::Debug for Unique<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Pointer::fmt(&self.as_ptr(), f)
     }
 }
@@ -2876,7 +2876,7 @@ impl<T: ?Sized, U: ?Sized> DispatchFromDyn<Unique<U>> for Unique<T> where T: Uns
 
 #[unstable(feature = "ptr_internals", issue = "0")]
 impl<T: ?Sized> fmt::Pointer for Unique<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Pointer::fmt(&self.as_ptr(), f)
     }
 }
@@ -3049,14 +3049,14 @@ impl<T: ?Sized, U: ?Sized> DispatchFromDyn<NonNull<U>> for NonNull<T> where T: U
 
 #[stable(feature = "nonnull", since = "1.25.0")]
 impl<T: ?Sized> fmt::Debug for NonNull<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Pointer::fmt(&self.as_ptr(), f)
     }
 }
 
 #[stable(feature = "nonnull", since = "1.25.0")]
 impl<T: ?Sized> fmt::Pointer for NonNull<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Pointer::fmt(&self.as_ptr(), f)
     }
 }

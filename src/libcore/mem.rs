@@ -5,18 +5,18 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use clone;
-use cmp;
-use fmt;
-use hash;
-use intrinsics;
-use marker::{Copy, PhantomData, Sized};
-use ptr;
-use ops::{Deref, DerefMut};
+use crate::clone;
+use crate::cmp;
+use crate::fmt;
+use crate::hash;
+use crate::intrinsics;
+use crate::marker::{Copy, PhantomData, Sized};
+use crate::ptr;
+use crate::ops::{Deref, DerefMut};
 
 #[stable(feature = "rust1", since = "1.0.0")]
 #[doc(inline)]
-pub use intrinsics::transmute;
+pub use crate::intrinsics::transmute;
 
 /// Takes ownership and "forgets" about the value **without running its destructor**.
 ///
@@ -862,7 +862,7 @@ impl<T> hash::Hash for Discriminant<T> {
 
 #[stable(feature = "discriminant_value", since = "1.21.0")]
 impl<T> fmt::Debug for Discriminant<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_tuple("Discriminant")
            .field(&self.0)
            .finish()
