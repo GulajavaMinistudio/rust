@@ -936,13 +936,6 @@ fn analysis<'tcx>(
         });
     });
 
-    // Abort so we don't try to construct MIR with liveness errors.
-    // We also won't want to continue with errors from rvalue promotion
-    // We only do so if the only error found so far *isn't* a missing `fn main()`
-    if !(entry_point.is_none() && sess.err_count() == 1) {
-        tcx.sess.abort_if_errors();
-    }
-
     time(sess, "borrow checking", || {
         if tcx.use_ast_borrowck() {
             borrowck::check_crate(tcx);
@@ -966,8 +959,7 @@ fn analysis<'tcx>(
     time(sess, "layout testing", || layout_test::test_layout(tcx));
 
     // Avoid overwhelming user with errors if borrow checking failed.
-    // I'm not sure how helpful this is, to be honest, but it avoids
-    // a
+    // I'm not sure how helpful this is, to be honest, but it avoids a
     // lot of annoying errors in the compile-fail tests (basically,
     // lint warnings and so on -- kindck used to do this abort, but
     // kindck is gone now). -nmatsakis
