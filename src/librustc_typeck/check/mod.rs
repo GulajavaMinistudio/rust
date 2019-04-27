@@ -1,3 +1,5 @@
+// ignore-tidy-filelength
+
 /*!
 
 # typeck: check phase
@@ -865,6 +867,8 @@ fn typeck_tables_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             GatherLocalsVisitor { fcx: &fcx, parent_id: id, }.visit_body(body);
 
             fcx.check_expr_coercable_to_type(&body.value, revealed_ty);
+
+            fcx.write_ty(id, revealed_ty);
 
             fcx
         };
@@ -4530,6 +4534,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 let ty = self.to_ty_saving_user_provided_ty(&t);
                 self.check_expr_eq_type(&e, ty);
                 ty
+            }
+            ExprKind::Use(ref e) => {
+                self.check_expr_with_expectation(e, expected)
             }
             ExprKind::Array(ref args) => {
                 let uty = expected.to_option(self).and_then(|uty| {

@@ -1,4 +1,6 @@
 // ignore-tidy-linelength
+// ignore-tidy-filelength
+
 #![allow(non_snake_case)]
 
 register_long_diagnostics! {
@@ -4728,7 +4730,6 @@ register_diagnostics! {
     E0640, // infer outlives requirements
     E0641, // cannot cast to/from a pointer with an unknown kind
     E0645, // trait aliases not finished
-    E0698, // type inside generator must be known in this context
     E0719, // duplicate values for associated type binding
     E0722, // Malformed #[optimize] attribute
     E0724, // `#[ffi_returns_twice]` is only allowed in foreign functions

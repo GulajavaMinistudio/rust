@@ -1,3 +1,5 @@
+// ignore-tidy-filelength
+
 //! Manually manage memory through raw pointers.
 //!
 //! *[See also the pointer primitive types](../../std/primitive.pointer.html).*
@@ -1538,7 +1540,6 @@ impl<T: ?Sized> *const T {
     /// Accessing adjacent `u8` as `u16`
     ///
     /// ```
-    /// # #![feature(align_offset)]
     /// # fn foo(n: usize) {
     /// # use std::mem::align_of;
     /// # unsafe {
@@ -1554,7 +1555,7 @@ impl<T: ?Sized> *const T {
     /// }
     /// # } }
     /// ```
-    #[unstable(feature = "align_offset", issue = "44488")]
+    #[stable(feature = "align_offset", since = "1.36.0")]
     pub fn align_offset(self, align: usize) -> usize where T: Sized {
         if !align.is_power_of_two() {
             panic!("align_offset: align is not a power-of-two");
@@ -2310,7 +2311,6 @@ impl<T: ?Sized> *mut T {
     /// Accessing adjacent `u8` as `u16`
     ///
     /// ```
-    /// # #![feature(align_offset)]
     /// # fn foo(n: usize) {
     /// # use std::mem::align_of;
     /// # unsafe {
@@ -2326,7 +2326,7 @@ impl<T: ?Sized> *mut T {
     /// }
     /// # } }
     /// ```
-    #[unstable(feature = "align_offset", issue = "44488")]
+    #[stable(feature = "align_offset", since = "1.36.0")]
     pub fn align_offset(self, align: usize) -> usize where T: Sized {
         if !align.is_power_of_two() {
             panic!("align_offset: align is not a power-of-two");
