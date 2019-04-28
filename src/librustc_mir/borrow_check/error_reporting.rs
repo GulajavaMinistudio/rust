@@ -17,7 +17,6 @@ use rustc::ty::layout::VariantIdx;
 use rustc::ty::print::Print;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::indexed_vec::Idx;
-use rustc_data_structures::sync::Lrc;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use syntax_pos::Span;
 use syntax::source_map::CompilerDesugaringKind;
@@ -811,7 +810,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
         &mut self,
         context: Context,
         name: &str,
-        scope_tree: &Lrc<ScopeTree>,
+        scope_tree: &'tcx ScopeTree,
         borrow: &BorrowData<'tcx>,
         drop_span: Span,
         borrow_spans: UseSpans,
@@ -1000,7 +999,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
     fn report_temporary_value_does_not_live_long_enough(
         &mut self,
         context: Context,
-        scope_tree: &Lrc<ScopeTree>,
+        scope_tree: &'tcx ScopeTree,
         borrow: &BorrowData<'tcx>,
         drop_span: Span,
         borrow_spans: UseSpans,
@@ -2214,7 +2213,7 @@ impl<'cx, 'gcx, 'tcx> MirBorrowckCtxt<'cx, 'gcx, 'tcx> {
                 // Closure arguments are wrapped in a tuple, so we need to get the first
                 // from that.
                 if let ty::Tuple(elems) = argument_ty.sty {
-                    let argument_ty = elems.first()?;
+                    let argument_ty = elems.first()?.expect_ty();
                     if let ty::Ref(_, _, _) = argument_ty.sty {
                         return Some(AnnotatedBorrowFnSignature::Closure {
                             argument_ty,
