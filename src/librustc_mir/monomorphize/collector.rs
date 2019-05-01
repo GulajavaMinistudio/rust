@@ -615,7 +615,6 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
     }
 
     fn visit_terminator_kind(&mut self,
-                             block: mir::BasicBlock,
                              kind: &mir::TerminatorKind<'tcx>,
                              location: Location) {
         debug!("visiting terminator {:?} @ {:?}", kind, location);
@@ -654,12 +653,12 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
             mir::TerminatorKind::FalseUnwind { .. } => bug!(),
         }
 
-        self.super_terminator_kind(block, kind, location);
+        self.super_terminator_kind(kind, location);
     }
 
     fn visit_place(&mut self,
                     place: &mir::Place<'tcx>,
-                    context: mir::visit::PlaceContext<'tcx>,
+                    context: mir::visit::PlaceContext,
                     location: Location) {
         match place {
             Place::Base(
@@ -1149,7 +1148,7 @@ fn create_mono_items_for_default_impls<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
                     let substs = InternalSubsts::for_item(tcx, method.def_id, |param, _| {
                         match param.kind {
-                            GenericParamDefKind::Lifetime => tcx.types.re_erased.into(),
+                            GenericParamDefKind::Lifetime => tcx.lifetimes.re_erased.into(),
                             GenericParamDefKind::Type { .. } |
                             GenericParamDefKind::Const => {
                                 trait_ref.substs[param.index as usize]
