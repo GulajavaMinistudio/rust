@@ -2030,6 +2030,10 @@ impl<'tcx> Place<'tcx> {
             variant_index))
     }
 
+    pub fn downcast_unnamed(self, variant_index: VariantIdx) -> Place<'tcx> {
+        self.elem(ProjectionElem::Downcast(None, variant_index))
+    }
+
     pub fn index(self, index: Local) -> Place<'tcx> {
         self.elem(ProjectionElem::Index(index))
     }
@@ -2055,10 +2059,13 @@ impl<'tcx> Place<'tcx> {
 
     /// Finds the innermost `Local` from this `Place`.
     pub fn base_local(&self) -> Option<Local> {
-        match self {
-            Place::Base(PlaceBase::Local(local)) => Some(*local),
-            Place::Projection(box Projection { base, elem: _ }) => base.base_local(),
-            Place::Base(PlaceBase::Static(..)) => None,
+        let mut place = self;
+        loop {
+            match place {
+                Place::Projection(proj) => place = &proj.base,
+                Place::Base(PlaceBase::Static(_)) => return None,
+                Place::Base(PlaceBase::Local(local)) => return Some(*local),
+            }
         }
     }
 
@@ -2589,11 +2596,6 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                                     let var_name = tcx.hir().name_by_hir_id(freevar.var_id());
                                     struct_fmt.field(&var_name.as_str(), place);
                                 }
-                                struct_fmt.field("$state", &places[freevars.len()]);
-                                for i in (freevars.len() + 1)..places.len() {
-                                    struct_fmt
-                                        .field(&format!("${}", i - freevars.len() - 1), &places[i]);
-                                }
                             });
 
                             struct_fmt.finish()
@@ -3031,10 +3033,29 @@ pub struct UnsafetyCheckResult {
     pub unsafe_blocks: Lrc<[(hir::HirId, bool)]>,
 }
 
+newtype_index! {
+    pub struct GeneratorSavedLocal {
+        derive [HashStable]
+        DEBUG_FORMAT = "_{}",
+    }
+}
+
 /// The layout of generator state
 #[derive(Clone, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub struct GeneratorLayout<'tcx> {
-    pub fields: Vec<LocalDecl<'tcx>>,
+    /// The type of every local stored inside the generator.
+    pub field_tys: IndexVec<GeneratorSavedLocal, Ty<'tcx>>,
+
+    /// Which of the above fields are in each variant. Note that one field may
+    /// be stored in multiple variants.
+    pub variant_fields: IndexVec<VariantIdx, IndexVec<Field, GeneratorSavedLocal>>,
+
+    /// Names and scopes of all the stored generator locals.
+    /// NOTE(tmandry) This is *strictly* a temporary hack for codegen
+    /// debuginfo generation, and will be removed at some point.
+    /// Do **NOT** use it for anything else, local information should not be
+    /// in the MIR, please rely on local crate HIR or other side-channels.
+    pub __local_debuginfo_codegen_only_do_not_use: IndexVec<GeneratorSavedLocal, LocalDecl<'tcx>>,
 }
 
 #[derive(Clone, Debug, RustcEncodable, RustcDecodable, HashStable)]
@@ -3223,7 +3244,9 @@ BraceStructTypeFoldableImpl! {
 
 BraceStructTypeFoldableImpl! {
     impl<'tcx> TypeFoldable<'tcx> for GeneratorLayout<'tcx> {
-        fields
+        field_tys,
+        variant_fields,
+        __local_debuginfo_codegen_only_do_not_use,
     }
 }
 
@@ -3590,6 +3613,15 @@ where
 }
 
 impl<'tcx> TypeFoldable<'tcx> for Field {
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, _: &mut F) -> Self {
+        *self
+    }
+    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, _: &mut V) -> bool {
+        false
+    }
+}
+
+impl<'tcx> TypeFoldable<'tcx> for GeneratorSavedLocal {
     fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, _: &mut F) -> Self {
         *self
     }

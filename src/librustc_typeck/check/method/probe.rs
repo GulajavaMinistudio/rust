@@ -6,7 +6,7 @@ use super::suggest;
 use crate::check::autoderef::{self, Autoderef};
 use crate::check::FnCtxt;
 use crate::hir::def_id::DefId;
-use crate::hir::def::Def;
+use crate::hir::def::DefKind;
 use crate::namespace::Namespace;
 
 use rustc_data_structures::sync::Lrc;
@@ -34,6 +34,8 @@ use std::iter;
 use std::mem;
 use std::ops::Deref;
 use std::cmp::max;
+
+use smallvec::{smallvec, SmallVec};
 
 use self::CandidateKind::*;
 pub use self::PickKind::*;
@@ -68,7 +70,7 @@ struct ProbeContext<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> {
     allow_similar_names: bool,
 
     /// Some(candidate) if there is a private candidate
-    private_candidate: Option<Def>,
+    private_candidate: Option<(DefKind, DefId)>,
 
     /// Collects near misses when trait bounds for type parameters are unsatisfied and is only used
     /// for error reporting
@@ -121,7 +123,7 @@ struct Candidate<'tcx> {
     xform_ret_ty: Option<Ty<'tcx>>,
     item: ty::AssociatedItem,
     kind: CandidateKind<'tcx>,
-    import_id: Option<hir::HirId>,
+    import_ids: SmallVec<[hir::HirId; 1]>,
 }
 
 #[derive(Debug)]
@@ -146,7 +148,7 @@ enum ProbeResult {
 pub struct Pick<'tcx> {
     pub item: ty::AssociatedItem,
     pub kind: PickKind<'tcx>,
-    pub import_id: Option<hir::HirId>,
+    pub import_ids: SmallVec<[hir::HirId; 1]>,
 
     // Indicates that the source expression should be autoderef'd N times
     //
@@ -520,7 +522,8 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                 self.extension_candidates.push(candidate);
             }
         } else if self.private_candidate.is_none() {
-            self.private_candidate = Some(candidate.item.def());
+            self.private_candidate =
+                Some((candidate.item.def_kind(), candidate.item.def_id));
         }
     }
 
@@ -715,7 +718,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             self.push_candidate(Candidate {
                 xform_self_ty, xform_ret_ty, item,
                 kind: InherentImplCandidate(impl_substs, obligations),
-                import_id: None
+                import_ids: smallvec![]
             }, true);
         }
     }
@@ -749,7 +752,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             this.push_candidate(Candidate {
                 xform_self_ty, xform_ret_ty, item,
                 kind: ObjectCandidate,
-                import_id: None
+                import_ids: smallvec![]
             }, true);
         });
     }
@@ -798,7 +801,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             this.push_candidate(Candidate {
                 xform_self_ty, xform_ret_ty, item,
                 kind: WhereClauseCandidate(poly_trait_ref),
-                import_id: None
+                import_ids: smallvec![]
             }, true);
         });
     }
@@ -837,9 +840,10 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             for trait_candidate in applicable_traits.iter() {
                 let trait_did = trait_candidate.def_id;
                 if duplicates.insert(trait_did) {
-                    let import_id = trait_candidate.import_id.map(|node_id|
-                        self.fcx.tcx.hir().node_to_hir_id(node_id));
-                    let result = self.assemble_extension_candidates_for_trait(import_id, trait_did);
+                    let import_ids = trait_candidate.import_ids.iter().map(|node_id|
+                        self.fcx.tcx.hir().node_to_hir_id(*node_id)).collect();
+                    let result = self.assemble_extension_candidates_for_trait(import_ids,
+                                                                              trait_did);
                     result?;
                 }
             }
@@ -851,7 +855,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
         let mut duplicates = FxHashSet::default();
         for trait_info in suggest::all_traits(self.tcx) {
             if duplicates.insert(trait_info.def_id) {
-                self.assemble_extension_candidates_for_trait(None, trait_info.def_id)?;
+                self.assemble_extension_candidates_for_trait(smallvec![], trait_info.def_id)?;
             }
         }
         Ok(())
@@ -861,9 +865,9 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                                method: &ty::AssociatedItem,
                                self_ty: Option<Ty<'tcx>>,
                                expected: Ty<'tcx>) -> bool {
-        match method.def() {
-            Def::Method(def_id) => {
-                let fty = self.tcx.fn_sig(def_id);
+        match method.kind {
+            ty::AssociatedKind::Method => {
+                let fty = self.tcx.fn_sig(method.def_id);
                 self.probe(|_| {
                     let substs = self.fresh_substs_for_item(self.span, method.def_id);
                     let fty = fty.subst(self.tcx, substs);
@@ -889,7 +893,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
     }
 
     fn assemble_extension_candidates_for_trait(&mut self,
-                                               import_id: Option<hir::HirId>,
+                                               import_ids: SmallVec<[hir::HirId; 1]>,
                                                trait_def_id: DefId)
                                                -> Result<(), MethodError<'tcx>> {
         debug!("assemble_extension_candidates_for_trait(trait_def_id={:?})",
@@ -906,7 +910,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                 let (xform_self_ty, xform_ret_ty) =
                     this.xform_self_ty(&item, new_trait_ref.self_ty(), new_trait_ref.substs);
                 this.push_candidate(Candidate {
-                    xform_self_ty, xform_ret_ty, item, import_id,
+                    xform_self_ty, xform_ret_ty, item, import_ids: import_ids.clone(),
                     kind: TraitCandidate(new_trait_ref),
                 }, true);
             });
@@ -923,7 +927,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                 let (xform_self_ty, xform_ret_ty) =
                     self.xform_self_ty(&item, trait_ref.self_ty(), trait_substs);
                 self.push_candidate(Candidate {
-                    xform_self_ty, xform_ret_ty, item, import_id,
+                    xform_self_ty, xform_ret_ty, item, import_ids: import_ids.clone(),
                     kind: TraitCandidate(trait_ref),
                 }, false);
             }
@@ -1004,8 +1008,8 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             _ => vec![],
         };
 
-        if let Some(def) = private_candidate {
-            return Err(MethodError::PrivateMatch(def, out_of_scope_traits));
+        if let Some((kind, def_id)) = private_candidate {
+            return Err(MethodError::PrivateMatch(kind, def_id, out_of_scope_traits));
         }
         let lev_candidate = self.probe_for_lev_candidate()?;
 
@@ -1412,7 +1416,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
         Some(Pick {
             item: probes[0].0.item.clone(),
             kind: TraitPick,
-            import_id: probes[0].0.import_id,
+            import_ids: probes[0].0.import_ids.clone(),
             autoderefs: 0,
             autoref: None,
             unsize: None,
@@ -1651,7 +1655,7 @@ impl<'tcx> Candidate<'tcx> {
                     WhereClausePick(trait_ref.clone())
                 }
             },
-            import_id: self.import_id,
+            import_ids: self.import_ids.clone(),
             autoderefs: 0,
             autoref: None,
             unsize: None,

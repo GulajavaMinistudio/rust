@@ -5,7 +5,6 @@ use rustc::traits::{self, ObligationCause, ObligationCauseCode};
 use syntax::util::parser::PREC_POSTFIX;
 use syntax_pos::Span;
 use rustc::hir;
-use rustc::hir::def::Def;
 use rustc::hir::Node;
 use rustc::hir::{print, lowering::is_range_literal};
 use rustc::ty::{self, Ty, AssociatedItem};
@@ -206,9 +205,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
     // This function checks if the method isn't static and takes other arguments than `self`.
     fn has_no_input_arg(&self, method: &AssociatedItem) -> bool {
-        match method.def() {
-            Def::Method(def_id) => {
-                self.tcx.fn_sig(def_id).inputs().skip_binder().len() == 1
+        match method.kind {
+            ty::AssociatedKind::Method => {
+                self.tcx.fn_sig(method.def_id).inputs().skip_binder().len() == 1
             }
             _ => false,
         }
@@ -235,7 +234,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         expr: &hir::Expr,
     ) -> Option<(Span, &'static str, String)> {
         if let hir::ExprKind::Path(hir::QPath::Resolved(_, ref path)) = expr.node {
-            if let hir::def::Def::Local(id) = path.def {
+            if let hir::def::Res::Local(id) = path.res {
                 let parent = self.tcx.hir().get_parent_node_by_hir_id(id);
                 if let Some(Node::Expr(hir::Expr {
                     hir_id,
@@ -523,7 +522,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
         let msg = format!("you can convert an `{}` to `{}`", checked_ty, expected_ty);
         let cast_msg = format!("you can cast an `{} to `{}`", checked_ty, expected_ty);
-        let try_msg = format!("{} or panic if it the converted value wouldn't fit", msg);
+        let try_msg = format!("{} and panic if the converted value wouldn't fit", msg);
         let lit_msg = format!(
             "change the type of the numeric literal from `{}` to `{}`",
             checked_ty,
