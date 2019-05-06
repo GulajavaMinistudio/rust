@@ -66,6 +66,7 @@ macro_rules! try_validation {
 pub enum PathElem {
     Field(Symbol),
     Variant(Symbol),
+    GeneratoreState(VariantIdx),
     ClosureVar(Symbol),
     ArrayElem(usize),
     TupleElem(usize),
@@ -100,6 +101,7 @@ fn path_format(path: &Vec<PathElem>) -> String {
         match elem {
             Field(name) => write!(out, ".{}", name),
             Variant(name) => write!(out, ".<downcast-variant({})>", name),
+            GeneratoreState(idx) => write!(out, ".<generator-state({})>", idx.index()),
             ClosureVar(name) => write!(out, ".<closure-var({})>", name),
             TupleElem(idx) => write!(out, ".{}", idx),
             ArrayElem(idx) => write!(out, "[{}]", idx),
@@ -170,7 +172,7 @@ impl<'rt, 'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> ValidityVisitor<'rt, 'a, '
                 if def_id.is_local() {
                     let tables = self.ecx.tcx.typeck_tables_of(def_id);
                     if let Some(upvars) = tables.upvar_list.get(&def_id) {
-                        // Sometimes the index is beyond the number of freevars (seen
+                        // Sometimes the index is beyond the number of upvars (seen
                         // for a generator).
                         if let Some(upvar_id) = upvars.get(field) {
                             let var_hir_id = upvar_id.var_path.hir_id;
@@ -262,8 +264,13 @@ impl<'rt, 'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>>
         variant_id: VariantIdx,
         new_op: OpTy<'tcx, M::PointerTag>
     ) -> EvalResult<'tcx> {
-        let name = old_op.layout.ty.ty_adt_def().unwrap().variants[variant_id].ident.name;
-        self.visit_elem(new_op, PathElem::Variant(name))
+        let name = match old_op.layout.ty.sty {
+            ty::Adt(adt, _) => PathElem::Variant(adt.variants[variant_id].ident.name),
+            // Generators also have variants
+            ty::Generator(..) => PathElem::GeneratoreState(variant_id),
+            _ => bug!("Unexpected type with variant: {:?}", old_op.layout.ty),
+        };
+        self.visit_elem(new_op, name)
     }
 
     #[inline]
