@@ -1576,7 +1576,7 @@ impl<'a> Parser<'a> {
             let ident = self.parse_ident()?;
             let mut generics = self.parse_generics()?;
 
-            let d = self.parse_fn_decl_with_self(|p: &mut Parser<'a>| {
+            let mut decl = self.parse_fn_decl_with_self(|p: &mut Parser<'a>| {
                 // This is somewhat dubious; We don't want to allow
                 // argument names to be left off if there is a
                 // definition...
@@ -1585,7 +1585,7 @@ impl<'a> Parser<'a> {
                 p.parse_arg_general(p.span.rust_2018(), true, false)
             })?;
             generics.where_clause = self.parse_where_clause()?;
-            self.construct_async_arguments(&mut asyncness, &d);
+            self.construct_async_arguments(&mut asyncness, &mut decl);
 
             let sig = ast::MethodSig {
                 header: FnHeader {
@@ -1594,7 +1594,7 @@ impl<'a> Parser<'a> {
                     abi,
                     asyncness,
                 },
-                decl: d,
+                decl,
             };
 
             let body = match self.token {
@@ -2319,7 +2319,8 @@ impl<'a> Parser<'a> {
         let ident = self.parse_path_segment_ident()?;
 
         let is_args_start = |token: &token::Token| match *token {
-            token::Lt | token::BinOp(token::Shl) | token::OpenDelim(token::Paren) => true,
+            token::Lt | token::BinOp(token::Shl) | token::OpenDelim(token::Paren)
+            | token::LArrow => true,
             _ => false,
         };
         let check_args_start = |this: &mut Self| {
@@ -2751,6 +2752,14 @@ impl<'a> Parser<'a> {
                     db.span_label(self.span, "expected expression");
                     db.note("variable declaration using `let` is a statement");
                     return Err(db);
+                } else if self.span.rust_2018() && self.eat_keyword(keywords::Await) {
+                    // FIXME: remove this branch when `await!` is no longer supported
+                    // https://github.com/rust-lang/rust/issues/60610
+                    self.expect(&token::Not)?;
+                    self.expect(&token::OpenDelim(token::Paren))?;
+                    let expr = self.parse_expr()?;
+                    self.expect(&token::CloseDelim(token::Paren))?;
+                    ex = ExprKind::Await(ast::AwaitOrigin::MacroLike, expr);
                 } else if self.token.is_path_start() {
                     let path = self.parse_path(PathStyle::Expr)?;
 
@@ -3014,6 +3023,15 @@ impl<'a> Parser<'a> {
 
     // Assuming we have just parsed `.`, continue parsing into an expression.
     fn parse_dot_suffix(&mut self, self_arg: P<Expr>, lo: Span) -> PResult<'a, P<Expr>> {
+        if self.span.rust_2018() && self.eat_keyword(keywords::Await) {
+            let span = lo.to(self.prev_span);
+            let await_expr = self.mk_expr(
+                span,
+                ExprKind::Await(ast::AwaitOrigin::FieldLike, self_arg),
+                ThinVec::new(),
+            );
+            return Ok(await_expr);
+        }
         let segment = self.parse_path_segment(PathStyle::Expr)?;
         self.check_trailing_angle_brackets(&segment, token::OpenDelim(token::Paren));
 
@@ -6056,8 +6074,6 @@ impl<'a> Parser<'a> {
                         self.fatal("identifiers may currently not be used for const generics")
                     );
                 } else {
-                    // FIXME(const_generics): this currently conflicts with emplacement syntax
-                    // with negative integer literals.
                     self.parse_literal_maybe_minus()?
                 };
                 let value = AnonConst {
@@ -6475,10 +6491,10 @@ impl<'a> Parser<'a> {
                      -> PResult<'a, ItemInfo> {
         let (ident, mut generics) = self.parse_fn_header()?;
         let allow_c_variadic = abi == Abi::C && unsafety == Unsafety::Unsafe;
-        let decl = self.parse_fn_decl(allow_c_variadic)?;
+        let mut decl = self.parse_fn_decl(allow_c_variadic)?;
         generics.where_clause = self.parse_where_clause()?;
         let (inner_attrs, body) = self.parse_inner_attrs_and_block()?;
-        self.construct_async_arguments(&mut asyncness, &decl);
+        self.construct_async_arguments(&mut asyncness, &mut decl);
         let header = FnHeader { unsafety, asyncness, constness, abi };
         Ok((ident, ItemKind::Fn(decl, header, generics, body), Some(inner_attrs)))
     }
@@ -6662,9 +6678,9 @@ impl<'a> Parser<'a> {
             let (constness, unsafety, mut asyncness, abi) = self.parse_fn_front_matter()?;
             let ident = self.parse_ident()?;
             let mut generics = self.parse_generics()?;
-            let decl = self.parse_fn_decl_with_self(|p| p.parse_arg())?;
+            let mut decl = self.parse_fn_decl_with_self(|p| p.parse_arg())?;
             generics.where_clause = self.parse_where_clause()?;
-            self.construct_async_arguments(&mut asyncness, &decl);
+            self.construct_async_arguments(&mut asyncness, &mut decl);
             *at_end = true;
             let (inner_attrs, body) = self.parse_inner_attrs_and_block()?;
             let header = ast::FnHeader { abi, unsafety, constness, asyncness };
@@ -8710,9 +8726,9 @@ impl<'a> Parser<'a> {
     ///
     /// The arguments of the function are replaced in HIR lowering with the arguments created by
     /// this function and the statements created here are inserted at the top of the closure body.
-    fn construct_async_arguments(&mut self, asyncness: &mut Spanned<IsAsync>, decl: &FnDecl) {
+    fn construct_async_arguments(&mut self, asyncness: &mut Spanned<IsAsync>, decl: &mut FnDecl) {
         if let IsAsync::Async { ref mut arguments, .. } = asyncness.node {
-            for (index, input) in decl.inputs.iter().enumerate() {
+            for (index, input) in decl.inputs.iter_mut().enumerate() {
                 let id = ast::DUMMY_NODE_ID;
                 let span = input.pat.span;
 
@@ -8724,8 +8740,10 @@ impl<'a> Parser<'a> {
                 // `let <pat> = __argN;` statement, instead just adding a `let <pat> = <pat>;`
                 // statement.
                 let (binding_mode, ident, is_simple_pattern) = match input.pat.node {
-                    PatKind::Ident(binding_mode, ident, _) => (binding_mode, ident, true),
-                    _ => (BindingMode::ByValue(Mutability::Immutable), ident, false),
+                    PatKind::Ident(binding_mode @ BindingMode::ByValue(_), ident, _) => {
+                        (binding_mode, ident, true)
+                    }
+                    _ => (BindingMode::ByValue(Mutability::Mutable), ident, false),
                 };
 
                 // Construct an argument representing `__argN: <ty>` to replace the argument of the
@@ -8791,6 +8809,15 @@ impl<'a> Parser<'a> {
                         span,
                     })
                 };
+
+                // Remove mutability from arguments. If this is not a simple pattern,
+                // those arguments are replaced by `__argN`, so there is no need to do this.
+                if let PatKind::Ident(BindingMode::ByValue(mutability @ Mutability::Mutable), ..) =
+                    &mut input.pat.node
+                {
+                    assert!(is_simple_pattern);
+                    *mutability = Mutability::Immutable;
+                }
 
                 let move_stmt = Stmt { id, node: StmtKind::Local(P(move_local)), span };
                 arguments.push(AsyncArgument { ident, arg, pat_stmt, move_stmt });

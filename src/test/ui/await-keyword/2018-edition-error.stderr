@@ -1,38 +1,50 @@
-error[E0721]: `await` is a keyword in the 2018 edition
+error: expected identifier, found reserved keyword `await`
   --> $DIR/2018-edition-error.rs:5:13
    |
 LL |     pub mod await {
-   |             ^^^^^ help: you can use a raw identifier to stay compatible: `r#await`
+   |             ^^^^^ expected identifier, found reserved keyword
+help: you can escape reserved keywords to use them as identifiers
+   |
+LL |     pub mod r#await {
+   |             ^^^^^^^
 
-error[E0721]: `await` is a keyword in the 2018 edition
+error: expected identifier, found reserved keyword `await`
   --> $DIR/2018-edition-error.rs:6:20
    |
 LL |         pub struct await;
-   |                    ^^^^^ help: you can use a raw identifier to stay compatible: `r#await`
+   |                    ^^^^^ expected identifier, found reserved keyword
+help: you can escape reserved keywords to use them as identifiers
+   |
+LL |         pub struct r#await;
+   |                    ^^^^^^^
 
-error[E0721]: `await` is a keyword in the 2018 edition
+error: expected identifier, found reserved keyword `await`
   --> $DIR/2018-edition-error.rs:9:22
    |
 LL | use self::outer_mod::await::await;
-   |                      ^^^^^ help: you can use a raw identifier to stay compatible: `r#await`
+   |                      ^^^^^ expected identifier, found reserved keyword
+help: you can escape reserved keywords to use them as identifiers
+   |
+LL | use self::outer_mod::r#await::await;
+   |                      ^^^^^^^
 
-error[E0721]: `await` is a keyword in the 2018 edition
+error: expected identifier, found reserved keyword `await`
   --> $DIR/2018-edition-error.rs:9:29
    |
 LL | use self::outer_mod::await::await;
-   |                             ^^^^^ help: you can use a raw identifier to stay compatible: `r#await`
+   |                             ^^^^^ expected identifier, found reserved keyword
+help: you can escape reserved keywords to use them as identifiers
+   |
+LL | use self::outer_mod::await::r#await;
+   |                             ^^^^^^^
 
-error[E0721]: `await` is a keyword in the 2018 edition
-  --> $DIR/2018-edition-error.rs:13:11
+error: expected `!`, found `{`
+  --> $DIR/2018-edition-error.rs:13:17
    |
 LL |     match await { await => () }
-   |           ^^^^^ help: you can use a raw identifier to stay compatible: `r#await`
+   |     -----       ^ expected `!`
+   |     |
+   |     while parsing this match expression
 
-error[E0721]: `await` is a keyword in the 2018 edition
-  --> $DIR/2018-edition-error.rs:13:19
-   |
-LL |     match await { await => () }
-   |                   ^^^^^ help: you can use a raw identifier to stay compatible: `r#await`
-
-error: aborting due to 6 previous errors
+error: aborting due to 5 previous errors
 
