@@ -20,7 +20,7 @@ use syntax_pos::{Span, DUMMY_SP, symbol::InternedString};
 use syntax::source_map::Spanned;
 use rustc_target::spec::abi::Abi;
 use syntax::ast::{self, CrateSugar, Ident, Name, NodeId, AsmDialect};
-use syntax::ast::{Attribute, Label, Lit, StrStyle, FloatTy, IntTy, UintTy};
+use syntax::ast::{Attribute, Label, LitKind, StrStyle, FloatTy, IntTy, UintTy};
 use syntax::attr::{InlineAttr, OptimizeAttr};
 use syntax::ext::hygiene::SyntaxContext;
 use syntax::ptr::P;
@@ -126,12 +126,12 @@ mod item_local_id_inner {
     use rustc_macros::HashStable;
     newtype_index! {
         /// An `ItemLocalId` uniquely identifies something within a given "item-like",
-        /// that is within a hir::Item, hir::TraitItem, or hir::ImplItem. There is no
+        /// that is, within a hir::Item, hir::TraitItem, or hir::ImplItem. There is no
         /// guarantee that the numerical value of a given `ItemLocalId` corresponds to
         /// the node's position within the owning item in any way, but there is a
         /// guarantee that the `LocalItemId`s within an owner occupy a dense range of
         /// integers starting at zero, so a mapping that maps all or most nodes within
-        /// an "item-like" to something else can be implement by a `Vec` instead of a
+        /// an "item-like" to something else can be implemented by a `Vec` instead of a
         /// tree or hash map.
         pub struct ItemLocalId {
             derive [HashStable]
@@ -1330,6 +1330,9 @@ impl BodyOwnerKind {
         }
     }
 }
+
+/// A literal.
+pub type Lit = Spanned<LitKind>;
 
 /// A constant (expression) that's not an item or associated item,
 /// but needs its own `DefId` for type-checking, const-eval, etc.
