@@ -352,7 +352,7 @@ impl TokenCursor {
         let body = TokenTree::Delimited(
             delim_span,
             token::Bracket,
-            [TokenTree::Token(sp, token::Ident(ast::Ident::from_str("doc"), false)),
+            [TokenTree::Token(sp, token::Ident(ast::Ident::with_empty_ctxt(sym::doc), false)),
              TokenTree::Token(sp, token::Eq),
              TokenTree::Token(sp, token::Literal(
                 token::StrRaw(Symbol::intern(&stripped), num_of_hashes), None))
@@ -3497,8 +3497,7 @@ impl<'a> Parser<'a> {
                     let binary = self.mk_binary(source_map::respan(cur_op_span, ast_op), lhs, rhs);
                     self.mk_expr(span, binary, ThinVec::new())
                 }
-                AssocOp::Assign =>
-                    self.mk_expr(span, ExprKind::Assign(lhs, rhs), ThinVec::new()),
+                AssocOp::Assign => self.mk_expr(span, ExprKind::Assign(lhs, rhs), ThinVec::new()),
                 AssocOp::ObsoleteInPlace =>
                     self.mk_expr(span, ExprKind::ObsoleteInPlace(lhs, rhs), ThinVec::new()),
                 AssocOp::AssignOp(k) => {
@@ -7012,7 +7011,8 @@ impl<'a> Parser<'a> {
                     let attr = Attribute {
                         id: attr::mk_attr_id(),
                         style: ast::AttrStyle::Outer,
-                        path: ast::Path::from_ident(Ident::from_str("warn_directory_ownership")),
+                        path: ast::Path::from_ident(
+                            Ident::with_empty_ctxt(sym::warn_directory_ownership)),
                         tokens: TokenStream::empty(),
                         is_sugared_doc: false,
                         span: syntax_pos::DUMMY_SP,
