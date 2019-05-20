@@ -229,6 +229,7 @@ symbols! {
         eh_personality,
         eh_unwind_resume,
         enable,
+        err,
         Err,
         except,
         exclusive_range_pattern,
@@ -260,6 +261,7 @@ symbols! {
         fundamental,
         future,
         Future,
+        gen_future,
         generators,
         generic_associated_types,
         generic_param_attrs,
@@ -361,6 +363,7 @@ symbols! {
         never,
         never_type,
         next,
+        __next,
         nll,
         no_builtins,
         no_core,
@@ -406,6 +409,7 @@ symbols! {
         Pending,
         pin,
         Pin,
+        pinned,
         platform_intrinsics,
         plugin,
         plugin_registrar,
@@ -569,6 +573,7 @@ symbols! {
         trivial_bounds,
         Try,
         try_blocks,
+        try_trait,
         tuple_indexing,
         ty,
         type_alias_enum_variants,
@@ -587,6 +592,7 @@ symbols! {
         uniform_paths,
         universal_impl_trait,
         unmarked_api,
+        unreachable_code,
         unrestricted_attribute_tokens,
         unsafe_destructor_blind_to_params,
         unsafe_no_drop_flag,
@@ -601,6 +607,7 @@ symbols! {
         use_nested_groups,
         usize,
         v1,
+        val,
         vis,
         visible_private_types,
         volatile,
@@ -1029,6 +1036,17 @@ pub struct LocalInternedString {
 }
 
 impl LocalInternedString {
+    /// Maps a string to its interned representation.
+    pub fn intern(string: &str) -> Self {
+        let string = with_interner(|interner| {
+            let symbol = interner.intern(string);
+            interner.strings[symbol.0.as_usize()]
+        });
+        LocalInternedString {
+            string: unsafe { std::mem::transmute::<&str, &str>(string) }
+        }
+    }
+
     pub fn as_interned_str(self) -> InternedString {
         InternedString {
             symbol: Symbol::intern(self.string)
@@ -1105,7 +1123,7 @@ impl fmt::Display for LocalInternedString {
 
 impl Decodable for LocalInternedString {
     fn decode<D: Decoder>(d: &mut D) -> Result<LocalInternedString, D::Error> {
-        Ok(Symbol::intern(&d.read_str()?).as_str())
+        Ok(LocalInternedString::intern(&d.read_str()?))
     }
 }
 
@@ -1134,6 +1152,13 @@ pub struct InternedString {
 }
 
 impl InternedString {
+    /// Maps a string to its interned representation.
+    pub fn intern(string: &str) -> Self {
+        InternedString {
+            symbol: Symbol::intern(string)
+        }
+    }
+
     pub fn with<F: FnOnce(&str) -> R, R>(self, f: F) -> R {
         let str = with_interner(|interner| {
             interner.get(self.symbol) as *const str
@@ -1236,7 +1261,7 @@ impl fmt::Display for InternedString {
 
 impl Decodable for InternedString {
     fn decode<D: Decoder>(d: &mut D) -> Result<InternedString, D::Error> {
-        Ok(Symbol::intern(&d.read_str()?).as_interned_str())
+        Ok(InternedString::intern(&d.read_str()?))
     }
 }
 
