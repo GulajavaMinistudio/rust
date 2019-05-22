@@ -31,13 +31,14 @@ use rustc::ty::{self, AdtKind, ParamEnv, Ty, TyCtxt};
 use rustc::ty::layout::{self, Align, Integer, IntegerExt, LayoutOf,
                         PrimitiveExt, Size, TyLayout, VariantIdx};
 use rustc::ty::subst::UnpackedKind;
-use rustc::session::config;
+use rustc::session::config::{self, DebugInfo};
 use rustc::util::nodemap::FxHashMap;
 use rustc_fs_util::path_to_c_string;
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_target::abi::HasDataLayout;
 
 use libc::{c_uint, c_longlong};
+use std::collections::hash_map::Entry;
 use std::ffi::CString;
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
@@ -45,7 +46,7 @@ use std::iter;
 use std::ptr;
 use std::path::{Path, PathBuf};
 use syntax::ast;
-use syntax::symbol::{Interner, InternedString, Symbol};
+use syntax::symbol::{Interner, InternedString};
 use syntax_pos::{self, Span, FileName};
 
 impl PartialEq for llvm::Metadata {
@@ -787,49 +788,48 @@ pub fn file_metadata(cx: &CodegenCx<'ll, '_>,
            file_name,
            defining_crate);
 
-    let file_name = &file_name.to_string();
-    let file_name_symbol = Symbol::intern(file_name);
-    if defining_crate == LOCAL_CRATE {
-        let directory = &cx.sess().working_dir.0.to_string_lossy();
-        file_metadata_raw(cx, file_name, Some(file_name_symbol),
-                          directory, Some(Symbol::intern(directory)))
+    let file_name = Some(file_name.to_string());
+    let directory = if defining_crate == LOCAL_CRATE {
+        Some(cx.sess().working_dir.0.to_string_lossy().to_string())
     } else {
         // If the path comes from an upstream crate we assume it has been made
         // independent of the compiler's working directory one way or another.
-        file_metadata_raw(cx, file_name, Some(file_name_symbol), "", None)
-    }
+        None
+    };
+    file_metadata_raw(cx, file_name, directory)
 }
 
 pub fn unknown_file_metadata(cx: &CodegenCx<'ll, '_>) -> &'ll DIFile {
-    file_metadata_raw(cx, "<unknown>", None, "", None)
+    file_metadata_raw(cx, None, None)
 }
 
 fn file_metadata_raw(cx: &CodegenCx<'ll, '_>,
-                     file_name: &str,
-                     file_name_symbol: Option<Symbol>,
-                     directory: &str,
-                     directory_symbol: Option<Symbol>)
+                     file_name: Option<String>,
+                     directory: Option<String>)
                      -> &'ll DIFile {
-    let key = (file_name_symbol, directory_symbol);
+    let key = (file_name, directory);
 
-    if let Some(file_metadata) = debug_context(cx).created_files.borrow().get(&key) {
-        return *file_metadata;
+    match debug_context(cx).created_files.borrow_mut().entry(key) {
+        Entry::Occupied(o) => return o.get(),
+        Entry::Vacant(v) => {
+            let (file_name, directory) = v.key();
+            debug!("file_metadata: file_name: {:?}, directory: {:?}", file_name, directory);
+
+            let file_name = SmallCStr::new(
+                if let Some(file_name) = file_name { &file_name } else { "<unknown>" });
+            let directory = SmallCStr::new(
+                if let Some(directory) = directory { &directory } else { "" });
+
+            let file_metadata = unsafe {
+                llvm::LLVMRustDIBuilderCreateFile(DIB(cx),
+                                                  file_name.as_ptr(),
+                                                  directory.as_ptr())
+            };
+
+            v.insert(file_metadata);
+            file_metadata
+        }
     }
-
-    debug!("file_metadata: file_name: {}, directory: {}", file_name, directory);
-
-    let file_name = SmallCStr::new(file_name);
-    let directory = SmallCStr::new(directory);
-
-    let file_metadata = unsafe {
-        llvm::LLVMRustDIBuilderCreateFile(DIB(cx),
-                                          file_name.as_ptr(),
-                                          directory.as_ptr())
-    };
-
-    let mut created_files = debug_context(cx).created_files.borrow_mut();
-    created_files.insert(key, file_metadata);
-    file_metadata
 }
 
 fn basic_type_metadata(cx: &CodegenCx<'ll, 'tcx>, t: Ty<'tcx>) -> &'ll DIType {
@@ -925,7 +925,26 @@ pub fn compile_unit_metadata(tcx: TyCtxt<'_, '_, '_>,
     let producer = CString::new(producer).unwrap();
     let flags = "\0";
     let split_name = "\0";
-    let kind = DebugEmissionKind::from_generic(tcx.sess.opts.debuginfo);
+
+    // FIXME(#60020):
+    //
+    //    This should actually be
+    //
+    //    ```
+    //      let kind = DebugEmissionKind::from_generic(tcx.sess.opts.debuginfo);
+    //    ```
+    //
+    //    that is, we should set LLVM's emission kind to `LineTablesOnly` if
+    //    we are compiling with "limited" debuginfo. However, some of the
+    //    existing tools relied on slightly more debuginfo being generated than
+    //    would be the case with `LineTablesOnly`, and we did not want to break
+    //    these tools in a "drive-by fix", without a good idea or plan about
+    //    what limited debuginfo should exactly look like. So for now we keep
+    //    the emission kind as `FullDebug`.
+    //
+    //    See https://github.com/rust-lang/rust/issues/60020 for details.
+    let kind = DebugEmissionKind::FullDebug;
+    assert!(tcx.sess.opts.debuginfo != DebugInfo::None);
 
     unsafe {
         let file_metadata = llvm::LLVMRustDIBuilderCreateFile(

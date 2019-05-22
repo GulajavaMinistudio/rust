@@ -14,7 +14,7 @@ use syntax::{
         base::{ExtCtxt, Resolver},
         build::AstBuilder,
         expand::ExpansionConfig,
-        hygiene::{self, Mark, SyntaxContext},
+        hygiene::{Mark, SyntaxContext},
     },
     mut_visit::{self, MutVisitor},
     parse::ParseSess,
@@ -96,7 +96,7 @@ impl MutVisitor for ExpandAllocatorDirectives<'_> {
             ].into()),
             allow_internal_unsafe: false,
             local_inner_macros: false,
-            edition: hygiene::default_edition(),
+            edition: self.sess.edition,
         });
 
         // Tie the span to the macro expansion info we just created
@@ -140,7 +140,7 @@ impl MutVisitor for ExpandAllocatorDirectives<'_> {
 
         // Generate the submodule itself
         let name = f.kind.fn_name("allocator_abi");
-        let allocator_abi = Ident::with_empty_ctxt(Symbol::gensym(&name));
+        let allocator_abi = Ident::from_str(&name).gensym();
         let module = f.cx.item_mod(span, span, allocator_abi, Vec::new(), items);
         let module = f.cx.monotonic_expander().flat_map_item(module).pop().unwrap();
 
