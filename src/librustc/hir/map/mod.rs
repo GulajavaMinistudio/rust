@@ -373,6 +373,7 @@ impl<'hir> Map<'hir> {
             Node::Pat(_) |
             Node::Binding(_) |
             Node::Local(_) |
+            Node::Arm(_) |
             Node::Lifetime(_) |
             Node::Visibility(_) |
             Node::Block(_) |
@@ -519,7 +520,7 @@ impl<'hir> Map<'hir> {
     pub fn ty_param_name(&self, id: HirId) -> Name {
         match self.get_by_hir_id(id) {
             Node::Item(&Item { node: ItemKind::Trait(..), .. }) |
-            Node::Item(&Item { node: ItemKind::TraitAlias(..), .. }) => keywords::SelfUpper.name(),
+            Node::Item(&Item { node: ItemKind::TraitAlias(..), .. }) => kw::SelfUpper,
             Node::GenericParam(param) => param.name.ident().name,
             _ => bug!("ty_param_name: {} not a type parameter", self.hir_to_string(id)),
         }
@@ -1000,6 +1001,7 @@ impl<'hir> Map<'hir> {
             Some(Node::Field(ref f)) => Some(&f.attrs[..]),
             Some(Node::Expr(ref e)) => Some(&*e.attrs),
             Some(Node::Stmt(ref s)) => Some(s.node.attrs()),
+            Some(Node::Arm(ref a)) => Some(&*a.attrs),
             Some(Node::GenericParam(param)) => Some(&param.attrs[..]),
             // Unit/tuple structs/variants take the attributes straight from
             // the struct/variant definition.
@@ -1073,6 +1075,7 @@ impl<'hir> Map<'hir> {
             Some(Node::TraitRef(tr)) => tr.path.span,
             Some(Node::Binding(pat)) => pat.span,
             Some(Node::Pat(pat)) => pat.span,
+            Some(Node::Arm(arm)) => arm.span,
             Some(Node::Block(block)) => block.span,
             Some(Node::Ctor(..)) => match self.find_by_hir_id(
                 self.get_parent_node_by_hir_id(hir_id))
@@ -1288,6 +1291,7 @@ impl<'a> print::State<'a> {
             Node::TraitRef(a)     => self.print_trait_ref(&a),
             Node::Binding(a)      |
             Node::Pat(a)          => self.print_pat(&a),
+            Node::Arm(a)          => self.print_arm(&a),
             Node::Block(a)        => {
                 use syntax::print::pprust::PrintState;
 
@@ -1416,6 +1420,9 @@ fn hir_id_to_string(map: &Map<'_>, id: HirId, include_id: bool) -> String {
         }
         Some(Node::Pat(_)) => {
             format!("pat {}{}", map.hir_to_pretty_string(id), id_str)
+        }
+        Some(Node::Arm(_)) => {
+            format!("arm {}{}", map.hir_to_pretty_string(id), id_str)
         }
         Some(Node::Block(_)) => {
             format!("block {}{}", map.hir_to_pretty_string(id), id_str)

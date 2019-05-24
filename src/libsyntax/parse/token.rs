@@ -1,14 +1,14 @@
 pub use BinOpToken::*;
 pub use Nonterminal::*;
 pub use DelimToken::*;
-pub use Lit::*;
+pub use LitKind::*;
 pub use Token::*;
 
 use crate::ast::{self};
 use crate::parse::ParseSess;
 use crate::print::pprust;
 use crate::ptr::P;
-use crate::symbol::keywords;
+use crate::symbol::kw;
 use crate::syntax::parse::parse_stream_from_source_str;
 use crate::tokenstream::{self, DelimSpan, TokenStream, TokenTree};
 
@@ -59,48 +59,61 @@ impl DelimToken {
     }
 }
 
-#[derive(Clone, PartialEq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
-pub enum Lit {
-    Bool(ast::Name), // AST only, must never appear in a `Token`
-    Byte(ast::Name),
-    Char(ast::Name),
-    Err(ast::Name),
-    Integer(ast::Name),
-    Float(ast::Name),
-    Str_(ast::Name),
-    StrRaw(ast::Name, u16), /* raw str delimited by n hash symbols */
-    ByteStr(ast::Name),
-    ByteStrRaw(ast::Name, u16), /* raw byte str delimited by n hash symbols */
+#[derive(Clone, Copy, PartialEq, RustcEncodable, RustcDecodable, Debug)]
+pub enum LitKind {
+    Bool, // AST only, must never appear in a `Token`
+    Byte,
+    Char,
+    Integer,
+    Float,
+    Str,
+    StrRaw(u16), // raw string delimited by `n` hash symbols
+    ByteStr,
+    ByteStrRaw(u16), // raw byte string delimited by `n` hash symbols
+    Err,
 }
 
-#[cfg(target_arch = "x86_64")]
-static_assert_size!(Lit, 8);
+/// A literal token.
+#[derive(Clone, Copy, PartialEq, RustcEncodable, RustcDecodable, Debug)]
+pub struct Lit {
+    pub kind: LitKind,
+    pub symbol: Symbol,
+    pub suffix: Option<Symbol>,
+}
 
-impl Lit {
-    crate fn literal_name(&self) -> &'static str {
-        match *self {
-            Bool(_) => panic!("literal token contains `Lit::Bool`"),
-            Byte(_) => "byte literal",
-            Char(_) => "char literal",
-            Err(_) => "invalid literal",
-            Integer(_) => "integer literal",
-            Float(_) => "float literal",
-            Str_(_) | StrRaw(..) => "string literal",
-            ByteStr(_) | ByteStrRaw(..) => "byte string literal"
+impl LitKind {
+    /// An English article for the literal token kind.
+    crate fn article(self) -> &'static str {
+        match self {
+            Integer | Err => "an",
+            _ => "a",
         }
     }
 
-    crate fn may_have_suffix(&self) -> bool {
-        match *self {
-            Integer(..) | Float(..) => true,
+    crate fn descr(self) -> &'static str {
+        match self {
+            Bool => panic!("literal token contains `Lit::Bool`"),
+            Byte => "byte",
+            Char => "char",
+            Integer => "integer",
+            Float => "float",
+            Str | StrRaw(..) => "string",
+            ByteStr | ByteStrRaw(..) => "byte string",
+            Err => "error",
+        }
+    }
+
+    crate fn may_have_suffix(self) -> bool {
+        match self {
+            Integer | Float | Err => true,
             _ => false,
         }
     }
+}
 
-    // See comments in `Nonterminal::to_tokenstream` for why we care about
-    // *probably* equal here rather than actual equality
-    fn probably_equal_for_proc_macro(&self, other: &Lit) -> bool {
-        mem::discriminant(self) == mem::discriminant(other)
+impl Lit {
+    pub fn new(kind: LitKind, symbol: Symbol, suffix: Option<Symbol>) -> Lit {
+        Lit { kind, symbol, suffix }
     }
 }
 
@@ -110,28 +123,28 @@ pub(crate) fn ident_can_begin_expr(ident: ast::Ident, is_raw: bool) -> bool {
     !ident_token.is_reserved_ident() ||
     ident_token.is_path_segment_keyword() ||
     [
-        keywords::Async.name(),
+        kw::Async,
 
         // FIXME: remove when `await!(..)` syntax is removed
         // https://github.com/rust-lang/rust/issues/60610
-        keywords::Await.name(),
+        kw::Await,
 
-        keywords::Do.name(),
-        keywords::Box.name(),
-        keywords::Break.name(),
-        keywords::Continue.name(),
-        keywords::False.name(),
-        keywords::For.name(),
-        keywords::If.name(),
-        keywords::Loop.name(),
-        keywords::Match.name(),
-        keywords::Move.name(),
-        keywords::Return.name(),
-        keywords::True.name(),
-        keywords::Unsafe.name(),
-        keywords::While.name(),
-        keywords::Yield.name(),
-        keywords::Static.name(),
+        kw::Do,
+        kw::Box,
+        kw::Break,
+        kw::Continue,
+        kw::False,
+        kw::For,
+        kw::If,
+        kw::Loop,
+        kw::Match,
+        kw::Move,
+        kw::Return,
+        kw::True,
+        kw::Unsafe,
+        kw::While,
+        kw::Yield,
+        kw::Static,
     ].contains(&ident.name)
 }
 
@@ -141,14 +154,14 @@ fn ident_can_begin_type(ident: ast::Ident, is_raw: bool) -> bool {
     !ident_token.is_reserved_ident() ||
     ident_token.is_path_segment_keyword() ||
     [
-        keywords::Underscore.name(),
-        keywords::For.name(),
-        keywords::Impl.name(),
-        keywords::Fn.name(),
-        keywords::Unsafe.name(),
-        keywords::Extern.name(),
-        keywords::Typeof.name(),
-        keywords::Dyn.name(),
+        kw::Underscore,
+        kw::For,
+        kw::Impl,
+        kw::Fn,
+        kw::Unsafe,
+        kw::Extern,
+        kw::Typeof,
+        kw::Dyn,
     ].contains(&ident.name)
 }
 
@@ -193,7 +206,7 @@ pub enum Token {
     CloseDelim(DelimToken),
 
     /* Literals */
-    Literal(Lit, Option<ast::Name>),
+    Literal(Lit),
 
     /* Name components */
     Ident(ast::Ident, /* is_raw */ bool),
@@ -306,8 +319,12 @@ impl Token {
 
     /// Returns `true` if the token can appear at the start of a generic bound.
     crate fn can_begin_bound(&self) -> bool {
-        self.is_path_start() || self.is_lifetime() || self.is_keyword(keywords::For) ||
+        self.is_path_start() || self.is_lifetime() || self.is_keyword(kw::For) ||
         self == &Question || self == &OpenDelim(Paren)
+    }
+
+    pub fn lit(kind: LitKind, symbol: Symbol, suffix: Option<Symbol>) -> Token {
+        Literal(Lit::new(kind, symbol, suffix))
     }
 
     /// Returns `true` if the token is any literal
@@ -318,14 +335,21 @@ impl Token {
         }
     }
 
+    crate fn expect_lit(&self) -> Lit {
+        match *self {
+            Literal(lit) => lit,
+            _=> panic!("`expect_lit` called on non-literal"),
+        }
+    }
+
     /// Returns `true` if the token is any literal, a minus (which can prefix a literal,
     /// for example a '-42', or one of the boolean idents).
     crate fn can_begin_literal_or_bool(&self) -> bool {
         match *self {
             Literal(..)  => true,
             BinOp(Minus) => true,
-            Ident(ident, false) if ident.name == keywords::True.name() => true,
-            Ident(ident, false) if ident.name == keywords::False.name() => true,
+            Ident(ident, false) if ident.name == kw::True => true,
+            Ident(ident, false) if ident.name == kw::False => true,
             Interpolated(ref nt) => match **nt {
                 NtLiteral(..) => true,
                 _             => false,
@@ -386,8 +410,8 @@ impl Token {
 
     /// Returns `true` if the token is either the `mut` or `const` keyword.
     crate fn is_mutability(&self) -> bool {
-        self.is_keyword(keywords::Mut) ||
-        self.is_keyword(keywords::Const)
+        self.is_keyword(kw::Mut) ||
+        self.is_keyword(kw::Const)
     }
 
     crate fn is_qpath_start(&self) -> bool {
@@ -400,8 +424,8 @@ impl Token {
     }
 
     /// Returns `true` if the token is a given keyword, `kw`.
-    pub fn is_keyword(&self, kw: keywords::Keyword) -> bool {
-        self.ident().map(|(ident, is_raw)| ident.name == kw.name() && !is_raw).unwrap_or(false)
+    pub fn is_keyword(&self, kw: Symbol) -> bool {
+        self.ident().map(|(ident, is_raw)| ident.name == kw && !is_raw).unwrap_or(false)
     }
 
     pub fn is_path_segment_keyword(&self) -> bool {
@@ -564,14 +588,12 @@ impl Token {
             (&DocComment(a), &DocComment(b)) |
             (&Shebang(a), &Shebang(b)) => a == b,
 
+            (&Literal(a), &Literal(b)) => a == b,
+
             (&Lifetime(a), &Lifetime(b)) => a.name == b.name,
             (&Ident(a, b), &Ident(c, d)) => b == d && (a.name == c.name ||
-                                                       a.name == keywords::DollarCrate.name() ||
-                                                       c.name == keywords::DollarCrate.name()),
-
-            (&Literal(ref a, b), &Literal(ref c, d)) => {
-                b == d && a.probably_equal_for_proc_macro(c)
-            }
+                                                       a.name == kw::DollarCrate ||
+                                                       c.name == kw::DollarCrate),
 
             (&Interpolated(_), &Interpolated(_)) => false,
 

@@ -7,7 +7,7 @@ use syntax::print::pp::{self, Breaks};
 use syntax::print::pp::Breaks::{Consistent, Inconsistent};
 use syntax::print::pprust::{self, PrintState};
 use syntax::ptr::P;
-use syntax::symbol::keywords;
+use syntax::symbol::kw;
 use syntax::util::parser::{self, AssocOp, Fixity};
 use syntax_pos::{self, BytePos, FileName};
 
@@ -798,7 +798,7 @@ impl<'a> State<'a> {
             hir::VisibilityKind::Restricted { ref path, .. } => {
                 self.s.word("pub(")?;
                 if path.segments.len() == 1 &&
-                   path.segments[0].ident.name == keywords::Super.name() {
+                   path.segments[0].ident.name == kw::Super {
                     // Special case: `super` can print like `pub(super)`.
                     self.s.word("super")?;
                 } else {
@@ -1249,8 +1249,7 @@ impl<'a> State<'a> {
 
     fn print_literal(&mut self, lit: &hir::Lit) -> io::Result<()> {
         self.maybe_print_comment(lit.span.lo())?;
-        let (token, suffix) = lit.node.to_lit_token();
-        self.writer().word(pprust::literal_to_string(token, suffix))
+        self.writer().word(pprust::literal_to_string(lit.node.to_lit_token()))
     }
 
     pub fn print_expr(&mut self, expr: &hir::Expr) -> io::Result<()> {
@@ -1559,7 +1558,7 @@ impl<'a> State<'a> {
             if i > 0 {
                 self.s.word("::")?
             }
-            if segment.ident.name != keywords::PathRoot.name() {
+            if segment.ident.name != kw::PathRoot {
                self.print_ident(segment.ident)?;
                segment.with_generic_args(|generic_args| {
                    self.print_generic_args(generic_args, segment.infer_types,
@@ -1572,7 +1571,7 @@ impl<'a> State<'a> {
     }
 
     pub fn print_path_segment(&mut self, segment: &hir::PathSegment) -> io::Result<()> {
-        if segment.ident.name != keywords::PathRoot.name() {
+        if segment.ident.name != kw::PathRoot {
            self.print_ident(segment.ident)?;
            segment.with_generic_args(|generic_args| {
                self.print_generic_args(generic_args, segment.infer_types, false)
@@ -1599,7 +1598,7 @@ impl<'a> State<'a> {
                     if i > 0 {
                         self.s.word("::")?
                     }
-                    if segment.ident.name != keywords::PathRoot.name() {
+                    if segment.ident.name != kw::PathRoot {
                         self.print_ident(segment.ident)?;
                         segment.with_generic_args(|generic_args| {
                             self.print_generic_args(generic_args,
@@ -1862,7 +1861,7 @@ impl<'a> State<'a> {
         self.ann.post(self, AnnNode::Pat(pat))
     }
 
-    fn print_arm(&mut self, arm: &hir::Arm) -> io::Result<()> {
+    pub fn print_arm(&mut self, arm: &hir::Arm) -> io::Result<()> {
         // I have no idea why this check is necessary, but here it
         // is :(
         if arm.attrs.is_empty() {

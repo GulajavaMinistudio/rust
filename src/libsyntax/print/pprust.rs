@@ -13,7 +13,7 @@ use crate::print::pp::{self, Breaks};
 use crate::print::pp::Breaks::{Consistent, Inconsistent};
 use crate::ptr::P;
 use crate::std_inject;
-use crate::symbol::{keywords, sym};
+use crate::symbol::{kw, sym};
 use crate::tokenstream::{self, TokenStream, TokenTree};
 
 use rustc_target::spec::abi::{self, Abi};
@@ -163,22 +163,23 @@ fn binop_to_string(op: BinOpToken) -> &'static str {
     }
 }
 
-pub fn literal_to_string(lit: token::Lit, suffix: Option<ast::Name>) -> String {
-    let mut out = match lit {
-        token::Byte(b)           => format!("b'{}'", b),
-        token::Char(c)           => format!("'{}'", c),
-        token::Err(c)            => format!("'{}'", c),
-        token::Bool(c)           |
-        token::Float(c)          |
-        token::Integer(c)        => c.to_string(),
-        token::Str_(s)           => format!("\"{}\"", s),
-        token::StrRaw(s, n)      => format!("r{delim}\"{string}\"{delim}",
-                                            delim="#".repeat(n as usize),
-                                            string=s),
-        token::ByteStr(v)        => format!("b\"{}\"", v),
-        token::ByteStrRaw(s, n)  => format!("br{delim}\"{string}\"{delim}",
-                                            delim="#".repeat(n as usize),
-                                            string=s),
+pub fn literal_to_string(lit: token::Lit) -> String {
+    let token::Lit { kind, symbol, suffix } = lit;
+    let mut out = match kind {
+        token::Byte          => format!("b'{}'", symbol),
+        token::Char          => format!("'{}'", symbol),
+        token::Bool          |
+        token::Float         |
+        token::Integer       => symbol.to_string(),
+        token::Str           => format!("\"{}\"", symbol),
+        token::StrRaw(n)     => format!("r{delim}\"{string}\"{delim}",
+                                        delim="#".repeat(n as usize),
+                                        string=symbol),
+        token::ByteStr       => format!("b\"{}\"", symbol),
+        token::ByteStrRaw(n) => format!("br{delim}\"{string}\"{delim}",
+                                        delim="#".repeat(n as usize),
+                                        string=symbol),
+        token::Err           => format!("'{}'", symbol),
     };
 
     if let Some(suffix) = suffix {
@@ -231,7 +232,7 @@ pub fn token_to_string(tok: &Token) -> String {
         token::SingleQuote          => "'".to_string(),
 
         /* Literals */
-        token::Literal(lit, suf) => literal_to_string(lit, suf),
+        token::Literal(lit) => literal_to_string(lit),
 
         /* Name components */
         token::Ident(s, false)      => s.to_string(),
@@ -571,7 +572,7 @@ pub trait PrintState<'a> {
 
     fn print_literal(&mut self, lit: &ast::Lit) -> io::Result<()> {
         self.maybe_print_comment(lit.span.lo())?;
-        self.writer().word(literal_to_string(lit.token, lit.suffix))
+        self.writer().word(literal_to_string(lit.token))
     }
 
     fn print_string(&mut self, st: &str,
@@ -641,8 +642,8 @@ pub trait PrintState<'a> {
             if i > 0 {
                 self.writer().word("::")?
             }
-            if segment.ident.name != keywords::PathRoot.name() {
-                if segment.ident.name == keywords::DollarCrate.name() {
+            if segment.ident.name != kw::PathRoot {
+                if segment.ident.name == kw::DollarCrate {
                     self.print_dollar_crate(segment.ident)?;
                 } else {
                     self.writer().word(segment.ident.as_str().to_string())?;
@@ -1340,7 +1341,7 @@ impl<'a> State<'a> {
                 self.s.word(";")?;
             }
             ast::ItemKind::Mac(ref mac) => {
-                if item.ident.name == keywords::Invalid.name() {
+                if item.ident.name == kw::Invalid {
                     self.print_mac(mac)?;
                     match mac.node.delim {
                         MacDelimiter::Brace => {}
@@ -2400,8 +2401,8 @@ impl<'a> State<'a> {
                           colons_before_params: bool)
                           -> io::Result<()>
     {
-        if segment.ident.name != keywords::PathRoot.name() {
-            if segment.ident.name == keywords::DollarCrate.name() {
+        if segment.ident.name != kw::PathRoot {
+            if segment.ident.name == kw::DollarCrate {
                 self.print_dollar_crate(segment.ident)?;
             } else {
                 self.print_ident(segment.ident)?;
@@ -2984,7 +2985,7 @@ impl<'a> State<'a> {
                     self.print_explicit_self(&eself)?;
                 } else {
                     let invalid = if let PatKind::Ident(_, ident, _) = input.pat.node {
-                        ident.name == keywords::Invalid.name()
+                        ident.name == kw::Invalid
                     } else {
                         false
                     };

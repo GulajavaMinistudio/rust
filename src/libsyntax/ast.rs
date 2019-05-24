@@ -10,7 +10,7 @@ use crate::parse::token;
 use crate::print::pprust;
 use crate::ptr::P;
 use crate::source_map::{dummy_spanned, respan, Spanned};
-use crate::symbol::{keywords, Symbol};
+use crate::symbol::{kw, Symbol};
 use crate::tokenstream::TokenStream;
 use crate::ThinVec;
 
@@ -65,7 +65,7 @@ impl fmt::Debug for Lifetime {
 pub struct Path {
     pub span: Span,
     /// The segments in the path: the things separated by `::`.
-    /// Global paths begin with `keywords::PathRoot`.
+    /// Global paths begin with `kw::PathRoot`.
     pub segments: Vec<PathSegment>,
 }
 
@@ -100,7 +100,7 @@ impl Path {
     }
 
     pub fn is_global(&self) -> bool {
-        !self.segments.is_empty() && self.segments[0].ident.name == keywords::PathRoot.name()
+        !self.segments.is_empty() && self.segments[0].ident.name == kw::PathRoot
     }
 }
 
@@ -128,7 +128,7 @@ impl PathSegment {
         PathSegment { ident, id: DUMMY_NODE_ID, args: None }
     }
     pub fn path_root(span: Span) -> Self {
-        PathSegment::from_ident(Ident::new(keywords::PathRoot.name(), span))
+        PathSegment::from_ident(Ident::new(kw::PathRoot, span))
     }
 }
 
@@ -908,6 +908,7 @@ pub struct Arm {
     pub pats: Vec<P<Pat>>,
     pub guard: Option<Guard>,
     pub body: P<Expr>,
+    pub span: Span,
 }
 
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug)]
@@ -1346,8 +1347,6 @@ pub enum StrStyle {
 pub struct Lit {
     /// The original literal token as written in source code.
     pub token: token::Lit,
-    /// The original literal suffix as written in source code.
-    pub suffix: Option<Symbol>,
     /// The "semantic" representation of the literal lowered from the original tokens.
     /// Strings are unescaped, hexadecimal forms are eliminated, etc.
     /// FIXME: Remove this and only create the semantic representation during lowering to HIR.
@@ -1782,7 +1781,7 @@ pub type ExplicitSelf = Spanned<SelfKind>;
 impl Arg {
     pub fn to_self(&self) -> Option<ExplicitSelf> {
         if let PatKind::Ident(BindingMode::ByValue(mutbl), ident, _) = self.pat.node {
-            if ident.name == keywords::SelfLower.name() {
+            if ident.name == kw::SelfLower {
                 return match self.ty.node {
                     TyKind::ImplicitSelf => Some(respan(self.pat.span, SelfKind::Value(mutbl))),
                     TyKind::Rptr(lt, MutTy { ref ty, mutbl }) if ty.node.is_implicit_self() => {
@@ -1800,7 +1799,7 @@ impl Arg {
 
     pub fn is_self(&self) -> bool {
         if let PatKind::Ident(_, ident, _) = self.pat.node {
-            ident.name == keywords::SelfLower.name()
+            ident.name == kw::SelfLower
         } else {
             false
         }

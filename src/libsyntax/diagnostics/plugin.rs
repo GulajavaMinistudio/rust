@@ -7,7 +7,7 @@ use crate::ext::base::{ExtCtxt, MacEager, MacResult};
 use crate::ext::build::AstBuilder;
 use crate::parse::token;
 use crate::ptr::P;
-use crate::symbol::keywords;
+use crate::symbol::kw;
 use crate::tokenstream::{TokenTree};
 
 use smallvec::smallvec;
@@ -77,8 +77,8 @@ pub fn expand_register_diagnostic<'cx>(ecx: &'cx mut ExtCtxt<'_>,
         },
         (3, Some(&TokenTree::Token(_, token::Ident(ref code, _))),
             Some(&TokenTree::Token(_, token::Comma)),
-            Some(&TokenTree::Token(_, token::Literal(token::StrRaw(description, _), None)))) => {
-            (code, Some(description))
+            Some(&TokenTree::Token(_, token::Literal(token::Lit { symbol, .. })))) => {
+            (code, Some(symbol))
         }
         _ => unreachable!()
     };
@@ -185,7 +185,7 @@ pub fn expand_build_diagnostic_array<'cx>(ecx: &'cx mut ExtCtxt<'_>,
             (descriptions.len(), ecx.expr_vec(span, descriptions))
         });
 
-    let static_ = ecx.lifetime(span, keywords::StaticLifetime.ident());
+    let static_ = ecx.lifetime(span, Ident::with_empty_ctxt(kw::StaticLifetime));
     let ty_str = ecx.ty_rptr(
         span,
         ecx.ty_ident(span, ecx.ident_of("str")),

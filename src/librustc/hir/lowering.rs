@@ -64,7 +64,7 @@ use syntax::ptr::P;
 use syntax::source_map::{respan, CompilerDesugaringKind, Spanned};
 use syntax::source_map::CompilerDesugaringKind::IfTemporary;
 use syntax::std_inject;
-use syntax::symbol::{keywords, Symbol, sym};
+use syntax::symbol::{kw, sym, Symbol};
 use syntax::tokenstream::{TokenStream, TokenTree};
 use syntax::parse::token::Token;
 use syntax::visit::{self, Visitor};
@@ -927,11 +927,11 @@ impl<'a> LoweringContext<'a> {
                 hir::LifetimeParamKind::InBand,
             ),
             ParamName::Fresh(_) => (
-                keywords::UnderscoreLifetime.name().as_interned_str(),
+                kw::UnderscoreLifetime.as_interned_str(),
                 hir::LifetimeParamKind::Elided,
             ),
             ParamName::Error => (
-                keywords::UnderscoreLifetime.name().as_interned_str(),
+                kw::UnderscoreLifetime.as_interned_str(),
                 hir::LifetimeParamKind::Error,
             ),
         };
@@ -1314,6 +1314,7 @@ impl<'a> LoweringContext<'a> {
 
     fn lower_arm(&mut self, arm: &Arm) -> hir::Arm {
         hir::Arm {
+            hir_id: self.next_id(),
             attrs: self.lower_attrs(&arm.attrs),
             pats: arm.pats.iter().map(|x| self.lower_pat(x)).collect(),
             guard: match arm.guard {
@@ -1321,6 +1322,7 @@ impl<'a> LoweringContext<'a> {
                 _ => None,
             },
             body: P(self.lower_expr(&arm.body)),
+            span: arm.span,
         }
     }
 
@@ -1415,7 +1417,7 @@ impl<'a> LoweringContext<'a> {
                     P(hir::Path {
                         res,
                         segments: hir_vec![hir::PathSegment::from_ident(
-                            keywords::SelfUpper.ident()
+                            Ident::with_empty_ctxt(kw::SelfUpper)
                         )],
                         span: t.span,
                     }),
@@ -1614,7 +1616,7 @@ impl<'a> LoweringContext<'a> {
         trace!("registering existential type with id {:#?}", exist_ty_id);
         let exist_ty_item = hir::Item {
             hir_id: exist_ty_id,
-            ident: keywords::Invalid.ident(),
+            ident: Ident::invalid(),
             attrs: Default::default(),
             node: exist_ty_item_kind,
             vis: respan(span.shrink_to_lo(), hir::VisibilityKind::Inherited),
@@ -1747,7 +1749,7 @@ impl<'a> LoweringContext<'a> {
 
                     let (name, kind) = match name {
                         hir::LifetimeName::Underscore => (
-                            hir::ParamName::Plain(keywords::UnderscoreLifetime.ident()),
+                            hir::ParamName::Plain(Ident::with_empty_ctxt(kw::UnderscoreLifetime)),
                             hir::LifetimeParamKind::Elided,
                         ),
                         hir::LifetimeName::Param(param_name) => (
@@ -2296,7 +2298,7 @@ impl<'a> LoweringContext<'a> {
             .iter()
             .map(|arg| match arg.pat.node {
                 PatKind::Ident(_, ident, _) => ident,
-                _ => Ident::new(keywords::Invalid.name(), arg.pat.span),
+                _ => Ident::new(kw::Invalid, arg.pat.span),
             })
             .collect()
     }
@@ -2585,9 +2587,9 @@ impl<'a> LoweringContext<'a> {
     fn lower_lifetime(&mut self, l: &Lifetime) -> hir::Lifetime {
         let span = l.ident.span;
         match l.ident {
-            ident if ident.name == keywords::StaticLifetime.name() =>
+            ident if ident.name == kw::StaticLifetime =>
                 self.new_named_lifetime(l.id, span, hir::LifetimeName::Static),
-            ident if ident.name == keywords::UnderscoreLifetime.name() =>
+            ident if ident.name == kw::UnderscoreLifetime =>
                 match self.anonymous_lifetime_mode {
                     AnonymousLifetimeMode::CreateParameter => {
                         let fresh_name = self.collect_fresh_in_band_lifetime(span);
@@ -2709,7 +2711,7 @@ impl<'a> LoweringContext<'a> {
                 // Don't expose `Self` (recovered "keyword used as ident" parse error).
                 // `rustc::ty` expects `Self` to be only used for a trait's `Self`.
                 // Instead, use `gensym("Self")` to create a distinct name that looks the same.
-                let ident = if param.ident.name == keywords::SelfUpper.name() {
+                let ident = if param.ident.name == kw::SelfUpper {
                     param.ident.gensym()
                 } else {
                     param.ident
@@ -3325,7 +3327,7 @@ impl<'a> LoweringContext<'a> {
 
                 // Correctly resolve `self` imports.
                 if path.segments.len() > 1
-                    && path.segments.last().unwrap().ident.name == keywords::SelfLower.name()
+                    && path.segments.last().unwrap().ident.name == kw::SelfLower
                 {
                     let _ = path.segments.pop();
                     if rename.is_none() {
@@ -5024,9 +5026,11 @@ impl<'a> LoweringContext<'a> {
 
     fn arm(&mut self, pats: hir::HirVec<P<hir::Pat>>, expr: P<hir::Expr>) -> hir::Arm {
         hir::Arm {
+            hir_id: self.next_id(),
             attrs: hir_vec![],
             pats,
             guard: None,
+            span: expr.span,
             body: expr,
         }
     }
