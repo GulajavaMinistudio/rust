@@ -467,22 +467,34 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tcx, M> 
         mir_place: &mir::Place<'tcx>,
         layout: Option<TyLayout<'tcx>>,
     ) -> EvalResult<'tcx, OpTy<'tcx, M::PointerTag>> {
-        use rustc::mir::Place::*;
+        use rustc::mir::Place;
         use rustc::mir::PlaceBase;
-        let op = match *mir_place {
-            Base(PlaceBase::Local(mir::RETURN_PLACE)) => return err!(ReadFromReturnPointer),
-            Base(PlaceBase::Local(local)) => self.access_local(self.frame(), local, layout)?,
 
-            Projection(ref proj) => {
-                let op = self.eval_place_to_op(&proj.base, None)?;
-                self.operand_projection(op, &proj.elem)?
+        mir_place.iterate(|place_base, place_projection| {
+            let mut op = match place_base {
+                PlaceBase::Local(mir::RETURN_PLACE) => return err!(ReadFromReturnPointer),
+                PlaceBase::Local(local) => {
+                    // FIXME use place_projection.is_empty() when is available
+                    let layout = if let Place::Base(_) = mir_place {
+                        layout
+                    } else {
+                        None
+                    };
+
+                    self.access_local(self.frame(), *local, layout)?
+                }
+                PlaceBase::Static(place_static) => {
+                    self.eval_static_to_mplace(place_static)?.into()
+                }
+            };
+
+            for proj in place_projection {
+                op = self.operand_projection(op, &proj.elem)?
             }
 
-            _ => self.eval_place_to_mplace(mir_place)?.into(),
-        };
-
-        trace!("eval_place_to_op: got {:?}", *op);
-        Ok(op)
+            trace!("eval_place_to_op: got {:?}", *op);
+            Ok(op)
+        })
     }
 
     /// Evaluate the operand, returning a place where you can then find the data.
@@ -500,7 +512,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tcx, M> 
             Move(ref place) =>
                 self.eval_place_to_op(place, layout)?,
 
-            Constant(ref constant) => self.eval_const_to_op(*constant.literal, layout)?,
+            Constant(ref constant) => self.eval_const_to_op(constant.literal, layout)?,
         };
         trace!("{:?}: {:?}", mir_op, *op);
         Ok(op)
@@ -520,7 +532,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tcx, M> 
     // in patterns via the `const_eval` module
     crate fn eval_const_to_op(
         &self,
-        val: ty::Const<'tcx>,
+        val: &'tcx ty::Const<'tcx>,
         layout: Option<TyLayout<'tcx>>,
     ) -> EvalResult<'tcx, OpTy<'tcx, M::PointerTag>> {
         let op = match val.val {
@@ -533,11 +545,16 @@ impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tcx, M> 
                     MemPlace::from_ptr(ptr.with_default_tag(), alloc.align)
                 )
             },
-            ConstValue::Slice(a, b) =>
+            ConstValue::Slice { data, start, end } =>
                 Operand::Immediate(Immediate::ScalarPair(
-                    a.with_default_tag().into(),
-                    Scalar::from_uint(b, self.tcx.data_layout.pointer_size)
-                        .with_default_tag().into(),
+                    Scalar::from(Pointer::new(
+                        self.tcx.alloc_map.lock().allocate(data),
+                        Size::from_bytes(start as u64),
+                    )).with_default_tag().into(),
+                    Scalar::from_uint(
+                        (end - start) as u64,
+                        self.tcx.data_layout.pointer_size,
+                    ).with_default_tag().into(),
                 )),
             ConstValue::Scalar(x) =>
                 Operand::Immediate(Immediate::Scalar(x.with_default_tag().into())),
