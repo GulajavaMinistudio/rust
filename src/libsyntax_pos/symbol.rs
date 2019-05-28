@@ -9,10 +9,10 @@ use rustc_data_structures::newtype_index;
 use rustc_macros::symbols;
 use serialize::{Decodable, Decoder, Encodable, Encoder};
 
-use std::fmt;
-use std::str;
 use std::cmp::{PartialEq, Ordering, PartialOrd, Ord};
+use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::str;
 
 use crate::hygiene::SyntaxContext;
 use crate::{Span, DUMMY_SP, GLOBALS};
@@ -102,6 +102,9 @@ symbols! {
     // Symbols that can be referred to with syntax_pos::sym::*. The symbol is
     // the stringified identifier unless otherwise specified (e.g.
     // `proc_dash_macro` represents "proc-macro").
+    //
+    // As well as the symbols listed, there are symbols for the the strings
+    // "0", "1", ..., "9", which are accessible via `sym::integer`.
     Symbols {
         aarch64_target_feature,
         abi,
@@ -130,8 +133,11 @@ symbols! {
         allow_internal_unstable,
         allow_internal_unstable_backcompat_hack,
         always,
+        and,
         any,
         arbitrary_self_types,
+        Arguments,
+        ArgumentV1,
         arm_target_feature,
         asm,
         associated_consts,
@@ -145,6 +151,8 @@ symbols! {
         automatically_derived,
         avx512_target_feature,
         await_macro,
+        begin_panic,
+        bench,
         bin,
         bind_by_move_pattern_guards,
         block,
@@ -163,9 +171,11 @@ symbols! {
         cfg_target_thread_local,
         cfg_target_vendor,
         clone,
+        Clone,
         clone_closures,
         clone_from,
         closure_to_fn_coercion,
+        cmp,
         cmpxchg16b_target_feature,
         cold,
         compile_error,
@@ -184,6 +194,7 @@ symbols! {
         const_raw_ptr_to_usize_cast,
         const_transmute,
         contents,
+        context,
         convert,
         copy_closures,
         core,
@@ -199,11 +210,14 @@ symbols! {
         custom_test_frameworks,
         c_variadic,
         decl_macro,
+        Default,
         default_lib_allocator,
         default_type_parameter_fallback,
         default_type_params,
         deny,
         deprecated,
+        deref,
+        deref_mut,
         derive,
         doc,
         doc_alias,
@@ -231,6 +245,7 @@ symbols! {
         enable,
         err,
         Err,
+        Equal,
         except,
         exclusive_range_pattern,
         exhaustive_integer_patterns,
@@ -238,6 +253,7 @@ symbols! {
         existential_type,
         expected,
         export_name,
+        expr,
         extern_absolute_paths,
         external_doc,
         extern_crate_item_prelude,
@@ -250,8 +266,11 @@ symbols! {
         f64,
         feature,
         ffi_returns_twice,
+        field,
         field_init_shorthand,
         file,
+        fmt,
+        fmt_internals,
         fn_must_use,
         forbid,
         format_args_nl,
@@ -260,9 +279,12 @@ symbols! {
         from_error,
         from_generator,
         from_ok,
+        from_usize,
         fundamental,
         future,
         Future,
+        FxHashSet,
+        FxHashMap,
         gen_future,
         generators,
         generic_associated_types,
@@ -270,6 +292,10 @@ symbols! {
         global_allocator,
         global_asm,
         globs,
+        hash,
+        Hash,
+        HashSet,
+        HashMap,
         hexagon_target_feature,
         hidden,
         homogeneous_aggregate,
@@ -291,6 +317,8 @@ symbols! {
         impl_header_lifetime_elision,
         impl_trait_in_bindings,
         import_shadowing,
+        index,
+        index_mut,
         in_band_lifetimes,
         include,
         inclusive_range_syntax,
@@ -307,6 +335,7 @@ symbols! {
         issue,
         issue_5723_bootstrap,
         issue_tracker_base_url,
+        item,
         item_like_imports,
         iter,
         Iterator,
@@ -317,6 +346,7 @@ symbols! {
         lang,
         lang_items,
         lib,
+        lifetime,
         link,
         linkage,
         link_args,
@@ -325,6 +355,7 @@ symbols! {
         link_name,
         link_section,
         lint_reasons,
+        literal,
         local_inner_macros,
         log_syntax,
         loop_break_value,
@@ -364,6 +395,7 @@ symbols! {
         negate_unsigned,
         never,
         never_type,
+        new,
         next,
         __next,
         nll,
@@ -398,14 +430,21 @@ symbols! {
         option,
         Option,
         opt_out_copy,
+        or,
+        Ord,
+        Ordering,
         Output,
         overlapping_marker_traits,
         packed,
+        panic,
         panic_handler,
         panic_impl,
         panic_implementation,
         panic_runtime,
+        partial_cmp,
+        PartialOrd,
         passes,
+        pat,
         path,
         pattern_parentheses,
         Pending,
@@ -426,6 +465,7 @@ symbols! {
         proc_dash_macro: "proc-macro",
         proc_macro,
         proc_macro_attribute,
+        proc_macro_def_site,
         proc_macro_derive,
         proc_macro_expr,
         proc_macro_gen,
@@ -464,11 +504,13 @@ symbols! {
         Result,
         Return,
         rlib,
+        rt,
         rtm_target_feature,
         rust,
         rust_2015_preview,
         rust_2018_preview,
         rust_begin_unwind,
+        rustc,
         rustc_allocator_nounwind,
         rustc_allow_const_fn_ptr,
         rustc_args_required_const,
@@ -547,12 +589,14 @@ symbols! {
         static_recursion,
         std,
         str,
+        stmt,
         stmt_expr_attributes,
         stop_after_dataflow,
         struct_field_attributes,
         struct_inherit,
         structural_match,
         struct_variant,
+        sty,
         suggestion,
         target_feature,
         target_has_atomic,
@@ -564,8 +608,10 @@ symbols! {
         test,
         test_2018_feature,
         test_accepted_feature,
+        test_case,
         test_removed_feature,
         test_runner,
+        then_with,
         thread_local,
         tool_attributes,
         tool_lints,
@@ -577,8 +623,12 @@ symbols! {
         Try,
         try_blocks,
         try_trait,
+        tt,
         tuple_indexing,
+        Ty,
         ty,
+        TyCtxt,
+        TyKind,
         type_alias_enum_variants,
         type_ascription,
         type_length_limit,
@@ -605,12 +655,15 @@ symbols! {
         untagged_unions,
         unwind,
         unwind_attributes,
+        unwrap_or,
         used,
         use_extern_macros,
         use_nested_groups,
         usize,
         v1,
         val,
+        vec,
+        Vec,
         vis,
         visible_private_types,
         volatile,
@@ -866,20 +919,13 @@ pub struct Interner {
 }
 
 impl Interner {
-    fn prefill(init: &[&str]) -> Self {
-        let mut this = Interner::default();
-        this.names.reserve(init.len());
-        this.strings.reserve(init.len());
-
-        // We can't allocate empty strings in the arena, so handle this here.
-        assert!(kw::Invalid.as_u32() == 0 && init[0].is_empty());
-        this.names.insert("", kw::Invalid);
-        this.strings.push("");
-
-        for string in &init[1..] {
-            this.intern(string);
+    fn prefill(init: &[&'static str]) -> Self {
+        let symbols = (0 .. init.len() as u32).map(Symbol::new);
+        Interner {
+            strings: init.to_vec(),
+            names: init.iter().copied().zip(symbols).collect(),
+            ..Default::default()
         }
-        this
     }
 
     pub fn intern(&mut self, string: &str) -> Symbol {
@@ -942,8 +988,21 @@ pub mod kw {
 
 // This module has a very short name because it's used a lot.
 pub mod sym {
+    use std::convert::TryInto;
     use super::Symbol;
+
     symbols!();
+
+    // Get the symbol for an integer. The first few non-negative integers each
+    // have a static symbol and therefore are fast.
+    pub fn integer<N: TryInto<usize> + Copy + ToString>(n: N) -> Symbol {
+        if let Result::Ok(idx) = n.try_into() {
+            if let Option::Some(&sym) = digits_array.get(idx) {
+                return sym;
+            }
+        }
+        Symbol::intern(&n.to_string())
+    }
 }
 
 impl Symbol {

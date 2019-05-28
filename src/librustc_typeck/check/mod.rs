@@ -2697,16 +2697,12 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
     fn resolve_place_op(&self, op: PlaceOp, is_mut: bool) -> (Option<DefId>, ast::Ident) {
         let (tr, name) = match (op, is_mut) {
-            (PlaceOp::Deref, false) =>
-                (self.tcx.lang_items().deref_trait(), "deref"),
-            (PlaceOp::Deref, true) =>
-                (self.tcx.lang_items().deref_mut_trait(), "deref_mut"),
-            (PlaceOp::Index, false) =>
-                (self.tcx.lang_items().index_trait(), "index"),
-            (PlaceOp::Index, true) =>
-                (self.tcx.lang_items().index_mut_trait(), "index_mut"),
+            (PlaceOp::Deref, false) => (self.tcx.lang_items().deref_trait(), sym::deref),
+            (PlaceOp::Deref, true) => (self.tcx.lang_items().deref_mut_trait(), sym::deref_mut),
+            (PlaceOp::Index, false) => (self.tcx.lang_items().index_trait(), sym::index),
+            (PlaceOp::Index, true) => (self.tcx.lang_items().index_mut_trait(), sym::index_mut),
         };
-        (tr, ast::Ident::from_str(name))
+        (tr, ast::Ident::with_empty_ctxt(name))
     }
 
     fn try_overloaded_place_op(&self,
@@ -4948,7 +4944,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 // This is less than ideal, it will not suggest a return type span on any
                 // method called `main`, regardless of whether it is actually the entry point,
                 // but it will still present it as the reason for the expected type.
-                Some((decl, ident, ident.name != Symbol::intern("main")))
+                Some((decl, ident, ident.name != sym::main))
             }),
             Node::TraitItem(&hir::TraitItem {
                 ident, node: hir::TraitItemKind::Method(hir::MethodSig {
@@ -5194,7 +5190,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         &self,
         res: Res,
         span: Span,
-    ) -> Result<(DefKind, DefId, Ty<'tcx>), ErrorReported> {
+    ) -> Result<Res, ErrorReported> {
         let tcx = self.tcx;
         if let Res::SelfCtor(impl_def_id) = res {
             let ty = self.impl_self_ty(span, impl_def_id).ty;
@@ -5204,11 +5200,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 Some(adt_def) if adt_def.has_ctor() => {
                     let variant = adt_def.non_enum_variant();
                     let ctor_def_id = variant.ctor_def_id.unwrap();
-                    Ok((
-                        DefKind::Ctor(CtorOf::Struct, variant.ctor_kind),
-                        ctor_def_id,
-                        tcx.type_of(ctor_def_id),
-                    ))
+                    Ok(Res::Def(DefKind::Ctor(CtorOf::Struct, variant.ctor_kind), ctor_def_id))
                 }
                 _ => {
                     let mut err = tcx.sess.struct_span_err(span,
@@ -5235,15 +5227,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
             }
         } else {
-            match res {
-                Res::Def(kind, def_id) => {
-                    // The things we are substituting into the type should not contain
-                    // escaping late-bound regions, and nor should the base type scheme.
-                    let ty = tcx.type_of(def_id);
-                    Ok((kind, def_id, ty))
-                }
-                _ => span_bug!(span, "unexpected res in rewrite_self_ctor: {:?}", res),
-            }
+            Ok(res)
         }
     }
 
@@ -5266,27 +5250,21 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
         let tcx = self.tcx;
 
-        match res {
-            Res::Local(hid) | Res::Upvar(hid, ..) => {
-                let ty = self.local_ty(span, hid).decl_ty;
-                let ty = self.normalize_associated_types_in(span, &ty);
-                self.write_ty(hir_id, ty);
-                return (ty, res);
-            }
-            _ => {}
-        }
-
-        let (kind, def_id, ty) = match self.rewrite_self_ctor(res, span) {
-            Ok(result) => result,
+        let res = match self.rewrite_self_ctor(res, span) {
+            Ok(res) => res,
             Err(ErrorReported) => return (tcx.types.err, res),
         };
-        let path_segs =
-            AstConv::def_ids_for_value_path_segments(self, segments, self_ty, kind, def_id);
+        let path_segs = match res {
+            Res::Local(_) | Res::Upvar(..) => Vec::new(),
+            Res::Def(kind, def_id) =>
+                AstConv::def_ids_for_value_path_segments(self, segments, self_ty, kind, def_id),
+            _ => bug!("instantiate_value_path on {:?}", res),
+        };
 
         let mut user_self_ty = None;
         let mut is_alias_variant_ctor = false;
-        match kind {
-            DefKind::Ctor(CtorOf::Variant, _) => {
+        match res {
+            Res::Def(DefKind::Ctor(CtorOf::Variant, _), _) => {
                 if let Some(self_ty) = self_ty {
                     let adt_def = self_ty.ty_adt_def().unwrap();
                     user_self_ty = Some(UserSelfTy {
@@ -5296,8 +5274,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     is_alias_variant_ctor = true;
                 }
             }
-            DefKind::Method
-            | DefKind::AssociatedConst => {
+            Res::Def(DefKind::Method, def_id)
+            | Res::Def(DefKind::AssociatedConst, def_id) => {
                 let container = tcx.associated_item(def_id).container;
                 debug!("instantiate_value_path: def_id={:?} container={:?}", def_id, container);
                 match container {
@@ -5337,6 +5315,17 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 None
             }
         }));
+
+        match res {
+            Res::Local(hid) | Res::Upvar(hid, ..) => {
+                let ty = self.local_ty(span, hid).decl_ty;
+                let ty = self.normalize_associated_types_in(span, &ty);
+                self.write_ty(hir_id, ty);
+                return (ty, res);
+            }
+            _ => {}
+        }
+
         if generics_has_err {
             // Don't try to infer type parameters when prohibited generic arguments were given.
             user_self_ty = None;
@@ -5373,6 +5362,12 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         let has_self = path_segs.last().map(|PathSeg(def_id, _)| {
             tcx.generics_of(*def_id).has_self
         }).unwrap_or(false);
+
+        let def_id = res.def_id();
+
+        // The things we are substituting into the type should not contain
+        // escaping late-bound regions, and nor should the base type scheme.
+        let ty = tcx.type_of(def_id);
 
         let substs = AstConv::create_substs_for_generic_args(
             tcx,
@@ -5490,7 +5485,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                ty_substituted);
         self.write_substs(hir_id, substs);
 
-        (ty_substituted, Res::Def(kind, def_id))
+        (ty_substituted, res)
     }
 
     fn check_rustc_args_require_const(&self,
