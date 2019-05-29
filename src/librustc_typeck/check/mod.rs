@@ -330,13 +330,13 @@ impl<'a, 'gcx, 'tcx> Expectation<'tcx> {
         match self {
             NoExpectation => NoExpectation,
             ExpectCastableToType(t) => {
-                ExpectCastableToType(fcx.resolve_type_vars_if_possible(&t))
+                ExpectCastableToType(fcx.resolve_vars_if_possible(&t))
             }
             ExpectHasType(t) => {
-                ExpectHasType(fcx.resolve_type_vars_if_possible(&t))
+                ExpectHasType(fcx.resolve_vars_if_possible(&t))
             }
             ExpectRvalueLikeUnsized(t) => {
-                ExpectRvalueLikeUnsized(fcx.resolve_type_vars_if_possible(&t))
+                ExpectRvalueLikeUnsized(fcx.resolve_vars_if_possible(&t))
             }
         }
     }
@@ -1499,17 +1499,17 @@ fn report_forbidden_specialization<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
 fn check_specialization_validity<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                            trait_def: &ty::TraitDef,
-                                           trait_item: &ty::AssociatedItem,
+                                           trait_item: &ty::AssocItem,
                                            impl_id: DefId,
                                            impl_item: &hir::ImplItem)
 {
     let ancestors = trait_def.ancestors(tcx, impl_id);
 
     let kind = match impl_item.node {
-        hir::ImplItemKind::Const(..) => ty::AssociatedKind::Const,
-        hir::ImplItemKind::Method(..) => ty::AssociatedKind::Method,
-        hir::ImplItemKind::Existential(..) => ty::AssociatedKind::Existential,
-        hir::ImplItemKind::Type(_) => ty::AssociatedKind::Type
+        hir::ImplItemKind::Const(..) => ty::AssocKind::Const,
+        hir::ImplItemKind::Method(..) => ty::AssocKind::Method,
+        hir::ImplItemKind::Existential(..) => ty::AssocKind::Existential,
+        hir::ImplItemKind::Type(_) => ty::AssocKind::Type
     };
 
     let parent = ancestors.defs(tcx, trait_item.ident, kind, trait_def.def_id).nth(1)
@@ -1560,7 +1560,7 @@ fn check_impl_items_against_trait<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             match impl_item.node {
                 hir::ImplItemKind::Const(..) => {
                     // Find associated const definition.
-                    if ty_trait_item.kind == ty::AssociatedKind::Const {
+                    if ty_trait_item.kind == ty::AssocKind::Const {
                         compare_const_impl(tcx,
                                            &ty_impl_item,
                                            impl_item.span,
@@ -1583,7 +1583,7 @@ fn check_impl_items_against_trait<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 }
                 hir::ImplItemKind::Method(..) => {
                     let trait_span = tcx.hir().span_if_local(ty_trait_item.def_id);
-                    if ty_trait_item.kind == ty::AssociatedKind::Method {
+                    if ty_trait_item.kind == ty::AssocKind::Method {
                         compare_impl_method(tcx,
                                             &ty_impl_item,
                                             impl_item.span,
@@ -1605,7 +1605,7 @@ fn check_impl_items_against_trait<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 }
                 hir::ImplItemKind::Existential(..) |
                 hir::ImplItemKind::Type(_) => {
-                    if ty_trait_item.kind == ty::AssociatedKind::Type {
+                    if ty_trait_item.kind == ty::AssocKind::Type {
                         if ty_trait_item.defaultness.has_value() {
                             overridden_associated_type = Some(impl_item);
                         }
@@ -2067,7 +2067,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
     }
 
     /// Resolves type variables in `ty` if possible. Unlike the infcx
-    /// version (resolve_type_vars_if_possible), this version will
+    /// version (resolve_vars_if_possible), this version will
     /// also select obligations if it seems useful, in an effort
     /// to get more type information.
     fn resolve_type_vars_with_obligations(&self, mut ty: Ty<'tcx>) -> Ty<'tcx> {
@@ -2080,7 +2080,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         }
 
         // If `ty` is a type variable, see whether we already know what it is.
-        ty = self.resolve_type_vars_if_possible(&ty);
+        ty = self.resolve_vars_if_possible(&ty);
         if !ty.has_infer_types() {
             debug!("resolve_type_vars_with_obligations: ty={:?}", ty);
             return ty;
@@ -2091,7 +2091,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         // indirect dependencies that don't seem worth tracking
         // precisely.
         self.select_obligations_where_possible(false);
-        ty = self.resolve_type_vars_if_possible(&ty);
+        ty = self.resolve_vars_if_possible(&ty);
 
         debug!("resolve_type_vars_with_obligations: ty={:?}", ty);
         ty
@@ -2127,7 +2127,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
     #[inline]
     pub fn write_ty(&self, id: hir::HirId, ty: Ty<'tcx>) {
         debug!("write_ty({:?}, {:?}) in fcx {}",
-               id, self.resolve_type_vars_if_possible(&ty), self.tag());
+               id, self.resolve_vars_if_possible(&ty), self.tag());
         self.tables.borrow_mut().node_types_mut().insert(id, ty);
 
         if ty.references_error() {
@@ -2950,9 +2950,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         } else {
             // is the missing argument of type `()`?
             let sugg_unit = if expected_arg_tys.len() == 1 && supplied_arg_count == 0 {
-                self.resolve_type_vars_if_possible(&expected_arg_tys[0]).is_unit()
+                self.resolve_vars_if_possible(&expected_arg_tys[0]).is_unit()
             } else if fn_inputs.len() == 1 && supplied_arg_count == 0 {
-                self.resolve_type_vars_if_possible(&fn_inputs[0]).is_unit()
+                self.resolve_vars_if_possible(&fn_inputs[0]).is_unit()
             } else {
                 false
             };
@@ -3063,7 +3063,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     }
                     ty::FnDef(..) => {
                         let ptr_ty = self.tcx.mk_fn_ptr(arg_ty.fn_sig(self.tcx));
-                        let ptr_ty = self.resolve_type_vars_if_possible(&ptr_ty);
+                        let ptr_ty = self.resolve_vars_if_possible(&ptr_ty);
                         variadic_error(tcx.sess, arg.span, arg_ty, &ptr_ty.to_string());
                     }
                     _ => {}
@@ -3253,7 +3253,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             // Record all the argument types, with the substitutions
             // produced from the above subtyping unification.
             Ok(formal_args.iter().map(|ty| {
-                self.resolve_type_vars_if_possible(ty)
+                self.resolve_vars_if_possible(ty)
             }).collect())
         }).unwrap_or_default();
         debug!("expected_inputs_for_expected_output(formal={:?} -> {:?}, expected={:?} -> {:?})",
@@ -3742,7 +3742,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             Res::Def(DefKind::Struct, _)
             | Res::Def(DefKind::Union, _)
             | Res::Def(DefKind::TyAlias, _)
-            | Res::Def(DefKind::AssociatedTy, _)
+            | Res::Def(DefKind::AssocTy, _)
             | Res::SelfTy(..) => {
                 match ty.sty {
                     ty::Adt(adt, substs) if !adt.is_enum() => {
@@ -4333,9 +4333,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 // Find the type of `e`. Supply hints based on the type we are casting to,
                 // if appropriate.
                 let t_cast = self.to_ty_saving_user_provided_ty(t);
-                let t_cast = self.resolve_type_vars_if_possible(&t_cast);
+                let t_cast = self.resolve_vars_if_possible(&t_cast);
                 let t_expr = self.check_expr_with_expectation(e, ExpectCastableToType(t_cast));
-                let t_cast = self.resolve_type_vars_if_possible(&t_cast);
+                let t_cast = self.resolve_vars_if_possible(&t_cast);
 
                 // Eagerly check for some obvious errors.
                 if t_expr.references_error() || t_cast.references_error() {
@@ -5275,7 +5275,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
             }
             Res::Def(DefKind::Method, def_id)
-            | Res::Def(DefKind::AssociatedConst, def_id) => {
+            | Res::Def(DefKind::AssocConst, def_id) => {
                 let container = tcx.associated_item(def_id).container;
                 debug!("instantiate_value_path: def_id={:?} container={:?}", def_id, container);
                 match container {

@@ -3,7 +3,7 @@
 
 use rustc::hir::def::DefKind;
 use rustc::mir::{
-    AggregateKind, Constant, Location, Place, PlaceBase, Mir, Operand, Rvalue, Local,
+    AggregateKind, Constant, Location, Place, PlaceBase, Body, Operand, Rvalue, Local,
     NullOp, UnOp, StatementKind, Statement, LocalKind, Static, StaticKind,
     TerminatorKind, Terminator,  ClearCrossCrate, SourceInfo, BinOp, ProjectionElem,
     SourceScope, SourceScopeLocalData, LocalDecl, Promoted,
@@ -33,7 +33,7 @@ impl MirPass for ConstProp {
     fn run_pass<'a, 'tcx>(&self,
                           tcx: TyCtxt<'a, 'tcx, 'tcx>,
                           source: MirSource<'tcx>,
-                          mir: &mut Mir<'tcx>) {
+                          mir: &mut Body<'tcx>) {
         // will be evaluated by miri and produce its errors there
         if source.promoted.is_some() {
             return;
@@ -45,7 +45,7 @@ impl MirPass for ConstProp {
 
         let is_fn_like = FnLikeNode::from_node(tcx.hir().get_by_hir_id(hir_id)).is_some();
         let is_assoc_const = match tcx.def_kind(source.def_id()) {
-            Some(DefKind::AssociatedConst) => true,
+            Some(DefKind::AssocConst) => true,
             _ => false,
         };
 
@@ -63,7 +63,7 @@ impl MirPass for ConstProp {
         // That would require an uniform one-def no-mutation analysis
         // and RPO (or recursing when needing the value of a local).
         let mut optimization_finder = ConstPropagator::new(mir, tcx, source);
-        optimization_finder.visit_mir(mir);
+        optimization_finder.visit_body(mir);
 
         // put back the data we stole from `mir`
         std::mem::replace(
@@ -91,7 +91,7 @@ struct ConstPropagator<'a, 'mir, 'tcx:'a+'mir> {
     param_env: ParamEnv<'tcx>,
     source_scope_local_data: ClearCrossCrate<IndexVec<SourceScope, SourceScopeLocalData>>,
     local_decls: IndexVec<Local, LocalDecl<'tcx>>,
-    promoted: IndexVec<Promoted, Mir<'tcx>>,
+    promoted: IndexVec<Promoted, Body<'tcx>>,
 }
 
 impl<'a, 'b, 'tcx> LayoutOf for ConstPropagator<'a, 'b, 'tcx> {
@@ -119,7 +119,7 @@ impl<'a, 'b, 'tcx> HasTyCtxt<'tcx> for ConstPropagator<'a, 'b, 'tcx> {
 
 impl<'a, 'mir, 'tcx> ConstPropagator<'a, 'mir, 'tcx> {
     fn new(
-        mir: &mut Mir<'tcx>,
+        mir: &mut Body<'tcx>,
         tcx: TyCtxt<'a, 'tcx, 'tcx>,
         source: MirSource<'tcx>,
     ) -> ConstPropagator<'a, 'mir, 'tcx> {
@@ -143,7 +143,7 @@ impl<'a, 'mir, 'tcx> ConstPropagator<'a, 'mir, 'tcx> {
             can_const_prop,
             places: IndexVec::from_elem(None, &mir.local_decls),
             source_scope_local_data,
-            //FIXME(wesleywiser) we can't steal this because `Visitor::super_visit_mir()` needs it
+            //FIXME(wesleywiser) we can't steal this because `Visitor::super_visit_body()` needs it
             local_decls: mir.local_decls.clone(),
             promoted,
         }
@@ -296,47 +296,50 @@ impl<'a, 'mir, 'tcx> ConstPropagator<'a, 'mir, 'tcx> {
 
     fn eval_place(&mut self, place: &Place<'tcx>, source_info: SourceInfo) -> Option<Const<'tcx>> {
         trace!("eval_place(place={:?})", place);
-        match *place {
-            Place::Base(PlaceBase::Local(loc)) => self.places[loc].clone(),
-            Place::Projection(ref proj) => match proj.elem {
-                ProjectionElem::Field(field, _) => {
-                    trace!("field proj on {:?}", proj.base);
-                    let base = self.eval_place(&proj.base, source_info)?;
+        place.iterate(|place_base, place_projection| {
+            let mut eval = match place_base {
+                PlaceBase::Local(loc) => self.places[*loc].clone()?,
+                PlaceBase::Static(box Static {kind: StaticKind::Promoted(promoted), ..}) => {
+                    let generics = self.tcx.generics_of(self.source.def_id());
+                    if generics.requires_monomorphization(self.tcx) {
+                        // FIXME: can't handle code with generics
+                        return None;
+                    }
+                    let substs = InternalSubsts::identity_for_item(self.tcx, self.source.def_id());
+                    let instance = Instance::new(self.source.def_id(), substs);
+                    let cid = GlobalId {
+                        instance,
+                        promoted: Some(*promoted),
+                    };
+                    // cannot use `const_eval` here, because that would require having the MIR
+                    // for the current function available, but we're producing said MIR right now
                     let res = self.use_ecx(source_info, |this| {
-                        this.ecx.operand_field(base, field.index() as u64)
+                        let mir = &this.promoted[*promoted];
+                        eval_promoted(this.tcx, cid, mir, this.param_env)
                     })?;
-                    Some(res)
-                },
-                // We could get more projections by using e.g., `operand_projection`,
-                // but we do not even have the stack frame set up properly so
-                // an `Index` projection would throw us off-track.
-                _ => None,
-            },
-            Place::Base(
-                PlaceBase::Static(box Static {kind: StaticKind::Promoted(promoted), ..})
-            ) => {
-                let generics = self.tcx.generics_of(self.source.def_id());
-                if generics.requires_monomorphization(self.tcx) {
-                    // FIXME: can't handle code with generics
-                    return None;
+                    trace!("evaluated promoted {:?} to {:?}", promoted, res);
+                    res.into()
                 }
-                let substs = InternalSubsts::identity_for_item(self.tcx, self.source.def_id());
-                let instance = Instance::new(self.source.def_id(), substs);
-                let cid = GlobalId {
-                    instance,
-                    promoted: Some(promoted),
-                };
-                // cannot use `const_eval` here, because that would require having the MIR
-                // for the current function available, but we're producing said MIR right now
-                let res = self.use_ecx(source_info, |this| {
-                    let mir = &this.promoted[promoted];
-                    eval_promoted(this.tcx, cid, mir, this.param_env)
-                })?;
-                trace!("evaluated promoted {:?} to {:?}", promoted, res);
-                Some(res.into())
-            },
-            _ => None,
-        }
+                _ => return None,
+            };
+
+            for proj in place_projection {
+                match proj.elem {
+                    ProjectionElem::Field(field, _) => {
+                        trace!("field proj on {:?}", proj.base);
+                        eval = self.use_ecx(source_info, |this| {
+                            this.ecx.operand_field(eval, field.index() as u64)
+                        })?;
+                    },
+                    // We could get more projections by using e.g., `operand_projection`,
+                    // but we do not even have the stack frame set up properly so
+                    // an `Index` projection would throw us off-track.
+                    _ => return None,
+                }
+            }
+
+            Some(eval)
+        })
     }
 
     fn eval_operand(&mut self, op: &Operand<'tcx>, source_info: SourceInfo) -> Option<Const<'tcx>> {
@@ -379,10 +382,7 @@ impl<'a, 'mir, 'tcx> ConstPropagator<'a, 'mir, 'tcx> {
                 type_size_of(self.tcx, self.param_env, ty).and_then(|n| Some(
                     ImmTy {
                         imm: Immediate::Scalar(
-                            Scalar::Bits {
-                                bits: n as u128,
-                                size: self.tcx.data_layout.pointer_size.bytes() as u8,
-                            }.into()
+                            Scalar::from_uint(n, self.tcx.data_layout.pointer_size).into()
                         ),
                         layout: self.tcx.layout_of(self.param_env.and(self.tcx.types.usize)).ok()?,
                     }.into()
@@ -569,7 +569,7 @@ struct CanConstProp {
 
 impl CanConstProp {
     /// returns true if `local` can be propagated
-    fn check(mir: &Mir<'_>) -> IndexVec<Local, bool> {
+    fn check(mir: &Body<'_>) -> IndexVec<Local, bool> {
         let mut cpv = CanConstProp {
             can_const_prop: IndexVec::from_elem(true, &mir.local_decls),
             found_assignment: IndexVec::from_elem(false, &mir.local_decls),
@@ -586,7 +586,7 @@ impl CanConstProp {
                 trace!("local {:?} can't be propagated because it's not a temporary", local);
             }
         }
-        cpv.visit_mir(mir);
+        cpv.visit_body(mir);
         cpv.can_const_prop
     }
 }
@@ -710,18 +710,18 @@ impl<'b, 'a, 'tcx> MutVisitor<'tcx> for ConstPropagator<'b, 'a, 'tcx> {
                                     .eval_operand(len, source_info)
                                     .expect("len must be const");
                                 let len = match self.ecx.read_scalar(len) {
-                                    Ok(ScalarMaybeUndef::Scalar(Scalar::Bits {
-                                        bits, ..
-                                    })) => bits,
+                                    Ok(ScalarMaybeUndef::Scalar(Scalar::Raw {
+                                        data, ..
+                                    })) => data,
                                     other => bug!("const len not primitive: {:?}", other),
                                 };
                                 let index = self
                                     .eval_operand(index, source_info)
                                     .expect("index must be const");
                                 let index = match self.ecx.read_scalar(index) {
-                                    Ok(ScalarMaybeUndef::Scalar(Scalar::Bits {
-                                        bits, ..
-                                    })) => bits,
+                                    Ok(ScalarMaybeUndef::Scalar(Scalar::Raw {
+                                        data, ..
+                                    })) => data,
                                     other => bug!("const index not primitive: {:?}", other),
                                 };
                                 format!(

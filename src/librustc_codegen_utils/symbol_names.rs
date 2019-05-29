@@ -443,7 +443,7 @@ impl Printer<'tcx, 'tcx> for SymbolPrinter<'_, 'tcx> {
         ct: &'tcx ty::Const<'tcx>,
     ) -> Result<Self::Const, Self::Error> {
         // only print integers
-        if let ConstValue::Scalar(Scalar::Bits { .. }) = ct.val {
+        if let ConstValue::Scalar(Scalar::Raw { .. }) = ct.val {
             if ct.ty.is_integral() {
                 return self.pretty_print_const(ct);
             }
@@ -628,6 +628,9 @@ impl fmt::Write for SymbolPrinter<'_, '_> {
                 // '.' doesn't occur in types and functions, so reuse it
                 // for ':' and '-'
                 '-' | ':' => self.path.temp_buf.push('.'),
+
+                // Avoid segmentation fault on some platforms, see #60925.
+                'm' if self.path.temp_buf.ends_with(".llv") => self.path.temp_buf.push_str("$6d$"),
 
                 // These are legal symbols
                 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '.' | '$' => self.path.temp_buf.push(c),

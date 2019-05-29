@@ -44,7 +44,7 @@ pub struct Cx<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> {
     /// Whether this constant/function needs overflow checks.
     check_overflow: bool,
 
-    /// See field with the same name on `Mir`.
+    /// See field with the same name on `mir::Body`.
     control_flow_destroyed: Vec<(Span, String)>,
 }
 
@@ -170,7 +170,7 @@ impl<'a, 'gcx, 'tcx> Cx<'a, 'gcx, 'tcx> {
         let method_name = Symbol::intern(method_name);
         let substs = self.tcx.mk_substs_trait(self_ty, params);
         for item in self.tcx.associated_items(trait_def_id) {
-            if item.kind == ty::AssociatedKind::Method && item.ident.name == method_name {
+            if item.kind == ty::AssocKind::Method && item.ident.name == method_name {
                 let method_ty = self.tcx.type_of(item.def_id);
                 let method_ty = method_ty.subst(self.tcx, substs);
                 return (method_ty, ty::Const::zero_sized(self.tcx, method_ty));

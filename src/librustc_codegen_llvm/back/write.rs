@@ -13,7 +13,7 @@ use crate::LlvmCodegenBackend;
 use rustc::hir::def_id::LOCAL_CRATE;
 use rustc_codegen_ssa::back::write::{CodegenContext, ModuleConfig, run_assembler};
 use rustc_codegen_ssa::traits::*;
-use rustc::session::config::{self, OutputType, Passes, Lto, PgoGenerate};
+use rustc::session::config::{self, OutputType, Passes, Lto, SwitchWithOptPath};
 use rustc::session::Session;
 use rustc::ty::TyCtxt;
 use rustc_codegen_ssa::{RLIB_BYTECODE_EXTENSION, ModuleCodegen, CompiledModule};
@@ -707,7 +707,7 @@ pub unsafe fn with_llvm_pmb(llmod: &llvm::Module,
     let inline_threshold = config.inline_threshold;
 
     let pgo_gen_path = match config.pgo_gen {
-        PgoGenerate::Enabled(ref opt_dir_path) => {
+        SwitchWithOptPath::Enabled(ref opt_dir_path) => {
             let path = if let Some(dir_path) = opt_dir_path {
                 dir_path.join("default_%m.profraw")
             } else {
@@ -716,16 +716,14 @@ pub unsafe fn with_llvm_pmb(llmod: &llvm::Module,
 
             Some(CString::new(format!("{}", path.display())).unwrap())
         }
-        PgoGenerate::Disabled => {
+        SwitchWithOptPath::Disabled => {
             None
         }
     };
 
-    let pgo_use_path = if config.pgo_use.is_empty() {
-        None
-    } else {
-        Some(CString::new(config.pgo_use.as_bytes()).unwrap())
-    };
+    let pgo_use_path = config.pgo_use.as_ref().map(|path_buf| {
+        CString::new(path_buf.to_string_lossy().as_bytes()).unwrap()
+    });
 
     llvm::LLVMRustConfigurePassManagerBuilder(
         builder,

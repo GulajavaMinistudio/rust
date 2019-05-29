@@ -13,7 +13,7 @@ use rustc::dep_graph::{WorkProduct, WorkProductId, WorkProductFileKind};
 use rustc::dep_graph::cgu_reuse_tracker::CguReuseTracker;
 use rustc::middle::cstore::EncodedMetadata;
 use rustc::session::config::{self, OutputFilenames, OutputType, Passes, Lto,
-                             Sanitizer, PgoGenerate};
+                             Sanitizer, SwitchWithOptPath};
 use rustc::session::Session;
 use rustc::util::nodemap::FxHashMap;
 use rustc::hir::def_id::{CrateNum, LOCAL_CRATE};
@@ -56,8 +56,8 @@ pub struct ModuleConfig {
     /// Some(level) to optimize binary size, or None to not affect program size.
     pub opt_size: Option<config::OptLevel>,
 
-    pub pgo_gen: PgoGenerate,
-    pub pgo_use: String,
+    pub pgo_gen: SwitchWithOptPath,
+    pub pgo_use: Option<PathBuf>,
 
     // Flags indicating which outputs to produce.
     pub emit_pre_lto_bc: bool,
@@ -94,8 +94,8 @@ impl ModuleConfig {
             opt_level: None,
             opt_size: None,
 
-            pgo_gen: PgoGenerate::Disabled,
-            pgo_use: String::new(),
+            pgo_gen: SwitchWithOptPath::Disabled,
+            pgo_use: None,
 
             emit_no_opt_bc: false,
             emit_pre_lto_bc: false,

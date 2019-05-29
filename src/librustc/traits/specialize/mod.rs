@@ -112,7 +112,7 @@ pub fn translate_substs<'a, 'gcx, 'tcx>(infcx: &InferCtxt<'a, 'gcx, 'tcx>,
 pub fn find_associated_item<'a, 'tcx>(
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
     param_env: ty::ParamEnv<'tcx>,
-    item: &ty::AssociatedItem,
+    item: &ty::AssocItem,
     substs: SubstsRef<'tcx>,
     impl_data: &super::VtableImplData<'tcx, ()>,
 ) -> (DefId, SubstsRef<'tcx>) {
@@ -278,7 +278,7 @@ fn fulfill_implication<'a, 'gcx, 'tcx>(infcx: &InferCtxt<'a, 'gcx, 'tcx>,
 
                 // Now resolve the *substitution* we built for the target earlier, replacing
                 // the inference variables inside with whatever we got from fulfillment.
-                Ok(infcx.resolve_type_vars_if_possible(&target_substs))
+                Ok(infcx.resolve_vars_if_possible(&target_substs))
             }
         }
     })

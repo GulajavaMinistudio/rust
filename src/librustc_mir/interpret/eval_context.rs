@@ -53,7 +53,7 @@ pub struct Frame<'mir, 'tcx: 'mir, Tag=(), Extra=()> {
     // Function and callsite information
     ////////////////////////////////////////////////////////////////////////////////
     /// The MIR for the function called on this frame.
-    pub mir: &'mir mir::Mir<'tcx>,
+    pub mir: &'mir mir::Body<'tcx>,
 
     /// The def_id and substs of the current function.
     pub instance: ty::Instance<'tcx>,
@@ -244,7 +244,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tc
     }
 
     #[inline(always)]
-    pub(super) fn mir(&self) -> &'mir mir::Mir<'tcx> {
+    pub(super) fn mir(&self) -> &'mir mir::Body<'tcx> {
         self.frame().mir
     }
 
@@ -294,7 +294,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tc
     pub fn load_mir(
         &self,
         instance: ty::InstanceDef<'tcx>,
-    ) -> EvalResult<'tcx, &'tcx mir::Mir<'tcx>> {
+    ) -> EvalResult<'tcx, &'tcx mir::Body<'tcx>> {
         // do not continue if typeck errors occurred (can only occur in local crate)
         let did = instance.def_id();
         if did.is_local()
@@ -472,7 +472,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tc
         &mut self,
         instance: ty::Instance<'tcx>,
         span: source_map::Span,
-        mir: &'mir mir::Mir<'tcx>,
+        mir: &'mir mir::Body<'tcx>,
         return_place: Option<PlaceTy<'tcx, M::PointerTag>>,
         return_to_block: StackPopCleanup,
     ) -> EvalResult<'tcx> {
@@ -513,7 +513,7 @@ impl<'a, 'mir, 'tcx: 'mir, M: Machine<'a, 'mir, 'tcx>> InterpretCx<'a, 'mir, 'tc
                 // statics and constants don't have `Storage*` statements, no need to look for them
                 Some(DefKind::Static)
                 | Some(DefKind::Const)
-                | Some(DefKind::AssociatedConst) => {},
+                | Some(DefKind::AssocConst) => {},
                 _ => {
                     trace!("push_stack_frame: {:?}: num_bbs: {}", span, mir.basic_blocks().len());
                     for block in mir.basic_blocks() {

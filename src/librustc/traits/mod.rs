@@ -927,7 +927,7 @@ pub fn fully_normalize<'a, 'gcx, 'tcx, T>(
     debug!("fully_normalize: select_all_or_error start");
     fulfill_cx.select_all_or_error(infcx)?;
     debug!("fully_normalize: select_all_or_error complete");
-    let resolved_value = infcx.resolve_type_vars_if_possible(&normalized_value);
+    let resolved_value = infcx.resolve_vars_if_possible(&normalized_value);
     debug!("fully_normalize: resolved_value={:?}", resolved_value);
     Ok(resolved_value)
 }
@@ -993,7 +993,7 @@ fn vtable_methods<'a, 'tcx>(
     tcx.arena.alloc_from_iter(
         supertraits(tcx, trait_ref).flat_map(move |trait_ref| {
             let trait_methods = tcx.associated_items(trait_ref.def_id())
-                .filter(|item| item.kind == ty::AssociatedKind::Method);
+                .filter(|item| item.kind == ty::AssocKind::Method);
 
             // Now list each method's DefId and InternalSubsts (for within its trait).
             // If the method can never be called from this object, produce None.
