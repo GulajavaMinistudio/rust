@@ -212,7 +212,7 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
             }
             "type_name" => {
                 let tp_ty = substs.type_at(0);
-                let ty_name = rustc_mir::interpret::type_name(self.tcx, tp_ty);
+                let ty_name = self.tcx.type_name(tp_ty);
                 OperandRef::from_const(self, ty_name).immediate_or_packed_pair(self)
             }
             "type_id" => {
@@ -334,7 +334,8 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
             "ctlz" | "ctlz_nonzero" | "cttz" | "cttz_nonzero" | "ctpop" | "bswap" |
             "bitreverse" | "add_with_overflow" | "sub_with_overflow" |
             "mul_with_overflow" | "overflowing_add" | "overflowing_sub" | "overflowing_mul" |
-            "unchecked_div" | "unchecked_rem" | "unchecked_shl" | "unchecked_shr" | "exact_div" |
+            "unchecked_div" | "unchecked_rem" | "unchecked_shl" | "unchecked_shr" |
+            "unchecked_add" | "unchecked_sub" | "unchecked_mul" | "exact_div" |
             "rotate_left" | "rotate_right" | "saturating_add" | "saturating_sub" => {
                 let ty = arg_tys[0];
                 match int_type_width_signed(ty, self) {
@@ -430,6 +431,27 @@ impl IntrinsicCallMethods<'tcx> for Builder<'a, 'll, 'tcx> {
                                 } else {
                                     self.lshr(args[0].immediate(), args[1].immediate())
                                 },
+                            "unchecked_add" => {
+                                if signed {
+                                    self.unchecked_sadd(args[0].immediate(), args[1].immediate())
+                                } else {
+                                    self.unchecked_uadd(args[0].immediate(), args[1].immediate())
+                                }
+                            },
+                            "unchecked_sub" => {
+                                if signed {
+                                    self.unchecked_ssub(args[0].immediate(), args[1].immediate())
+                                } else {
+                                    self.unchecked_usub(args[0].immediate(), args[1].immediate())
+                                }
+                            },
+                            "unchecked_mul" => {
+                                if signed {
+                                    self.unchecked_smul(args[0].immediate(), args[1].immediate())
+                                } else {
+                                    self.unchecked_umul(args[0].immediate(), args[1].immediate())
+                                }
+                            },
                             "rotate_left" | "rotate_right" => {
                                 let is_left = name == "rotate_left";
                                 let val = args[0].immediate();
