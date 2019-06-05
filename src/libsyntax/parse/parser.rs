@@ -1,9 +1,9 @@
 // ignore-tidy-filelength
 
-use crate::ast::{AngleBracketedArgs, AsyncArgument, ParenthesizedArgs, AttrStyle, BareFnTy};
+use crate::ast::{AngleBracketedArgs, ParenthesizedArgs, AttrStyle, BareFnTy};
 use crate::ast::{GenericBound, TraitBoundModifier};
 use crate::ast::Unsafety;
-use crate::ast::{Mod, AnonConst, Arg, ArgSource, Arm, Guard, Attribute, BindingMode, TraitItemKind};
+use crate::ast::{Mod, AnonConst, Arg, Arm, Guard, Attribute, BindingMode, TraitItemKind};
 use crate::ast::Block;
 use crate::ast::{BlockCheckMode, CaptureBy, Movability};
 use crate::ast::{Constness, Crate};
@@ -16,7 +16,7 @@ use crate::ast::{GenericParam, GenericParamKind};
 use crate::ast::GenericArg;
 use crate::ast::{Ident, ImplItem, IsAsync, IsAuto, Item, ItemKind};
 use crate::ast::{Label, Lifetime};
-use crate::ast::{Local, LocalSource};
+use crate::ast::Local;
 use crate::ast::MacStmtStyle;
 use crate::ast::{Mac, Mac_, MacDelimiter};
 use crate::ast::{MutTy, Mutability};
@@ -51,7 +51,7 @@ use crate::parse::diagnostics::{Error, dummy_arg};
 
 use errors::{Applicability, DiagnosticBuilder, DiagnosticId, FatalError};
 use rustc_target::spec::abi::{self, Abi};
-use syntax_pos::{Span, BytePos, DUMMY_SP, FileName, hygiene::CompilerDesugaringKind};
+use syntax_pos::{Span, BytePos, DUMMY_SP, FileName};
 use log::debug;
 
 use std::borrow::Cow;
@@ -628,10 +628,10 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 Err(if self.prev_token_kind == PrevTokenKind::DocComment {
-                        self.span_fatal_err(self.prev_span, Error::UselessDocComment)
-                    } else {
-                        self.expected_ident_found()
-                    })
+                    self.span_fatal_err(self.prev_span, Error::UselessDocComment)
+                } else {
+                    self.expected_ident_found()
+                })
             }
         }
     }
@@ -1126,7 +1126,6 @@ impl<'a> Parser<'a> {
             IsAsync::Async {
                 closure_id: ast::DUMMY_NODE_ID,
                 return_impl_trait_id: ast::DUMMY_NODE_ID,
-                arguments: Vec::new(),
             }
         } else {
             IsAsync::NotAsync
@@ -1185,12 +1184,12 @@ impl<'a> Parser<'a> {
             // trait item macro.
             (Ident::invalid(), ast::TraitItemKind::Macro(mac), ast::Generics::default())
         } else {
-            let (constness, unsafety, mut asyncness, abi) = self.parse_fn_front_matter()?;
+            let (constness, unsafety, asyncness, abi) = self.parse_fn_front_matter()?;
 
             let ident = self.parse_ident()?;
             let mut generics = self.parse_generics()?;
 
-            let mut decl = self.parse_fn_decl_with_self(|p: &mut Parser<'a>| {
+            let decl = self.parse_fn_decl_with_self(|p: &mut Parser<'a>| {
                 // This is somewhat dubious; We don't want to allow
                 // argument names to be left off if there is a
                 // definition...
@@ -1199,7 +1198,6 @@ impl<'a> Parser<'a> {
                 p.parse_arg_general(p.span.rust_2018(), true, false)
             })?;
             generics.where_clause = self.parse_where_clause()?;
-            self.construct_async_arguments(&mut asyncness, &mut decl);
 
             let sig = ast::MethodSig {
                 header: FnHeader {
@@ -1563,7 +1561,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        Ok(Arg { ty, pat, id: ast::DUMMY_NODE_ID, source: ast::ArgSource::Normal })
+        Ok(Arg { ty, pat, id: ast::DUMMY_NODE_ID })
     }
 
     /// Parses an argument in a lambda header (e.g., `|arg, arg|`).
@@ -1581,8 +1579,7 @@ impl<'a> Parser<'a> {
         Ok(Arg {
             ty: t,
             pat,
-            id: ast::DUMMY_NODE_ID,
-            source: ast::ArgSource::Normal,
+            id: ast::DUMMY_NODE_ID
         })
     }
 
@@ -1660,8 +1657,8 @@ impl<'a> Parser<'a> {
             path = self.parse_path(PathStyle::Type)?;
             path_span = path_lo.to(self.prev_span);
         } else {
-            path = ast::Path { segments: Vec::new(), span: DUMMY_SP };
             path_span = self.span.to(self.span);
+            path = ast::Path { segments: Vec::new(), span: path_span };
         }
 
         // See doc comment for `unmatched_angle_bracket_count`.
@@ -2086,13 +2083,6 @@ impl<'a> Parser<'a> {
                     hi = path.span;
                     return Ok(self.mk_expr(lo.to(hi), ExprKind::Path(Some(qself), path), attrs));
                 }
-                if self.span.rust_2018() && self.check_keyword(kw::Async) {
-                    return if self.is_async_block() { // check for `async {` and `async move {`
-                        self.parse_async_block(attrs)
-                    } else {
-                        self.parse_lambda_expr(attrs)
-                    };
-                }
                 if self.check_keyword(kw::Move) || self.check_keyword(kw::Static) {
                     return self.parse_lambda_expr(attrs);
                 }
@@ -2164,6 +2154,16 @@ impl<'a> Parser<'a> {
                     assert!(self.eat_keyword(kw::Try));
                     return self.parse_try_block(lo, attrs);
                 }
+
+                // Span::rust_2018() is somewhat expensive; don't get it repeatedly.
+                let is_span_rust_2018 = self.span.rust_2018();
+                if is_span_rust_2018 && self.check_keyword(kw::Async) {
+                    return if self.is_async_block() { // check for `async {` and `async move {`
+                        self.parse_async_block(attrs)
+                    } else {
+                        self.parse_lambda_expr(attrs)
+                    };
+                }
                 if self.eat_keyword(kw::Return) {
                     if self.token.can_begin_expr() {
                         let e = self.parse_expr()?;
@@ -2199,7 +2199,7 @@ impl<'a> Parser<'a> {
                     db.span_label(self.span, "expected expression");
                     db.note("variable declaration using `let` is a statement");
                     return Err(db);
-                } else if self.span.rust_2018() && self.eat_keyword(kw::Await) {
+                } else if is_span_rust_2018 && self.eat_keyword(kw::Await) {
                     let (await_hi, e_kind) = self.parse_await_macro_or_alt(lo, self.prev_span)?;
                     hi = await_hi;
                     ex = e_kind;
@@ -2847,7 +2847,11 @@ impl<'a> Parser<'a> {
             // want to keep their span info to improve diagnostics in these cases in a later stage.
             (true, Some(AssocOp::Multiply)) | // `{ 42 } *foo = bar;` or `{ 42 } * 3`
             (true, Some(AssocOp::Subtract)) | // `{ 42 } -5`
-            (true, Some(AssocOp::Add)) => { // `{ 42 } + 42
+            (true, Some(AssocOp::LAnd)) | // `{ 42 } &&x` (#61475)
+            (true, Some(AssocOp::Add)) // `{ 42 } + 42
+            // If the next token is a keyword, then the tokens above *are* unambiguously incorrect:
+            // `if x { a } else { b } && if y { c } else { d }`
+            if !self.look_ahead(1, |t| t.is_reserved_ident()) => {
                 // These cases are ambiguous and can't be identified in the parser alone
                 let sp = self.sess.source_map().start_point(self.span);
                 self.sess.ambiguous_block_expr_parse.borrow_mut().insert(sp, lhs.span);
@@ -4213,7 +4217,6 @@ impl<'a> Parser<'a> {
             id: ast::DUMMY_NODE_ID,
             span: lo.to(hi),
             attrs,
-            source: LocalSource::Normal,
         }))
     }
 
@@ -5244,9 +5247,13 @@ impl<'a> Parser<'a> {
                     // FIXME(const_generics): to distinguish between idents for types and consts,
                     // we should introduce a GenericArg::Ident in the AST and distinguish when
                     // lowering to the HIR. For now, idents for const args are not permitted.
-                    return Err(
-                        self.fatal("identifiers may currently not be used for const generics")
-                    );
+                    if self.token.is_keyword(kw::True) || self.token.is_keyword(kw::False) {
+                        self.parse_literal_maybe_minus()?
+                    } else {
+                        return Err(
+                            self.fatal("identifiers may currently not be used for const generics")
+                        );
+                    }
                 } else {
                     self.parse_literal_maybe_minus()?
                 };
@@ -5298,7 +5305,7 @@ impl<'a> Parser<'a> {
         let mut where_clause = WhereClause {
             id: ast::DUMMY_NODE_ID,
             predicates: Vec::new(),
-            span: DUMMY_SP,
+            span: self.prev_span.to(self.prev_span),
         };
 
         if !self.eat_keyword(kw::Where) {
@@ -5660,16 +5667,15 @@ impl<'a> Parser<'a> {
     /// Parses an item-position function declaration.
     fn parse_item_fn(&mut self,
                      unsafety: Unsafety,
-                     mut asyncness: Spanned<IsAsync>,
+                     asyncness: Spanned<IsAsync>,
                      constness: Spanned<Constness>,
                      abi: Abi)
                      -> PResult<'a, ItemInfo> {
         let (ident, mut generics) = self.parse_fn_header()?;
         let allow_c_variadic = abi == Abi::C && unsafety == Unsafety::Unsafe;
-        let mut decl = self.parse_fn_decl(allow_c_variadic)?;
+        let decl = self.parse_fn_decl(allow_c_variadic)?;
         generics.where_clause = self.parse_where_clause()?;
         let (inner_attrs, body) = self.parse_inner_attrs_and_block()?;
-        self.construct_async_arguments(&mut asyncness, &mut decl);
         let header = FnHeader { unsafety, asyncness, constness, abi };
         Ok((ident, ItemKind::Fn(decl, header, generics, body), Some(inner_attrs)))
     }
@@ -5849,14 +5855,13 @@ impl<'a> Parser<'a> {
             Ok((Ident::invalid(), vec![], ast::Generics::default(),
                 ast::ImplItemKind::Macro(mac)))
         } else {
-            let (constness, unsafety, mut asyncness, abi) = self.parse_fn_front_matter()?;
+            let (constness, unsafety, asyncness, abi) = self.parse_fn_front_matter()?;
             let ident = self.parse_ident()?;
             let mut generics = self.parse_generics()?;
-            let mut decl = self.parse_fn_decl_with_self(|p| {
+            let decl = self.parse_fn_decl_with_self(|p| {
                 p.parse_arg_general(true, true, false)
             })?;
             generics.where_clause = self.parse_where_clause()?;
-            self.construct_async_arguments(&mut asyncness, &mut decl);
             *at_end = true;
             let (inner_attrs, body) = self.parse_inner_attrs_and_block()?;
             let header = ast::FnHeader { abi, unsafety, constness, asyncness };
@@ -7218,7 +7223,6 @@ impl<'a> Parser<'a> {
                                     respan(async_span, IsAsync::Async {
                                         closure_id: ast::DUMMY_NODE_ID,
                                         return_impl_trait_id: ast::DUMMY_NODE_ID,
-                                        arguments: Vec::new(),
                                     }),
                                     respan(fn_span, Constness::NotConst),
                                     Abi::Rust)?;
@@ -7848,116 +7852,6 @@ impl<'a> Parser<'a> {
             ';'.to_string(),
             Applicability::MaybeIncorrect,
         ).emit();
-    }
-
-    /// When lowering a `async fn` to the HIR, we need to move all of the arguments of the function
-    /// into the generated closure so that they are dropped when the future is polled and not when
-    /// it is created.
-    ///
-    /// The arguments of the function are replaced in HIR lowering with the arguments created by
-    /// this function and the statements created here are inserted at the top of the closure body.
-    fn construct_async_arguments(&mut self, asyncness: &mut Spanned<IsAsync>, decl: &mut FnDecl) {
-        // FIXME(davidtwco): This function should really live in the HIR lowering but because
-        // the types constructed here need to be used in parts of resolve so that the correct
-        // locals are considered upvars, it is currently easier for it to live here in the parser,
-        // where it can be constructed once.
-        if let IsAsync::Async { ref mut arguments, .. } = asyncness.node {
-            for (index, input) in decl.inputs.iter_mut().enumerate() {
-                let id = ast::DUMMY_NODE_ID;
-                let span = input.pat.span;
-                let desugared_span = self.sess.source_map()
-                    .mark_span_with_reason(CompilerDesugaringKind::Async, span, None);
-
-                // Construct a name for our temporary argument.
-                let name = format!("__arg{}", index);
-                let ident = Ident::from_str(&name).gensym();
-
-                // Check if this is a ident pattern, if so, we can optimize and avoid adding a
-                // `let <pat> = __argN;` statement, instead just adding a `let <pat> = <pat>;`
-                // statement.
-                let (binding_mode, ident, is_simple_pattern) = match input.pat.node {
-                    PatKind::Ident(binding_mode @ BindingMode::ByValue(_), ident, _) => {
-                        // Simple patterns like this don't have a generated argument, but they are
-                        // moved into the closure with a statement, so any `mut` bindings on the
-                        // argument will be unused. This binding mode can't be removed, because
-                        // this would affect the input to procedural macros, but they can have
-                        // their span marked as being the result of a compiler desugaring so
-                        // that they aren't linted against.
-                        input.pat.span = desugared_span;
-
-                        (binding_mode, ident, true)
-                    }
-                    _ => (BindingMode::ByValue(Mutability::Mutable), ident, false),
-                };
-
-                // Construct an argument representing `__argN: <ty>` to replace the argument of the
-                // async function if it isn't a simple pattern.
-                let arg = if is_simple_pattern {
-                    None
-                } else {
-                    Some(Arg {
-                        ty: input.ty.clone(),
-                        id,
-                        pat: P(Pat {
-                            id,
-                            node: PatKind::Ident(
-                                BindingMode::ByValue(Mutability::Immutable), ident, None,
-                            ),
-                            span: desugared_span,
-                        }),
-                        source: ArgSource::AsyncFn(input.pat.clone()),
-                    })
-                };
-
-                // Construct a `let __argN = __argN;` statement to insert at the top of the
-                // async closure. This makes sure that the argument is captured by the closure and
-                // that the drop order is correct.
-                let move_local = Local {
-                    pat: P(Pat {
-                        id,
-                        node: PatKind::Ident(binding_mode, ident, None),
-                        span: desugared_span,
-                    }),
-                    // We explicitly do not specify the type for this statement. When the user's
-                    // argument type is `impl Trait` then this would require the
-                    // `impl_trait_in_bindings` feature to also be present for that same type to
-                    // be valid in this binding. At the time of writing (13 Mar 19),
-                    // `impl_trait_in_bindings` is not stable.
-                    ty: None,
-                    init: Some(P(Expr {
-                        id,
-                        node: ExprKind::Path(None, ast::Path {
-                            span,
-                            segments: vec![PathSegment { ident, id, args: None }],
-                        }),
-                        span,
-                        attrs: ThinVec::new(),
-                    })),
-                    id,
-                    span,
-                    attrs: ThinVec::new(),
-                    source: LocalSource::AsyncFn,
-                };
-
-                // Construct a `let <pat> = __argN;` statement to insert at the top of the
-                // async closure if this isn't a simple pattern.
-                let pat_stmt = if is_simple_pattern {
-                    None
-                } else {
-                    Some(Stmt {
-                        id,
-                        node: StmtKind::Local(P(Local {
-                            pat: input.pat.clone(),
-                            ..move_local.clone()
-                        })),
-                        span,
-                    })
-                };
-
-                let move_stmt = Stmt { id, node: StmtKind::Local(P(move_local)), span };
-                arguments.push(AsyncArgument { ident, arg, pat_stmt, move_stmt });
-            }
-        }
     }
 }
 
