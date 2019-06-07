@@ -55,6 +55,10 @@ fn get_simple_intrinsic(cx: &CodegenCx<'ll, '_>, name: &str) -> Option<&'ll Valu
         "fmaf64" => "llvm.fma.f64",
         "fabsf32" => "llvm.fabs.f32",
         "fabsf64" => "llvm.fabs.f64",
+        "minnumf32" => "llvm.minnum.f32",
+        "minnumf64" => "llvm.minnum.f64",
+        "maxnumf32" => "llvm.maxnum.f32",
+        "maxnumf64" => "llvm.maxnum.f64",
         "copysignf32" => "llvm.copysign.f32",
         "copysignf64" => "llvm.copysign.f64",
         "floorf32" => "llvm.floor.f32",
@@ -937,8 +941,8 @@ fn codegen_msvc_try(
     bx.store(ret, dest, i32_align);
 }
 
-// Definition of the standard "try" function for Rust using the GNU-like model
-// of exceptions (e.g., the normal semantics of LLVM's landingpad and invoke
+// Definition of the standard `try` function for Rust using the GNU-like model
+// of exceptions (e.g., the normal semantics of LLVM's `landingpad` and `invoke`
 // instructions).
 //
 // This codegen is a little surprising because we always call a shim

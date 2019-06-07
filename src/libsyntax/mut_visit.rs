@@ -163,8 +163,8 @@ pub trait MutVisitor: Sized {
         noop_visit_lifetime(l, self);
     }
 
-    fn visit_ty_binding(&mut self, t: &mut TypeBinding) {
-        noop_visit_ty_binding(t, self);
+    fn visit_ty_constraint(&mut self, t: &mut AssocTyConstraint) {
+        noop_visit_ty_constraint(t, self);
     }
 
     fn visit_mod(&mut self, m: &mut Mod) {
@@ -400,11 +400,20 @@ pub fn noop_visit_guard<T: MutVisitor>(g: &mut Guard, vis: &mut T) {
     }
 }
 
-pub fn noop_visit_ty_binding<T: MutVisitor>(TypeBinding { id, ident, ty, span }: &mut TypeBinding,
-                                            vis: &mut T) {
+pub fn noop_visit_ty_constraint<T: MutVisitor>(
+    AssocTyConstraint { id, ident, kind, span }: &mut AssocTyConstraint,
+    vis: &mut T
+) {
     vis.visit_id(id);
     vis.visit_ident(ident);
-    vis.visit_ty(ty);
+    match kind {
+        AssocTyConstraintKind::Equality { ref mut ty } => {
+            vis.visit_ty(ty);
+        }
+        AssocTyConstraintKind::Bound { ref mut bounds } => {
+            visit_bounds(bounds, vis);
+        }
+    }
     vis.visit_span(span);
 }
 
@@ -499,9 +508,9 @@ pub fn noop_visit_generic_arg<T: MutVisitor>(arg: &mut GenericArg, vis: &mut T) 
 
 pub fn noop_visit_angle_bracketed_parameter_data<T: MutVisitor>(data: &mut AngleBracketedArgs,
                                                                 vis: &mut T) {
-    let AngleBracketedArgs { args, bindings, span } = data;
+    let AngleBracketedArgs { args, constraints, span } = data;
     visit_vec(args, |arg| vis.visit_generic_arg(arg));
-    visit_vec(bindings, |binding| vis.visit_ty_binding(binding));
+    visit_vec(constraints, |constraint| vis.visit_ty_constraint(constraint));
     vis.visit_span(span);
 }
 
@@ -567,9 +576,8 @@ pub fn noop_visit_arg<T: MutVisitor>(Arg { id, pat, ty }: &mut Arg, vis: &mut T)
 
 pub fn noop_visit_tt<T: MutVisitor>(tt: &mut TokenTree, vis: &mut T) {
     match tt {
-        TokenTree::Token(span, tok) => {
-            vis.visit_span(span);
-            vis.visit_token(tok);
+        TokenTree::Token(token) => {
+            vis.visit_token(token);
         }
         TokenTree::Delimited(DelimSpan { open, close }, _delim, tts) => {
             vis.visit_span(open);
@@ -586,17 +594,26 @@ pub fn noop_visit_tts<T: MutVisitor>(TokenStream(tts): &mut TokenStream, vis: &m
     })
 }
 
-// apply ident visitor if it's an ident, apply other visits to interpolated nodes
+// Apply ident visitor if it's an ident, apply other visits to interpolated nodes.
+// In practice the ident part is not actually used by specific visitors right now,
+// but there's a test below checking that it works.
 pub fn noop_visit_token<T: MutVisitor>(t: &mut Token, vis: &mut T) {
-    match t {
-        token::Ident(id, _is_raw) => vis.visit_ident(id),
-        token::Lifetime(id) => vis.visit_ident(id),
+    let Token { kind, span } = t;
+    match kind {
+        token::Ident(name, _) | token::Lifetime(name) => {
+            let mut ident = Ident::new(*name, *span);
+            vis.visit_ident(&mut ident);
+            *name = ident.name;
+            *span = ident.span;
+            return; // avoid visiting the span for the second time
+        }
         token::Interpolated(nt) => {
             let mut nt = Lrc::make_mut(nt);
             vis.visit_interpolated(&mut nt);
         }
         _ => {}
     }
+    vis.visit_span(span);
 }
 
 /// Apply visitor to elements of interpolated nodes.

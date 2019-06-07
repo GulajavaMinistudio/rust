@@ -49,7 +49,8 @@ pub struct ConstEvalErr<'tcx> {
 
 #[derive(Clone, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub struct FrameInfo<'tcx> {
-    pub call_site: Span, // this span is in the caller!
+    /// This span is in the caller.
+    pub call_site: Span,
     pub instance: ty::Instance<'tcx>,
     pub lint_root: Option<hir::HirId>,
 }
@@ -178,10 +179,15 @@ pub fn struct_error<'a, 'gcx, 'tcx>(
     struct_span_err!(tcx.sess, tcx.span, E0080, "{}", msg)
 }
 
+/// Packages the kind of error we got from the const code interpreter
+/// up with a Rust-level backtrace of where the error occured.
+/// Thsese should always be constructed by calling `.into()` on
+/// a `InterpError`. In `librustc_mir::interpret`, we have the `err!`
+/// macro for this
 #[derive(Debug, Clone)]
 pub struct EvalError<'tcx> {
     pub kind: InterpError<'tcx, u64>,
-    pub backtrace: Option<Box<Backtrace>>,
+    backtrace: Option<Box<Backtrace>>,
 }
 
 impl<'tcx> EvalError<'tcx> {
@@ -200,12 +206,12 @@ fn print_backtrace(backtrace: &mut Backtrace) {
 impl<'tcx> From<InterpError<'tcx, u64>> for EvalError<'tcx> {
     fn from(kind: InterpError<'tcx, u64>) -> Self {
         let backtrace = match env::var("RUST_CTFE_BACKTRACE") {
-            // matching RUST_BACKTRACE, we treat "0" the same as "not present".
+            // Matching `RUST_BACKTRACE` -- we treat "0" the same as "not present".
             Ok(ref val) if val != "0" => {
                 let mut backtrace = Backtrace::new_unresolved();
 
                 if val == "immediate" {
-                    // Print it now
+                    // Print it now.
                     print_backtrace(&mut backtrace);
                     None
                 } else {

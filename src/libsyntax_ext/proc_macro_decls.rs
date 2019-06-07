@@ -132,7 +132,7 @@ impl<'a> CollectProcMacros<'a> {
             }
         };
 
-        if !trait_ident.can_be_raw() {
+        if !trait_ident.name.can_be_raw() {
             self.handler.span_err(trait_attr.span,
                                   &format!("`{}` cannot be a name of derive macro", trait_ident));
         }
@@ -166,7 +166,7 @@ impl<'a> CollectProcMacros<'a> {
                         return None;
                     }
                 };
-                if !ident.can_be_raw() {
+                if !ident.name.can_be_raw() {
                     self.handler.span_err(
                         attr.span,
                         &format!("`{}` cannot be a name of derive helper attribute", ident),
@@ -245,8 +245,7 @@ impl<'a> Visitor<'a> for CollectProcMacros<'a> {
         // First up, make sure we're checking a bare function. If we're not then
         // we're just not interested in this item.
         //
-        // If we find one, try to locate a `#[proc_macro_derive]` attribute on
-        // it.
+        // If we find one, try to locate a `#[proc_macro_derive]` attribute on it.
         let is_fn = match item.node {
             ast::ItemKind::Fn(..) => true,
             _ => false,
@@ -259,7 +258,7 @@ impl<'a> Visitor<'a> for CollectProcMacros<'a> {
                 if let Some(prev_attr) = found_attr {
                     let msg = if attr.path.segments[0].ident.name ==
                                  prev_attr.path.segments[0].ident.name {
-                        format!("Only one `#[{}]` attribute is allowed on any given function",
+                        format!("only one `#[{}]` attribute is allowed on any given function",
                                 attr.path)
                     } else {
                         format!("`#[{}]` and `#[{}]` attributes cannot both be applied \
@@ -267,7 +266,7 @@ impl<'a> Visitor<'a> for CollectProcMacros<'a> {
                     };
 
                     self.handler.struct_span_err(attr.span, &msg)
-                        .span_note(prev_attr.span, "Previous attribute here")
+                        .span_note(prev_attr.span, "previous attribute here")
                         .emit();
 
                     return;

@@ -21,7 +21,7 @@ use crate::hir;
 use crate::hir::Node;
 use crate::hir::def_id::DefId;
 use crate::infer::{self, InferCtxt};
-use crate::infer::type_variable::TypeVariableOrigin;
+use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::session::DiagnosticMessageId;
 use crate::ty::{self, AdtKind, ToPredicate, ToPolyTraitRef, Ty, TyCtxt, TypeFoldable};
 use crate::ty::GenericParamDefKind;
@@ -662,7 +662,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                             "{}",
                             message.unwrap_or_else(||
                                 format!("the trait bound `{}` is not satisfied{}",
-                                         trait_ref.to_predicate(), post_message)
+                                        trait_ref.to_predicate(), post_message)
                             ));
 
                         let explanation =
@@ -676,7 +676,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                             };
 
                         if let Some(ref s) = label {
-                            // If it has a custom "#[rustc_on_unimplemented]"
+                            // If it has a custom `#[rustc_on_unimplemented]`
                             // error message, let's display it as the label!
                             err.span_label(span, s.as_str());
                             err.help(&explanation);
@@ -684,7 +684,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                             err.span_label(span, explanation);
                         }
                         if let Some(ref s) = note {
-                            // If it has a custom "#[rustc_on_unimplemented]" note, let's display it
+                            // If it has a custom `#[rustc_on_unimplemented]` note, let's display it
                             err.note(s.as_str());
                         }
 
@@ -1464,7 +1464,12 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     let infcx = self.infcx;
                     self.var_map.entry(ty).or_insert_with(||
                         infcx.next_ty_var(
-                            TypeVariableOrigin::TypeParameterDefinition(DUMMY_SP, name)))
+                            TypeVariableOrigin {
+                                kind: TypeVariableOriginKind::TypeParameterDefinition(name),
+                                span: DUMMY_SP,
+                            }
+                        )
+                    )
                 } else {
                     ty.super_fold_with(self)
                 }
