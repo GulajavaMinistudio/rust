@@ -78,7 +78,7 @@ use crate::ast::{Ident, Name};
 use crate::ext::tt::quoted::{self, TokenTree};
 use crate::parse::{Directory, ParseSess};
 use crate::parse::parser::{Parser, PathStyle};
-use crate::parse::token::{self, DocComment, Nonterminal, Token, TokenKind};
+use crate::parse::token::{self, DocComment, Nonterminal, Token};
 use crate::print::pprust;
 use crate::symbol::{kw, sym, Symbol};
 use crate::tokenstream::{DelimSpan, TokenStream};
@@ -199,7 +199,7 @@ struct MatcherPos<'root, 'tt: 'root> {
     seq_op: Option<quoted::KleeneOp>,
 
     /// The separator if we are in a repetition.
-    sep: Option<TokenKind>,
+    sep: Option<Token>,
 
     /// The "parent" matcher position if we are in a repetition. That is, the matcher position just
     /// before we enter the sequence.
@@ -417,24 +417,24 @@ fn nameize<I: Iterator<Item = NamedMatch>>(
 
 /// Generates an appropriate parsing failure message. For EOF, this is "unexpected end...". For
 /// other tokens, this is "unexpected token...".
-pub fn parse_failure_msg(tok: TokenKind) -> String {
-    match tok {
+pub fn parse_failure_msg(tok: &Token) -> String {
+    match tok.kind {
         token::Eof => "unexpected end of macro invocation".to_string(),
         _ => format!(
             "no rules expected the token `{}`",
-            pprust::token_to_string(&tok)
+            pprust::token_to_string(tok)
         ),
     }
 }
 
 /// Performs a token equality check, ignoring syntax context (that is, an unhygienic comparison)
-fn token_name_eq(t1: &TokenKind, t2: &TokenKind) -> bool {
-    if let (Some((name1, is_raw1)), Some((name2, is_raw2))) = (t1.ident_name(), t2.ident_name()) {
-        name1 == name2 && is_raw1 == is_raw2
-    } else if let (Some(name1), Some(name2)) = (t1.lifetime_name(), t2.lifetime_name()) {
-        name1 == name2
+fn token_name_eq(t1: &Token, t2: &Token) -> bool {
+    if let (Some((ident1, is_raw1)), Some((ident2, is_raw2))) = (t1.ident(), t2.ident()) {
+        ident1.name == ident2.name && is_raw1 == is_raw2
+    } else if let (Some(ident1), Some(ident2)) = (t1.lifetime(), t2.lifetime()) {
+        ident1.name == ident2.name
     } else {
-        *t1 == *t2
+        t1.kind == t2.kind
     }
 }
 
@@ -675,7 +675,7 @@ pub fn parse(
     //
     // This MatcherPos instance is allocated on the stack. All others -- and
     // there are frequently *no* others! -- are allocated on the heap.
-    let mut initial = initial_matcher_pos(ms, parser.span);
+    let mut initial = initial_matcher_pos(ms, parser.token.span);
     let mut cur_items = smallvec![MatcherPosHandle::Ref(&mut initial)];
     let mut next_items = Vec::new();
 
@@ -712,7 +712,7 @@ pub fn parse(
 
         // If we reached the EOF, check that there is EXACTLY ONE possible matcher. Otherwise,
         // either the parse is ambiguous (which should never happen) or there is a syntax error.
-        if token_name_eq(&parser.token, &token::Eof) {
+        if parser.token == token::Eof {
             if eof_items.len() == 1 {
                 let matches = eof_items[0]
                     .matches
@@ -721,15 +721,15 @@ pub fn parse(
                 return nameize(sess, ms, matches);
             } else if eof_items.len() > 1 {
                 return Error(
-                    parser.span,
+                    parser.token.span,
                     "ambiguity: multiple successful parses".to_string(),
                 );
             } else {
                 return Failure(
-                    Token::new(token::Eof, if parser.span.is_dummy() {
-                        parser.span
+                    Token::new(token::Eof, if parser.token.span.is_dummy() {
+                        parser.token.span
                     } else {
-                        sess.source_map().next_point(parser.span)
+                        sess.source_map().next_point(parser.token.span)
                     }),
                     "missing tokens in macro arguments",
                 );
@@ -753,7 +753,7 @@ pub fn parse(
                 .join(" or ");
 
             return Error(
-                parser.span,
+                parser.token.span,
                 format!(
                     "local ambiguity: multiple parsing options: {}",
                     match next_items.len() {
@@ -804,8 +804,8 @@ pub fn parse(
 
 /// The token is an identifier, but not `_`.
 /// We prohibit passing `_` to macros expecting `ident` for now.
-fn get_macro_name(token: &TokenKind) -> Option<(Name, bool)> {
-    match *token {
+fn get_macro_name(token: &Token) -> Option<(Name, bool)> {
+    match token.kind {
         token::Ident(name, is_raw) if name != kw::Underscore => Some((name, is_raw)),
         _ => None,
     }
@@ -927,7 +927,7 @@ fn parse_nt<'a>(p: &mut Parser<'a>, sp: Span, name: Symbol) -> Nonterminal {
         sym::ty => token::NtTy(panictry!(p.parse_ty())),
         // this could be handled like a token, since it is one
         sym::ident => if let Some((name, is_raw)) = get_macro_name(&p.token) {
-            let span = p.span;
+            let span = p.token.span;
             p.bump();
             token::NtIdent(Ident::new(name, span), is_raw)
         } else {
