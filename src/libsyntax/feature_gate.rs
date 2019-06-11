@@ -551,9 +551,6 @@ declare_features! (
     // Allows using `#[optimize(X)]`.
     (active, optimize_attribute, "1.34.0", Some(54882), None),
 
-    // Allows using `#[repr(align(X))]` on enums.
-    (active, repr_align_enum, "1.34.0", Some(57996), None),
-
     // Allows using C-variadics.
     (active, c_variadic, "1.34.0", Some(44930), None),
 
@@ -563,6 +560,12 @@ declare_features! (
     // Allows calling constructor functions in `const fn`
     // FIXME Create issue
     (active, const_constructor, "1.37.0", Some(61456), None),
+
+    // #[repr(transparent)] on enums.
+    (active, transparent_enums, "1.37.0", Some(60405), None),
+
+    // #[repr(transparent)] on unions.
+    (active, transparent_unions, "1.37.0", Some(60405), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
@@ -843,6 +846,9 @@ declare_features! (
     (accepted, extern_crate_self, "1.34.0", Some(56409), None),
     // Allows arbitrary delimited token streams in non-macro attributes.
     (accepted, unrestricted_attribute_tokens, "1.34.0", Some(55208), None),
+    // Allows using `#[repr(align(X))]` on enums with equivalent semantics
+    // to wrapping an enum in a wrapper struct with `#[repr(align(X))]`.
+    (accepted, repr_align_enum, "1.37.0", Some(57996), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: accepted features
@@ -2028,17 +2034,6 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                         if item.check_name(sym::simd) {
                             gate_feature_post!(&self, repr_simd, attr.span,
                                                "SIMD types are experimental and possibly buggy");
-                        }
-                    }
-                }
-            }
-
-            ast::ItemKind::Enum(..) => {
-                for attr in attr::filter_by_name(&i.attrs[..], sym::repr) {
-                    for item in attr.meta_item_list().unwrap_or_else(Vec::new) {
-                        if item.check_name(sym::align) {
-                            gate_feature_post!(&self, repr_align_enum, attr.span,
-                                               "`#[repr(align(x))]` on enums is experimental");
                         }
                     }
                 }
