@@ -40,7 +40,7 @@ macro_rules! provide {
     (<$lt:tt> $tcx:ident, $def_id:ident, $other:ident, $cdata:ident,
       $($name:ident => $compute:block)*) => {
         pub fn provide_extern<$lt>(providers: &mut Providers<$lt>) {
-            $(fn $name<'a, $lt:$lt, T>($tcx: TyCtxt<'a, $lt, $lt>, def_id_arg: T)
+            $(fn $name<$lt:$lt, T>($tcx: TyCtxt<$lt, $lt>, def_id_arg: T)
                                     -> <ty::queries::$name<$lt> as
                                         QueryConfig<$lt>>::Value
                 where T: IntoArgs,
@@ -430,7 +430,7 @@ impl cstore::CStore {
             use syntax_ext::proc_macro_impl::BangProcMacro;
 
             let client = proc_macro::bridge::client::Client::expand1(proc_macro::quote);
-            let ext = SyntaxExtension::ProcMacro {
+            let ext = SyntaxExtension::Bang {
                 expander: Box::new(BangProcMacro { client }),
                 allow_internal_unstable: Some(vec![sym::proc_macro_def_site].into()),
                 edition: data.root.edition,
@@ -550,10 +550,7 @@ impl CrateStore for cstore::CStore {
         self.do_postorder_cnums_untracked()
     }
 
-    fn encode_metadata<'a, 'tcx>(&self,
-                                 tcx: TyCtxt<'a, 'tcx, 'tcx>)
-                                 -> EncodedMetadata
-    {
+    fn encode_metadata<'tcx>(&self, tcx: TyCtxt<'tcx, 'tcx>) -> EncodedMetadata {
         encoder::encode_metadata(tcx)
     }
 
