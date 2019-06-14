@@ -124,6 +124,7 @@ steps:
     CI: true
     SRC: .
     AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+    TOOLSTATE_REPO_ACCESS_TOKEN: $(TOOLSTATE_REPO_ACCESS_TOKEN)
   displayName: Run build
 
 # If we're a deploy builder, use the `aws` command to publish everything to our
@@ -155,6 +156,6 @@ steps:
 - bash: aws s3 cp --acl public-read cpu-usage.csv s3://$DEPLOY_BUCKET/rustc-builds/$BUILD_SOURCEVERSION/cpu-$SYSTEM_JOBNAME.csv
   env:
     AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-  condition: contains(variables, 'AWS_SECRET_ACCESS_KEY')
+  condition: variables['AWS_SECRET_ACCESS_KEY']
   continueOnError: true
   displayName: Upload CPU usage statistics

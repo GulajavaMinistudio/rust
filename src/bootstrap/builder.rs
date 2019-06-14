@@ -787,7 +787,7 @@ impl<'a> Builder<'a> {
 
         let libtest_stamp = match cmd {
             "check" | "clippy" | "fix" => check::libtest_stamp(self, cmp, target),
-            _ => compile::libstd_stamp(self, cmp, target),
+            _ => compile::libtest_stamp(self, cmp, target),
         };
 
         let librustc_stamp = match cmd {
@@ -1691,10 +1691,6 @@ mod __test {
                 },
                 compile::Std {
                     compiler: Compiler { host: a, stage: 1 },
-                    target: b,
-                },
-                compile::Std {
-                    compiler: Compiler { host: a, stage: 2 },
                     target: b,
                 },
             ]
