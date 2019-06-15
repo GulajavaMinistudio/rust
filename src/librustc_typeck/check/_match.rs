@@ -22,7 +22,7 @@ use std::cmp;
 
 use super::report_unexpected_variant_res;
 
-impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
+impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// `discrim_span` argument having a `Span` indicates that this pattern is part of a match
     /// expression arm guard, and it points to the match discriminant to add context in type errors.
     /// In the following example, `discrim_span` corresponds to the `a + b` expression:
@@ -41,7 +41,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
     /// ```
     pub fn check_pat_walk(
         &self,
-        pat: &'gcx hir::Pat,
+        pat: &'tcx hir::Pat,
         mut expected: Ty<'tcx>,
         mut def_bm: ty::BindingMode,
         discrim_span: Option<Span>,
@@ -50,6 +50,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
         debug!("check_pat_walk(pat={:?},expected={:?},def_bm={:?})", pat, expected, def_bm);
 
+        let mut path_resolution = None;
         let is_non_ref_pat = match pat.node {
             PatKind::Struct(..) |
             PatKind::TupleStruct(..) |
@@ -65,8 +66,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
             }
             PatKind::Path(ref qpath) => {
-                let (def, _, _) = self.resolve_ty_and_res_ufcs(qpath, pat.hir_id, pat.span);
-                match def {
+                let resolution = self.resolve_ty_and_res_ufcs(qpath, pat.hir_id, pat.span);
+                path_resolution = Some(resolution);
+                match resolution.0 {
                     Res::Def(DefKind::Const, _) | Res::Def(DefKind::AssocConst, _) => false,
                     _ => true,
                 }
@@ -132,7 +134,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             // }
             // ```
             //
-            // cc #46688
+            // See issue #46688.
             def_bm = ty::BindByValue(hir::MutImmutable);
         }
 
@@ -150,7 +152,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 let ty = self.node_ty(lt.hir_id);
 
                 // Byte string patterns behave the same way as array patterns
-                // They can denote both statically and dynamically sized byte arrays
+                // They can denote both statically and dynamically-sized byte arrays.
                 let mut pat_ty = ty;
                 if let hir::ExprKind::Lit(ref lt) = lt.node {
                     if let ast::LitKind::ByteStr(_) = lt.node {
@@ -164,7 +166,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     }
                 }
 
-                // somewhat surprising: in this case, the subtyping
+                // Somewhat surprising: in this case, the subtyping
                 // relation goes the opposite way as the other
                 // cases. Actually what we really want is not a subtyping
                 // relation at all but rather that there exists a LUB (so
@@ -175,7 +177,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 //
                 //     &'static str <: expected
                 //
-                // that's equivalent to there existing a LUB.
+                // then that's equivalent to there existing a LUB.
                 if let Some(mut err) = self.demand_suptype_diag(pat.span, expected, pat_ty) {
                     err.emit_unless(discrim_span
                         .filter(|&s| s.is_compiler_desugaring(CompilerDesugaringKind::IfTemporary))
@@ -228,7 +230,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 // it to type the entire expression.
                 let common_type = self.resolve_vars_if_possible(&lhs_ty);
 
-                // subtyping doesn't matter here, as the value is some kind of scalar
+                // Subtyping doesn't matter here, as the value is some kind of scalar.
                 self.demand_eqtype_pat(pat.span, expected, lhs_ty, discrim_span);
                 self.demand_eqtype_pat(pat.span, expected, rhs_ty, discrim_span);
                 common_type
@@ -248,8 +250,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 let local_ty = self.local_ty(pat.span, pat.hir_id).decl_ty;
                 match bm {
                     ty::BindByReference(mutbl) => {
-                        // if the binding is like
-                        //    ref x | ref const x | ref mut x
+                        // If the binding is like
+                        //     ref x | ref const x | ref mut x
                         // then `x` is assigned a value of type `&M T` where M is the mutability
                         // and T is the expected type.
                         let region_var = self.next_region_var(infer::PatternRegion(pat.span));
@@ -261,16 +263,16 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         // an explanation.
                         self.demand_eqtype_pat(pat.span, region_ty, local_ty, discrim_span);
                     }
-                    // otherwise the type of x is the expected type T
+                    // Otherwise, the type of x is the expected type `T`.
                     ty::BindByValue(_) => {
-                        // As above, `T <: typeof(x)` is required but we
+                        // As above, `T <: typeof(x)` is required, but we
                         // use equality, see (*) below.
                         self.demand_eqtype_pat(pat.span, expected, local_ty, discrim_span);
                     }
                 }
 
-                // if there are multiple arms, make sure they all agree on
-                // what the type of the binding `x` ought to be
+                // If there are multiple arms, make sure they all agree on
+                // what the type of the binding `x` ought to be.
                 if var_id != pat.hir_id {
                     let vt = self.local_ty(pat.span, var_id).decl_ty;
                     self.demand_eqtype_pat(pat.span, vt, local_ty, discrim_span);
@@ -294,7 +296,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 )
             }
             PatKind::Path(ref qpath) => {
-                self.check_pat_path(pat, qpath, expected)
+                self.check_pat_path(pat, path_resolution.unwrap(), qpath, expected)
             }
             PatKind::Struct(ref qpath, ref fields, etc) => {
                 self.check_pat_struct(pat, qpath, fields, etc, expected, def_bm, discrim_span)
@@ -613,9 +615,9 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
 
     pub fn check_match(
         &self,
-        expr: &'gcx hir::Expr,
-        discrim: &'gcx hir::Expr,
-        arms: &'gcx [hir::Arm],
+        expr: &'tcx hir::Expr,
+        discrim: &'tcx hir::Expr,
+        arms: &'tcx [hir::Arm],
         expected: Expectation<'tcx>,
         match_src: hir::MatchSource,
     ) -> Ty<'tcx> {
@@ -769,7 +771,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
 
     /// When the previously checked expression (the scrutinee) diverges,
     /// warn the user about the match arms being unreachable.
-    fn warn_arms_when_scrutinee_diverges(&self, arms: &'gcx [hir::Arm], source_if: bool) {
+    fn warn_arms_when_scrutinee_diverges(&self, arms: &'tcx [hir::Arm], source_if: bool) {
         if self.diverges.get().always() {
             let msg = if source_if { "block in `if` expression" } else { "arm" };
             for arm in arms {
@@ -782,8 +784,8 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
     fn if_fallback_coercion(
         &self,
         span: Span,
-        then_expr: &'gcx hir::Expr,
-        coercion: &mut CoerceMany<'gcx, 'tcx, '_, rustc::hir::Arm>,
+        then_expr: &'tcx hir::Expr,
+        coercion: &mut CoerceMany<'tcx, '_, rustc::hir::Arm>,
     ) {
         // If this `if` expr is the parent's function return expr,
         // the cause of the type coercion is the return type, point at it. (#25228)
@@ -839,8 +841,8 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
     fn if_cause(
         &self,
         span: Span,
-        then_expr: &'gcx hir::Expr,
-        else_expr: &'gcx hir::Expr,
+        then_expr: &'tcx hir::Expr,
+        else_expr: &'tcx hir::Expr,
         then_ty: Ty<'tcx>,
         else_ty: Ty<'tcx>,
     ) -> ObligationCause<'tcx> {
@@ -878,7 +880,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                 // possibly incorrect trailing `;` in the else arm
                 remove_semicolon = self.could_remove_semicolon(block, then_ty);
                 stmt.span
-            } else {  // empty block, point at its entirety
+            } else { // empty block; point at its entirety
                 // Avoid overlapping spans that aren't as readable:
                 // ```
                 // 2 |        let x = if true {
@@ -915,7 +917,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
             else_expr.span
         };
 
-        // Compute `Span` of `then` part of `if`-expression:
+        // Compute `Span` of `then` part of `if`-expression.
         let then_sp = if let ExprKind::Block(block, _) = &then_expr.node {
             if let Some(expr) = &block.expr {
                 expr.span
@@ -923,11 +925,11 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
                 // possibly incorrect trailing `;` in the else arm
                 remove_semicolon = remove_semicolon.or(self.could_remove_semicolon(block, else_ty));
                 stmt.span
-            } else {  // empty block, point at its entirety
-                outer_sp = None;  // same as in `error_sp`, cleanup output
+            } else { // empty block; point at its entirety
+                outer_sp = None;  // same as in `error_sp`; cleanup output
                 then_expr.span
             }
-        } else {  // shouldn't happen unless the parser has done something weird
+        } else { // shouldn't happen unless the parser has done something weird
             then_expr.span
         };
 
@@ -941,8 +943,8 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
 
     fn demand_discriminant_type(
         &self,
-        arms: &'gcx [hir::Arm],
-        discrim: &'gcx hir::Expr,
+        arms: &'tcx [hir::Arm],
+        discrim: &'tcx hir::Expr,
     ) -> Ty<'tcx> {
         // Not entirely obvious: if matches may create ref bindings, we want to
         // use the *precise* type of the discriminant, *not* some supertype, as
@@ -1020,15 +1022,14 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
 
     fn check_pat_struct(
         &self,
-        pat: &'gcx hir::Pat,
+        pat: &'tcx hir::Pat,
         qpath: &hir::QPath,
-        fields: &'gcx [Spanned<hir::FieldPat>],
+        fields: &'tcx [Spanned<hir::FieldPat>],
         etc: bool,
         expected: Ty<'tcx>,
         def_bm: ty::BindingMode,
         discrim_span: Option<Span>,
-    ) -> Ty<'tcx>
-    {
+    ) -> Ty<'tcx> {
         // Resolve the path and check the definition for errors.
         let (variant, pat_ty) = if let Some(variant_ty) = self.check_struct_path(qpath, pat.hir_id)
         {
@@ -1055,13 +1056,14 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
     fn check_pat_path(
         &self,
         pat: &hir::Pat,
+        path_resolution: (Res, Option<Ty<'tcx>>, &'b [hir::PathSegment]),
         qpath: &hir::QPath,
         expected: Ty<'tcx>,
     ) -> Ty<'tcx> {
         let tcx = self.tcx;
 
-        // Resolve the path and check the definition for errors.
-        let (res, opt_ty, segments) = self.resolve_ty_and_res_ufcs(qpath, pat.hir_id, pat.span);
+        // We have already resolved the path.
+        let (res, opt_ty, segments) = path_resolution;
         match res {
             Res::Err => {
                 self.set_tainted_by_errors();
@@ -1088,7 +1090,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
         &self,
         pat: &hir::Pat,
         qpath: &hir::QPath,
-        subpats: &'gcx [P<hir::Pat>],
+        subpats: &'tcx [P<hir::Pat>],
         ddpos: Option<usize>,
         expected: Ty<'tcx>,
         def_bm: ty::BindingMode,
@@ -1192,7 +1194,7 @@ https://doc.rust-lang.org/reference/types.html#trait-objects");
         pat_id: hir::HirId,
         span: Span,
         variant: &'tcx ty::VariantDef,
-        fields: &'gcx [Spanned<hir::FieldPat>],
+        fields: &'tcx [Spanned<hir::FieldPat>],
         etc: bool,
         def_bm: ty::BindingMode,
     ) -> bool {
