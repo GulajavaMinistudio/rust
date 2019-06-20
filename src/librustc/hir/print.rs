@@ -1501,7 +1501,7 @@ impl<'a> State<'a> {
 
                 self.pclose()?;
             }
-            hir::ExprKind::Yield(ref expr) => {
+            hir::ExprKind::Yield(ref expr, _) => {
                 self.word_space("yield")?;
                 self.print_expr_maybe_paren(&expr, parser::PREC_JUMP)?;
             }
@@ -2202,8 +2202,8 @@ impl<'a> State<'a> {
         let generics = hir::Generics {
             params: hir::HirVec::new(),
             where_clause: hir::WhereClause {
-                hir_id: hir::DUMMY_HIR_ID,
                 predicates: hir::HirVec::new(),
+                span: syntax_pos::DUMMY_SP,
             },
             span: syntax_pos::DUMMY_SP,
         };

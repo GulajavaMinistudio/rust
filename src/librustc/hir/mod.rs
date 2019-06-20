@@ -592,8 +592,8 @@ impl Generics {
         Generics {
             params: HirVec::new(),
             where_clause: WhereClause {
-                hir_id: DUMMY_HIR_ID,
                 predicates: HirVec::new(),
+                span: DUMMY_SP,
             },
             span: DUMMY_SP,
         }
@@ -644,19 +644,18 @@ pub enum SyntheticTyParamKind {
 /// A where-clause in a definition.
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub struct WhereClause {
-    pub hir_id: HirId,
     pub predicates: HirVec<WherePredicate>,
+    // Only valid if predicates isn't empty.
+    span: Span,
 }
 
 impl WhereClause {
     pub fn span(&self) -> Option<Span> {
-        self.predicates.iter().map(|predicate| predicate.span())
-            .fold(None, |acc, i| match (acc, i) {
-                (None, i) => Some(i),
-                (Some(acc), i) => {
-                    Some(acc.to(i))
-                }
-            })
+        if self.predicates.is_empty() {
+            None
+        } else {
+            Some(self.span)
+        }
     }
 }
 
@@ -1306,7 +1305,7 @@ pub struct BodyId {
 ///
 /// - an `arguments` array containing the `(x, y)` pattern
 /// - a `value` containing the `x + y` expression (maybe wrapped in a block)
-/// - `is_generator` would be false
+/// - `generator_kind` would be `None`
 ///
 /// All bodies have an **owner**, which can be accessed via the HIR
 /// map using `body_owner_def_id()`.
@@ -1314,7 +1313,7 @@ pub struct BodyId {
 pub struct Body {
     pub arguments: HirVec<Arg>,
     pub value: Expr,
-    pub is_generator: bool,
+    pub generator_kind: Option<GeneratorKind>,
 }
 
 impl Body {
@@ -1322,6 +1321,26 @@ impl Body {
         BodyId {
             hir_id: self.value.hir_id,
         }
+    }
+}
+
+/// The type of source expression that caused this generator to be created.
+// Not `IsAsync` because we want to eventually add support for `AsyncGen`
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, HashStable,
+         RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
+pub enum GeneratorKind {
+    /// An `async` block or function.
+    Async,
+    /// A generator literal created via a `yield` inside a closure.
+    Gen,
+}
+
+impl fmt::Display for GeneratorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            GeneratorKind::Async => "`async` object",
+            GeneratorKind::Gen => "generator",
+        })
     }
 }
 
@@ -1531,8 +1550,8 @@ pub enum ExprKind {
     ///
     /// The final span is the span of the argument block `|...|`.
     ///
-    /// This may also be a generator literal, indicated by the final boolean,
-    /// in that case there is an `GeneratorClause`.
+    /// This may also be a generator literal or an `async block` as indicated by the
+    /// `Option<GeneratorMovability>`.
     Closure(CaptureClause, P<FnDecl>, BodyId, Span, Option<GeneratorMovability>),
     /// A block (e.g., `'label: { ... }`).
     Block(P<Block>, Option<Label>),
@@ -1576,7 +1595,7 @@ pub enum ExprKind {
     Repeat(P<Expr>, AnonConst),
 
     /// A suspension point for generators (i.e., `yield <expr>`).
-    Yield(P<Expr>),
+    Yield(P<Expr>, YieldSource),
 
     /// A placeholder for an expression that wasn't syntactically well formed in some way.
     Err,
@@ -1668,12 +1687,12 @@ pub enum LoopIdError {
 
 impl fmt::Display for LoopIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(match *self {
+        f.write_str(match self {
             LoopIdError::OutsideLoopScope => "not inside loop scope",
             LoopIdError::UnlabeledCfInWhileCondition =>
                 "unlabeled control flow (break or continue) in while condition",
             LoopIdError::UnresolvedLabel => "label not found",
-        }, f)
+        })
     }
 }
 
@@ -1687,11 +1706,32 @@ pub struct Destination {
     pub target_id: Result<HirId, LoopIdError>,
 }
 
+/// Whether a generator contains self-references, causing it to be `!Unpin`.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, HashStable,
          RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
 pub enum GeneratorMovability {
+    /// May contain self-references, `!Unpin`.
     Static,
+    /// Must not contain self-references, `Unpin`.
     Movable,
+}
+
+/// The yield kind that caused an `ExprKind::Yield`.
+#[derive(Debug, Copy, Clone, RustcEncodable, RustcDecodable, HashStable)]
+pub enum YieldSource {
+    /// An `<expr>.await`.
+    Await,
+    /// A plain `yield`.
+    Yield,
+}
+
+impl fmt::Display for YieldSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            YieldSource::Await => "`await`",
+            YieldSource::Yield => "`yield`",
+        })
+    }
 }
 
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, Copy, HashStable)]
@@ -1930,7 +1970,7 @@ pub enum TyKind {
     Infer,
     /// Placeholder for a type that has failed to be defined.
     Err,
-    /// Placeholder for C-variadic arguments. We "spoof" the `VaList` created
+    /// Placeholder for C-variadic arguments. We "spoof" the `VaListImpl` created
     /// from the variadic arguments. This type is only valid up to typeck.
     CVarArgs(Lifetime),
 }
@@ -2058,11 +2098,10 @@ impl Defaultness {
 
 impl fmt::Display for Unsafety {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(match *self {
-                              Unsafety::Normal => "normal",
-                              Unsafety::Unsafe => "unsafe",
-                          },
-                          f)
+        f.write_str(match self {
+            Unsafety::Normal => "normal",
+            Unsafety::Unsafe => "unsafe",
+        })
     }
 }
 
@@ -2076,10 +2115,10 @@ pub enum ImplPolarity {
 
 impl fmt::Debug for ImplPolarity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            ImplPolarity::Positive => "positive".fmt(f),
-            ImplPolarity::Negative => "negative".fmt(f),
-        }
+        f.write_str(match self {
+            ImplPolarity::Positive => "positive",
+            ImplPolarity::Negative => "negative",
+        })
     }
 }
 
@@ -2177,8 +2216,8 @@ pub enum UseKind {
 /// References to traits in impls.
 ///
 /// `resolve` maps each `TraitRef`'s `ref_id` to its defining trait; that's all
-/// that the `ref_id` is for. Note that `ref_id`'s value is not the `NodeId` of the
-/// trait being referred to but just a unique `NodeId` that serves as a key
+/// that the `ref_id` is for. Note that `ref_id`'s value is not the `HirId` of the
+/// trait being referred to but just a unique `HirId` that serves as a key
 /// within the resolution map.
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, HashStable)]
 pub struct TraitRef {

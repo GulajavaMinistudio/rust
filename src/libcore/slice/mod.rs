@@ -25,7 +25,7 @@
 use crate::cmp::Ordering::{self, Less, Equal, Greater};
 use crate::cmp;
 use crate::fmt;
-use crate::intrinsics::assume;
+use crate::intrinsics::{assume, exact_div, unchecked_sub};
 use crate::isize;
 use crate::iter::*;
 use crate::ops::{FnMut, Try, self};
@@ -44,19 +44,6 @@ pub mod memchr;
 
 mod rotate;
 mod sort;
-
-#[repr(C)]
-union Repr<'a, T: 'a> {
-    rust: &'a [T],
-    rust_mut: &'a mut [T],
-    raw: FatPtr<T>,
-}
-
-#[repr(C)]
-struct FatPtr<T> {
-    data: *const T,
-    len: usize,
-}
 
 //
 // Extension traits
@@ -78,7 +65,7 @@ impl<T> [T] {
     #[rustc_const_unstable(feature = "const_slice_len")]
     pub const fn len(&self) -> usize {
         unsafe {
-            Repr { rust: self }.raw.len
+            crate::ptr::Repr { rust: self }.raw.len
         }
     }
 
@@ -2998,14 +2985,27 @@ macro_rules! is_empty {
 // unexpected way. (Tested by `codegen/slice-position-bounds-check`.)
 macro_rules! len {
     ($self: ident) => {{
+        #![allow(unused_unsafe)] // we're sometimes used within an unsafe block
+
         let start = $self.ptr;
-        let diff = ($self.end as usize).wrapping_sub(start as usize);
         let size = size_from_ptr(start);
         if size == 0 {
+            // This _cannot_ use `unchecked_sub` because we depend on wrapping
+            // to represent the length of long ZST slice iterators.
+            let diff = ($self.end as usize).wrapping_sub(start as usize);
             diff
         } else {
-            // Using division instead of `offset_from` helps LLVM remove bounds checks
-            diff / size
+            // We know that `start <= end`, so can do better than `offset_from`,
+            // which needs to deal in signed.  By setting appropriate flags here
+            // we can tell LLVM this, which helps it remove bounds checks.
+            // SAFETY: By the type invariant, `start <= end`
+            let diff = unsafe { unchecked_sub($self.end as usize, start as usize) };
+            // By also telling LLVM that the pointers are apart by an exact
+            // multiple of the type size, it can optimize `len() == 0` down to
+            // `start == end` instead of `(end - start) < size`.
+            // SAFETY: By the type invariant, the pointers are aligned so the
+            //         distance between them must be a multiple of pointee size
+            unsafe { exact_div(diff, size) }
         }
     }}
 }
@@ -5182,7 +5182,7 @@ pub unsafe fn from_raw_parts<'a, T>(data: *const T, len: usize) -> &'a [T] {
     debug_assert!(data as usize % mem::align_of::<T>() == 0, "attempt to create unaligned slice");
     debug_assert!(mem::size_of::<T>().saturating_mul(len) <= isize::MAX as usize,
                   "attempt to create slice covering half the address space");
-    Repr { raw: FatPtr { data, len } }.rust
+    &*ptr::slice_from_raw_parts(data, len)
 }
 
 /// Performs the same functionality as [`from_raw_parts`], except that a
@@ -5203,7 +5203,7 @@ pub unsafe fn from_raw_parts_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T]
     debug_assert!(data as usize % mem::align_of::<T>() == 0, "attempt to create unaligned slice");
     debug_assert!(mem::size_of::<T>().saturating_mul(len) <= isize::MAX as usize,
                   "attempt to create slice covering half the address space");
-    Repr { raw: FatPtr { data, len } }.rust_mut
+    &mut *ptr::slice_from_raw_parts_mut(data, len)
 }
 
 /// Converts a reference to T into a slice of length 1 (without copying).

@@ -180,7 +180,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.diverges.set(self.diverges.get() | old_diverges);
         self.has_errors.set(self.has_errors.get() | old_has_errors);
 
-        debug!("type of {} is...", self.tcx.hir().hir_to_string(expr.hir_id));
+        debug!("type of {} is...", self.tcx.hir().node_to_string(expr.hir_id));
         debug!("... {:?}, expected is {:?}", ty, expected);
 
         ty
@@ -295,7 +295,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ExprKind::Index(ref base, ref idx) => {
                 self.check_expr_index(base, idx, needs, expr)
             }
-            ExprKind::Yield(ref value) => {
+            ExprKind::Yield(ref value, _) => {
                 self.check_expr_yield(value, expr)
             }
             hir::ExprKind::Err => {

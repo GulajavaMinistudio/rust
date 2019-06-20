@@ -2001,16 +2001,15 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let PathSeg(def_id, index) = path_segs.last().unwrap();
                 self.ast_path_to_ty(span, *def_id, &path.segments[*index])
             }
-            Res::Def(DefKind::TyParam, did) => {
+            Res::Def(DefKind::TyParam, def_id) => {
                 assert_eq!(opt_self_ty, None);
                 self.prohibit_generics(&path.segments);
 
-                let hir_id = tcx.hir().as_local_hir_id(did).unwrap();
+                let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
                 let item_id = tcx.hir().get_parent_node_by_hir_id(hir_id);
                 let item_def_id = tcx.hir().local_def_id_from_hir_id(item_id);
                 let generics = tcx.generics_of(item_def_id);
-                let index = generics.param_def_id_to_index[
-                    &tcx.hir().local_def_id_from_hir_id(hir_id)];
+                let index = generics.param_def_id_to_index[&def_id];
                 tcx.mk_ty_param(index, tcx.hir().name_by_hir_id(hir_id).as_interned_str())
             }
             Res::SelfTy(Some(_), None) => {
@@ -2196,12 +2195,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         if let Some(def_id) = self.const_param_def_id(expr) {
             // Find the name and index of the const parameter by indexing the generics of the
             // parent item and construct a `ParamConst`.
-            let node_id = tcx.hir().as_local_node_id(def_id).unwrap();
-            let item_id = tcx.hir().get_parent_node(node_id);
-            let item_def_id = tcx.hir().local_def_id(item_id);
+            let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
+            let item_id = tcx.hir().get_parent_node_by_hir_id(hir_id);
+            let item_def_id = tcx.hir().local_def_id_from_hir_id(item_id);
             let generics = tcx.generics_of(item_def_id);
-            let index = generics.param_def_id_to_index[&tcx.hir().local_def_id(node_id)];
-            let name = tcx.hir().name(node_id).as_interned_str();
+            let index = generics.param_def_id_to_index[&tcx.hir().local_def_id_from_hir_id(hir_id)];
+            let name = tcx.hir().name_by_hir_id(hir_id).as_interned_str();
             const_.val = ConstValue::Param(ty::ParamConst::new(index, name));
         }
 
