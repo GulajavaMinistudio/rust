@@ -231,7 +231,7 @@ pub struct CommonConsts<'tcx> {
     pub err: &'tcx Const<'tcx>,
 }
 
-pub struct LocalTableInContext<'a, V: 'a> {
+pub struct LocalTableInContext<'a, V> {
     local_id_root: Option<DefId>,
     data: &'a ItemLocalMap<V>
 }
@@ -294,7 +294,7 @@ impl<'a, V> ::std::ops::Index<hir::HirId> for LocalTableInContext<'a, V> {
     }
 }
 
-pub struct LocalTableInContextMut<'a, V: 'a> {
+pub struct LocalTableInContextMut<'a, V> {
     local_id_root: Option<DefId>,
     data: &'a mut ItemLocalMap<V>
 }
@@ -1610,7 +1610,7 @@ impl<'tcx> TyCtxt<'tcx> {
     ) -> Option<Ty<'tcx>> {
         // HACK: `type_of_def_id()` will fail on these (#55796), so return None
         let hir_id = self.hir().as_local_hir_id(scope_def_id).unwrap();
-        match self.hir().get_by_hir_id(hir_id) {
+        match self.hir().get(hir_id) {
             Node::Item(item) => {
                 match item.node {
                     ItemKind::Fn(..) => { /* type_of_def_id() will work */ }
@@ -2171,7 +2171,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
 
 /// An entry in an interner.
-struct Interned<'tcx, T: 'tcx+?Sized>(&'tcx T);
+struct Interned<'tcx, T: ?Sized>(&'tcx T);
 
 impl<'tcx, T: 'tcx+?Sized> Clone for Interned<'tcx, T> {
     fn clone(&self) -> Self {
@@ -2223,7 +2223,7 @@ impl<'tcx> Borrow<[Ty<'tcx>]> for Interned<'tcx, List<Ty<'tcx>>> {
 }
 
 impl<'tcx> Borrow<[CanonicalVarInfo]> for Interned<'tcx, List<CanonicalVarInfo>> {
-    fn borrow<'a>(&'a self) -> &'a [CanonicalVarInfo] {
+    fn borrow(&self) -> &[CanonicalVarInfo] {
         &self.0[..]
     }
 }
@@ -2236,13 +2236,13 @@ impl<'tcx> Borrow<[Kind<'tcx>]> for Interned<'tcx, InternalSubsts<'tcx>> {
 
 impl<'tcx> Borrow<[ProjectionKind]>
     for Interned<'tcx, List<ProjectionKind>> {
-    fn borrow<'a>(&'a self) -> &'a [ProjectionKind] {
+    fn borrow(&self) -> &[ProjectionKind] {
         &self.0[..]
     }
 }
 
 impl<'tcx> Borrow<RegionKind> for Interned<'tcx, RegionKind> {
-    fn borrow<'a>(&'a self) -> &'a RegionKind {
+    fn borrow(&self) -> &RegionKind {
         &self.0
     }
 }
