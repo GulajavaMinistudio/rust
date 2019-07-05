@@ -99,7 +99,7 @@
 #![feature(staged_api)]
 #![feature(std_internals)]
 #![feature(stmt_expr_attributes)]
-#![cfg_attr(not(bootstrap), feature(transparent_unions))]
+#![feature(transparent_unions)]
 #![feature(unboxed_closures)]
 #![feature(unsized_locals)]
 #![feature(untagged_unions)]
@@ -126,6 +126,7 @@
 #![feature(adx_target_feature)]
 #![feature(maybe_uninit_slice, maybe_uninit_array)]
 #![feature(external_doc)]
+#![feature(mem_take)]
 
 #[prelude_import]
 #[allow(unused)]

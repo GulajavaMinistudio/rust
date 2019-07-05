@@ -2572,12 +2572,12 @@ impl<'a> Parser<'a> {
                           };
                           let sugg = pprust::to_string(|s| {
                               use crate::print::pprust::PrintState;
-                              s.popen()?;
-                              s.print_expr(&e)?;
-                              s.s.word( ".")?;
-                              s.print_usize(float.trunc() as usize)?;
-                              s.pclose()?;
-                              s.s.word(".")?;
+                              s.popen();
+                              s.print_expr(&e);
+                              s.s.word( ".");
+                              s.print_usize(float.trunc() as usize);
+                              s.pclose();
+                              s.s.word(".");
                               s.s.word(fstr.splitn(2, ".").last().unwrap().to_string())
                           });
                           err.span_suggestion(
@@ -3221,21 +3221,24 @@ impl<'a> Parser<'a> {
                              -> PResult<'a, P<Expr>>
     {
         let lo = self.token.span;
+
         let movability = if self.eat_keyword(kw::Static) {
             Movability::Static
         } else {
             Movability::Movable
         };
+
         let asyncness = if self.token.span.rust_2018() {
             self.parse_asyncness()
         } else {
             IsAsync::NotAsync
         };
-        let capture_clause = if self.eat_keyword(kw::Move) {
-            CaptureBy::Value
-        } else {
-            CaptureBy::Ref
-        };
+        if asyncness.is_async() {
+            // Feature gate `async ||` closures.
+            self.sess.async_closure_spans.borrow_mut().push(self.prev_span);
+        }
+
+        let capture_clause = self.parse_capture_clause();
         let decl = self.parse_fn_block_decl()?;
         let decl_hi = self.prev_span;
         let body = match decl.output {
@@ -3257,7 +3260,7 @@ impl<'a> Parser<'a> {
             attrs))
     }
 
-    // `else` token already eaten
+    /// `else` token already eaten
     fn parse_else_expr(&mut self) -> PResult<'a, P<Expr>> {
         if self.eat_keyword(kw::If) {
             return self.parse_if_expr(ThinVec::new());
@@ -3306,7 +3309,7 @@ impl<'a> Parser<'a> {
         Ok(self.mk_expr(span, ExprKind::While(cond, body, opt_label), attrs))
     }
 
-    // parse `loop {...}`, `loop` token already eaten
+    /// Parse `loop {...}`, `loop` token already eaten.
     fn parse_loop_expr(&mut self, opt_label: Option<Label>,
                            span_lo: Span,
                            mut attrs: ThinVec<Attribute>) -> PResult<'a, P<Expr>> {
@@ -3316,17 +3319,20 @@ impl<'a> Parser<'a> {
         Ok(self.mk_expr(span, ExprKind::Loop(body, opt_label), attrs))
     }
 
-    /// Parses an `async move {...}` expression.
-    pub fn parse_async_block(&mut self, mut attrs: ThinVec<Attribute>)
-        -> PResult<'a, P<Expr>>
-    {
-        let span_lo = self.token.span;
-        self.expect_keyword(kw::Async)?;
-        let capture_clause = if self.eat_keyword(kw::Move) {
+    /// Parse an optional `move` prefix to a closure lke construct.
+    fn parse_capture_clause(&mut self) -> CaptureBy {
+        if self.eat_keyword(kw::Move) {
             CaptureBy::Value
         } else {
             CaptureBy::Ref
-        };
+        }
+    }
+
+    /// Parses an `async move? {...}` expression.
+    pub fn parse_async_block(&mut self, mut attrs: ThinVec<Attribute>) -> PResult<'a, P<Expr>> {
+        let span_lo = self.token.span;
+        self.expect_keyword(kw::Async)?;
+        let capture_clause = self.parse_capture_clause();
         let (iattrs, body) = self.parse_inner_attrs_and_block()?;
         attrs.extend(iattrs);
         Ok(self.mk_expr(
@@ -4324,51 +4330,49 @@ impl<'a> Parser<'a> {
     fn eat_macro_def(&mut self, attrs: &[Attribute], vis: &Visibility, lo: Span)
                      -> PResult<'a, Option<P<Item>>> {
         let token_lo = self.token.span;
-        let (ident, def) = match self.token.kind {
-            token::Ident(name, false) if name == kw::Macro => {
-                self.bump();
-                let ident = self.parse_ident()?;
-                let tokens = if self.check(&token::OpenDelim(token::Brace)) {
-                    match self.parse_token_tree() {
-                        TokenTree::Delimited(_, _, tts) => tts,
-                        _ => unreachable!(),
-                    }
-                } else if self.check(&token::OpenDelim(token::Paren)) {
-                    let args = self.parse_token_tree();
-                    let body = if self.check(&token::OpenDelim(token::Brace)) {
-                        self.parse_token_tree()
-                    } else {
-                        self.unexpected()?;
-                        unreachable!()
-                    };
-                    TokenStream::new(vec![
-                        args.into(),
-                        TokenTree::token(token::FatArrow, token_lo.to(self.prev_span)).into(),
-                        body.into(),
-                    ])
+        let (ident, def) = if self.eat_keyword(kw::Macro) {
+            let ident = self.parse_ident()?;
+            let tokens = if self.check(&token::OpenDelim(token::Brace)) {
+                match self.parse_token_tree() {
+                    TokenTree::Delimited(_, _, tts) => tts,
+                    _ => unreachable!(),
+                }
+            } else if self.check(&token::OpenDelim(token::Paren)) {
+                let args = self.parse_token_tree();
+                let body = if self.check(&token::OpenDelim(token::Brace)) {
+                    self.parse_token_tree()
                 } else {
                     self.unexpected()?;
                     unreachable!()
                 };
+                TokenStream::new(vec![
+                    args.into(),
+                    TokenTree::token(token::FatArrow, token_lo.to(self.prev_span)).into(),
+                    body.into(),
+                ])
+            } else {
+                self.unexpected()?;
+                unreachable!()
+            };
 
-                (ident, ast::MacroDef { tokens: tokens.into(), legacy: false })
+            (ident, ast::MacroDef { tokens: tokens.into(), legacy: false })
+        } else if self.check_keyword(sym::macro_rules) &&
+                  self.look_ahead(1, |t| *t == token::Not) &&
+                  self.look_ahead(2, |t| t.is_ident()) {
+            let prev_span = self.prev_span;
+            self.complain_if_pub_macro(&vis.node, prev_span);
+            self.bump();
+            self.bump();
+
+            let ident = self.parse_ident()?;
+            let (delim, tokens) = self.expect_delimited_token_tree()?;
+            if delim != MacDelimiter::Brace && !self.eat(&token::Semi) {
+                self.report_invalid_macro_expansion_item();
             }
-            token::Ident(name, _) if name == sym::macro_rules &&
-                                     self.look_ahead(1, |t| *t == token::Not) => {
-                let prev_span = self.prev_span;
-                self.complain_if_pub_macro(&vis.node, prev_span);
-                self.bump();
-                self.bump();
 
-                let ident = self.parse_ident()?;
-                let (delim, tokens) = self.expect_delimited_token_tree()?;
-                if delim != MacDelimiter::Brace && !self.eat(&token::Semi) {
-                    self.report_invalid_macro_expansion_item();
-                }
-
-                (ident, ast::MacroDef { tokens, legacy: true })
-            }
-            _ => return Ok(None),
+            (ident, ast::MacroDef { tokens, legacy: true })
+        } else {
+            return Ok(None);
         };
 
         let span = lo.to(self.prev_span);
@@ -4412,14 +4416,14 @@ impl<'a> Parser<'a> {
                   !self.is_existential_type_decl() &&
                   !self.is_auto_trait_item() &&
                   !self.is_async_fn() {
-            let pth = self.parse_path(PathStyle::Expr)?;
+            let path = self.parse_path(PathStyle::Expr)?;
 
             if !self.eat(&token::Not) {
                 let expr = if self.check(&token::OpenDelim(token::Brace)) {
-                    self.parse_struct_expr(lo, pth, ThinVec::new())?
+                    self.parse_struct_expr(lo, path, ThinVec::new())?
                 } else {
                     let hi = self.prev_span;
-                    self.mk_expr(lo.to(hi), ExprKind::Path(None, pth), ThinVec::new())
+                    self.mk_expr(lo.to(hi), ExprKind::Path(None, path), ThinVec::new())
                 };
 
                 let expr = self.with_res(Restrictions::STMT_EXPR, |this| {
@@ -4434,34 +4438,6 @@ impl<'a> Parser<'a> {
                 }));
             }
 
-            // it's a macro invocation
-            let id = match self.token.kind {
-                token::OpenDelim(_) => Ident::invalid(), // no special identifier
-                _ => self.parse_ident()?,
-            };
-
-            // check that we're pointing at delimiters (need to check
-            // again after the `if`, because of `parse_ident`
-            // consuming more tokens).
-            match self.token.kind {
-                token::OpenDelim(_) => {}
-                _ => {
-                    // we only expect an ident if we didn't parse one
-                    // above.
-                    let ident_str = if id.name == kw::Invalid {
-                        "identifier, "
-                    } else {
-                        ""
-                    };
-                    let tok_str = self.this_token_descr();
-                    let mut err = self.fatal(&format!("expected {}`(` or `{{`, found {}",
-                                                      ident_str,
-                                                      tok_str));
-                    err.span_label(self.token.span, format!("expected {}`(` or `{{`", ident_str));
-                    return Err(err)
-                },
-            }
-
             let (delim, tts) = self.expect_delimited_token_tree()?;
             let hi = self.prev_span;
 
@@ -4471,59 +4447,38 @@ impl<'a> Parser<'a> {
                 MacStmtStyle::NoBraces
             };
 
-            if id.name == kw::Invalid {
-                let mac = respan(lo.to(hi), Mac_ { path: pth, tts, delim });
-                let node = if delim == MacDelimiter::Brace ||
-                              self.token == token::Semi || self.token == token::Eof {
-                    StmtKind::Mac(P((mac, style, attrs.into())))
-                }
-                // We used to incorrectly stop parsing macro-expanded statements here.
-                // If the next token will be an error anyway but could have parsed with the
-                // earlier behavior, stop parsing here and emit a warning to avoid breakage.
-                else if macro_legacy_warnings &&
-                        self.token.can_begin_expr() &&
-                        match self.token.kind {
-                    // These can continue an expression, so we can't stop parsing and warn.
-                    token::OpenDelim(token::Paren) | token::OpenDelim(token::Bracket) |
-                    token::BinOp(token::Minus) | token::BinOp(token::Star) |
-                    token::BinOp(token::And) | token::BinOp(token::Or) |
-                    token::AndAnd | token::OrOr |
-                    token::DotDot | token::DotDotDot | token::DotDotEq => false,
-                    _ => true,
-                } {
-                    self.warn_missing_semicolon();
-                    StmtKind::Mac(P((mac, style, attrs.into())))
-                } else {
-                    let e = self.mk_expr(mac.span, ExprKind::Mac(mac), ThinVec::new());
-                    let e = self.maybe_recover_from_bad_qpath(e, true)?;
-                    let e = self.parse_dot_or_call_expr_with(e, lo, attrs.into())?;
-                    let e = self.parse_assoc_expr_with(0, LhsExpr::AlreadyParsed(e))?;
-                    StmtKind::Expr(e)
-                };
-                Stmt {
-                    id: ast::DUMMY_NODE_ID,
-                    span: lo.to(hi),
-                    node,
-                }
+            let mac = respan(lo.to(hi), Mac_ { path, tts, delim });
+            let node = if delim == MacDelimiter::Brace ||
+                          self.token == token::Semi || self.token == token::Eof {
+                StmtKind::Mac(P((mac, style, attrs.into())))
+            }
+            // We used to incorrectly stop parsing macro-expanded statements here.
+            // If the next token will be an error anyway but could have parsed with the
+            // earlier behavior, stop parsing here and emit a warning to avoid breakage.
+            else if macro_legacy_warnings &&
+                    self.token.can_begin_expr() &&
+                    match self.token.kind {
+                // These can continue an expression, so we can't stop parsing and warn.
+                token::OpenDelim(token::Paren) | token::OpenDelim(token::Bracket) |
+                token::BinOp(token::Minus) | token::BinOp(token::Star) |
+                token::BinOp(token::And) | token::BinOp(token::Or) |
+                token::AndAnd | token::OrOr |
+                token::DotDot | token::DotDotDot | token::DotDotEq => false,
+                _ => true,
+            } {
+                self.warn_missing_semicolon();
+                StmtKind::Mac(P((mac, style, attrs.into())))
             } else {
-                // if it has a special ident, it's definitely an item
-                //
-                // Require a semicolon or braces.
-                if style != MacStmtStyle::Braces && !self.eat(&token::Semi) {
-                    self.report_invalid_macro_expansion_item();
-                }
-                let span = lo.to(hi);
-                Stmt {
-                    id: ast::DUMMY_NODE_ID,
-                    span,
-                    node: StmtKind::Item({
-                        self.mk_item(
-                            span, id /*id is good here*/,
-                            ItemKind::Mac(respan(span, Mac_ { path: pth, tts, delim })),
-                            respan(lo, VisibilityKind::Inherited),
-                            attrs)
-                    }),
-                }
+                let e = self.mk_expr(mac.span, ExprKind::Mac(mac), ThinVec::new());
+                let e = self.maybe_recover_from_bad_qpath(e, true)?;
+                let e = self.parse_dot_or_call_expr_with(e, lo, attrs.into())?;
+                let e = self.parse_assoc_expr_with(0, LhsExpr::AlreadyParsed(e))?;
+                StmtKind::Expr(e)
+            };
+            Stmt {
+                id: ast::DUMMY_NODE_ID,
+                span: lo.to(hi),
+                node,
             }
         } else {
             // FIXME: Bad copy of attrs
@@ -4634,9 +4589,9 @@ impl<'a> Parser<'a> {
                     }
                     let sugg = pprust::to_string(|s| {
                         use crate::print::pprust::{PrintState, INDENT_UNIT};
-                        s.ibox(INDENT_UNIT)?;
-                        s.bopen()?;
-                        s.print_stmt(&stmt)?;
+                        s.ibox(INDENT_UNIT);
+                        s.bopen();
+                        s.print_stmt(&stmt);
                         s.bclose_maybe_open(stmt.span, INDENT_UNIT, false)
                     });
                     e.span_suggestion(
@@ -7619,26 +7574,17 @@ impl<'a> Parser<'a> {
             let mac_lo = self.token.span;
 
             // item macro.
-            let pth = self.parse_path(PathStyle::Mod)?;
+            let path = self.parse_path(PathStyle::Mod)?;
             self.expect(&token::Not)?;
-
-            // a 'special' identifier (like what `macro_rules!` uses)
-            // is optional. We should eventually unify invoc syntax
-            // and remove this.
-            let id = if self.token.is_ident() {
-                self.parse_ident()?
-            } else {
-                Ident::invalid() // no special identifier
-            };
-            // eat a matched-delimiter token tree:
             let (delim, tts) = self.expect_delimited_token_tree()?;
             if delim != MacDelimiter::Brace && !self.eat(&token::Semi) {
                 self.report_invalid_macro_expansion_item();
             }
 
             let hi = self.prev_span;
-            let mac = respan(mac_lo.to(hi), Mac_ { path: pth, tts, delim });
-            let item = self.mk_item(lo.to(hi), id, ItemKind::Mac(mac), visibility, attrs);
+            let mac = respan(mac_lo.to(hi), Mac_ { path, tts, delim });
+            let item =
+                self.mk_item(lo.to(hi), Ident::invalid(), ItemKind::Mac(mac), visibility, attrs);
             return Ok(Some(item));
         }
 
@@ -7664,9 +7610,9 @@ impl<'a> Parser<'a> {
                 !(self.is_async_fn() && self.token.span.rust_2015()) {
             let prev_span = self.prev_span;
             let lo = self.token.span;
-            let pth = self.parse_path(PathStyle::Mod)?;
+            let path = self.parse_path(PathStyle::Mod)?;
 
-            if pth.segments.len() == 1 {
+            if path.segments.len() == 1 {
                 if !self.eat(&token::Not) {
                     return Err(self.missing_assoc_item_kind_err(item_kind, prev_span));
                 }
@@ -7686,7 +7632,7 @@ impl<'a> Parser<'a> {
                 self.expect(&token::Semi)?;
             }
 
-            Ok(Some(respan(lo.to(self.prev_span), Mac_ { path: pth, tts, delim })))
+            Ok(Some(respan(lo.to(self.prev_span), Mac_ { path, tts, delim })))
         } else {
             Ok(None)
         }
@@ -7699,7 +7645,7 @@ impl<'a> Parser<'a> {
         let mut tokens = Vec::new();
         let prev_collecting = match self.token_cursor.frame.last_token {
             LastToken::Collecting(ref mut list) => {
-                Some(mem::replace(list, Vec::new()))
+                Some(mem::take(list))
             }
             LastToken::Was(ref mut last) => {
                 tokens.extend(last.take());
@@ -7717,7 +7663,7 @@ impl<'a> Parser<'a> {
 
         // Pull out the tokens that we've collected from the call to `f` above.
         let mut collected_tokens = match *last_token {
-            LastToken::Collecting(ref mut v) => mem::replace(v, Vec::new()),
+            LastToken::Collecting(ref mut v) => mem::take(v),
             LastToken::Was(_) => panic!("our vector went away?"),
         };
 

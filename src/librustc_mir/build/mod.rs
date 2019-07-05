@@ -22,7 +22,7 @@ use syntax_pos::Span;
 use super::lints;
 
 /// Construct the MIR for a given `DefId`.
-pub fn mir_build<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Body<'tcx> {
+pub fn mir_build(tcx: TyCtxt<'_>, def_id: DefId) -> Body<'_> {
     let id = tcx.hir().as_local_hir_id(def_id).unwrap();
 
     // Figure out what primary body this item has.
@@ -171,11 +171,11 @@ pub fn mir_build<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Body<'tcx> {
 ///////////////////////////////////////////////////////////////////////////
 // BuildMir -- walks a crate, looking for fn items and methods to build MIR from
 
-fn liberated_closure_env_ty<'tcx>(
-    tcx: TyCtxt<'tcx>,
+fn liberated_closure_env_ty(
+    tcx: TyCtxt<'_>,
     closure_expr_id: hir::HirId,
     body_id: hir::BodyId,
-) -> Ty<'tcx> {
+) -> Ty<'_> {
     let closure_ty = tcx.body_tables(body_id).node_type(closure_expr_id);
 
     let (closure_def_id, closure_substs) = match closure_ty.sty {
@@ -485,7 +485,7 @@ macro_rules! unpack {
     };
 }
 
-fn should_abort_on_panic<'tcx>(tcx: TyCtxt<'tcx>, fn_def_id: DefId, abi: Abi) -> bool {
+fn should_abort_on_panic(tcx: TyCtxt<'_>, fn_def_id: DefId, abi: Abi) -> bool {
     // Not callable from C, so we can safely unwind through these
     if abi == Abi::Rust || abi == Abi::RustCall { return false; }
 
@@ -604,9 +604,18 @@ where
         }
 
         let arg_scope_s = (arg_scope, source_info);
-        unpack!(block = builder.in_scope(arg_scope_s, LintLevel::Inherited, |builder| {
-            builder.args_and_body(block, &arguments, arg_scope, &body.value)
-        }));
+        // `return_block` is called when we evaluate a `return` expression, so
+        // we just use `START_BLOCK` here.
+        unpack!(block = builder.in_breakable_scope(
+            None,
+            START_BLOCK,
+            Place::RETURN_PLACE,
+            |builder| {
+                builder.in_scope(arg_scope_s, LintLevel::Inherited, |builder| {
+                    builder.args_and_body(block, &arguments, arg_scope, &body.value)
+                })
+            },
+        ));
         // Attribute epilogue to function's closing brace
         let fn_end = span.shrink_to_hi();
         let source_info = builder.source_info(fn_end);
@@ -860,11 +869,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
 
         let body = self.hir.mirror(ast_body);
-        // `return_block` is called when we evaluate a `return` expression, so
-        // we just use `START_BLOCK` here.
-        self.in_breakable_scope(None, START_BLOCK, Place::RETURN_PLACE, |this| {
-            this.into(&Place::RETURN_PLACE, block, body)
-        })
+        self.into(&Place::RETURN_PLACE, block, body)
     }
 
     fn get_unit_temp(&mut self) -> Place<'tcx> {

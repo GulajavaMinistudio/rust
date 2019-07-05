@@ -83,28 +83,6 @@ impl<'a> StringReader<'a> {
         Ok(ret_val)
     }
 
-    /// Immutably extract string if found at current position with given delimiters
-    fn peek_delimited(&self, from_ch: char, to_ch: char) -> Option<String> {
-        let mut pos = self.pos;
-        let mut idx = self.src_index(pos);
-        let mut ch = char_at(&self.src, idx);
-        if ch != from_ch {
-            return None;
-        }
-        pos = pos + Pos::from_usize(ch.len_utf8());
-        let start_pos = pos;
-        idx = self.src_index(pos);
-        while idx < self.end_src_index {
-            ch = char_at(&self.src, idx);
-            if ch == to_ch {
-                return Some(self.src[self.src_index(start_pos)..self.src_index(pos)].to_string());
-            }
-            pos = pos + Pos::from_usize(ch.len_utf8());
-            idx = self.src_index(pos);
-        }
-        return None;
-    }
-
     fn try_real_token(&mut self) -> Result<Token, ()> {
         let mut t = self.try_next_token()?;
         loop {
@@ -1474,6 +1452,7 @@ mod tests {
             ambiguous_block_expr_parse: Lock::new(FxHashMap::default()),
             param_attr_spans: Lock::new(Vec::new()),
             let_chains_spans: Lock::new(Vec::new()),
+            async_closure_spans: Lock::new(Vec::new()),
         }
     }
 

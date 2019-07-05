@@ -660,7 +660,7 @@ pub fn run(mut krate: clean::Crate,
         deref_trait_did,
         deref_mut_trait_did,
         owned_box_did,
-        masked_crates: mem::replace(&mut krate.masked_crates, Default::default()),
+        masked_crates: mem::take(&mut krate.masked_crates),
         param_names: external_param_names,
         aliases: Default::default(),
     };
@@ -2541,7 +2541,7 @@ fn full_path(cx: &Context, item: &clean::Item) -> String {
     s
 }
 
-fn shorter<'a>(s: Option<&'a str>) -> String {
+fn shorter(s: Option<&str>) -> String {
     match s {
         Some(s) => s.lines()
             .skip_while(|s| s.chars().all(|c| c.is_whitespace()))
