@@ -2,11 +2,7 @@
 
 mod builtin;
 
-pub use builtin::{
-    cfg_matches, contains_feature_attr, eval_condition, find_crate_name, find_deprecation,
-    find_repr_attrs, find_stability, find_unwind_attr, Deprecation, InlineAttr, OptimizeAttr,
-    IntType, ReprAttr, RustcDeprecation, Stability, StabilityLevel, UnwindAttr,
-};
+pub use builtin::*;
 pub use IntType::*;
 pub use ReprAttr::*;
 pub use StabilityLevel::*;
@@ -60,7 +56,7 @@ pub fn is_known(attr: &Attribute) -> bool {
 }
 
 pub fn is_known_lint_tool(m_item: Ident) -> bool {
-    ["clippy"].contains(&m_item.as_str().as_ref())
+    [sym::clippy, sym::rustc].contains(&m_item.name)
 }
 
 impl NestedMetaItem {

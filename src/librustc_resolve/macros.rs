@@ -9,19 +9,18 @@ use crate::resolve_imports::ImportResolver;
 use rustc::hir::def_id::{CrateNum, DefId, DefIndex, CRATE_DEF_INDEX};
 use rustc::hir::def::{self, DefKind, NonMacroAttrKind};
 use rustc::hir::map::{self, DefCollector};
-use rustc::{ty, lint};
-use rustc::{bug, span_bug};
+use rustc::middle::stability;
+use rustc::{ty, lint, span_bug};
 use syntax::ast::{self, Ident};
-use syntax::attr;
+use syntax::attr::{self, StabilityLevel};
 use syntax::errors::DiagnosticBuilder;
 use syntax::ext::base::{self, Determinacy};
 use syntax::ext::base::{MacroKind, SyntaxExtension};
 use syntax::ext::expand::{AstFragment, Invocation, InvocationKind};
 use syntax::ext::hygiene::Mark;
 use syntax::ext::tt::macro_rules;
-use syntax::feature_gate::{
-    feature_err, is_builtin_attr_name, AttributeGate, GateIssue, Stability, BUILTIN_ATTRIBUTES,
-};
+use syntax::feature_gate::{feature_err, emit_feature_err, is_builtin_attr_name};
+use syntax::feature_gate::{AttributeGate, GateIssue, Stability, BUILTIN_ATTRIBUTES};
 use syntax::symbol::{Symbol, kw, sym};
 use syntax::visit::Visitor;
 use syntax::util::lev_distance::find_best_match_for_name;
@@ -231,16 +230,19 @@ impl<'a> base::Resolver for Resolver<'a> {
             Err(determinacy) => return Err(determinacy),
         };
 
+        let span = invoc.span();
+        let path = fast_print_path(path);
         let format = match kind {
-            MacroKind::Derive => format!("derive({})", fast_print_path(path)),
-            _ => fast_print_path(path),
+            MacroKind::Derive => format!("derive({})", path),
+            _ => path.clone(),
         };
-        invoc.expansion_data.mark.set_expn_info(ext.expn_info(invoc.span(), &format));
+        invoc.expansion_data.mark.set_expn_info(ext.expn_info(span, &format));
+
+        self.check_stability_and_deprecation(&ext, &path, span);
 
         if let Res::Def(_, def_id) = res {
             if after_derive {
-                self.session.span_err(invoc.span(),
-                                      "macro attributes must be placed before `#[derive]`");
+                self.session.span_err(span, "macro attributes must be placed before `#[derive]`");
             }
             self.macro_defs.insert(invoc.expansion_data.mark, def_id);
             let normal_module_def_id =
@@ -260,14 +262,10 @@ impl<'a> base::Resolver for Resolver<'a> {
     }
 
     fn check_unused_macros(&self) {
-        for did in self.unused_macros.iter() {
-            if let Some((id, span)) = self.macro_map[did].def_info {
-                let lint = lint::builtin::UNUSED_MACROS;
-                let msg = "unused macro definition";
-                self.session.buffer_lint(lint, id, span, msg);
-            } else {
-                bug!("attempted to create unused macro error, but span not available");
-            }
+        for (&node_id, &span) in self.unused_macros.iter() {
+            self.session.buffer_lint(
+                lint::builtin::UNUSED_MACROS, node_id, span, "unused macro definition"
+            );
         }
     }
 }
@@ -298,11 +296,24 @@ impl<'a> Resolver<'a> {
         let res = self.resolve_macro_to_res_inner(path, kind, parent_scope, trace, force);
 
         // Report errors and enforce feature gates for the resolved macro.
+        let features = self.session.features_untracked();
         if res != Err(Determinacy::Undetermined) {
             // Do not report duplicated errors on every undetermined resolution.
             for segment in &path.segments {
                 if let Some(args) = &segment.args {
                     self.session.span_err(args.span(), "generic arguments in macro path");
+                }
+                if kind == MacroKind::Attr && !features.rustc_attrs &&
+                   segment.ident.as_str().starts_with("rustc") {
+                    let msg = "attributes starting with `rustc` are \
+                               reserved for use by the `rustc` compiler";
+                    emit_feature_err(
+                        &self.session.parse_sess,
+                        sym::rustc_attrs,
+                        segment.ident.span,
+                        GateIssue::Language,
+                        msg,
+                    );
                 }
             }
         }
@@ -311,7 +322,9 @@ impl<'a> Resolver<'a> {
 
         match res {
             Res::Def(DefKind::Macro(macro_kind), def_id) => {
-                self.unused_macros.remove(&def_id);
+                if let Some(node_id) = self.definitions.as_local_node_id(def_id) {
+                    self.unused_macros.remove(&node_id);
+                }
                 if macro_kind == MacroKind::ProcMacroStub {
                     let msg = "can't use a procedural macro from the same crate that defines it";
                     self.session.span_err(path.span, msg);
@@ -320,24 +333,15 @@ impl<'a> Resolver<'a> {
             }
             Res::NonMacroAttr(attr_kind) => {
                 if kind == MacroKind::Attr {
-                    let features = self.session.features_untracked();
                     if attr_kind == NonMacroAttrKind::Custom {
                         assert!(path.segments.len() == 1);
-                        let name = path.segments[0].ident.as_str();
-                        if name.starts_with("rustc_") {
-                            if !features.rustc_attrs {
-                                let msg = "unless otherwise specified, attributes with the prefix \
-                                           `rustc_` are reserved for internal compiler diagnostics";
-                                self.report_unknown_attribute(path.span, &name, msg,
-                                                              sym::rustc_attrs);
-                            }
-                        } else if !features.custom_attribute {
+                        if !features.custom_attribute {
                             let msg = format!("The attribute `{}` is currently unknown to the \
                                                compiler and may have meaning added to it in the \
                                                future", path);
                             self.report_unknown_attribute(
                                 path.span,
-                                &name,
+                                &path.segments[0].ident.as_str(),
                                 &msg,
                                 sym::custom_attribute,
                             );
@@ -1006,6 +1010,27 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn check_stability_and_deprecation(&self, ext: &SyntaxExtension, path: &str, span: Span) {
+        if let Some(stability) = &ext.stability {
+            if let StabilityLevel::Unstable { reason, issue } = stability.level {
+                let feature = stability.feature;
+                if !self.active_features.contains(&feature) && !span.allows_unstable(feature) {
+                    stability::report_unstable(self.session, feature, reason, issue, span);
+                }
+            }
+            if let Some(depr) = &stability.rustc_depr {
+                let (message, lint) = stability::rustc_deprecation_message(depr, path);
+                stability::early_report_deprecation(
+                    self.session, &message, depr.suggestion, lint, span
+                );
+            }
+        }
+        if let Some(depr) = &ext.deprecation {
+            let (message, lint) = stability::deprecation_message(depr, path);
+            stability::early_report_deprecation(self.session, &message, None, lint, span);
+        }
+    }
+
     fn prohibit_imported_non_macro_attrs(&self, binding: Option<&'a NameBinding<'a>>,
                                          res: Option<Res>, span: Span) {
         if let Some(Res::NonMacroAttr(kind)) = res {
@@ -1103,6 +1128,19 @@ impl<'a> Resolver<'a> {
         });
     }
 
+    crate fn check_reserved_macro_name(&mut self, ident: Ident, res: Res) {
+        // Reserve some names that are not quite covered by the general check
+        // performed on `Resolver::builtin_attrs`.
+        if ident.name == sym::cfg || ident.name == sym::cfg_attr || ident.name == sym::derive {
+            let macro_kind = self.opt_get_macro(res).map(|ext| ext.macro_kind());
+            if macro_kind.is_some() && sub_namespace_match(macro_kind, Some(MacroKind::Attr)) {
+                self.session.span_err(
+                    ident.span, &format!("name `{}` is reserved in attribute namespace", ident)
+                );
+            }
+        }
+    }
+
     pub fn define_macro(&mut self,
                         item: &ast::Item,
                         expansion: Mark,
@@ -1114,13 +1152,14 @@ impl<'a> Resolver<'a> {
         let ext = Lrc::new(macro_rules::compile(&self.session.parse_sess,
                                                &self.session.features_untracked(),
                                                item, self.session.edition()));
+        let macro_kind = ext.macro_kind();
+        let res = Res::Def(DefKind::Macro(macro_kind), def_id);
         self.macro_map.insert(def_id, ext);
 
         let def = match item.node { ast::ItemKind::MacroDef(ref def) => def, _ => unreachable!() };
         if def.legacy {
             let ident = ident.modern();
             self.macro_names.insert(ident);
-            let res = Res::Def(DefKind::Macro(MacroKind::Bang), def_id);
             let is_macro_export = attr::contains_name(&item.attrs, sym::macro_export);
             let vis = if is_macro_export {
                 ty::Visibility::Public
@@ -1139,17 +1178,14 @@ impl<'a> Resolver<'a> {
                 self.define(module, ident, MacroNS,
                             (res, vis, item.span, expansion, IsMacroExport));
             } else {
-                if !attr::contains_name(&item.attrs, sym::rustc_doc_only_macro) {
-                    self.check_reserved_macro_name(ident, MacroNS);
-                }
-                self.unused_macros.insert(def_id);
+                self.check_reserved_macro_name(ident, res);
+                self.unused_macros.insert(item.id, item.span);
             }
         } else {
             let module = self.current_module;
-            let res = Res::Def(DefKind::Macro(MacroKind::Bang), def_id);
             let vis = self.resolve_visibility(&item.vis);
             if vis != ty::Visibility::Public {
-                self.unused_macros.insert(def_id);
+                self.unused_macros.insert(item.id, item.span);
             }
             self.define(module, ident, MacroNS, (res, vis, item.span, expansion));
         }

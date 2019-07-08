@@ -20,7 +20,6 @@
 #![recursion_limit="256"]
 
 #![deny(rust_2018_idioms)]
-#![deny(internal)]
 #![deny(unused_lifetimes)]
 
 #[macro_use]
@@ -31,6 +30,7 @@ mod nonstandard_style;
 pub mod builtin;
 mod types;
 mod unused;
+mod non_ascii_idents;
 
 use rustc::lint;
 use rustc::lint::{EarlyContext, LateContext, LateLintPass, EarlyLintPass, LintPass, LintArray};
@@ -62,6 +62,7 @@ use nonstandard_style::*;
 use builtin::*;
 use types::*;
 use unused::*;
+use non_ascii_idents::*;
 use rustc::lint::internal::*;
 
 /// Useful for other parts of the compiler.
@@ -97,6 +98,8 @@ macro_rules! early_lint_passes {
             EllipsisInclusiveRangePatterns: EllipsisInclusiveRangePatterns::default(),
             NonCamelCaseTypes: NonCamelCaseTypes,
             DeprecatedAttr: DeprecatedAttr::new(),
+            WhileTrue: WhileTrue,
+            NonAsciiIdents: NonAsciiIdents,
         ]);
     )
 }
@@ -141,7 +144,6 @@ macro_rules! late_lint_mod_passes {
     ($macro:path, $args:tt) => (
         $macro!($args, [
             HardwiredLints: HardwiredLints,
-            WhileTrue: WhileTrue,
             ImproperCTypes: ImproperCTypes,
             VariantSizeDifferences: VariantSizeDifferences,
             BoxPointers: BoxPointers,
@@ -487,15 +489,17 @@ pub fn register_builtins(store: &mut lint::LintStore, sess: Option<&Session>) {
 
 pub fn register_internals(store: &mut lint::LintStore, sess: Option<&Session>) {
     store.register_early_pass(sess, false, false, box DefaultHashTypes::new());
+    store.register_early_pass(sess, false, false, box LintPassImpl);
     store.register_late_pass(sess, false, false, false, box TyTyKind);
     store.register_group(
         sess,
         false,
-        "internal",
+        "rustc::internal",
         None,
         vec![
             LintId::of(DEFAULT_HASH_TYPES),
             LintId::of(USAGE_OF_TY_TYKIND),
+            LintId::of(LINT_PASS_IMPL_WITHOUT_MACRO),
             LintId::of(TY_PASS_BY_REFERENCE),
             LintId::of(USAGE_OF_QUALIFIED_TY),
         ],

@@ -16,17 +16,12 @@
 #![feature(step_trait)]
 
 #![deny(rust_2018_idioms)]
-#![deny(internal)]
 #![deny(unused_lifetimes)]
 
 #[macro_use] extern crate log;
 
 #[allow(unused_extern_crates)]
 extern crate serialize as rustc_serialize; // used by deriving
-
-// See librustc_cratesio_shim/Cargo.toml for a comment explaining this.
-#[allow(unused_extern_crates)]
-extern crate rustc_cratesio_shim;
 
 #[macro_use]
 extern crate rustc_data_structures;

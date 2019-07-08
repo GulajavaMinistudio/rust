@@ -675,7 +675,7 @@ impl<'tcx> ScopeTree {
                     &format!("free_scope: {:?} not recognized by the \
                               region scope tree for {:?} / {:?}",
                              param_owner,
-                             self.root_parent.map(|id| tcx.hir().local_def_id_from_hir_id(id)),
+                             self.root_parent.map(|id| tcx.hir().local_def_id(id)),
                              self.root_body.map(|hir_id| DefId::local(hir_id.owner))));
             }
 
@@ -912,11 +912,6 @@ fn resolve_expr<'tcx>(visitor: &mut RegionResolutionVisitor<'tcx>, expr: &'tcx h
             }
 
             hir::ExprKind::Loop(ref body, _, _) => {
-                terminating(body.hir_id.local_id);
-            }
-
-            hir::ExprKind::While(ref expr, ref body, _) => {
-                terminating(expr.hir_id.local_id);
                 terminating(body.hir_id.local_id);
             }
 

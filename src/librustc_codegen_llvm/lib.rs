@@ -23,7 +23,6 @@
 #![feature(trusted_len)]
 #![feature(mem_take)]
 #![deny(rust_2018_idioms)]
-#![deny(internal)]
 #![deny(unused_lifetimes)]
 
 use back::write::{create_target_machine, create_informational_target_machine};
@@ -40,6 +39,7 @@ extern crate rustc_incremental;
 extern crate rustc_codegen_utils;
 extern crate rustc_codegen_ssa;
 extern crate rustc_fs_util;
+extern crate rustc_driver as _;
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate syntax;

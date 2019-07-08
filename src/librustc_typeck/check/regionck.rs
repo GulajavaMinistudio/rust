@@ -138,7 +138,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// types from which we should derive implied bounds, if any.
     pub fn regionck_item(&self, item_id: hir::HirId, span: Span, wf_tys: &[Ty<'tcx>]) {
         debug!("regionck_item(item.id={:?}, wf_tys={:?})", item_id, wf_tys);
-        let subject = self.tcx.hir().local_def_id_from_hir_id(item_id);
+        let subject = self.tcx.hir().local_def_id(item_id);
         let mut rcx = RegionCtxt::new(
             self,
             RepeatingScope(item_id),
@@ -682,16 +682,6 @@ impl<'a, 'tcx> Visitor<'tcx> for RegionCtxt<'a, 'tcx> {
             hir::ExprKind::Loop(ref body, _, _) => {
                 let repeating_scope = self.set_repeating_scope(body.hir_id);
                 intravisit::walk_expr(self, expr);
-                self.set_repeating_scope(repeating_scope);
-            }
-
-            hir::ExprKind::While(ref cond, ref body, _) => {
-                let repeating_scope = self.set_repeating_scope(cond.hir_id);
-                self.visit_expr(&cond);
-
-                self.set_repeating_scope(body.hir_id);
-                self.visit_block(&body);
-
                 self.set_repeating_scope(repeating_scope);
             }
 

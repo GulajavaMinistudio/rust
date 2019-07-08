@@ -245,7 +245,7 @@ declare_features! (
     (active, allocator_internals, "1.20.0", None, None),
 
     // Allows using the `format_args_nl` macro.
-    (active, format_args_nl, "1.29.0", None, None),
+    (active, format_args_nl, "1.29.0", Some(0), None),
 
     // no-tracking-issue-end
 
@@ -576,6 +576,9 @@ declare_features! (
 
     // Allows `async || body` closures.
     (active, async_closure, "1.37.0", Some(62290), None),
+
+    // Allows the use of `#[cfg(doctest)]`, set when rustdoc is collecting doctests
+    (active, cfg_doctest, "1.37.0", Some(62210), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
@@ -1296,12 +1299,26 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
                                                     attribute is just used for rustc unit \
                                                     tests and will never be stable",
                                                     cfg_fn!(rustc_attrs))),
+    (sym::rustc_dump_env_program_clauses, Whitelisted, template!(Word), Gated(Stability::Unstable,
+                                                    sym::rustc_attrs,
+                                                    "the `#[rustc_dump_env_program_clauses]` \
+                                                    attribute is just used for rustc unit \
+                                                    tests and will never be stable",
+                                                    cfg_fn!(rustc_attrs))),
+    (sym::rustc_object_lifetime_default, Whitelisted, template!(Word), Gated(Stability::Unstable,
+                                                    sym::rustc_attrs,
+                                                    "the `#[rustc_object_lifetime_default]` \
+                                                    attribute is just used for rustc unit \
+                                                    tests and will never be stable",
+                                                    cfg_fn!(rustc_attrs))),
     (sym::rustc_test_marker, Normal, template!(Word), Gated(Stability::Unstable,
                                     sym::rustc_attrs,
                                     "the `#[rustc_test_marker]` attribute \
                                     is used internally to track tests",
                                     cfg_fn!(rustc_attrs))),
-    (sym::rustc_transparent_macro, Whitelisted, template!(Word), Gated(Stability::Unstable,
+    (sym::rustc_macro_transparency, Whitelisted, template!(NameValueStr:
+                                                           "transparent|semitransparent|opaque"),
+                                                Gated(Stability::Unstable,
                                                 sym::rustc_attrs,
                                                 "used internally for testing macro hygiene",
                                                     cfg_fn!(rustc_attrs))),
@@ -1353,6 +1370,26 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
                                                 cfg_fn!(rustc_attrs))),
 
     (sym::rustc_allocator, Whitelisted, template!(Word), Gated(Stability::Unstable,
+                                                sym::rustc_attrs,
+                                                "internal implementation detail",
+                                                cfg_fn!(rustc_attrs))),
+
+    (sym::rustc_allocator_nounwind, Whitelisted, template!(Word), Gated(Stability::Unstable,
+                                                sym::rustc_attrs,
+                                                "internal implementation detail",
+                                                cfg_fn!(rustc_attrs))),
+
+    (sym::rustc_builtin_macro, Whitelisted, template!(Word), Gated(Stability::Unstable,
+                                                sym::rustc_attrs,
+                                                "internal implementation detail",
+                                                cfg_fn!(rustc_attrs))),
+
+    (sym::rustc_promotable, Whitelisted, template!(Word), Gated(Stability::Unstable,
+                                                sym::rustc_attrs,
+                                                "internal implementation detail",
+                                                cfg_fn!(rustc_attrs))),
+
+    (sym::rustc_allow_const_fn_ptr, Whitelisted, template!(Word), Gated(Stability::Unstable,
                                                 sym::rustc_attrs,
                                                 "internal implementation detail",
                                                 cfg_fn!(rustc_attrs))),
@@ -1534,7 +1571,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     (sym::type_length_limit, CrateLevel, template!(NameValueStr: "N"), Ungated),
     (sym::test_runner, CrateLevel, template!(List: "path"), Gated(Stability::Unstable,
                     sym::custom_test_frameworks,
-                    EXPLAIN_CUSTOM_TEST_FRAMEWORKS,
+                    "custom test frameworks are an unstable feature",
                     cfg_fn!(custom_test_frameworks))),
 ];
 
@@ -1558,6 +1595,7 @@ const GATED_CFGS: &[(Symbol, Symbol, fn(&Features) -> bool)] = &[
     (sym::target_thread_local, sym::cfg_target_thread_local, cfg_fn!(cfg_target_thread_local)),
     (sym::target_has_atomic, sym::cfg_target_has_atomic, cfg_fn!(cfg_target_has_atomic)),
     (sym::rustdoc, sym::doc_cfg, cfg_fn!(doc_cfg)),
+    (sym::doctest, sym::cfg_doctest, cfg_fn!(cfg_doctest)),
 ];
 
 #[derive(Debug)]
@@ -1643,6 +1681,14 @@ impl<'a> Context<'a> {
             }
             debug!("check_attribute: {:?} is builtin, {:?}, {:?}", attr.path, ty, gateage);
             return;
+        } else {
+            for segment in &attr.path.segments {
+                if segment.ident.as_str().starts_with("rustc") {
+                    let msg = "attributes starting with `rustc` are \
+                               reserved for use by the `rustc` compiler";
+                    gate_feature!(self, rustc_attrs, segment.ident.span, msg);
+                }
+            }
         }
         for &(n, ty) in self.plugin_attributes {
             if attr.path == n {
@@ -1653,19 +1699,13 @@ impl<'a> Context<'a> {
                 return;
             }
         }
-        if !attr::is_known(attr) {
-            if attr.name_or_empty().as_str().starts_with("rustc_") {
-                let msg = "unless otherwise specified, attributes with the prefix `rustc_` \
-                           are reserved for internal compiler diagnostics";
-                gate_feature!(self, rustc_attrs, attr.span, msg);
-            } else if !is_macro {
-                // Only run the custom attribute lint during regular feature gate
-                // checking. Macro gating runs before the plugin attributes are
-                // registered, so we skip this in that case.
-                let msg = format!("The attribute `{}` is currently unknown to the compiler and \
-                                   may have meaning added to it in the future", attr.path);
-                gate_feature!(self, custom_attribute, attr.span, &msg);
-            }
+        if !is_macro && !attr::is_known(attr) {
+            // Only run the custom attribute lint during regular feature gate
+            // checking. Macro gating runs before the plugin attributes are
+            // registered, so we skip this in that case.
+            let msg = format!("The attribute `{}` is currently unknown to the compiler and \
+                                may have meaning added to it in the future", attr.path);
+            gate_feature!(self, custom_attribute, attr.span, &msg);
         }
     }
 }
@@ -1783,26 +1823,6 @@ const EXPLAIN_BOX_SYNTAX: &str =
 pub const EXPLAIN_STMT_ATTR_SYNTAX: &str =
     "attributes on expressions are experimental";
 
-pub const EXPLAIN_ASM: &str =
-    "inline assembly is not stable enough for use and is subject to change";
-
-pub const EXPLAIN_GLOBAL_ASM: &str =
-    "`global_asm!` is not stable enough for use and is subject to change";
-
-pub const EXPLAIN_CUSTOM_TEST_FRAMEWORKS: &str =
-    "custom test frameworks are an unstable feature";
-
-pub const EXPLAIN_LOG_SYNTAX: &str =
-    "`log_syntax!` is not stable enough for use and is subject to change";
-
-pub const EXPLAIN_CONCAT_IDENTS: &str =
-    "`concat_idents` is not stable enough for use and is subject to change";
-
-pub const EXPLAIN_FORMAT_ARGS_NL: &str =
-    "`format_args_nl` is only for internal language use and is subject to change";
-
-pub const EXPLAIN_TRACE_MACROS: &str =
-    "`trace_macros` is not stable enough for use and is subject to change";
 pub const EXPLAIN_ALLOW_INTERNAL_UNSTABLE: &str =
     "allow_internal_unstable side-steps feature gating and stability checks";
 pub const EXPLAIN_ALLOW_INTERNAL_UNSAFE: &str =
