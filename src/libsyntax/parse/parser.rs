@@ -4378,9 +4378,10 @@ impl<'a> Parser<'a> {
         Ok(Some(self.mk_item(span, ident, ItemKind::MacroDef(def), vis.clone(), attrs.to_vec())))
     }
 
-    fn parse_stmt_without_recovery(&mut self,
-                                   macro_legacy_warnings: bool)
-                                   -> PResult<'a, Option<Stmt>> {
+    fn parse_stmt_without_recovery(
+        &mut self,
+        macro_legacy_warnings: bool,
+    ) -> PResult<'a, Option<Stmt>> {
         maybe_whole!(self, NtStmt, |x| Some(x));
 
         let attrs = self.parse_outer_attributes()?;
@@ -4586,20 +4587,15 @@ impl<'a> Parser<'a> {
                     if self.eat(&token::Semi) {
                         stmt_span = stmt_span.with_hi(self.prev_span.hi());
                     }
-                    let sugg = pprust::to_string(|s| {
-                        use crate::print::pprust::INDENT_UNIT;
-                        s.ibox(INDENT_UNIT);
-                        s.bopen();
-                        s.print_stmt(&stmt);
-                        s.bclose_maybe_open(stmt.span, false)
-                    });
-                    e.span_suggestion(
-                        stmt_span,
-                        "try placing this code inside a block",
-                        sugg,
-                        // speculative, has been misleading in the past (closed Issue #46836)
-                        Applicability::MaybeIncorrect
-                    );
+                    if let Ok(snippet) = self.sess.source_map().span_to_snippet(stmt_span) {
+                        e.span_suggestion(
+                            stmt_span,
+                            "try placing this code inside a block",
+                            format!("{{ {} }}", snippet),
+                            // speculative, has been misleading in the past (#46836)
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
                 }
                 Err(mut e) => {
                     self.recover_stmt_(SemiColonMode::Break, BlockMode::Ignore);
@@ -4629,6 +4625,9 @@ impl<'a> Parser<'a> {
     fn parse_block_tail(&mut self, lo: Span, s: BlockCheckMode) -> PResult<'a, P<Block>> {
         let mut stmts = vec![];
         while !self.eat(&token::CloseDelim(token::Brace)) {
+            if self.token == token::Eof {
+                break;
+            }
             let stmt = match self.parse_full_stmt(false) {
                 Err(mut err) => {
                     err.emit();
@@ -4643,8 +4642,6 @@ impl<'a> Parser<'a> {
             };
             if let Some(stmt) = stmt {
                 stmts.push(stmt);
-            } else if self.token == token::Eof {
-                break;
             } else {
                 // Found only `;` or `}`.
                 continue;
@@ -6666,12 +6663,13 @@ impl<'a> Parser<'a> {
     }
 
     /// Reads a module from a source file.
-    fn eval_src_mod(&mut self,
-                    path: PathBuf,
-                    directory_ownership: DirectoryOwnership,
-                    name: String,
-                    id_sp: Span)
-                    -> PResult<'a, (ast::Mod, Vec<Attribute> )> {
+    fn eval_src_mod(
+        &mut self,
+        path: PathBuf,
+        directory_ownership: DirectoryOwnership,
+        name: String,
+        id_sp: Span,
+    ) -> PResult<'a, (ast::Mod, Vec<Attribute>)> {
         let mut included_mod_stack = self.sess.included_mod_stack.borrow_mut();
         if let Some(i) = included_mod_stack.iter().position(|p| *p == path) {
             let mut err = String::from("circular modules: ");
@@ -7408,10 +7406,13 @@ impl<'a> Parser<'a> {
             } else if self.look_ahead(1, |t| *t == token::OpenDelim(token::Paren)) {
                 let ident = self.parse_ident().unwrap();
                 self.bump();  // `(`
-                let kw_name = if let Ok(Some(_)) = self.parse_self_arg_with_attrs() {
-                    "method"
-                } else {
-                    "function"
+                let kw_name = match self.parse_self_arg_with_attrs() {
+                    Ok(Some(_)) => "method",
+                    Ok(None) => "function",
+                    Err(mut err) => {
+                        err.cancel();
+                        "function"
+                    }
                 };
                 self.consume_block(token::Paren);
                 let (kw, kw_name, ambiguous) = if self.check(&token::RArrow) {
