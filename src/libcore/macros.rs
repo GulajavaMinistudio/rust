@@ -353,11 +353,15 @@ macro_rules! r#try {
 /// use std::fmt::Write as FmtWrite;
 /// use std::io::Write as IoWrite;
 ///
-/// let mut s = String::new();
-/// let mut v = Vec::new();
-/// write!(&mut s, "{} {}", "abc", 123).unwrap(); // uses fmt::Write::write_fmt
-/// write!(&mut v, "s = {:?}", s).unwrap(); // uses io::Write::write_fmt
-/// assert_eq!(v, b"s = \"abc 123\"");
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let mut s = String::new();
+///     let mut v = Vec::new();
+///
+///     write!(&mut s, "{} {}", "abc", 123)?; // uses fmt::Write::write_fmt
+///     write!(&mut v, "s = {:?}", s)?; // uses io::Write::write_fmt
+///     assert_eq!(v, b"s = \"abc 123\"");
+///     Ok(())
+/// }
 /// ```
 ///
 /// Note: This macro can be used in `no_std` setups as well.
@@ -399,14 +403,17 @@ macro_rules! write {
 /// # Examples
 ///
 /// ```
-/// use std::io::Write;
+/// use std::io::{Write, Result};
 ///
-/// let mut w = Vec::new();
-/// writeln!(&mut w).unwrap();
-/// writeln!(&mut w, "test").unwrap();
-/// writeln!(&mut w, "formatted {}", "arguments").unwrap();
+/// fn main() -> Result<()> {
+///     let mut w = Vec::new();
+///     writeln!(&mut w)?;
+///     writeln!(&mut w, "test")?;
+///     writeln!(&mut w, "formatted {}", "arguments")?;
 ///
-/// assert_eq!(&w[..], "\ntest\nformatted arguments\n".as_bytes());
+///     assert_eq!(&w[..], "\ntest\nformatted arguments\n".as_bytes());
+///     Ok(())
+/// }
 /// ```
 ///
 /// A module can import both `std::fmt::Write` and `std::io::Write` and call `write!` on objects
@@ -417,11 +424,15 @@ macro_rules! write {
 /// use std::fmt::Write as FmtWrite;
 /// use std::io::Write as IoWrite;
 ///
-/// let mut s = String::new();
-/// let mut v = Vec::new();
-/// writeln!(&mut s, "{} {}", "abc", 123).unwrap(); // uses fmt::Write::write_fmt
-/// writeln!(&mut v, "s = {:?}", s).unwrap(); // uses io::Write::write_fmt
-/// assert_eq!(v, b"s = \"abc 123\\n\"\n");
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let mut s = String::new();
+///     let mut v = Vec::new();
+///
+///     writeln!(&mut s, "{} {}", "abc", 123)?; // uses fmt::Write::write_fmt
+///     writeln!(&mut v, "s = {:?}", s)?; // uses io::Write::write_fmt
+///     assert_eq!(v, b"s = \"abc 123\\n\"\n");
+///     Ok(())
+/// }
 /// ```
 #[macro_export]
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -1267,7 +1278,8 @@ pub(crate) mod builtin {
     pub macro test($item:item) { /* compiler built-in */ }
 
     /// Attribute macro applied to a function to turn it into a benchmark test.
-    #[stable(feature = "rust1", since = "1.0.0")]
+    #[unstable(feature = "test", issue = "50297",
+               reason = "`bench` is a part of custom test frameworks which are unstable")]
     #[allow_internal_unstable(test, rustc_attrs)]
     #[rustc_builtin_macro]
     #[rustc_macro_transparency = "semitransparent"]
@@ -1309,36 +1321,12 @@ pub(crate) mod builtin {
     #[allow_internal_unstable(core_intrinsics)]
     pub macro Debug($item:item) { /* compiler built-in */ }
 
-    /// Unstable implementation detail of the `rustc` compiler, do not use.
-    #[rustc_builtin_macro]
-    #[rustc_macro_transparency = "semitransparent"]
-    #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_deprecated(
-        since = "1.0.0",
-        reason = "derive(Decodable) is deprecated in favor of derive(RustcDecodable)",
-        suggestion = "RustcDecodable",
-    )]
-    #[allow_internal_unstable(core_intrinsics, libstd_sys_internals)]
-    pub macro Decodable($item:item) { /* compiler built-in */ }
-
     /// Derive macro generating an impl of the trait `Default`.
     #[rustc_builtin_macro]
     #[rustc_macro_transparency = "semitransparent"]
     #[stable(feature = "rust1", since = "1.0.0")]
     #[allow_internal_unstable(core_intrinsics)]
     pub macro Default($item:item) { /* compiler built-in */ }
-
-    /// Unstable implementation detail of the `rustc` compiler, do not use.
-    #[rustc_builtin_macro]
-    #[rustc_macro_transparency = "semitransparent"]
-    #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_deprecated(
-        since = "1.0.0",
-        reason = "derive(Encodable) is deprecated in favor of derive(RustcEncodable)",
-        suggestion = "RustcEncodable",
-    )]
-    #[allow_internal_unstable(core_intrinsics)]
-    pub macro Encodable($item:item) { /* compiler built-in */ }
 
     /// Derive macro generating an impl of the trait `Eq`.
     #[rustc_builtin_macro]

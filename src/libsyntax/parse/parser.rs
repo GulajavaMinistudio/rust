@@ -143,6 +143,7 @@ macro_rules! maybe_whole_expr {
                         $p.token.span, ExprKind::Block(block, None), ThinVec::new()
                     ));
                 }
+                // N.B: `NtIdent(ident)` is normalized to `Ident` in `fn bump`.
                 _ => {},
             };
         }
@@ -2756,12 +2757,7 @@ impl<'a> Parser<'a> {
                     // can't continue an expression after an ident
                     token::Ident(name, is_raw) => token::ident_can_begin_expr(name, t.span, is_raw),
                     token::Literal(..) | token::Pound => true,
-                    token::Interpolated(ref nt) => match **nt {
-                        token::NtIdent(..) | token::NtExpr(..) |
-                        token::NtBlock(..) | token::NtPath(..) => true,
-                        _ => false,
-                    },
-                    _ => false
+                    _ => t.is_whole_expr(),
                 };
                 let cannot_continue_expr = self.look_ahead(1, token_cannot_continue_expr);
                 if cannot_continue_expr {
@@ -3596,7 +3592,15 @@ impl<'a> Parser<'a> {
         let mut etc_span = None;
 
         while self.token != token::CloseDelim(token::Brace) {
-            let attrs = self.parse_outer_attributes()?;
+            let attrs = match self.parse_outer_attributes() {
+                Ok(attrs) => attrs,
+                Err(err) => {
+                    if let Some(mut delayed) = delayed_err {
+                        delayed.emit();
+                    }
+                    return Err(err);
+                },
+            };
             let lo = self.token.span;
 
             // check that a comma comes after every field
@@ -3728,6 +3732,7 @@ impl<'a> Parser<'a> {
         self.token.is_path_start() // e.g. `MY_CONST`;
             || self.token == token::Dot // e.g. `.5` for recovery;
             || self.token.can_begin_literal_or_bool() // e.g. `42`.
+            || self.token.is_whole_expr()
     }
 
     // Helper function to decide whether to parse as ident binding
