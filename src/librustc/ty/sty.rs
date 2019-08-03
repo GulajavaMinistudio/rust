@@ -185,7 +185,7 @@ pub enum TyKind<'tcx> {
     /// Opaque (`impl Trait`) type found in a return type.
     /// The `DefId` comes either from
     /// * the `impl Trait` ast::Ty node,
-    /// * or the `existential type` declaration
+    /// * or the `type Foo = impl Trait` declaration
     /// The substitutions are for the generics of the function in question.
     /// After typeck, the concrete type can be found in the `types` map.
     Opaque(DefId, SubstsRef<'tcx>),
@@ -1861,6 +1861,12 @@ impl<'tcx> TyS<'tcx> {
             RawPtr(_) => return true,
             _ => return false,
         }
+    }
+
+    /// Tests if this is any kind of primitive pointer type (reference, raw pointer, fn pointer).
+    #[inline]
+    pub fn is_any_ptr(&self) -> bool {
+        self.is_region_ptr() || self.is_unsafe_ptr() || self.is_fn_ptr()
     }
 
     /// Returns `true` if this type is an `Arc<T>`.

@@ -75,6 +75,9 @@ use crate::html::{highlight, layout, static_files};
 
 use minifier;
 
+#[cfg(test)]
+mod tests;
+
 /// A pair of name and its optional document.
 pub type NameDoc = (String, Option<String>);
 
@@ -1883,7 +1886,7 @@ struct AllTypes {
     macros: FxHashSet<ItemEntry>,
     functions: FxHashSet<ItemEntry>,
     typedefs: FxHashSet<ItemEntry>,
-    existentials: FxHashSet<ItemEntry>,
+    opaque_tys: FxHashSet<ItemEntry>,
     statics: FxHashSet<ItemEntry>,
     constants: FxHashSet<ItemEntry>,
     keywords: FxHashSet<ItemEntry>,
@@ -1904,7 +1907,7 @@ impl AllTypes {
             macros: new_set(100),
             functions: new_set(100),
             typedefs: new_set(100),
-            existentials: new_set(100),
+            opaque_tys: new_set(100),
             statics: new_set(100),
             constants: new_set(100),
             keywords: new_set(100),
@@ -1929,7 +1932,7 @@ impl AllTypes {
                 ItemType::Macro => self.macros.insert(ItemEntry::new(new_url, name)),
                 ItemType::Function => self.functions.insert(ItemEntry::new(new_url, name)),
                 ItemType::Typedef => self.typedefs.insert(ItemEntry::new(new_url, name)),
-                ItemType::Existential => self.existentials.insert(ItemEntry::new(new_url, name)),
+                ItemType::OpaqueTy => self.opaque_tys.insert(ItemEntry::new(new_url, name)),
                 ItemType::Static => self.statics.insert(ItemEntry::new(new_url, name)),
                 ItemType::Constant => self.constants.insert(ItemEntry::new(new_url, name)),
                 ItemType::ProcAttribute => self.attributes.insert(ItemEntry::new(new_url, name)),
@@ -1979,7 +1982,7 @@ impl fmt::Display for AllTypes {
         print_entries(f, &self.functions, "Functions", "functions")?;
         print_entries(f, &self.typedefs, "Typedefs", "typedefs")?;
         print_entries(f, &self.trait_aliases, "Trait Aliases", "trait-aliases")?;
-        print_entries(f, &self.existentials, "Existentials", "existentials")?;
+        print_entries(f, &self.opaque_tys, "Opaque Types", "opaque-types")?;
         print_entries(f, &self.statics, "Statics", "statics")?;
         print_entries(f, &self.constants, "Constants", "constants")
     }
@@ -2477,7 +2480,7 @@ impl<'a> fmt::Display for Item<'a> {
             clean::ConstantItem(..) => write!(fmt, "Constant ")?,
             clean::ForeignTypeItem => write!(fmt, "Foreign Type ")?,
             clean::KeywordItem(..) => write!(fmt, "Keyword ")?,
-            clean::ExistentialItem(..) => write!(fmt, "Existential Type ")?,
+            clean::OpaqueTyItem(..) => write!(fmt, "Opaque Type ")?,
             clean::TraitAliasItem(..) => write!(fmt, "Trait Alias ")?,
             _ => {
                 // We don't generate pages for any other type.
@@ -2516,7 +2519,7 @@ impl<'a> fmt::Display for Item<'a> {
             clean::ConstantItem(ref c) => item_constant(fmt, self.cx, self.item, c),
             clean::ForeignTypeItem => item_foreign_type(fmt, self.cx, self.item),
             clean::KeywordItem(ref k) => item_keyword(fmt, self.cx, self.item, k),
-            clean::ExistentialItem(ref e, _) => item_existential(fmt, self.cx, self.item, e),
+            clean::OpaqueTyItem(ref e, _) => item_opaque_ty(fmt, self.cx, self.item, e),
             clean::TraitAliasItem(ref ta) => item_trait_alias(fmt, self.cx, self.item, ta),
             _ => {
                 // We don't generate pages for any other type.
@@ -4387,15 +4390,15 @@ fn render_impl(w: &mut fmt::Formatter<'_>, cx: &Context, i: &Impl, link: AssocIt
     Ok(())
 }
 
-fn item_existential(
+fn item_opaque_ty(
     w: &mut fmt::Formatter<'_>,
     cx: &Context,
     it: &clean::Item,
-    t: &clean::Existential,
+    t: &clean::OpaqueTy,
 ) -> fmt::Result {
-    write!(w, "<pre class='rust existential'>")?;
+    write!(w, "<pre class='rust opaque'>")?;
     render_attributes(w, it, false)?;
-    write!(w, "existential type {}{}{where_clause}: {bounds};</pre>",
+    write!(w, "type {}{}{where_clause} = impl {bounds};</pre>",
            it.name.as_ref().unwrap(),
            t.generics,
            where_clause = WhereClause { gens: &t.generics, indent: 0, end_newline: true },
@@ -4983,7 +4986,7 @@ fn item_ty_to_strs(ty: &ItemType) -> (&'static str, &'static str) {
         ItemType::AssocConst      => ("associated-consts", "Associated Constants"),
         ItemType::ForeignType     => ("foreign-types", "Foreign Types"),
         ItemType::Keyword         => ("keywords", "Keywords"),
-        ItemType::Existential     => ("existentials", "Existentials"),
+        ItemType::OpaqueTy        => ("opaque-types", "Opaque Types"),
         ItemType::ProcAttribute   => ("attributes", "Attribute Macros"),
         ItemType::ProcDerive      => ("derives", "Derive Macros"),
         ItemType::TraitAlias      => ("trait-aliases", "Trait aliases"),
@@ -5237,34 +5240,4 @@ fn get_generics(clean_type: &clean::Type) -> Option<Vec<String>> {
 
 pub fn cache() -> Arc<Cache> {
     CACHE_KEY.with(|c| c.borrow().clone())
-}
-
-#[cfg(test)]
-#[test]
-fn test_name_key() {
-    assert_eq!(name_key("0"), ("", 0, 1));
-    assert_eq!(name_key("123"), ("", 123, 0));
-    assert_eq!(name_key("Fruit"), ("Fruit", 0, 0));
-    assert_eq!(name_key("Fruit0"), ("Fruit", 0, 1));
-    assert_eq!(name_key("Fruit0000"), ("Fruit", 0, 4));
-    assert_eq!(name_key("Fruit01"), ("Fruit", 1, 1));
-    assert_eq!(name_key("Fruit10"), ("Fruit", 10, 0));
-    assert_eq!(name_key("Fruit123"), ("Fruit", 123, 0));
-}
-
-#[cfg(test)]
-#[test]
-fn test_name_sorting() {
-    let names = ["Apple",
-                 "Banana",
-                 "Fruit", "Fruit0", "Fruit00",
-                 "Fruit1", "Fruit01",
-                 "Fruit2", "Fruit02",
-                 "Fruit20",
-                 "Fruit30x",
-                 "Fruit100",
-                 "Pear"];
-    let mut sorted = names.to_owned();
-    sorted.sort_by_key(|&s| name_key(s));
-    assert_eq!(names, sorted);
 }
