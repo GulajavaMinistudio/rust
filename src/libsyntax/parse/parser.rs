@@ -1415,7 +1415,12 @@ impl<'a> Parser<'a> {
             if self.eat(&token::Not) {
                 // Macro invocation in type position
                 let (delim, tts) = self.expect_delimited_token_tree()?;
-                let node = Mac_ { path, tts, delim };
+                let node = Mac_ {
+                    path,
+                    tts,
+                    delim,
+                    prior_type_ascription: self.last_type_ascription,
+                };
                 TyKind::Mac(respan(lo.to(self.prev_span), node))
             } else {
                 // Just a type path or bound list (trait object type) starting with a trait.
@@ -2246,7 +2251,12 @@ impl<'a> Parser<'a> {
                         // MACRO INVOCATION expression
                         let (delim, tts) = self.expect_delimited_token_tree()?;
                         hi = self.prev_span;
-                        ex = ExprKind::Mac(respan(lo.to(hi), Mac_ { path, tts, delim }));
+                        ex = ExprKind::Mac(respan(lo.to(hi), Mac_ {
+                            path,
+                            tts,
+                            delim,
+                            prior_type_ascription: self.last_type_ascription,
+                        }));
                     } else if self.check(&token::OpenDelim(token::Brace)) {
                         if let Some(expr) = self.maybe_parse_struct_expr(lo, &path, &attrs) {
                             return expr;
@@ -3963,7 +3973,12 @@ impl<'a> Parser<'a> {
                         // Parse macro invocation
                         self.bump();
                         let (delim, tts) = self.expect_delimited_token_tree()?;
-                        let mac = respan(lo.to(self.prev_span), Mac_ { path, tts, delim });
+                        let mac = respan(lo.to(self.prev_span), Mac_ {
+                            path,
+                            tts,
+                            delim,
+                            prior_type_ascription: self.last_type_ascription,
+                        });
                         pat = PatKind::Mac(mac);
                     }
                     token::DotDotDot | token::DotDotEq | token::DotDot => {
@@ -4403,7 +4418,12 @@ impl<'a> Parser<'a> {
                 MacStmtStyle::NoBraces
             };
 
-            let mac = respan(lo.to(hi), Mac_ { path, tts, delim });
+            let mac = respan(lo.to(hi), Mac_ {
+                path,
+                tts,
+                delim,
+                prior_type_ascription: self.last_type_ascription,
+            });
             let node = if delim == MacDelimiter::Brace ||
                           self.token == token::Semi || self.token == token::Eof {
                 StmtKind::Mac(P((mac, style, attrs.into())))
@@ -5687,7 +5707,7 @@ impl<'a> Parser<'a> {
         let (name, node, generics) = if let Some(type_) = self.eat_type() {
             let (name, alias, generics) = type_?;
             let kind = match alias {
-                AliasKind::Weak(typ) => ast::ImplItemKind::Type(typ),
+                AliasKind::Weak(typ) => ast::ImplItemKind::TyAlias(typ),
                 AliasKind::OpaqueTy(bounds) => ast::ImplItemKind::OpaqueTy(bounds),
             };
             (name, kind, generics)
@@ -6395,15 +6415,8 @@ impl<'a> Parser<'a> {
                     self.eval_src_mod(path, directory_ownership, id.to_string(), id_span)?;
                 // Record that we fetched the mod from an external file
                 if warn {
-                    let attr = Attribute {
-                        id: attr::mk_attr_id(),
-                        style: ast::AttrStyle::Outer,
-                        path: ast::Path::from_ident(
-                            Ident::with_empty_ctxt(sym::warn_directory_ownership)),
-                        tokens: TokenStream::empty(),
-                        is_sugared_doc: false,
-                        span: DUMMY_SP,
-                    };
+                    let attr = attr::mk_attr_outer(
+                        attr::mk_word_item(Ident::with_empty_ctxt(sym::warn_directory_ownership)));
                     attr::mark_known(&attr);
                     attrs.push(attr);
                 }
@@ -7250,7 +7263,7 @@ impl<'a> Parser<'a> {
             let (ident, alias, generics) = type_?;
             // TYPE ITEM
             let item_ = match alias {
-                AliasKind::Weak(ty) => ItemKind::Ty(ty, generics),
+                AliasKind::Weak(ty) => ItemKind::TyAlias(ty, generics),
                 AliasKind::OpaqueTy(bounds) => ItemKind::OpaqueTy(bounds, generics),
             };
             let prev_span = self.prev_span;
@@ -7525,7 +7538,12 @@ impl<'a> Parser<'a> {
             }
 
             let hi = self.prev_span;
-            let mac = respan(mac_lo.to(hi), Mac_ { path, tts, delim });
+            let mac = respan(mac_lo.to(hi), Mac_ {
+                path,
+                tts,
+                delim,
+                prior_type_ascription: self.last_type_ascription,
+            });
             let item =
                 self.mk_item(lo.to(hi), Ident::invalid(), ItemKind::Mac(mac), visibility, attrs);
             return Ok(Some(item));
@@ -7575,7 +7593,12 @@ impl<'a> Parser<'a> {
                 self.expect(&token::Semi)?;
             }
 
-            Ok(Some(respan(lo.to(self.prev_span), Mac_ { path, tts, delim })))
+            Ok(Some(respan(lo.to(self.prev_span), Mac_ {
+                path,
+                tts,
+                delim,
+                prior_type_ascription: self.last_type_ascription,
+            })))
         } else {
             Ok(None)
         }

@@ -2253,7 +2253,7 @@ impl Clean<Item> for hir::ImplItem {
             hir::ImplItemKind::Method(ref sig, body) => {
                 MethodItem((sig, &self.generics, body, Some(self.defaultness)).clean(cx))
             }
-            hir::ImplItemKind::Type(ref ty) => TypedefItem(Typedef {
+            hir::ImplItemKind::TyAlias(ref ty) => TypedefItem(Typedef {
                 type_: ty.clean(cx),
                 generics: Generics::default(),
             }, true),
@@ -2429,7 +2429,7 @@ impl Clean<Item> for ty::AssocItem {
             stability: get_stability(cx, self.def_id),
             deprecation: get_deprecation(cx, self.def_id),
             def_id: self.def_id,
-            attrs: inline::load_attrs(cx, self.def_id),
+            attrs: inline::load_attrs(cx, self.def_id).clean(cx),
             source: cx.tcx.def_span(self.def_id).clean(cx),
             inner,
         }
@@ -2802,7 +2802,7 @@ impl Clean<Type> for hir::Ty {
                     }
                 };
 
-                if let Some(&hir::ItemKind::Ty(ref ty, ref generics)) = alias {
+                if let Some(&hir::ItemKind::TyAlias(ref ty, ref generics)) = alias {
                     let provided_params = &path.segments.last().expect("segments were empty");
                     let mut ty_substs = FxHashMap::default();
                     let mut lt_substs = FxHashMap::default();
@@ -3372,7 +3372,7 @@ impl Clean<Item> for ty::VariantDef {
         };
         Item {
             name: Some(self.ident.clean(cx)),
-            attrs: inline::load_attrs(cx, self.def_id),
+            attrs: inline::load_attrs(cx, self.def_id).clean(cx),
             source: cx.tcx.def_span(self.def_id).clean(cx),
             visibility: Some(Inherited),
             def_id: self.def_id,
@@ -3856,7 +3856,7 @@ fn build_deref_target_impls(cx: &DocContext<'_>,
         let primitive = match *target {
             ResolvedPath { did, .. } if did.is_local() => continue,
             ResolvedPath { did, .. } => {
-                ret.extend(inline::build_impls(cx, did));
+                ret.extend(inline::build_impls(cx, did, None));
                 continue
             }
             _ => match target.primitive_type() {
@@ -3894,7 +3894,7 @@ fn build_deref_target_impls(cx: &DocContext<'_>,
         };
         if let Some(did) = did {
             if !did.is_local() {
-                inline::build_impl(cx, did, ret);
+                inline::build_impl(cx, did, None, ret);
             }
         }
     }
@@ -3921,7 +3921,11 @@ impl Clean<Vec<Item>> for doctree::ExternCrate<'_> {
                 },
             );
 
-            if let Some(items) = inline::try_inline(cx, res, self.name, &mut visited) {
+            if let Some(items) = inline::try_inline(
+                cx, res, self.name,
+                Some(rustc::ty::Attributes::Borrowed(self.attrs)),
+                &mut visited
+            ) {
                 return items;
             }
         }
@@ -3981,7 +3985,11 @@ impl Clean<Vec<Item>> for doctree::Import<'_> {
             }
             if !denied {
                 let mut visited = FxHashSet::default();
-                if let Some(items) = inline::try_inline(cx, path.res, name, &mut visited) {
+                if let Some(items) = inline::try_inline(
+                    cx, path.res, name,
+                    Some(rustc::ty::Attributes::Borrowed(self.attrs)),
+                    &mut visited
+                ) {
                     return items;
                 }
             }

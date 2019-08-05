@@ -173,6 +173,7 @@ fn generic_extension<'cx>(
                 let mut p = Parser::new(cx.parse_sess(), tts, Some(directory), true, false, None);
                 p.root_module_name =
                     cx.current_expansion.module.mod_path.last().map(|id| id.as_str().to_string());
+                p.last_type_ascription = cx.current_expansion.prior_type_ascription;
 
                 p.process_potential_macro_variable();
                 // Let the context choose how to interpret the result.
@@ -751,7 +752,7 @@ impl TokenSet {
 }
 
 // Checks that `matcher` is internally consistent and that it
-// can legally by followed by a token N, for all N in `follow`.
+// can legally be followed by a token `N`, for all `N` in `follow`.
 // (If `follow` is empty, then it imposes no constraint on
 // the `matcher`.)
 //

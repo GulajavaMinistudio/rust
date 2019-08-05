@@ -1306,6 +1306,7 @@ pub struct Mac_ {
     pub path: Path,
     pub delim: MacDelimiter,
     pub tts: TokenStream,
+    pub prior_type_ascription: Option<(Span, bool)>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Debug)]
@@ -1508,7 +1509,7 @@ pub struct ImplItem {
 pub enum ImplItemKind {
     Const(P<Ty>, P<Expr>),
     Method(MethodSig, P<Block>),
-    Type(P<Ty>),
+    TyAlias(P<Ty>),
     OpaqueTy(GenericBounds),
     Macro(Mac),
 }
@@ -2109,9 +2110,7 @@ pub enum AttrStyle {
     Inner,
 }
 
-#[derive(
-    Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, PartialOrd, Ord, Copy,
-)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Copy)]
 pub struct AttrId(pub usize);
 
 impl Idx for AttrId {
@@ -2120,6 +2119,18 @@ impl Idx for AttrId {
     }
     fn index(self) -> usize {
         self.0
+    }
+}
+
+impl rustc_serialize::Encodable for AttrId {
+    fn encode<S: Encoder>(&self, s: &mut S) -> Result<(), S::Error> {
+        s.emit_unit()
+    }
+}
+
+impl rustc_serialize::Decodable for AttrId {
+    fn decode<D: Decoder>(d: &mut D) -> Result<AttrId, D::Error> {
+        d.read_nil().map(|_| crate::attr::mk_attr_id())
     }
 }
 
@@ -2335,7 +2346,7 @@ pub enum ItemKind {
     /// A type alias (`type` or `pub type`).
     ///
     /// E.g., `type Foo = Bar<u8>;`.
-    Ty(P<Ty>, Generics),
+    TyAlias(P<Ty>, Generics),
     /// An opaque `impl Trait` type alias.
     ///
     /// E.g., `type Foo = impl Bar + Boo;`.
@@ -2392,7 +2403,7 @@ impl ItemKind {
             ItemKind::Mod(..) => "module",
             ItemKind::ForeignMod(..) => "foreign module",
             ItemKind::GlobalAsm(..) => "global asm",
-            ItemKind::Ty(..) => "type alias",
+            ItemKind::TyAlias(..) => "type alias",
             ItemKind::OpaqueTy(..) => "opaque type",
             ItemKind::Enum(..) => "enum",
             ItemKind::Struct(..) => "struct",
