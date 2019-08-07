@@ -485,6 +485,39 @@ impl<I> Iterator for StepBy<I> where I: Iterator {
     }
 }
 
+impl<I> StepBy<I> where I: ExactSizeIterator {
+    // The zero-based index starting from the end of the iterator of the
+    // last element. Used in the `DoubleEndedIterator` implementation.
+    fn next_back_index(&self) -> usize {
+        let rem = self.iter.len() % (self.step + 1);
+        if self.first_take {
+            if rem == 0 { self.step } else { rem - 1 }
+        } else {
+            rem
+        }
+    }
+}
+
+#[stable(feature = "double_ended_step_by_iterator", since = "1.38.0")]
+impl<I> DoubleEndedIterator for StepBy<I> where I: DoubleEndedIterator + ExactSizeIterator {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.nth_back(self.next_back_index())
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // `self.iter.nth_back(usize::MAX)` does the right thing here when `n`
+        // is out of bounds because the length of `self.iter` does not exceed
+        // `usize::MAX` (because `I: ExactSizeIterator`) and `nth_back` is
+        // zero-indexed
+        let n = n
+            .saturating_mul(self.step + 1)
+            .saturating_add(self.next_back_index());
+        self.iter.nth_back(n)
+    }
+}
+
 // StepBy can only make the iterator shorter, so the len will still fit.
 #[stable(feature = "iterator_step_by", since = "1.28.0")]
 impl<I> ExactSizeIterator for StepBy<I> where I: ExactSizeIterator {}
@@ -1158,6 +1191,45 @@ impl<I: Iterator> Iterator for Peekable<I> {
     }
 }
 
+#[stable(feature = "double_ended_peek_iterator", since = "1.38.0")]
+impl<I> DoubleEndedIterator for Peekable<I> where I: DoubleEndedIterator {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().or_else(|| self.peeked.take().and_then(|x| x))
+    }
+
+    #[inline]
+    fn try_rfold<B, F, R>(&mut self, init: B, mut f: F) -> R where
+        Self: Sized, F: FnMut(B, Self::Item) -> R, R: Try<Ok=B>
+    {
+        match self.peeked.take() {
+            Some(None) => return Try::from_ok(init),
+            Some(Some(v)) => match self.iter.try_rfold(init, &mut f).into_result() {
+                Ok(acc) => f(acc, v),
+                Err(e) => {
+                    self.peeked = Some(Some(v));
+                    Try::from_error(e)
+                }
+            },
+            None => self.iter.try_rfold(init, f),
+        }
+    }
+
+    #[inline]
+    fn rfold<Acc, Fold>(self, init: Acc, mut fold: Fold) -> Acc
+        where Fold: FnMut(Acc, Self::Item) -> Acc,
+    {
+        match self.peeked {
+            Some(None) => return init,
+            Some(Some(v)) => {
+                let acc = self.iter.rfold(init, &mut fold);
+                fold(acc, v)
+            }
+            None => self.iter.rfold(init, fold),
+        }
+    }
+}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<I: ExactSizeIterator> ExactSizeIterator for Peekable<I> {}
 
@@ -1627,6 +1699,51 @@ impl<I> Iterator for Take<I> where I: Iterator{
     }
 }
 
+#[stable(feature = "double_ended_take_iterator", since = "1.38.0")]
+impl<I> DoubleEndedIterator for Take<I> where I: DoubleEndedIterator + ExactSizeIterator {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.n == 0 {
+            None
+        } else {
+            let n = self.n;
+            self.n -= 1;
+            self.iter.nth_back(self.iter.len().saturating_sub(n))
+        }
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        let len = self.iter.len();
+        if self.n > n {
+            let m = len.saturating_sub(self.n) + n;
+            self.n -= n + 1;
+            self.iter.nth_back(m)
+        } else {
+            if len > 0 {
+                self.iter.nth_back(len - 1);
+            }
+            None
+        }
+    }
+
+    #[inline]
+    fn try_rfold<Acc, Fold, R>(&mut self, init: Acc, fold: Fold) -> R where
+        Self: Sized, Fold: FnMut(Acc, Self::Item) -> R, R: Try<Ok = Acc>
+    {
+        if self.n == 0 {
+            Try::from_ok(init)
+        } else {
+            let len = self.iter.len();
+            if len > self.n && self.iter.nth_back(len - self.n - 1).is_none() {
+                Try::from_ok(init)
+            } else {
+                self.iter.try_rfold(init, fold)
+            }
+        }
+    }
+}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<I> ExactSizeIterator for Take<I> where I: ExactSizeIterator {}
 
@@ -2064,136 +2181,64 @@ impl<I: FusedIterator, F> FusedIterator for Inspect<I, F>
     where F: FnMut(&I::Item) {}
 
 /// An iterator adapter that produces output as long as the underlying
-/// iterator produces `Option::Some` values.
-pub(crate) struct OptionShunt<I> {
-    iter: I,
-    exited_early: bool,
-}
-
-impl<I, T> OptionShunt<I>
-where
-    I: Iterator<Item = Option<T>>,
-{
-    /// Process the given iterator as if it yielded a `T` instead of a
-    /// `Option<T>`. Any `None` value will stop the inner iterator and
-    /// the overall result will be a `None`.
-    pub fn process<F, U>(iter: I, mut f: F) -> Option<U>
-    where
-        F: FnMut(&mut Self) -> U,
-    {
-        let mut shunt = OptionShunt::new(iter);
-        let value = f(shunt.by_ref());
-        shunt.reconstruct(value)
-    }
-
-    fn new(iter: I) -> Self {
-        OptionShunt {
-            iter,
-            exited_early: false,
-        }
-    }
-
-    /// Consume the adapter and rebuild a `Option` value.
-    fn reconstruct<U>(self, val: U) -> Option<U> {
-        if self.exited_early {
-            None
-        } else {
-            Some(val)
-        }
-    }
-}
-
-impl<I, T> Iterator for OptionShunt<I>
-where
-    I: Iterator<Item = Option<T>>,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            Some(Some(v)) => Some(v),
-            Some(None) => {
-                self.exited_early = true;
-                None
-            }
-            None => None,
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        if self.exited_early {
-            (0, Some(0))
-        } else {
-            let (_, upper) = self.iter.size_hint();
-            (0, upper)
-        }
-    }
-}
-
-/// An iterator adapter that produces output as long as the underlying
 /// iterator produces `Result::Ok` values.
 ///
 /// If an error is encountered, the iterator stops and the error is
-/// stored. The error may be recovered later via `reconstruct`.
-pub(crate) struct ResultShunt<I, E> {
+/// stored.
+pub(crate) struct ResultShunt<'a, I, E> {
     iter: I,
-    error: Option<E>,
+    error: &'a mut Result<(), E>,
 }
 
-impl<I, T, E> ResultShunt<I, E>
-    where I: Iterator<Item = Result<T, E>>
+/// Process the given iterator as if it yielded a `T` instead of a
+/// `Result<T, _>`. Any errors will stop the inner iterator and
+/// the overall result will be an error.
+pub(crate) fn process_results<I, T, E, F, U>(iter: I, mut f: F) -> Result<U, E>
+where
+    I: Iterator<Item = Result<T, E>>,
+    for<'a> F: FnMut(ResultShunt<'a, I, E>) -> U,
 {
-    /// Process the given iterator as if it yielded a `T` instead of a
-    /// `Result<T, _>`. Any errors will stop the inner iterator and
-    /// the overall result will be an error.
-    pub fn process<F, U>(iter: I, mut f: F) -> Result<U, E>
-        where F: FnMut(&mut Self) -> U
-    {
-        let mut shunt = ResultShunt::new(iter);
-        let value = f(shunt.by_ref());
-        shunt.reconstruct(value)
-    }
-
-    fn new(iter: I) -> Self {
-        ResultShunt {
-            iter,
-            error: None,
-        }
-    }
-
-    /// Consume the adapter and rebuild a `Result` value. This should
-    /// *always* be called, otherwise any potential error would be
-    /// lost.
-    fn reconstruct<U>(self, val: U) -> Result<U, E> {
-        match self.error {
-            None => Ok(val),
-            Some(e) => Err(e),
-        }
-    }
+    let mut error = Ok(());
+    let shunt = ResultShunt {
+        iter,
+        error: &mut error,
+    };
+    let value = f(shunt);
+    error.map(|()| value)
 }
 
-impl<I, T, E> Iterator for ResultShunt<I, E>
+impl<I, T, E> Iterator for ResultShunt<'_, I, E>
     where I: Iterator<Item = Result<T, E>>
 {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            Some(Ok(v)) => Some(v),
-            Some(Err(e)) => {
-                self.error = Some(e);
-                None
-            }
-            None => None,
-        }
+        self.find(|_| true)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        if self.error.is_some() {
+        if self.error.is_err() {
             (0, Some(0))
         } else {
             let (_, upper) = self.iter.size_hint();
             (0, upper)
         }
+    }
+
+    fn try_fold<B, F, R>(&mut self, init: B, mut f: F) -> R
+    where
+        F: FnMut(B, Self::Item) -> R,
+        R: Try<Ok = B>,
+    {
+        let error = &mut *self.error;
+        self.iter
+            .try_fold(init, |acc, x| match x {
+                Ok(x) => LoopState::from_try(f(acc, x)),
+                Err(e) => {
+                    *error = Err(e);
+                    LoopState::Break(Try::from_ok(acc))
+                }
+            })
+            .into_try()
     }
 }

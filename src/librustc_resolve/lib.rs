@@ -38,8 +38,7 @@ use rustc_metadata::cstore::CStore;
 use syntax::source_map::SourceMap;
 use syntax::ext::hygiene::{ExpnId, Transparency, SyntaxContext};
 use syntax::ast::{self, Name, NodeId, Ident, FloatTy, IntTy, UintTy};
-use syntax::ext::base::SyntaxExtension;
-use syntax::ext::base::MacroKind;
+use syntax::ext::base::{SyntaxExtension, MacroKind, SpecialDerives};
 use syntax::symbol::{Symbol, kw, sym};
 use syntax::util::lev_distance::find_best_match_for_name;
 
@@ -172,7 +171,7 @@ enum ResolutionError<'a> {
     GenericParamsFromOuterFunction(Res),
     /// Error E0403: the name is already used for a type or const parameter in this generic
     /// parameter list.
-    NameAlreadyUsedInParameterList(Name, &'a Span),
+    NameAlreadyUsedInParameterList(Name, Span),
     /// Error E0407: method is not a member of trait.
     MethodNotMemberOfTrait(Name, &'a str),
     /// Error E0437: type is not a member of trait.
@@ -298,7 +297,7 @@ fn resolve_struct_error<'sess, 'a>(resolver: &'sess Resolver<'_>,
                                             parameter in this list of generic parameters",
                                             name);
              err.span_label(span, "already used");
-             err.span_label(first_use_span.clone(), format!("first use of `{}`", name));
+             err.span_label(first_use_span, format!("first use of `{}`", name));
              err
         }
         ResolutionError::MethodNotMemberOfTrait(method, trait_) => {
@@ -1685,6 +1684,12 @@ pub struct Resolver<'a> {
     local_macro_def_scopes: FxHashMap<NodeId, Module<'a>>,
     unused_macros: NodeMap<Span>,
     proc_macro_stubs: NodeSet,
+    /// Some built-in derives mark items they are applied to so they are treated specially later.
+    /// Derive macros cannot modify the item themselves and have to store the markers in the global
+    /// context, so they attach the markers to derive container IDs using this resolver table.
+    /// FIXME: Find a way for `PartialEq` and `Eq` to emulate `#[structural_match]`
+    /// by marking the produced impls rather than the original items.
+    special_derives: FxHashMap<ExpnId, SpecialDerives>,
 
     /// Maps the `ExpnId` of an expansion to its containing module or block.
     invocations: FxHashMap<ExpnId, &'a InvocationData<'a>>,
@@ -1766,8 +1771,13 @@ impl<'a> hir::lowering::Resolver for Resolver<'a> {
         path: &ast::Path,
         is_value: bool,
     ) -> Res {
-        self.resolve_ast_path_cb(path, is_value,
-                                 |resolver, span, error| resolve_error(resolver, span, error))
+        match self.resolve_ast_path_inner(path, is_value) {
+            Ok(r) => r,
+            Err((span, error)) => {
+                resolve_error(self, span, error);
+                Res::Err
+            }
+        }
     }
 
     fn resolve_str_path(
@@ -1813,6 +1823,12 @@ impl<'a> hir::lowering::Resolver for Resolver<'a> {
     fn definitions(&mut self) -> &mut Definitions {
         &mut self.definitions
     }
+
+    fn has_derives(&self, node_id: NodeId, derives: SpecialDerives) -> bool {
+        let def_id = self.definitions.local_def_id(node_id);
+        let expn_id = self.definitions.expansion_that_defined(def_id.index);
+        self.has_derives(expn_id, derives)
+    }
 }
 
 impl<'a> Resolver<'a> {
@@ -1822,8 +1838,6 @@ impl<'a> Resolver<'a> {
     /// just that an error occurred.
     pub fn resolve_str_path_error(&mut self, span: Span, path_str: &str, is_value: bool)
         -> Result<(ast::Path, Res), ()> {
-        let mut errored = false;
-
         let path = if path_str.starts_with("::") {
             ast::Path {
                 span,
@@ -1844,24 +1858,16 @@ impl<'a> Resolver<'a> {
                     .collect(),
             }
         };
-        let res = self.resolve_ast_path_cb(&path, is_value, |_, _, _| errored = true);
-        if errored || res == def::Res::Err {
-            Err(())
-        } else {
-            Ok((path, res))
-        }
+        let res = self.resolve_ast_path_inner(&path, is_value).map_err(|_| ())?;
+        Ok((path, res))
     }
 
     /// Like `resolve_ast_path`, but takes a callback in case there was an error.
-    // FIXME(eddyb) use `Result` or something instead of callbacks.
-    fn resolve_ast_path_cb<F>(
+    fn resolve_ast_path_inner(
         &mut self,
         path: &ast::Path,
         is_value: bool,
-        error_callback: F,
-    ) -> Res
-        where F: for<'c, 'b> FnOnce(&'c mut Resolver<'_>, Span, ResolutionError<'b>)
-    {
+    ) -> Result<Res, (Span, ResolutionError<'a>)> {
         let namespace = if is_value { ValueNS } else { TypeNS };
         let span = path.span;
         let path = Segment::from_path(&path);
@@ -1869,23 +1875,21 @@ impl<'a> Resolver<'a> {
         match self.resolve_path_without_parent_scope(&path, Some(namespace), true,
                                                                span, CrateLint::No) {
             PathResult::Module(ModuleOrUniformRoot::Module(module)) =>
-                module.res().unwrap(),
+                Ok(module.res().unwrap()),
             PathResult::NonModule(path_res) if path_res.unresolved_segments() == 0 =>
-                path_res.base_res(),
+                Ok(path_res.base_res()),
             PathResult::NonModule(..) => {
-                error_callback(self, span, ResolutionError::FailedToResolve {
+                Err((span, ResolutionError::FailedToResolve {
                     label: String::from("type-relative paths are not supported in this context"),
                     suggestion: None,
-                });
-                Res::Err
+                }))
             }
             PathResult::Module(..) | PathResult::Indeterminate => unreachable!(),
             PathResult::Failed { span, label, suggestion, .. } => {
-                error_callback(self, span, ResolutionError::FailedToResolve {
+                Err((span, ResolutionError::FailedToResolve {
                     label,
                     suggestion,
-                });
-                Res::Err
+                }))
             }
         }
     }
@@ -2031,6 +2035,7 @@ impl<'a> Resolver<'a> {
             struct_constructors: Default::default(),
             unused_macros: Default::default(),
             proc_macro_stubs: Default::default(),
+            special_derives: Default::default(),
             current_type_ascription: Vec::new(),
             injected_crate: None,
             active_features:
@@ -2075,6 +2080,10 @@ impl<'a> Resolver<'a> {
                 None => ctxt.remove_mark(),
             };
         }
+    }
+
+    fn has_derives(&self, expn_id: ExpnId, markers: SpecialDerives) -> bool {
+        self.special_derives.get(&expn_id).map_or(false, |m| m.contains(markers))
     }
 
     /// Entry point to crate resolution.
@@ -2837,7 +2846,7 @@ impl<'a> Resolver<'a> {
                                 let span = seen_bindings.get(&ident).unwrap();
                                 let err = ResolutionError::NameAlreadyUsedInParameterList(
                                     ident.name,
-                                    span,
+                                    *span,
                                 );
                                 resolve_error(self, param.ident.span, err);
                             }
@@ -2859,7 +2868,7 @@ impl<'a> Resolver<'a> {
                                 let span = seen_bindings.get(&ident).unwrap();
                                 let err = ResolutionError::NameAlreadyUsedInParameterList(
                                     ident.name,
-                                    span,
+                                    *span,
                                 );
                                 resolve_error(self, param.ident.span, err);
                             }
