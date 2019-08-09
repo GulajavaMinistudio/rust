@@ -302,6 +302,7 @@ macro_rules! debug_assert_ne {
 /// ```
 #[macro_export]
 #[stable(feature = "rust1", since = "1.0.0")]
+#[rustc_deprecated(since = "1.39.0", reason = "use the `?` operator instead")]
 #[doc(alias = "?")]
 macro_rules! r#try {
     ($expr:expr) => (match $expr {
@@ -680,7 +681,7 @@ pub(crate) mod builtin {
     ///
     /// This macro should be used when a crate uses a conditional compilation strategy to provide
     /// better error messages for erroneous conditions. It's the compiler-level form of [`panic!`],
-    /// which emits an error at *runtime*, rather than during compilation.
+    /// but emits an error during *compilation* rather than at *runtime*.
     ///
     /// # Examples
     ///
@@ -767,7 +768,6 @@ pub(crate) mod builtin {
     #[stable(feature = "rust1", since = "1.0.0")]
     #[allow_internal_unstable(fmt_internals)]
     #[rustc_builtin_macro]
-    #[rustc_macro_transparency = "semitransparent"]
     pub macro format_args {
         ($fmt:expr) => ({ /* compiler built-in */ }),
         ($fmt:expr, $($args:tt)*) => ({ /* compiler built-in */ })
@@ -779,7 +779,6 @@ pub(crate) mod builtin {
                          language use and is subject to change")]
     #[allow_internal_unstable(fmt_internals)]
     #[rustc_builtin_macro]
-    #[rustc_macro_transparency = "semitransparent"]
     pub macro format_args_nl {
         ($fmt:expr) => ({ /* compiler built-in */ }),
         ($fmt:expr, $($args:tt)*) => ({ /* compiler built-in */ })

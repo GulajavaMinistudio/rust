@@ -3,19 +3,19 @@ use core::result::Result::{Ok, Err};
 #[test]
 fn test_position() {
     let b = [1, 2, 3, 5, 5];
-    assert!(b.iter().position(|&v| v == 9) == None);
-    assert!(b.iter().position(|&v| v == 5) == Some(3));
-    assert!(b.iter().position(|&v| v == 3) == Some(2));
-    assert!(b.iter().position(|&v| v == 0) == None);
+    assert_eq!(b.iter().position(|&v| v == 9), None);
+    assert_eq!(b.iter().position(|&v| v == 5), Some(3));
+    assert_eq!(b.iter().position(|&v| v == 3), Some(2));
+    assert_eq!(b.iter().position(|&v| v == 0), None);
 }
 
 #[test]
 fn test_rposition() {
     let b = [1, 2, 3, 5, 5];
-    assert!(b.iter().rposition(|&v| v == 9) == None);
-    assert!(b.iter().rposition(|&v| v == 5) == Some(4));
-    assert!(b.iter().rposition(|&v| v == 3) == Some(2));
-    assert!(b.iter().rposition(|&v| v == 0) == None);
+    assert_eq!(b.iter().rposition(|&v| v == 9), None);
+    assert_eq!(b.iter().rposition(|&v| v == 5), Some(4));
+    assert_eq!(b.iter().rposition(|&v| v == 3), Some(2));
+    assert_eq!(b.iter().rposition(|&v| v == 0), None);
 }
 
 #[test]
@@ -1153,11 +1153,49 @@ fn test_rotate_right() {
 }
 
 #[test]
+#[cfg(not(miri))] // Miri is too slow
+fn brute_force_rotate_test_0() {
+    // In case of edge cases involving multiple algorithms
+    let n = 300;
+    for len in 0..n {
+        for s in 0..len {
+            let mut v = Vec::with_capacity(len);
+            for i in 0..len {
+                v.push(i);
+            }
+            v[..].rotate_right(s);
+            for i in 0..v.len() {
+                assert_eq!(v[i], v.len().wrapping_add(i.wrapping_sub(s)) % v.len());
+            }
+        }
+    }
+}
+
+#[test]
+fn brute_force_rotate_test_1() {
+    // `ptr_rotate` covers so many kinds of pointer usage, that this is just a good test for
+    // pointers in general. This uses a `[usize; 4]` to hit all algorithms without overwhelming miri
+    let n = 30;
+    for len in 0..n {
+        for s in 0..len {
+            let mut v: Vec<[usize; 4]> = Vec::with_capacity(len);
+            for i in 0..len {
+                v.push([i, 0, 0, 0]);
+            }
+            v[..].rotate_right(s);
+            for i in 0..v.len() {
+                assert_eq!(v[i][0], v.len().wrapping_add(i.wrapping_sub(s)) % v.len());
+            }
+        }
+    }
+}
+
+#[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn sort_unstable() {
     use core::cmp::Ordering::{Equal, Greater, Less};
     use core::slice::heapsort;
-    use rand::{FromEntropy, Rng, rngs::SmallRng, seq::SliceRandom};
+    use rand::{SeedableRng, Rng, rngs::StdRng, seq::SliceRandom};
 
     #[cfg(not(miri))] // Miri is too slow
     let large_range = 500..510;
@@ -1171,7 +1209,7 @@ fn sort_unstable() {
 
     let mut v = [0; 600];
     let mut tmp = [0; 600];
-    let mut rng = SmallRng::from_entropy();
+    let mut rng = StdRng::from_entropy();
 
     for len in (2..25).chain(large_range) {
         let v = &mut v[0..len];
@@ -1237,11 +1275,11 @@ fn sort_unstable() {
 #[cfg(not(miri))] // Miri is too slow
 fn partition_at_index() {
     use core::cmp::Ordering::{Equal, Greater, Less};
-    use rand::rngs::SmallRng;
+    use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
-    use rand::{FromEntropy, Rng};
+    use rand::{SeedableRng, Rng};
 
-    let mut rng = SmallRng::from_entropy();
+    let mut rng = StdRng::from_entropy();
 
     for len in (2..21).chain(500..501) {
         let mut orig = vec![0; len];
