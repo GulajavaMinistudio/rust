@@ -224,6 +224,10 @@ impl<'a> Parser<'a> {
                 self.err_dotdotdot_syntax(self.token.span);
             }
 
+            if self.token == token::LArrow {
+                self.err_larrow_operator(self.token.span);
+            }
+
             self.bump();
             if op.is_comparison() {
                 self.check_no_chained_comparison(&lhs, &op);
@@ -1199,7 +1203,7 @@ impl<'a> Parser<'a> {
         if self.eat_keyword(kw::Else) || !cond.returns() {
             let sp = self.sess.source_map().next_point(lo);
             let mut err = self.diagnostic()
-                .struct_span_err(sp, "missing condition for `if` statemement");
+                .struct_span_err(sp, "missing condition for `if` expression");
             err.span_label(sp, "expected if condition here");
             return Err(err)
         }
@@ -1444,6 +1448,7 @@ impl<'a> Parser<'a> {
             guard,
             body: expr,
             span: lo.to(hi),
+            id: ast::DUMMY_NODE_ID,
         })
     }
 
@@ -1599,6 +1604,7 @@ impl<'a> Parser<'a> {
                         expr: self.mk_expr(self.token.span, ExprKind::Err, ThinVec::new()),
                         is_shorthand: false,
                         attrs: ThinVec::new(),
+                        id: ast::DUMMY_NODE_ID,
                     });
                 }
             }
@@ -1684,6 +1690,7 @@ impl<'a> Parser<'a> {
             expr,
             is_shorthand,
             attrs: attrs.into(),
+            id: ast::DUMMY_NODE_ID,
         })
     }
 
@@ -1700,6 +1707,19 @@ impl<'a> Parser<'a> {
                 Applicability::MaybeIncorrect
             )
             .emit();
+    }
+
+    fn err_larrow_operator(&self, span: Span) {
+        self.struct_span_err(
+            span,
+            "unexpected token: `<-`"
+        ).span_suggestion(
+            span,
+            "if you meant to write a comparison against a negative value, add a \
+             space in between `<` and `-`",
+            "< -".to_string(),
+            Applicability::MaybeIncorrect
+        ).emit();
     }
 
     fn mk_assign_op(&self, binop: BinOp, lhs: P<Expr>, rhs: P<Expr>) -> ExprKind {
