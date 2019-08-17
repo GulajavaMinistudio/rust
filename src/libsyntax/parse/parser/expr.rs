@@ -8,13 +8,13 @@ use crate::ast::{self, Attribute, AttrStyle, Ident, CaptureBy, BlockCheckMode};
 use crate::ast::{Expr, ExprKind, RangeLimits, Label, Movability, IsAsync, Arm};
 use crate::ast::{Ty, TyKind, FunctionRetTy, Arg, FnDecl};
 use crate::ast::{BinOpKind, BinOp, UnOp};
-use crate::ast::{Mac_, AnonConst, Field};
+use crate::ast::{Mac, AnonConst, Field};
 
 use crate::parse::classify;
 use crate::parse::token::{self, Token};
 use crate::parse::diagnostics::{Error};
 use crate::print::pprust;
-use crate::source_map::{self, respan, Span};
+use crate::source_map::{self, Span};
 use crate::symbol::{kw, sym};
 use crate::util::parser::{AssocOp, Fixity, prec_let_scrutinee_needs_par};
 
@@ -997,6 +997,9 @@ impl<'a> Parser<'a> {
                     } else {
                         ex = ExprKind::Yield(None);
                     }
+
+                    let span = lo.to(hi);
+                    self.sess.yield_spans.borrow_mut().push(span);
                 } else if self.eat_keyword(kw::Let) {
                     return self.parse_let_expr(attrs);
                 } else if is_span_rust_2018 && self.eat_keyword(kw::Await) {
@@ -1011,12 +1014,13 @@ impl<'a> Parser<'a> {
                         // MACRO INVOCATION expression
                         let (delim, tts) = self.expect_delimited_token_tree()?;
                         hi = self.prev_span;
-                        ex = ExprKind::Mac(respan(lo.to(hi), Mac_ {
+                        ex = ExprKind::Mac(Mac {
                             path,
                             tts,
                             delim,
+                            span: lo.to(hi),
                             prior_type_ascription: self.last_type_ascription,
-                        }));
+                        });
                     } else if self.check(&token::OpenDelim(token::Brace)) {
                         if let Some(expr) = self.maybe_parse_struct_expr(lo, &path, &attrs) {
                             return expr;

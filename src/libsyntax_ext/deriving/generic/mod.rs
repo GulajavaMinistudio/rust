@@ -187,7 +187,7 @@ use syntax::ast::{self, BinOpKind, EnumDef, Expr, Generics, Ident, PatKind};
 use syntax::ast::{VariantData, GenericParamKind, GenericArg};
 use syntax::attr;
 use syntax::ext::base::{Annotatable, ExtCtxt, SpecialDerives};
-use syntax::source_map::{self, respan};
+use syntax::source_map::respan;
 use syntax::util::map_in_place::MapInPlace;
 use syntax::ptr::P;
 use syntax::symbol::{Symbol, kw, sym};
@@ -425,7 +425,7 @@ impl<'a> TraitDef<'a> {
                         return;
                     }
                 };
-                let container_id = cx.current_expansion.id.parent();
+                let container_id = cx.current_expansion.id.expn_data().parent;
                 let is_always_copy =
                     cx.resolver.has_derives(container_id, SpecialDerives::COPY) &&
                     has_no_type_params;
@@ -928,7 +928,7 @@ impl<'a> MethodDef<'a> {
 
         let args = {
             let self_args = explicit_self.map(|explicit_self| {
-                let ident = Ident::with_empty_ctxt(kw::SelfLower).with_span_pos(trait_.span);
+                let ident = Ident::with_dummy_span(kw::SelfLower).with_span_pos(trait_.span);
                 ast::Arg::from_self(ThinVec::default(), explicit_self, ident)
             });
             let nonself_args = arg_types.into_iter()
@@ -1610,15 +1610,13 @@ impl<'a> TraitDef<'a> {
                         if ident.is_none() {
                             cx.span_bug(sp, "a braced struct with unnamed fields in `derive`");
                         }
-                        source_map::Spanned {
+                        ast::FieldPat {
+                            ident: ident.unwrap(),
+                            is_shorthand: false,
+                            attrs: ThinVec::new(),
+                            id: ast::DUMMY_NODE_ID,
                             span: pat.span.with_ctxt(self.span.ctxt()),
-                            node: ast::FieldPat {
-                                id: ast::DUMMY_NODE_ID,
-                                ident: ident.unwrap(),
-                                pat,
-                                is_shorthand: false,
-                                attrs: ThinVec::new(),
-                            },
+                            pat,
                         }
                     })
                     .collect();

@@ -202,7 +202,7 @@ impl ParamName {
         match *self {
             ParamName::Plain(ident) => ident,
             ParamName::Fresh(_) |
-            ParamName::Error => Ident::with_empty_ctxt(kw::UnderscoreLifetime),
+            ParamName::Error => Ident::with_dummy_span(kw::UnderscoreLifetime),
         }
     }
 
@@ -237,8 +237,8 @@ impl LifetimeName {
     pub fn ident(&self) -> Ident {
         match *self {
             LifetimeName::Implicit | LifetimeName::Error => Ident::invalid(),
-            LifetimeName::Underscore => Ident::with_empty_ctxt(kw::UnderscoreLifetime),
-            LifetimeName::Static => Ident::with_empty_ctxt(kw::StaticLifetime),
+            LifetimeName::Underscore => Ident::with_dummy_span(kw::UnderscoreLifetime),
+            LifetimeName::Static => Ident::with_dummy_span(kw::StaticLifetime),
             LifetimeName::Param(param_name) => param_name.ident(),
         }
     }
@@ -877,7 +877,7 @@ impl Pat {
         match self.node {
             PatKind::Binding(.., Some(ref p)) => p.walk_(it),
             PatKind::Struct(_, ref fields, _) => {
-                fields.iter().all(|field| field.node.pat.walk_(it))
+                fields.iter().all(|field| field.pat.walk_(it))
             }
             PatKind::TupleStruct(_, ref s, _) | PatKind::Tuple(ref s, _) => {
                 s.iter().all(|p| p.walk_(it))
@@ -923,6 +923,7 @@ pub struct FieldPat {
     /// The pattern the field is destructured to.
     pub pat: P<Pat>,
     pub is_shorthand: bool,
+    pub span: Span,
 }
 
 /// Explicit binding annotations given in the HIR for a binding. Note
@@ -968,7 +969,7 @@ pub enum PatKind {
 
     /// A struct or struct variant pattern (e.g., `Variant {x, y, ..}`).
     /// The `bool` is `true` in the presence of a `..`.
-    Struct(QPath, HirVec<Spanned<FieldPat>>, bool),
+    Struct(QPath, HirVec<FieldPat>, bool),
 
     /// A tuple struct/variant pattern `Variant(x, y, .., z)`.
     /// If the `..` pattern fragment is present, then `Option<usize>` denotes its position.

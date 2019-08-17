@@ -1457,7 +1457,7 @@ impl<'a> State<'a> {
     }
 
     pub fn print_name(&mut self, name: ast::Name) {
-        self.print_ident(ast::Ident::with_empty_ctxt(name))
+        self.print_ident(ast::Ident::with_dummy_span(name))
     }
 
     pub fn print_for_decl(&mut self, loc: &hir::Local, coll: &hir::Expr) {
@@ -1670,14 +1670,14 @@ impl<'a> State<'a> {
                                    &fields[..],
                                    |s, f| {
                                        s.cbox(INDENT_UNIT);
-                                       if !f.node.is_shorthand {
-                                           s.print_ident(f.node.ident);
+                                       if !f.is_shorthand {
+                                           s.print_ident(f.ident);
                                            s.word_nbsp(":");
                                        }
-                                       s.print_pat(&f.node.pat);
+                                       s.print_pat(&f.pat);
                                        s.end()
                                    },
-                                   |f| f.node.pat.span);
+                                   |f| f.pat.span);
                 if etc {
                     if !fields.is_empty() {
                         self.word_space(",");
