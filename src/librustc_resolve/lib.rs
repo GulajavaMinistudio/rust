@@ -448,7 +448,7 @@ pub struct ModuleData<'a> {
     populate_on_access: Cell<bool>,
 
     // Macro invocations that can expand into items in this module.
-    unresolved_invocations: RefCell<FxHashSet<ExpnId>>,
+    unexpanded_invocations: RefCell<FxHashSet<ExpnId>>,
 
     no_implicit_prelude: bool,
 
@@ -478,7 +478,7 @@ impl<'a> ModuleData<'a> {
             normal_ancestor_id,
             lazy_resolutions: Default::default(),
             populate_on_access: Cell::new(!normal_ancestor_id.is_local()),
-            unresolved_invocations: Default::default(),
+            unexpanded_invocations: Default::default(),
             no_implicit_prelude: false,
             glob_importers: RefCell::new(Vec::new()),
             globs: RefCell::new(Vec::new()),
@@ -1499,7 +1499,7 @@ impl<'a> Resolver<'a> {
             debug!("walk rib\n{:?}", ribs[i].bindings);
             // Use the rib kind to determine whether we are resolving parameters
             // (modern hygiene) or local variables (legacy hygiene).
-            let rib_ident = if let AssocItemRibKind | ItemRibKind = ribs[i].kind {
+            let rib_ident = if ribs[i].kind.contains_params() {
                 modern_ident
             } else {
                 ident
