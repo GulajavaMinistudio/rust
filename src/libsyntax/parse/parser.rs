@@ -375,10 +375,11 @@ impl<'a> Parser<'a> {
         if let Some(directory) = directory {
             parser.directory = directory;
         } else if !parser.token.span.is_dummy() {
-            if let FileName::Real(mut path) =
-                    sess.source_map().span_to_unmapped_path(parser.token.span) {
-                path.pop();
-                parser.directory.path = Cow::from(path);
+            if let Some(FileName::Real(path)) =
+                    &sess.source_map().lookup_char_pos(parser.token.span.lo()).file.unmapped_path {
+                if let Some(directory_path) = path.parent() {
+                    parser.directory.path = Cow::from(directory_path.to_path_buf());
+                }
             }
         }
 
@@ -971,15 +972,12 @@ impl<'a> Parser<'a> {
     /// Skips unexpected attributes and doc comments in this position and emits an appropriate
     /// error.
     /// This version of parse arg doesn't necessarily require identifier names.
-    fn parse_arg_general<F>(
+    fn parse_arg_general(
         &mut self,
         is_trait_item: bool,
         allow_c_variadic: bool,
-        is_name_required: F,
-    ) -> PResult<'a, Arg>
-    where
-        F: Fn(&token::Token) -> bool
-    {
+        is_name_required: impl Fn(&token::Token) -> bool,
+    ) -> PResult<'a, Arg> {
         let lo = self.token.span;
         let attrs = self.parse_arg_attributes()?;
         if let Some(mut arg) = self.parse_self_arg()? {
@@ -991,7 +989,7 @@ impl<'a> Parser<'a> {
         let (pat, ty) = if is_name_required || self.is_named_argument() {
             debug!("parse_arg_general parse_pat (is_name_required:{})", is_name_required);
 
-            let pat = self.parse_pat(Some("argument name"))?;
+            let pat = self.parse_fn_param_pat()?;
             if let Err(mut err) = self.expect(&token::Colon) {
                 if let Some(ident) = self.argument_without_type(
                     &mut err,

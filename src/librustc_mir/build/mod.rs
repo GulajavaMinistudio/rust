@@ -502,7 +502,7 @@ fn should_abort_on_panic(tcx: TyCtxt<'_>, fn_def_id: DefId, abi: Abi) -> bool {
     // This is a special case: some functions have a C abi but are meant to
     // unwind anyway. Don't stop them.
     match unwind_attr {
-        None => true,
+        None => false, // FIXME(#58794)
         Some(UnwindAttr::Allowed) => false,
         Some(UnwindAttr::Aborts) => true,
     }
@@ -763,7 +763,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             self.cfg.basic_blocks,
             self.source_scopes,
             ClearCrossCrate::Set(self.source_scope_local_data),
-            IndexVec::new(),
             yield_ty,
             self.local_decls,
             self.canonical_user_type_annotations,
