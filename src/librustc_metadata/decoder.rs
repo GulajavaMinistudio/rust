@@ -450,9 +450,17 @@ impl<'a, 'tcx> CrateMetadata {
     pub fn is_proc_macro_crate(&self) -> bool {
         self.root.proc_macro_decls_static.is_some()
     }
+
     fn is_proc_macro(&self, id: DefIndex) -> bool {
         self.is_proc_macro_crate() &&
             self.root.proc_macro_data.unwrap().decode(self).find(|x| *x == id).is_some()
+    }
+
+    fn entry_unless_proc_macro(&self, id: DefIndex) -> Option<Entry<'tcx>> {
+        match self.is_proc_macro(id) {
+            true => None,
+            false => Some(self.entry(id)),
+        }
     }
 
     fn maybe_entry(&self, item_id: DefIndex) -> Option<Lazy<Entry<'tcx>>> {
@@ -519,9 +527,7 @@ impl<'a, 'tcx> CrateMetadata {
                     attributes.iter().cloned().map(Symbol::intern).collect::<Vec<_>>();
                 (
                     trait_name,
-                    SyntaxExtensionKind::Derive(Box::new(ProcMacroDerive {
-                        client, attrs: helper_attrs.clone()
-                    })),
+                    SyntaxExtensionKind::Derive(Box::new(ProcMacroDerive { client })),
                     helper_attrs,
                 )
             }
@@ -689,10 +695,8 @@ impl<'a, 'tcx> CrateMetadata {
     }
 
     pub fn get_deprecation(&self, id: DefIndex) -> Option<attr::Deprecation> {
-        match self.is_proc_macro(id) {
-            true => None,
-            false => self.entry(id).deprecation.map(|depr| depr.decode(self)),
-        }
+        self.entry_unless_proc_macro(id)
+            .and_then(|entry| entry.deprecation.map(|depr| depr.decode(self)))
     }
 
     pub fn get_visibility(&self, id: DefIndex) -> ty::Visibility {
@@ -902,22 +906,24 @@ impl<'a, 'tcx> CrateMetadata {
         self.maybe_entry(id).and_then(|item| item.decode(self).mir).is_some()
     }
 
-    pub fn maybe_get_optimized_mir(&self, tcx: TyCtxt<'tcx>, id: DefIndex) -> Option<Body<'tcx>> {
-        match self.is_proc_macro(id) {
-            true => None,
-            false => self.entry(id).mir.map(|mir| mir.decode((self, tcx))),
-        }
+    pub fn get_optimized_mir(&self, tcx: TyCtxt<'tcx>, id: DefIndex) -> Body<'tcx> {
+        self.entry_unless_proc_macro(id)
+            .and_then(|entry| entry.mir.map(|mir| mir.decode((self, tcx))))
+            .unwrap_or_else(|| {
+                bug!("get_optimized_mir: missing MIR for `{:?}", self.local_def_id(id))
+            })
     }
 
-    pub fn maybe_get_promoted_mir(
+    pub fn get_promoted_mir(
         &self,
         tcx: TyCtxt<'tcx>,
         id: DefIndex,
-    ) -> Option<IndexVec<Promoted, Body<'tcx>>> {
-        match self.is_proc_macro(id) {
-            true => None,
-            false => self.entry(id).promoted_mir.map(|promoted| promoted.decode((self, tcx)),)
-        }
+    ) -> IndexVec<Promoted, Body<'tcx>> {
+        self.entry_unless_proc_macro(id)
+            .and_then(|entry| entry.promoted_mir.map(|promoted| promoted.decode((self, tcx))))
+            .unwrap_or_else(|| {
+                bug!("get_promoted_mir: missing MIR for `{:?}`", self.local_def_id(id))
+            })
     }
 
     pub fn mir_const_qualif(&self, id: DefIndex) -> u8 {
@@ -1135,14 +1141,14 @@ impl<'a, 'tcx> CrateMetadata {
         }
     }
 
-    pub fn get_fn_arg_names(&self, id: DefIndex) -> Vec<ast::Name> {
-        let arg_names = match self.entry(id).kind {
+    pub fn get_fn_param_names(&self, id: DefIndex) -> Vec<ast::Name> {
+        let param_names = match self.entry(id).kind {
             EntryKind::Fn(data) |
-            EntryKind::ForeignFn(data) => data.decode(self).arg_names,
-            EntryKind::Method(data) => data.decode(self).fn_data.arg_names,
+            EntryKind::ForeignFn(data) => data.decode(self).param_names,
+            EntryKind::Method(data) => data.decode(self).fn_data.param_names,
             _ => Lazy::empty(),
         };
-        arg_names.decode(self).collect()
+        param_names.decode(self).collect()
     }
 
     pub fn exported_symbols(
