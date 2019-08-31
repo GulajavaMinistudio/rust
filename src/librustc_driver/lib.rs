@@ -439,6 +439,15 @@ fn make_input(free_matches: &[String]) -> Option<(Input, Option<PathBuf>, Option
             } else {
                 None
             };
+            if let Ok(path) = env::var("UNSTABLE_RUSTDOC_TEST_PATH") {
+                let line = env::var("UNSTABLE_RUSTDOC_TEST_LINE").
+                            expect("when UNSTABLE_RUSTDOC_TEST_PATH is set \
+                                    UNSTABLE_RUSTDOC_TEST_LINE also needs to be set");
+                let line = isize::from_str_radix(&line, 10).
+                            expect("UNSTABLE_RUSTDOC_TEST_LINE needs to be an number");
+                let file_name = FileName::doc_test_source_code(PathBuf::from(path), line);
+                return Some((Input::Str { name: file_name, input: src }, None, err));
+            }
             Some((Input::Str { name: FileName::anon_source_code(&src), input: src },
                   None, err))
         } else {
@@ -1156,11 +1165,13 @@ pub fn report_ices_to_stderr_if_any<F: FnOnce() -> R, R>(f: F) -> Result<R, Erro
             // Thread panicked without emitting a fatal diagnostic
             eprintln!("");
 
-            let emitter =
-                Box::new(errors::emitter::EmitterWriter::stderr(errors::ColorConfig::Auto,
-                                                                None,
-                                                                false,
-                                                                false));
+            let emitter = Box::new(errors::emitter::EmitterWriter::stderr(
+                errors::ColorConfig::Auto,
+                None,
+                false,
+                false,
+                None,
+            ));
             let handler = errors::Handler::with_emitter(true, None, emitter);
 
             // a .span_bug or .bug call has already printed what
