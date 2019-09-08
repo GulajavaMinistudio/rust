@@ -11,7 +11,7 @@ use syntax::ext::base::{self, *};
 use syntax::parse::token;
 use syntax::ptr::P;
 use syntax::symbol::{Symbol, sym};
-use syntax::tokenstream;
+use syntax::tokenstream::TokenStream;
 use syntax_pos::{MultiSpan, Span};
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -126,7 +126,7 @@ struct Context<'a, 'b> {
 fn parse_args<'a>(
     ecx: &mut ExtCtxt<'a>,
     sp: Span,
-    tts: &[tokenstream::TokenTree]
+    tts: TokenStream,
 ) -> Result<(P<ast::Expr>, Vec<P<ast::Expr>>, FxHashMap<Symbol, usize>), DiagnosticBuilder<'a>> {
     let mut args = Vec::<P<ast::Expr>>::new();
     let mut names = FxHashMap::<Symbol, usize>::default();
@@ -291,7 +291,7 @@ impl<'a, 'b> Context<'a, 'b> {
                 &format!(
                     "{} positional argument{} in format string, but {}",
                     count,
-                    if count > 1 { "s" } else { "" },
+                    if count != 1 { "s" } else { "" },
                     self.describe_num_args(),
                 ),
             );
@@ -716,7 +716,7 @@ impl<'a, 'b> Context<'a, 'b> {
         // But the nested match expression is proved to perform not as well
         // as series of let's; the first approach does.
         let pat = self.ecx.pat_tuple(self.fmtsp, pats);
-        let arm = self.ecx.arm(self.fmtsp, vec![pat], args_array);
+        let arm = self.ecx.arm(self.fmtsp, pat, args_array);
         let head = self.ecx.expr(self.fmtsp, ast::ExprKind::Tup(heads));
         let result = self.ecx.expr_match(self.fmtsp, head, vec![arm]);
 
@@ -794,7 +794,7 @@ impl<'a, 'b> Context<'a, 'b> {
 fn expand_format_args_impl<'cx>(
     ecx: &'cx mut ExtCtxt<'_>,
     mut sp: Span,
-    tts: &[tokenstream::TokenTree],
+    tts: TokenStream,
     nl: bool,
 ) -> Box<dyn base::MacResult + 'cx> {
     sp = ecx.with_def_site_ctxt(sp);
@@ -812,7 +812,7 @@ fn expand_format_args_impl<'cx>(
 pub fn expand_format_args<'cx>(
     ecx: &'cx mut ExtCtxt<'_>,
     sp: Span,
-    tts: &[tokenstream::TokenTree],
+    tts: TokenStream,
 ) -> Box<dyn base::MacResult + 'cx> {
     expand_format_args_impl(ecx, sp, tts, false)
 }
@@ -820,7 +820,7 @@ pub fn expand_format_args<'cx>(
 pub fn expand_format_args_nl<'cx>(
     ecx: &'cx mut ExtCtxt<'_>,
     sp: Span,
-    tts: &[tokenstream::TokenTree],
+    tts: TokenStream,
 ) -> Box<dyn base::MacResult + 'cx> {
     expand_format_args_impl(ecx, sp, tts, true)
 }

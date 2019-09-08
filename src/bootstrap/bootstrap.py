@@ -631,8 +631,9 @@ class RustBuild(object):
         target_linker = self.get_toml("linker", build_section)
         if target_linker is not None:
             env["RUSTFLAGS"] += "-C linker=" + target_linker + " "
+        env["RUSTFLAGS"] += " -Wrust_2018_idioms -Wunused_lifetimes "
         if self.get_toml("deny-warnings", "rust") != "false":
-            env["RUSTFLAGS"] += "-Dwarnings -Drust_2018_idioms -Dunused_lifetimes "
+            env["RUSTFLAGS"] += "-Dwarnings "
 
         env["PATH"] = os.path.join(self.bin_root(), "bin") + \
             os.pathsep + env["PATH"]
@@ -668,7 +669,7 @@ class RustBuild(object):
     def update_submodule(self, module, checked_out, recorded_submodules):
         module_path = os.path.join(self.rust_root, module)
 
-        if checked_out != None:
+        if checked_out is not None:
             default_encoding = sys.getdefaultencoding()
             checked_out = checked_out.communicate()[0].decode(default_encoding).strip()
             if recorded_submodules[module] == checked_out:

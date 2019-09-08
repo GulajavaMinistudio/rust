@@ -45,7 +45,6 @@
 #![feature(non_exhaustive)]
 #![feature(optin_builtin_traits)]
 #![feature(range_is_empty)]
-#![feature(rustc_diagnostic_macros)]
 #![feature(slice_patterns)]
 #![feature(specialization)]
 #![feature(unboxed_closures)]
@@ -88,8 +87,6 @@ mod tests;
 #[macro_use]
 mod macros;
 
-// N.B., this module needs to be declared first so diagnostics are
-// registered before they are used.
 pub mod error_codes;
 
 #[macro_use]
@@ -97,7 +94,6 @@ pub mod query;
 
 #[macro_use]
 pub mod arena;
-pub mod cfg;
 pub mod dep_graph;
 pub mod hir;
 pub mod ich;
@@ -143,6 +139,3 @@ pub mod util {
 
 // Allows macros to refer to this crate as `::rustc`
 extern crate self as rustc;
-
-// Build the diagnostics array at the end so that the metadata includes error use sites.
-__build_diagnostic_array! { librustc, DIAGNOSTICS }

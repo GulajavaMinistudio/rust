@@ -3,20 +3,20 @@ use crate::attr::{self, HasAttrs, Stability, Deprecation};
 use crate::source_map::SourceMap;
 use crate::edition::Edition;
 use crate::ext::expand::{self, AstFragment, Invocation};
-use crate::ext::hygiene::{ExpnId, Transparency};
+use crate::ext::hygiene::ExpnId;
 use crate::mut_visit::{self, MutVisitor};
 use crate::parse::{self, parser, ParseSess, DirectoryOwnership};
 use crate::parse::token;
 use crate::ptr::P;
 use crate::symbol::{kw, sym, Ident, Symbol};
 use crate::{ThinVec, MACRO_ARGUMENTS};
-use crate::tokenstream::{self, TokenStream, TokenTree};
+use crate::tokenstream::{self, TokenStream};
 use crate::visit::Visitor;
 
 use errors::{DiagnosticBuilder, DiagnosticId};
 use smallvec::{smallvec, SmallVec};
 use syntax_pos::{FileName, Span, MultiSpan, DUMMY_SP};
-use syntax_pos::hygiene::{ExpnData, ExpnKind};
+use syntax_pos::hygiene::{AstPass, ExpnData, ExpnKind};
 
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::{self, Lrc};
@@ -235,18 +235,18 @@ pub trait TTMacroExpander {
 }
 
 pub type MacroExpanderFn =
-    for<'cx> fn(&'cx mut ExtCtxt<'_>, Span, &[tokenstream::TokenTree])
+    for<'cx> fn(&'cx mut ExtCtxt<'_>, Span, TokenStream)
                 -> Box<dyn MacResult+'cx>;
 
 impl<F> TTMacroExpander for F
-    where F: for<'cx> Fn(&'cx mut ExtCtxt<'_>, Span, &[tokenstream::TokenTree])
+    where F: for<'cx> Fn(&'cx mut ExtCtxt<'_>, Span, TokenStream)
     -> Box<dyn MacResult+'cx>
 {
     fn expand<'cx>(
         &self,
         ecx: &'cx mut ExtCtxt<'_>,
         span: Span,
-        input: TokenStream,
+        mut input: TokenStream,
     ) -> Box<dyn MacResult+'cx> {
         struct AvoidInterpolatedIdents;
 
@@ -268,10 +268,8 @@ impl<F> TTMacroExpander for F
                 mut_visit::noop_visit_mac(mac, self)
             }
         }
-
-        let input: Vec<_> =
-            input.trees().map(|mut tt| { AvoidInterpolatedIdents.visit_tt(&mut tt); tt }).collect();
-        (*self)(ecx, span, &input)
+        AvoidInterpolatedIdents.visit_tts(&mut input);
+        (*self)(ecx, span, input)
     }
 }
 
@@ -677,7 +675,7 @@ impl SyntaxExtension {
     }
 
     pub fn dummy_bang(edition: Edition) -> SyntaxExtension {
-        fn expander<'cx>(_: &'cx mut ExtCtxt<'_>, span: Span, _: &[TokenTree])
+        fn expander<'cx>(_: &'cx mut ExtCtxt<'_>, span: Span, _: TokenStream)
                          -> Box<dyn MacResult + 'cx> {
             DummyResult::any(span)
         }
@@ -734,12 +732,18 @@ bitflags::bitflags! {
 pub trait Resolver {
     fn next_node_id(&mut self) -> NodeId;
 
-    fn get_module_scope(&mut self, id: NodeId) -> ExpnId;
-
     fn resolve_dollar_crates(&mut self);
     fn visit_ast_fragment_with_placeholders(&mut self, expn_id: ExpnId, fragment: &AstFragment,
                                             extra_placeholders: &[NodeId]);
     fn register_builtin_macro(&mut self, ident: ast::Ident, ext: SyntaxExtension);
+
+    fn expansion_for_ast_pass(
+        &mut self,
+        call_site: Span,
+        pass: AstPass,
+        features: &[Symbol],
+        parent_module_id: Option<NodeId>,
+    ) -> ExpnId;
 
     fn resolve_imports(&mut self);
 
@@ -811,9 +815,8 @@ impl<'a> ExtCtxt<'a> {
     pub fn monotonic_expander<'b>(&'b mut self) -> expand::MacroExpander<'b, 'a> {
         expand::MacroExpander::new(self, true)
     }
-
-    pub fn new_parser_from_tts(&self, tts: &[tokenstream::TokenTree]) -> parser::Parser<'a> {
-        parse::stream_to_parser(self.parse_sess, tts.iter().cloned().collect(), MACRO_ARGUMENTS)
+    pub fn new_parser_from_tts(&self, stream: TokenStream) -> parser::Parser<'a> {
+        parse::stream_to_parser(self.parse_sess, stream, MACRO_ARGUMENTS)
     }
     pub fn source_map(&self) -> &'a SourceMap { self.parse_sess.source_map() }
     pub fn parse_sess(&self) -> &'a parse::ParseSess { self.parse_sess }
@@ -825,20 +828,20 @@ impl<'a> ExtCtxt<'a> {
     /// Equivalent of `Span::def_site` from the proc macro API,
     /// except that the location is taken from the span passed as an argument.
     pub fn with_def_site_ctxt(&self, span: Span) -> Span {
-        span.with_ctxt_from_mark(self.current_expansion.id, Transparency::Opaque)
+        span.with_def_site_ctxt(self.current_expansion.id)
     }
 
     /// Equivalent of `Span::call_site` from the proc macro API,
     /// except that the location is taken from the span passed as an argument.
     pub fn with_call_site_ctxt(&self, span: Span) -> Span {
-        span.with_ctxt_from_mark(self.current_expansion.id, Transparency::Transparent)
+        span.with_call_site_ctxt(self.current_expansion.id)
     }
 
     /// Span with a context reproducing `macro_rules` hygiene (hygienic locals, unhygienic items).
     /// FIXME: This should be eventually replaced either with `with_def_site_ctxt` (preferably),
     /// or with `with_call_site_ctxt` (where necessary).
     pub fn with_legacy_ctxt(&self, span: Span) -> Span {
-        span.with_ctxt_from_mark(self.current_expansion.id, Transparency::SemiTransparent)
+        span.with_legacy_ctxt(self.current_expansion.id)
     }
 
     /// Returns span for the macro which originally caused the current expansion to happen.
@@ -955,7 +958,7 @@ impl<'a> ExtCtxt<'a> {
         self.resolver.check_unused_macros();
     }
 
-    /// Resolve a path mentioned inside Rust code.
+    /// Resolves a path mentioned inside Rust code.
     ///
     /// This unifies the logic used for resolving `include_X!`, and `#[doc(include)]` file paths.
     ///
@@ -1019,7 +1022,7 @@ pub fn expr_to_string(cx: &mut ExtCtxt<'_>, expr: P<ast::Expr>, err_msg: &str)
 /// done as rarely as possible).
 pub fn check_zero_tts(cx: &ExtCtxt<'_>,
                       sp: Span,
-                      tts: &[tokenstream::TokenTree],
+                      tts: TokenStream,
                       name: &str) {
     if !tts.is_empty() {
         cx.span_err(sp, &format!("{} takes no arguments", name));
@@ -1030,7 +1033,7 @@ pub fn check_zero_tts(cx: &ExtCtxt<'_>,
 /// expect exactly one string literal, or emit an error and return `None`.
 pub fn get_single_str_from_tts(cx: &mut ExtCtxt<'_>,
                                sp: Span,
-                               tts: &[tokenstream::TokenTree],
+                               tts: TokenStream,
                                name: &str)
                                -> Option<String> {
     let mut p = cx.new_parser_from_tts(tts);
@@ -1053,7 +1056,7 @@ pub fn get_single_str_from_tts(cx: &mut ExtCtxt<'_>,
 /// parsing error, emit a non-fatal error and return `None`.
 pub fn get_exprs_from_tts(cx: &mut ExtCtxt<'_>,
                           sp: Span,
-                          tts: &[tokenstream::TokenTree]) -> Option<Vec<P<ast::Expr>>> {
+                          tts: TokenStream) -> Option<Vec<P<ast::Expr>>> {
     let mut p = cx.new_parser_from_tts(tts);
     let mut es = Vec::new();
     while p.token != token::Eof {

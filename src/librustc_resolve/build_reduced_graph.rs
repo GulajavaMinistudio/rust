@@ -126,7 +126,8 @@ impl<'a> Resolver<'a> {
     crate fn macro_def_scope(&mut self, expn_id: ExpnId) -> Module<'a> {
         let def_id = match self.macro_defs.get(&expn_id) {
             Some(def_id) => *def_id,
-            None => return self.graph_root,
+            None => return self.ast_transform_scopes.get(&expn_id)
+                .unwrap_or(&self.graph_root),
         };
         if let Some(id) = self.definitions.as_local_node_id(def_id) {
             self.local_macro_def_scopes[&id]
@@ -727,9 +728,10 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                                              expansion,
                                              item.span);
                 self.r.define(parent, ident, TypeNS, (module, vis, sp, expansion));
+                self.parent_scope.module = module;
 
                 for variant in &(*enum_definition).variants {
-                    self.build_reduced_graph_for_variant(variant, module, vis);
+                    self.build_reduced_graph_for_variant(variant, vis);
                 }
             }
 
@@ -817,10 +819,8 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
 
     // Constructs the reduced graph for one variant. Variants exist in the
     // type and value namespaces.
-    fn build_reduced_graph_for_variant(&mut self,
-                                       variant: &Variant,
-                                       parent: Module<'a>,
-                                       vis: ty::Visibility) {
+    fn build_reduced_graph_for_variant(&mut self, variant: &Variant, vis: ty::Visibility) {
+        let parent = self.parent_scope.module;
         let expn_id = self.parent_scope.expansion;
         let ident = variant.ident;
 
@@ -1252,9 +1252,7 @@ impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {
         let expansion = self.parent_scope.expansion;
         self.r.define(parent, item.ident, ns, (res, vis, item.span, expansion));
 
-        self.parent_scope.module = parent.parent.unwrap(); // nearest normal ancestor
         visit::walk_trait_item(self, item);
-        self.parent_scope.module = parent;
     }
 
     fn visit_token(&mut self, t: Token) {
