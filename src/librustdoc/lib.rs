@@ -1,7 +1,7 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/",
        html_playground_url = "https://play.rust-lang.org/")]
 
-#![feature(bind_by_move_pattern_guards)]
+#![cfg_attr(bootstrap, feature(bind_by_move_pattern_guards))]
 #![feature(rustc_private)]
 #![feature(arbitrary_self_types)]
 #![feature(box_patterns)]
@@ -90,7 +90,7 @@ pub fn main() {
         32_000_000 // 32MB on other platforms
     };
     rustc_driver::set_sigpipe_handler();
-    env_logger::init();
+    env_logger::init_from_env("RUSTDOC_LOG");
     let res = std::thread::Builder::new().stack_size(thread_stack_size).spawn(move || {
         get_args().map(|args| main_args(&args)).unwrap_or(1)
     }).unwrap().join().unwrap_or(rustc_driver::EXIT_FAILURE);
@@ -355,6 +355,23 @@ fn opts() -> Vec<RustcOptGroup> {
             o.optflag("",
                       "show-coverage",
                       "calculate percentage of public items with documentation")
+        }),
+        unstable("enable-per-target-ignores", |o| {
+            o.optflag("",
+                      "enable-per-target-ignores",
+                      "parse ignore-foo for ignoring doctests on a per-target basis")
+        }),
+        unstable("runtool", |o| {
+            o.optopt("",
+                     "runtool",
+                     "",
+                     "The tool to run tests with when building for a different target than host")
+        }),
+        unstable("runtool-arg", |o| {
+            o.optmulti("",
+                       "runtool-arg",
+                       "",
+                       "One (of possibly many) arguments to pass to the runtool")
         }),
     ]
 }
