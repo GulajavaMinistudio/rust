@@ -23,6 +23,7 @@ Rust MIR: a lowered representation of Rust. Also: an experiment!
 #![feature(try_blocks)]
 #![feature(mem_take)]
 #![feature(associated_type_bounds)]
+#![feature(range_is_empty)]
 
 #![recursion_limit="256"]
 
@@ -35,7 +36,7 @@ pub mod error_codes;
 
 mod borrow_check;
 mod build;
-mod dataflow;
+pub mod dataflow;
 mod hair;
 mod lints;
 mod shim;
@@ -59,5 +60,4 @@ pub fn provide(providers: &mut Providers<'_>) {
         let (param_env, (value, field)) = param_env_and_value.into_parts();
         const_eval::const_field(tcx, param_env, None, field, value)
     };
-    providers.type_name = interpret::type_name;
 }
