@@ -88,7 +88,7 @@ pub mod intrinsic;
 mod op;
 
 use crate::astconv::{AstConv, PathSeg};
-use errors::{Applicability, DiagnosticBuilder, DiagnosticId};
+use errors::{Applicability, DiagnosticBuilder, DiagnosticId, pluralise};
 use rustc::hir::{self, ExprKind, GenericArg, ItemKind, Node, PatKind, QPath};
 use rustc::hir::def::{CtorOf, Res, DefKind};
 use rustc::hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
@@ -2340,16 +2340,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // If span arose from a desugaring of `if` or `while`, then it is the condition itself,
             // which diverges, that we are about to lint on. This gives suboptimal diagnostics.
             // Instead, stop here so that the `if`- or `while`-expression's block is linted instead.
-            if !span.is_desugaring(DesugaringKind::CondTemporary) {
+            if !span.is_desugaring(DesugaringKind::CondTemporary) &&
+                !span.is_desugaring(DesugaringKind::Async)
+            {
                 self.diverges.set(Diverges::WarnedAlways);
 
                 debug!("warn_if_unreachable: id={:?} span={:?} kind={}", id, span, kind);
 
                 let msg = format!("unreachable {}", kind);
                 self.tcx().struct_span_lint_hir(lint::builtin::UNREACHABLE_CODE, id, span, &msg)
-                    .span_note(
+                    .span_label(span, &msg)
+                    .span_label(
                         orig_span,
-                        custom_note.unwrap_or("any code following this expression is unreachable")
+                        custom_note.unwrap_or("any code following this expression is unreachable"),
                     )
                     .emit();
             }
@@ -4935,5 +4938,5 @@ fn fatally_break_rust(sess: &Session) {
 }
 
 fn potentially_plural_count(count: usize, word: &str) -> String {
-    format!("{} {}{}", count, word, if count == 1 { "" } else { "s" })
+    format!("{} {}{}", count, word, pluralise!(count))
 }
