@@ -974,7 +974,7 @@ pub struct FreeRegionInfo {
 ///
 /// [rustc guide]: https://rust-lang.github.io/rustc-guide/ty.html
 #[derive(Copy, Clone)]
-#[cfg_attr(not(bootstrap), rustc_diagnostic_item = "TyCtxt")]
+#[rustc_diagnostic_item = "TyCtxt"]
 pub struct TyCtxt<'tcx> {
     gcx: &'tcx GlobalCtxt<'tcx>,
 }
@@ -1510,9 +1510,9 @@ impl<'tcx> TyCtxt<'tcx> {
                 CrateType::Executable |
                 CrateType::Staticlib  |
                 CrateType::ProcMacro  |
+                CrateType::Dylib      |
                 CrateType::Cdylib     => false,
-                CrateType::Rlib       |
-                CrateType::Dylib      => true,
+                CrateType::Rlib       => true,
             }
         })
     }
