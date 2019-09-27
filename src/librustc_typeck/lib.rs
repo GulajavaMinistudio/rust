@@ -159,10 +159,10 @@ fn check_main_fn_ty(tcx: TyCtxt<'_>, main_def_id: DefId) {
     let main_id = tcx.hir().as_local_hir_id(main_def_id).unwrap();
     let main_span = tcx.def_span(main_def_id);
     let main_t = tcx.type_of(main_def_id);
-    match main_t.sty {
+    match main_t.kind {
         ty::FnDef(..) => {
             if let Some(Node::Item(it)) = tcx.hir().find(main_id) {
-                if let hir::ItemKind::Fn(.., ref generics, _) = it.node {
+                if let hir::ItemKind::Fn(.., ref generics, _) = it.kind {
                     let mut error = false;
                     if !generics.params.is_empty() {
                         let msg = "`main` function is not allowed to have generic \
@@ -224,10 +224,10 @@ fn check_start_fn_ty(tcx: TyCtxt<'_>, start_def_id: DefId) {
     let start_id = tcx.hir().as_local_hir_id(start_def_id).unwrap();
     let start_span = tcx.def_span(start_def_id);
     let start_t = tcx.type_of(start_def_id);
-    match start_t.sty {
+    match start_t.kind {
         ty::FnDef(..) => {
             if let Some(Node::Item(it)) = tcx.hir().find(start_id) {
-                if let hir::ItemKind::Fn(.., ref generics, _) = it.node {
+                if let hir::ItemKind::Fn(.., ref generics, _) = it.kind {
                     let mut error = false;
                     if !generics.params.is_empty() {
                         struct_span_err!(tcx.sess, generics.span, E0132,

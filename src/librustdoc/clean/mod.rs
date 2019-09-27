@@ -21,7 +21,7 @@ use rustc::hir;
 use rustc::hir::def::{CtorKind, DefKind, Res};
 use rustc::hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc::hir::ptr::P;
-use rustc::ty::subst::{InternalSubsts, SubstsRef, UnpackedKind};
+use rustc::ty::subst::{InternalSubsts, SubstsRef, GenericArgKind};
 use rustc::ty::{self, DefIdTree, TyCtxt, Region, RegionVid, Ty, AdtKind};
 use rustc::ty::fold::TypeFolder;
 use rustc::ty::layout::VariantIdx;
@@ -275,7 +275,7 @@ impl Clean<ExternalCrate> for CrateNum {
         let primitives = if root.is_local() {
             cx.tcx.hir().krate().module.item_ids.iter().filter_map(|&id| {
                 let item = cx.tcx.hir().expect_item(id.id);
-                match item.node {
+                match item.kind {
                     hir::ItemKind::Mod(_) => {
                         as_primitive(Res::Def(
                             DefKind::Mod,
@@ -319,7 +319,7 @@ impl Clean<ExternalCrate> for CrateNum {
         let keywords = if root.is_local() {
             cx.tcx.hir().krate().module.item_ids.iter().filter_map(|&id| {
                 let item = cx.tcx.hir().expect_item(id.id);
-                match item.node {
+                match item.kind {
                     hir::ItemKind::Mod(_) => {
                         as_keyword(Res::Def(
                             DefKind::Mod,
@@ -778,11 +778,11 @@ impl Attributes {
     fn extract_cfg(mi: &ast::MetaItem) -> Option<&ast::MetaItem> {
         use syntax::ast::NestedMetaItem::MetaItem;
 
-        if let ast::MetaItemKind::List(ref nmis) = mi.node {
+        if let ast::MetaItemKind::List(ref nmis) = mi.kind {
             if nmis.len() == 1 {
                 if let MetaItem(ref cfg_mi) = nmis[0] {
                     if cfg_mi.check_name(sym::cfg) {
-                        if let ast::MetaItemKind::List(ref cfg_nmis) = cfg_mi.node {
+                        if let ast::MetaItemKind::List(ref cfg_nmis) = cfg_mi.kind {
                             if cfg_nmis.len() == 1 {
                                 if let MetaItem(ref content_mi) = cfg_nmis[0] {
                                     return Some(content_mi);
@@ -1098,33 +1098,33 @@ fn external_generic_args(
     substs: SubstsRef<'_>,
 ) -> GenericArgs {
     let mut skip_self = has_self;
-    let mut ty_sty = None;
+    let mut ty_kind = None;
     let args: Vec<_> = substs.iter().filter_map(|kind| match kind.unpack() {
-        UnpackedKind::Lifetime(lt) => {
+        GenericArgKind::Lifetime(lt) => {
             lt.clean(cx).and_then(|lt| Some(GenericArg::Lifetime(lt)))
         }
-        UnpackedKind::Type(_) if skip_self => {
+        GenericArgKind::Type(_) if skip_self => {
             skip_self = false;
             None
         }
-        UnpackedKind::Type(ty) => {
-            ty_sty = Some(&ty.sty);
+        GenericArgKind::Type(ty) => {
+            ty_kind = Some(&ty.kind);
             Some(GenericArg::Type(ty.clean(cx)))
         }
-        UnpackedKind::Const(ct) => Some(GenericArg::Const(ct.clean(cx))),
+        GenericArgKind::Const(ct) => Some(GenericArg::Const(ct.clean(cx))),
     }).collect();
 
     match trait_did {
         // Attempt to sugar an external path like Fn<(A, B,), C> to Fn(A, B) -> C
         Some(did) if cx.tcx.lang_items().fn_trait_kind(did).is_some() => {
-            assert!(ty_sty.is_some());
-            let inputs = match ty_sty {
+            assert!(ty_kind.is_some());
+            let inputs = match ty_kind {
                 Some(ty::Tuple(ref tys)) => tys.iter().map(|t| t.expect_ty().clean(cx)).collect(),
                 _ => return GenericArgs::AngleBracketed { args, bindings },
             };
             let output = None;
             // FIXME(#20299) return type comes from a projection now
-            // match types[1].sty {
+            // match types[1].kind {
             //     ty::Tuple(ref v) if v.is_empty() => None, // -> ()
             //     _ => Some(types[1].clean(cx))
             // };
@@ -1162,9 +1162,9 @@ impl<'a, 'tcx> Clean<GenericBound> for (&'a ty::TraitRef<'tcx>, Vec<TypeBinding>
         // collect any late bound regions
         let mut late_bounds = vec![];
         for ty_s in trait_ref.input_types().skip(1) {
-            if let ty::Tuple(ts) = ty_s.sty {
+            if let ty::Tuple(ts) = ty_s.kind {
                 for &ty_s in ts {
-                    if let ty::Ref(ref reg, _, _) = ty_s.expect_ty().sty {
+                    if let ty::Ref(ref reg, _, _) = ty_s.expect_ty().kind {
                         if let &ty::RegionKind::ReLateBound(..) = *reg {
                             debug!("  hit an ReLateBound {:?}", reg);
                             if let Some(Lifetime(name)) = reg.clean(cx) {
@@ -1705,15 +1705,15 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics,
                 let mut projection = None;
                 let param_idx = (|| {
                     if let Some(trait_ref) = p.to_opt_poly_trait_ref() {
-                        if let ty::Param(param) = trait_ref.self_ty().sty {
+                        if let ty::Param(param) = trait_ref.self_ty().kind {
                             return Some(param.index);
                         }
                     } else if let Some(outlives) = p.to_opt_type_outlives() {
-                        if let ty::Param(param) = outlives.skip_binder().0.sty {
+                        if let ty::Param(param) = outlives.skip_binder().0.kind {
                             return Some(param.index);
                         }
                     } else if let ty::Predicate::Projection(p) = p {
-                        if let ty::Param(param) = p.skip_binder().projection_ty.self_ty().sty {
+                        if let ty::Param(param) = p.skip_binder().projection_ty.self_ty().kind {
                             projection = Some(p);
                             return Some(param.index);
                         }
@@ -2280,7 +2280,7 @@ impl Clean<PolyTrait> for hir::PolyTraitRef {
 
 impl Clean<Item> for hir::TraitItem {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
-        let inner = match self.node {
+        let inner = match self.kind {
             hir::TraitItemKind::Const(ref ty, default) => {
                 AssocConstItem(ty.clean(cx),
                                     default.map(|e| print_const_expr(cx, e)))
@@ -2321,7 +2321,7 @@ impl Clean<Item> for hir::TraitItem {
 
 impl Clean<Item> for hir::ImplItem {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
-        let inner = match self.node {
+        let inner = match self.kind {
             hir::ImplItemKind::Const(ref ty, expr) => {
                 AssocConstItem(ty.clean(cx),
                                     Some(print_const_expr(cx, expr)))
@@ -2380,7 +2380,7 @@ impl Clean<Item> for ty::AssocItem {
                     let self_arg_ty = *sig.input(0).skip_binder();
                     if self_arg_ty == self_ty {
                         decl.inputs.values[0].type_ = Generic(String::from("Self"));
-                    } else if let ty::Ref(_, ty, _) = self_arg_ty.sty {
+                    } else if let ty::Ref(_, ty, _) = self_arg_ty.kind {
                         if ty == self_ty {
                             match decl.inputs.values[0].type_ {
                                 BorrowedRef{ref mut type_, ..} => {
@@ -2835,7 +2835,7 @@ impl Clean<Type> for hir::Ty {
     fn clean(&self, cx: &DocContext<'_>) -> Type {
         use rustc::hir::*;
 
-        match self.node {
+        match self.kind {
             TyKind::Never => Never,
             TyKind::Ptr(ref m) => RawPointer(m.mutbl.clean(cx), box m.ty.clean(cx)),
             TyKind::Rptr(ref l, ref m) => {
@@ -2868,7 +2868,7 @@ impl Clean<Type> for hir::Ty {
             TyKind::Tup(ref tys) => Tuple(tys.clean(cx)),
             TyKind::Def(item_id, _) => {
                 let item = cx.tcx.hir().expect_item(item_id.id);
-                if let hir::ItemKind::OpaqueTy(ref ty) = item.node {
+                if let hir::ItemKind::OpaqueTy(ref ty) = item.kind {
                     ImplTrait(ty.bounds.clean(cx))
                 } else {
                     unreachable!()
@@ -2889,7 +2889,7 @@ impl Clean<Type> for hir::Ty {
                     // Substitute private type aliases
                     if let Some(hir_id) = cx.tcx.hir().as_local_hir_id(def_id) {
                         if !cx.renderinfo.borrow().access_levels.is_exported(def_id) {
-                            alias = Some(&cx.tcx.hir().expect_item(hir_id).node);
+                            alias = Some(&cx.tcx.hir().expect_item(hir_id).kind);
                         }
                     }
                 };
@@ -3000,7 +3000,7 @@ impl Clean<Type> for hir::Ty {
             TyKind::Path(hir::QPath::TypeRelative(ref qself, ref segment)) => {
                 let mut res = Res::Err;
                 let ty = hir_ty_to_ty(cx.tcx, self);
-                if let ty::Projection(proj) = ty.sty {
+                if let ty::Projection(proj) = ty.kind {
                     res = Res::Def(DefKind::Trait, proj.trait_ref(cx.tcx).def_id);
                 }
                 let trait_path = hir::Path {
@@ -3031,7 +3031,7 @@ impl Clean<Type> for hir::Ty {
             }
             TyKind::BareFn(ref barefn) => BareFunction(box barefn.clean(cx)),
             TyKind::Infer | TyKind::Err => Infer,
-            TyKind::Typeof(..) => panic!("unimplemented type {:?}", self.node),
+            TyKind::Typeof(..) => panic!("unimplemented type {:?}", self.kind),
             TyKind::CVarArgs(_) => CVarArgs,
         }
     }
@@ -3040,7 +3040,7 @@ impl Clean<Type> for hir::Ty {
 impl<'tcx> Clean<Type> for Ty<'tcx> {
     fn clean(&self, cx: &DocContext<'_>) -> Type {
         debug!("cleaning type: {:?}", self);
-        match self.sty {
+        match self.kind {
             ty::Never => Never,
             ty::Bool => Primitive(PrimitiveType::Bool),
             ty::Char => Primitive(PrimitiveType::Char),
@@ -3855,11 +3855,13 @@ pub enum ImplPolarity {
     Negative,
 }
 
-impl Clean<ImplPolarity> for hir::ImplPolarity {
+impl Clean<ImplPolarity> for ty::ImplPolarity {
     fn clean(&self, _: &DocContext<'_>) -> ImplPolarity {
         match self {
-            &hir::ImplPolarity::Positive => ImplPolarity::Positive,
-            &hir::ImplPolarity::Negative => ImplPolarity::Negative,
+            &ty::ImplPolarity::Positive |
+            // FIXME: do we want to do something else here?
+            &ty::ImplPolarity::Reservation => ImplPolarity::Positive,
+            &ty::ImplPolarity::Negative => ImplPolarity::Negative,
         }
     }
 }
@@ -3891,6 +3893,7 @@ impl Clean<Vec<Item>> for doctree::Impl<'_> {
         let mut ret = Vec::new();
         let trait_ = self.trait_.clean(cx);
         let items = self.items.iter().map(|ii| ii.clean(cx)).collect::<Vec<_>>();
+        let def_id = cx.tcx.hir().local_def_id(self.id);
 
         // If this impl block is an implementation of the Deref trait, then we
         // need to try inlining the target's inherent impl blocks as well.
@@ -3909,7 +3912,7 @@ impl Clean<Vec<Item>> for doctree::Impl<'_> {
             name: None,
             attrs: self.attrs.clean(cx),
             source: self.whence.clean(cx),
-            def_id: cx.tcx.hir().local_def_id(self.id),
+            def_id,
             visibility: self.vis.clean(cx),
             stability: cx.stability(self.id).clean(cx),
             deprecation: cx.deprecation(self.id).clean(cx),
@@ -3920,7 +3923,7 @@ impl Clean<Vec<Item>> for doctree::Impl<'_> {
                 trait_,
                 for_: self.for_.clean(cx),
                 items,
-                polarity: Some(self.polarity.clean(cx)),
+                polarity: Some(cx.tcx.impl_polarity(def_id).clean(cx)),
                 synthetic: false,
                 blanket_impl: None,
             })
@@ -4179,7 +4182,7 @@ fn name_from_pat(p: &hir::Pat) -> String {
     use rustc::hir::*;
     debug!("trying to get a name from pattern: {:?}", p);
 
-    match p.node {
+    match p.kind {
         PatKind::Wild => "_".to_string(),
         PatKind::Binding(_, _, ident, _) => ident.to_string(),
         PatKind::TupleStruct(ref p, ..) | PatKind::Path(ref p) => qpath_to_string(p),

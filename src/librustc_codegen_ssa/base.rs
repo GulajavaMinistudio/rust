@@ -43,11 +43,9 @@ use crate::mir;
 
 use crate::traits::*;
 
-use std::any::Any;
 use std::cmp;
 use std::ops::{Deref, DerefMut};
 use std::time::{Instant, Duration};
-use std::sync::mpsc;
 use syntax_pos::Span;
 use syntax::attr;
 use rustc::hir;
@@ -96,7 +94,7 @@ pub fn compare_simd_types<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     ret_ty: Bx::Type,
     op: hir::BinOpKind,
 ) -> Bx::Value {
-    let signed = match t.sty {
+    let signed = match t.kind {
         ty::Float(_) => {
             let cmp = bin_op_to_fcmp_predicate(op);
             let cmp = bx.fcmp(cmp, lhs, rhs);
@@ -130,7 +128,7 @@ pub fn unsized_info<'tcx, Cx: CodegenMethods<'tcx>>(
 ) -> Cx::Value {
     let (source, target) =
         cx.tcx().struct_lockstep_tails_erasing_lifetimes(source, target, cx.param_env());
-    match (&source.sty, &target.sty) {
+    match (&source.kind, &target.kind) {
         (&ty::Array(_, len), &ty::Slice(_)) => {
             cx.const_usize(len.eval_usize(cx.tcx(), ty::ParamEnv::reveal_all()))
         }
@@ -160,7 +158,7 @@ pub fn unsize_thin_ptr<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
     dst_ty: Ty<'tcx>,
 ) -> (Bx::Value, Bx::Value) {
     debug!("unsize_thin_ptr: {:?} => {:?}", src_ty, dst_ty);
-    match (&src_ty.sty, &dst_ty.sty) {
+    match (&src_ty.kind, &dst_ty.kind) {
         (&ty::Ref(_, a, _),
          &ty::Ref(_, b, _)) |
         (&ty::Ref(_, a, _),
@@ -232,7 +230,7 @@ pub fn coerce_unsized_into<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
         };
         OperandValue::Pair(base, info).store(bx, dst);
     };
-    match (&src_ty.sty, &dst_ty.sty) {
+    match (&src_ty.kind, &dst_ty.kind) {
         (&ty::Ref(..), &ty::Ref(..)) |
         (&ty::Ref(..), &ty::RawPtr(..)) |
         (&ty::RawPtr(..), &ty::RawPtr(..)) => {
@@ -482,19 +480,13 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     tcx: TyCtxt<'tcx>,
     metadata: EncodedMetadata,
     need_metadata_module: bool,
-    rx: mpsc::Receiver<Box<dyn Any + Send>>,
 ) -> OngoingCodegen<B> {
     check_for_rustc_errors_attr(tcx);
 
     // Skip crate items and just output metadata in -Z no-codegen mode.
     if tcx.sess.opts.debugging_opts.no_codegen ||
        !tcx.sess.opts.output_types.should_codegen() {
-        let ongoing_codegen = start_async_codegen(
-            backend,
-            tcx,
-            metadata,
-            rx,
-            1);
+        let ongoing_codegen = start_async_codegen(backend, tcx, metadata, 1);
 
         ongoing_codegen.codegen_finished(tcx);
 
@@ -523,12 +515,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         }
     }
 
-    let ongoing_codegen = start_async_codegen(
-        backend.clone(),
-        tcx,
-        metadata,
-        rx,
-        codegen_units.len());
+    let ongoing_codegen = start_async_codegen(backend.clone(), tcx, metadata, codegen_units.len());
     let ongoing_codegen = AbortCodegenOnDrop::<B>(Some(ongoing_codegen));
 
     // Codegen an allocator shim, if necessary.
@@ -614,20 +601,22 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
             CguReuse::No => {
                 tcx.sess.profiler(|p| p.start_activity(format!("codegen {}", cgu.name())));
                 let start_time = Instant::now();
-                backend.compile_codegen_unit(tcx, *cgu.name());
+                backend.compile_codegen_unit(tcx, *cgu.name(), &ongoing_codegen.coordinator_send);
                 total_codegen_time += start_time.elapsed();
                 tcx.sess.profiler(|p| p.end_activity(format!("codegen {}", cgu.name())));
                 false
             }
             CguReuse::PreLto => {
-                submit_pre_lto_module_to_llvm(&backend, tcx, CachedModuleCodegen {
+                submit_pre_lto_module_to_llvm(&backend, tcx, &ongoing_codegen.coordinator_send,
+                CachedModuleCodegen {
                     name: cgu.name().to_string(),
                     source: cgu.work_product(tcx),
                 });
                 true
             }
             CguReuse::PostLto => {
-                submit_post_lto_module_to_llvm(&backend, tcx, CachedModuleCodegen {
+                submit_post_lto_module_to_llvm(&backend, &ongoing_codegen.coordinator_send,
+                CachedModuleCodegen {
                     name: cgu.name().to_string(),
                     source: cgu.work_product(tcx),
                 });

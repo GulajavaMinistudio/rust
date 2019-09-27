@@ -12,7 +12,7 @@ use rustc::middle::region;
 use rustc::infer::InferCtxt;
 use rustc::ty::subst::Subst;
 use rustc::ty::{self, Ty, TyCtxt};
-use rustc::ty::subst::{Kind, InternalSubsts};
+use rustc::ty::subst::{GenericArg, InternalSubsts};
 use rustc::ty::layout::VariantIdx;
 use syntax::ast;
 use syntax::attr;
@@ -153,23 +153,20 @@ impl<'a, 'tcx> Cx<'a, 'tcx> {
         }
     }
 
-    pub fn pattern_from_hir(&mut self, p: &hir::Pat) -> Pattern<'tcx> {
+    pub fn pattern_from_hir(&mut self, p: &hir::Pat) -> Pat<'tcx> {
         let tcx = self.tcx.global_tcx();
         let p = match tcx.hir().get(p.hir_id) {
             Node::Pat(p) | Node::Binding(p) => p,
             node => bug!("pattern became {:?}", node)
         };
-        Pattern::from_hir(tcx,
-                          self.param_env.and(self.identity_substs),
-                          self.tables(),
-                          p)
+        Pat::from_hir(tcx, self.param_env.and(self.identity_substs), self.tables(), p)
     }
 
     pub fn trait_method(&mut self,
                         trait_def_id: DefId,
                         method_name: Symbol,
                         self_ty: Ty<'tcx>,
-                        params: &[Kind<'tcx>])
+                        params: &[GenericArg<'tcx>])
                         -> &'tcx ty::Const<'tcx> {
         let substs = self.tcx.mk_substs_trait(self_ty, params);
         for item in self.tcx.associated_items(trait_def_id) {

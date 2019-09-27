@@ -90,7 +90,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         );
 
         // If the callee is a bare function or a closure, then we're all set.
-        match adjusted_ty.sty {
+        match adjusted_ty.kind {
             ty::FnDef(..) | ty::FnPtr(_) => {
                 let adjustments = autoderef.adjust_steps(self, Needs::None);
                 self.apply_adjustments(callee_expr, adjustments);
@@ -212,7 +212,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let method = self.register_infer_ok_obligations(ok);
                 let mut autoref = None;
                 if borrow {
-                    if let ty::Ref(region, _, mutbl) = method.sig.inputs()[0].sty {
+                    if let ty::Ref(region, _, mutbl) = method.sig.inputs()[0].kind {
                         let mutbl = match mutbl {
                             hir::MutImmutable => AutoBorrowMutability::Immutable,
                             hir::MutMutable => AutoBorrowMutability::Mutable {
@@ -247,7 +247,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let hir_id = self.tcx.hir().get_parent_node(hir_id);
         let parent_node = self.tcx.hir().get(hir_id);
         if let (
-            hir::Node::Expr(hir::Expr { node: hir::ExprKind::Closure(_, _, _, sp, ..), .. }),
+            hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Closure(_, _, _, sp, ..), .. }),
             hir::ExprKind::Block(..),
         ) = (parent_node, callee_node) {
             let start = sp.shrink_to_lo();
@@ -268,7 +268,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         arg_exprs: &'tcx [hir::Expr],
         expected: Expectation<'tcx>,
     ) -> Ty<'tcx> {
-        let (fn_sig, def_span) = match callee_ty.sty {
+        let (fn_sig, def_span) = match callee_ty.kind {
             ty::FnDef(def_id, _) => (
                 callee_ty.fn_sig(self.tcx),
                 self.tcx.hir().span_if_local(def_id),
@@ -278,13 +278,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let mut unit_variant = None;
                 if let &ty::Adt(adt_def, ..) = t {
                     if adt_def.is_enum() {
-                        if let hir::ExprKind::Call(ref expr, _) = call_expr.node {
+                        if let hir::ExprKind::Call(ref expr, _) = call_expr.kind {
                             unit_variant = Some(self.tcx.hir().hir_to_pretty_string(expr.hir_id))
                         }
                     }
                 }
 
-                if let hir::ExprKind::Call(ref callee, _) = call_expr.node {
+                if let hir::ExprKind::Call(ref callee, _) = call_expr.kind {
                     let mut err = type_error_struct!(
                         self.tcx.sess,
                         callee.span,
@@ -300,7 +300,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     self.identify_bad_closure_def_and_call(
                         &mut err,
                         call_expr.hir_id,
-                        &callee.node,
+                        &callee.kind,
                         callee.span,
                     );
 
@@ -318,7 +318,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
 
                     let mut inner_callee_path = None;
-                    let def = match callee.node {
+                    let def = match callee.kind {
                         hir::ExprKind::Path(ref qpath) => {
                             self.tables.borrow().qpath_res(qpath, callee.hir_id)
                         }
@@ -337,7 +337,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                     Applicability::MaybeIncorrect,
                                 );
                             }
-                            if let hir::ExprKind::Path(ref inner_qpath) = inner_callee.node {
+                            if let hir::ExprKind::Path(ref inner_qpath) = inner_callee.kind {
                                 inner_callee_path = Some(inner_qpath);
                                 self.tables
                                     .borrow()
@@ -375,8 +375,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     err.emit();
                 } else {
                     bug!(
-                        "call_expr.node should be an ExprKind::Call, got {:?}",
-                        call_expr.node
+                        "call_expr.kind should be an ExprKind::Call, got {:?}",
+                        call_expr.kind
                     );
                 }
 

@@ -283,7 +283,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                         // for a `self: &mut Self` to suggest removing the `&mut`.
                         if let ty::Ref(
                             _, _, hir::Mutability::MutMutable
-                        ) = local_decl.ty.sty {
+                        ) = local_decl.ty.kind {
                             true
                         } else {
                             false
@@ -338,7 +338,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                         _,
                         upvar_ident,
                         _,
-                    ) = pat.node
+                    ) = pat.kind
                     {
                         err.span_suggestion(
                             upvar_ident.span,
@@ -630,8 +630,8 @@ fn annotate_struct_field(
     field: &mir::Field,
 ) -> Option<(Span, String)> {
     // Expect our local to be a reference to a struct of some kind.
-    if let ty::Ref(_, ty, _) = ty.sty {
-        if let ty::Adt(def, _) = ty.sty {
+    if let ty::Ref(_, ty, _) = ty.kind {
+        if let ty::Adt(def, _) = ty.kind {
             let field = def.all_fields().nth(field.index())?;
             // Use the HIR types to construct the diagnostic message.
             let hir_id = tcx.hir().as_local_hir_id(field.did)?;
@@ -642,7 +642,7 @@ fn annotate_struct_field(
                 if let hir::TyKind::Rptr(lifetime, hir::MutTy {
                     mutbl: hir::Mutability::MutImmutable,
                     ref ty
-                }) = field.ty.node {
+                }) = field.ty.kind {
                     // Get the snippets in two parts - the named lifetime (if there is one) and
                     // type being referenced, that way we can reconstruct the snippet without loss
                     // of detail.

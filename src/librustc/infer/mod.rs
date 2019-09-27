@@ -20,7 +20,7 @@ use crate::traits::{self, ObligationCause, PredicateObligations, TraitEngine};
 use crate::ty::error::{ExpectedFound, TypeError, UnconstrainedNumeric};
 use crate::ty::fold::{TypeFolder, TypeFoldable};
 use crate::ty::relate::RelateResult;
-use crate::ty::subst::{Kind, InternalSubsts, SubstsRef};
+use crate::ty::subst::{GenericArg, InternalSubsts, SubstsRef};
 use crate::ty::{self, GenericParamDefKind, Ty, TyCtxt, InferConst};
 use crate::ty::{FloatVid, IntVid, TyVid, ConstVid};
 use crate::util::nodemap::FxHashMap;
@@ -614,7 +614,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     }
 
     pub fn type_var_diverges(&'a self, ty: Ty<'_>) -> bool {
-        match ty.sty {
+        match ty.kind {
             ty::Infer(ty::TyVar(vid)) => self.type_variables.borrow().var_diverges(vid),
             _ => false,
         }
@@ -627,7 +627,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     pub fn type_is_unconstrained_numeric(&'a self, ty: Ty<'_>) -> UnconstrainedNumeric {
         use crate::ty::error::UnconstrainedNumeric::Neither;
         use crate::ty::error::UnconstrainedNumeric::{UnconstrainedFloat, UnconstrainedInt};
-        match ty.sty {
+        match ty.kind {
             ty::Infer(ty::IntVar(vid)) => {
                 if self.int_unification_table
                     .borrow_mut()
@@ -1110,7 +1110,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         self.next_region_var_in_universe(RegionVariableOrigin::NLL(origin), universe)
     }
 
-    pub fn var_for_def(&self, span: Span, param: &ty::GenericParamDef) -> Kind<'tcx> {
+    pub fn var_for_def(&self, span: Span, param: &ty::GenericParamDef) -> GenericArg<'tcx> {
         match param.kind {
             GenericParamDefKind::Lifetime => {
                 // Create a region inference variable for the given
@@ -1563,7 +1563,7 @@ impl<'a, 'tcx> ShallowResolver<'a, 'tcx> {
     }
 
     pub fn shallow_resolve(&mut self, typ: Ty<'tcx>) -> Ty<'tcx> {
-        match typ.sty {
+        match typ.kind {
             ty::Infer(ty::TyVar(v)) => {
                 // Not entirely obvious: if `typ` is a type variable,
                 // it can be resolved to an int/float variable, which
@@ -1604,7 +1604,7 @@ impl<'a, 'tcx> ShallowResolver<'a, 'tcx> {
     // are extremely hot.
     #[inline(always)]
     pub fn shallow_resolve_changed(&mut self, typ: Ty<'tcx>) -> bool {
-        match typ.sty {
+        match typ.kind {
             ty::Infer(ty::TyVar(v)) => {
                 use self::type_variable::TypeVariableValue;
 

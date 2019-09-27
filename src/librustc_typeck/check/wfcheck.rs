@@ -76,7 +76,7 @@ pub fn check_item_well_formed(tcx: TyCtxt<'_>, def_id: DefId) {
            item.hir_id,
            tcx.def_path_str(def_id));
 
-    match item.node {
+    match item.kind {
         // Right now we check that every default trait implementation
         // has an implementation of itself. Basically, a case like:
         //
@@ -94,20 +94,27 @@ pub fn check_item_well_formed(tcx: TyCtxt<'_>, def_id: DefId) {
         //
         // won't be allowed unless there's an *explicit* implementation of `Send`
         // for `T`
-        hir::ItemKind::Impl(_, polarity, defaultness, _, ref trait_ref, ref self_ty, _) => {
+        hir::ItemKind::Impl(_, _, defaultness, _, ref trait_ref, ref self_ty, _) => {
             let is_auto = tcx.impl_trait_ref(tcx.hir().local_def_id(item.hir_id))
-                                .map_or(false, |trait_ref| tcx.trait_is_auto(trait_ref.def_id));
+                .map_or(false, |trait_ref| tcx.trait_is_auto(trait_ref.def_id));
+            let polarity = tcx.impl_polarity(def_id);
             if let (hir::Defaultness::Default { .. }, true) = (defaultness, is_auto) {
                 tcx.sess.span_err(item.span, "impls of auto traits cannot be default");
             }
-            if polarity == hir::ImplPolarity::Positive {
-                check_impl(tcx, item, self_ty, trait_ref);
-            } else {
-                // FIXME(#27579): what amount of WF checking do we need for neg impls?
-                if trait_ref.is_some() && !is_auto {
-                    span_err!(tcx.sess, item.span, E0192,
-                              "negative impls are only allowed for \
-                               auto traits (e.g., `Send` and `Sync`)")
+            match polarity {
+                ty::ImplPolarity::Positive => {
+                    check_impl(tcx, item, self_ty, trait_ref);
+                }
+                ty::ImplPolarity::Negative => {
+                    // FIXME(#27579): what amount of WF checking do we need for neg impls?
+                    if trait_ref.is_some() && !is_auto {
+                        span_err!(tcx.sess, item.span, E0192,
+                                  "negative impls are only allowed for \
+                                   auto traits (e.g., `Send` and `Sync`)")
+                    }
+                }
+                ty::ImplPolarity::Reservation => {
+                    // FIXME: what amount of WF checking do we need for reservation impls?
                 }
             }
         }
@@ -121,7 +128,7 @@ pub fn check_item_well_formed(tcx: TyCtxt<'_>, def_id: DefId) {
             check_item_type(tcx, item.hir_id, ty.span, false);
         }
         hir::ItemKind::ForeignMod(ref module) => for it in module.items.iter() {
-            if let hir::ForeignItemKind::Static(ref ty, ..) = it.node {
+            if let hir::ForeignItemKind::Static(ref ty, ..) = it.kind {
                 check_item_type(tcx, it.hir_id, ty.span, true);
             }
         },
@@ -160,7 +167,7 @@ pub fn check_trait_item(tcx: TyCtxt<'_>, def_id: DefId) {
     let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
     let trait_item = tcx.hir().expect_trait_item(hir_id);
 
-    let method_sig = match trait_item.node {
+    let method_sig = match trait_item.kind {
         hir::TraitItemKind::Method(ref sig, _) => Some(sig),
         _ => None
     };
@@ -171,7 +178,7 @@ pub fn check_impl_item(tcx: TyCtxt<'_>, def_id: DefId) {
     let hir_id = tcx.hir().as_local_hir_id(def_id).unwrap();
     let impl_item = tcx.hir().expect_impl_item(hir_id);
 
-    let method_sig = match impl_item.node {
+    let method_sig = match impl_item.kind {
         hir::ImplItemKind::Method(ref sig, _) => Some(sig),
         _ => None
     };
@@ -292,7 +299,7 @@ fn check_type_defn<'tcx, F>(
                         field.span,
                         fcx.body_id,
                         traits::FieldSized {
-                            adt_kind: match item.node.adt_kind() {
+                            adt_kind: match item.kind.adt_kind() {
                                 Some(i) => i,
                                 None => bug!(),
                             },
@@ -366,7 +373,7 @@ fn check_item_type(
         let mut forbid_unsized = true;
         if allow_foreign_ty {
             let tail = fcx.tcx.struct_tail_erasing_lifetimes(item_ty, fcx.param_env);
-            if let ty::Foreign(_) = tail.sty {
+            if let ty::Foreign(_) = tail.kind {
                 forbid_unsized = false;
             }
         }
@@ -398,16 +405,19 @@ fn check_impl<'tcx>(
 
         match *ast_trait_ref {
             Some(ref ast_trait_ref) => {
+                // `#[rustc_reservation_impl]` impls are not real impls and
+                // therefore don't need to be WF (the trait's `Self: Trait` predicate
+                // won't hold).
                 let trait_ref = fcx.tcx.impl_trait_ref(item_def_id).unwrap();
                 let trait_ref =
                     fcx.normalize_associated_types_in(
                         ast_trait_ref.path.span, &trait_ref);
                 let obligations =
                     ty::wf::trait_obligations(fcx,
-                                                fcx.param_env,
-                                                fcx.body_id,
-                                                &trait_ref,
-                                                ast_trait_ref.path.span);
+                                              fcx.param_env,
+                                              fcx.body_id,
+                                              &trait_ref,
+                                              ast_trait_ref.path.span);
                 for obligation in obligations {
                     fcx.register_predicate(obligation);
                 }
@@ -511,7 +521,7 @@ fn check_where_clauses<'tcx, 'fcx>(
         struct CountParams { params: FxHashSet<u32> }
         impl<'tcx> ty::fold::TypeVisitor<'tcx> for CountParams {
             fn visit_ty(&mut self, t: Ty<'tcx>) -> bool {
-                if let ty::Param(param) = t.sty {
+                if let ty::Param(param) = t.kind {
                     self.params.insert(param.index);
                 }
                 t.super_visit_with(self)
@@ -635,7 +645,7 @@ fn check_opaque_types<'fcx, 'tcx>(
     ty.fold_with(&mut ty::fold::BottomUpFolder {
         tcx: fcx.tcx,
         ty_op: |ty| {
-            if let ty::Opaque(def_id, substs) = ty.sty {
+            if let ty::Opaque(def_id, substs) = ty.kind {
                 trace!("check_opaque_types: opaque_ty, {:?}, {:?}", def_id, substs);
                 let generics = tcx.generics_of(def_id);
                 // Only check named `impl Trait` types defined in this crate.
@@ -646,7 +656,7 @@ fn check_opaque_types<'fcx, 'tcx>(
                         let mut seen: FxHashMap<_, Vec<_>> = FxHashMap::default();
                         for (subst, param) in substs.iter().zip(&generics.params) {
                             match subst.unpack() {
-                                ty::subst::UnpackedKind::Type(ty) => match ty.sty {
+                                ty::subst::GenericArgKind::Type(ty) => match ty.kind {
                                     ty::Param(..) => {}
                                     // Prevent `fn foo() -> Foo<u32>` from being defining.
                                     _ => {
@@ -668,7 +678,7 @@ fn check_opaque_types<'fcx, 'tcx>(
                                     }
                                 }
 
-                                ty::subst::UnpackedKind::Lifetime(region) => {
+                                ty::subst::GenericArgKind::Lifetime(region) => {
                                     let param_span = tcx.def_span(param.def_id);
                                     if let ty::ReStatic = region {
                                         tcx
@@ -690,7 +700,7 @@ fn check_opaque_types<'fcx, 'tcx>(
                                     }
                                 }
 
-                                ty::subst::UnpackedKind::Const(ct) => match ct.val {
+                                ty::subst::GenericArgKind::Const(ct) => match ct.val {
                                     ConstValue::Param(_) => {}
                                     _ => {
                                         tcx.sess

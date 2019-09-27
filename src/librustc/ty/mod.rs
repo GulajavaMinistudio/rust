@@ -167,6 +167,19 @@ pub struct ImplHeader<'tcx> {
     pub predicates: Vec<Predicate<'tcx>>,
 }
 
+#[derive(Copy, Clone, PartialEq, RustcEncodable, RustcDecodable, HashStable)]
+pub enum ImplPolarity {
+    /// `impl Trait for Type`
+    Positive,
+    /// `impl !Trait for Type`
+    Negative,
+    /// `#[rustc_reservation_impl] impl Trait for Type`
+    ///
+    /// This is a "stability hack", not a real Rust feature.
+    /// See #64631 for details.
+    Reservation,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, HashStable)]
 pub struct AssocItem {
     pub def_id: DefId,
@@ -479,7 +492,7 @@ bitflags! {
 
 #[allow(rustc::usage_of_ty_tykind)]
 pub struct TyS<'tcx> {
-    pub sty: TyKind<'tcx>,
+    pub kind: TyKind<'tcx>,
     pub flags: TypeFlags,
 
     /// This is a kind of confusing thing: it stores the smallest
@@ -508,13 +521,13 @@ static_assert_size!(TyS<'_>, 32);
 
 impl<'tcx> Ord for TyS<'tcx> {
     fn cmp(&self, other: &TyS<'tcx>) -> Ordering {
-        self.sty.cmp(&other.sty)
+        self.kind.cmp(&other.kind)
     }
 }
 
 impl<'tcx> PartialOrd for TyS<'tcx> {
     fn partial_cmp(&self, other: &TyS<'tcx>) -> Option<Ordering> {
-        Some(self.sty.cmp(&other.sty))
+        Some(self.kind.cmp(&other.kind))
     }
 }
 
@@ -534,7 +547,7 @@ impl<'tcx> Hash for TyS<'tcx> {
 
 impl<'tcx> TyS<'tcx> {
     pub fn is_primitive_ty(&self) -> bool {
-        match self.sty {
+        match self.kind {
             Bool |
             Char |
             Int(_) |
@@ -550,7 +563,7 @@ impl<'tcx> TyS<'tcx> {
     }
 
     pub fn is_suggestable(&self) -> bool {
-        match self.sty {
+        match self.kind {
             Opaque(..) |
             FnDef(..) |
             FnPtr(..) |
@@ -568,16 +581,16 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for ty::TyS<'tcx> {
                                           hcx: &mut StableHashingContext<'a>,
                                           hasher: &mut StableHasher<W>) {
         let ty::TyS {
-            ref sty,
+            ref kind,
 
             // The other fields just provide fast access to information that is
-            // also contained in `sty`, so no need to hash them.
+            // also contained in `kind`, so no need to hash them.
             flags: _,
 
             outer_exclusive_binder: _,
         } = *self;
 
-        sty.hash_stable(hcx, hasher);
+        kind.hash_stable(hcx, hasher);
     }
 }
 
@@ -2494,7 +2507,7 @@ impl<'tcx> AdtDef {
     }
 
     fn sized_constraint_for_ty(&self, tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Vec<Ty<'tcx>> {
-        let result = match ty.sty {
+        let result = match ty.kind {
             Bool | Char | Int(..) | Uint(..) | Float(..) |
             RawPtr(..) | Ref(..) | FnDef(..) | FnPtr(_) |
             Array(..) | Closure(..) | Generator(..) | Never => {
@@ -2911,7 +2924,26 @@ impl<'tcx> TyCtxt<'tcx> {
             return Some(ImplOverlapKind::Permitted);
         }
 
-        let is_legit = if self.features().overlapping_marker_traits {
+        match (self.impl_polarity(def_id1), self.impl_polarity(def_id2)) {
+            (ImplPolarity::Reservation, _) |
+            (_, ImplPolarity::Reservation) => {
+                // `#[rustc_reservation_impl]` impls don't overlap with anything
+                debug!("impls_are_allowed_to_overlap({:?}, {:?}) = Some(Permitted) (reservations)",
+                       def_id1, def_id2);
+                return Some(ImplOverlapKind::Permitted);
+            }
+            (ImplPolarity::Positive, ImplPolarity::Negative) |
+            (ImplPolarity::Negative, ImplPolarity::Positive) => {
+                // `impl AutoTrait for Type` + `impl !AutoTrait for Type`
+                debug!("impls_are_allowed_to_overlap({:?}, {:?}) - None (differing polarities)",
+                       def_id1, def_id2);
+                return None;
+            }
+            (ImplPolarity::Positive, ImplPolarity::Positive) |
+            (ImplPolarity::Negative, ImplPolarity::Negative) => {}
+        };
+
+        let is_marker_overlap = if self.features().overlapping_marker_traits {
             let trait1_is_empty = self.impl_trait_ref(def_id1)
                 .map_or(false, |trait_ref| {
                     self.associated_item_def_ids(trait_ref.def_id).is_empty()
@@ -2920,22 +2952,19 @@ impl<'tcx> TyCtxt<'tcx> {
                 .map_or(false, |trait_ref| {
                     self.associated_item_def_ids(trait_ref.def_id).is_empty()
                 });
-            self.impl_polarity(def_id1) == self.impl_polarity(def_id2)
-                && trait1_is_empty
-                && trait2_is_empty
+            trait1_is_empty && trait2_is_empty
         } else {
             let is_marker_impl = |def_id: DefId| -> bool {
                 let trait_ref = self.impl_trait_ref(def_id);
                 trait_ref.map_or(false, |tr| self.trait_def(tr.def_id).is_marker)
             };
-            self.impl_polarity(def_id1) == self.impl_polarity(def_id2)
-                && is_marker_impl(def_id1)
-                && is_marker_impl(def_id2)
+            is_marker_impl(def_id1) && is_marker_impl(def_id2)
         };
 
-        if is_legit {
-            debug!("impls_are_allowed_to_overlap({:?}, {:?}) = Some(Permitted)",
-                  def_id1, def_id2);
+
+        if is_marker_overlap {
+            debug!("impls_are_allowed_to_overlap({:?}, {:?}) = Some(Permitted) (marker overlap)",
+                   def_id1, def_id2);
             Some(ImplOverlapKind::Permitted)
         } else {
             if let Some(self_ty1) = self.issue33140_self_ty(def_id1) {
@@ -3135,7 +3164,7 @@ fn associated_item(tcx: TyCtxt<'_>, def_id: DefId) -> AssocItem {
     let parent_id = tcx.hir().get_parent_item(id);
     let parent_def_id = tcx.hir().local_def_id(parent_id);
     let parent_item = tcx.hir().expect_item(parent_id);
-    match parent_item.node {
+    match parent_item.kind {
         hir::ItemKind::Impl(.., ref impl_item_refs) => {
             if let Some(impl_item_ref) = impl_item_refs.iter().find(|i| i.id.hir_id == id) {
                 let assoc_item = tcx.associated_item_from_impl_item_ref(parent_def_id,
@@ -3160,7 +3189,7 @@ fn associated_item(tcx: TyCtxt<'_>, def_id: DefId) -> AssocItem {
 
     span_bug!(parent_item.span,
               "unexpected parent of trait or impl item or item not found: {:?}",
-              parent_item.node)
+              parent_item.kind)
 }
 
 #[derive(Clone, HashStable)]
@@ -3192,7 +3221,7 @@ fn adt_sized_constraint(tcx: TyCtxt<'_>, def_id: DefId) -> AdtSizedConstraint<'_
 fn associated_item_def_ids(tcx: TyCtxt<'_>, def_id: DefId) -> &[DefId] {
     let id = tcx.hir().as_local_hir_id(def_id).unwrap();
     let item = tcx.hir().expect_item(id);
-    match item.node {
+    match item.kind {
         hir::ItemKind::Trait(.., ref trait_item_refs) => {
             tcx.arena.alloc_from_iter(
                 trait_item_refs.iter()
@@ -3233,7 +3262,7 @@ fn trait_of_item(tcx: TyCtxt<'_>, def_id: DefId) -> Option<DefId> {
 pub fn is_impl_trait_defn(tcx: TyCtxt<'_>, def_id: DefId) -> Option<DefId> {
     if let Some(hir_id) = tcx.hir().as_local_hir_id(def_id) {
         if let Node::Item(item) = tcx.hir().get(hir_id) {
-            if let hir::ItemKind::OpaqueTy(ref opaque_ty) = item.node {
+            if let hir::ItemKind::OpaqueTy(ref opaque_ty) = item.kind {
                 return opaque_ty.impl_trait_fn;
             }
         }
@@ -3317,7 +3346,7 @@ fn issue33140_self_ty(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Ty<'_>> {
     debug!("issue33140_self_ty({:?}), trait-ref={:?}", def_id, trait_ref);
 
     let is_marker_like =
-        tcx.impl_polarity(def_id) == hir::ImplPolarity::Positive &&
+        tcx.impl_polarity(def_id) == ty::ImplPolarity::Positive &&
         tcx.associated_item_def_ids(trait_ref.def_id).is_empty();
 
     // Check whether these impls would be ok for a marker trait.
@@ -3339,7 +3368,7 @@ fn issue33140_self_ty(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Ty<'_>> {
     }
 
     let self_ty = trait_ref.self_ty();
-    let self_ty_matches = match self_ty.sty {
+    let self_ty_matches = match self_ty.kind {
         ty::Dynamic(ref data, ty::ReStatic) => data.principal().is_none(),
         _ => false
     };

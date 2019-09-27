@@ -212,7 +212,7 @@ impl<'a, 'tcx> CheckCrateVisitor<'a, 'tcx> {
     }
 
     fn check_stmt(&mut self, stmt: &'tcx hir::Stmt) -> Promotability {
-        match stmt.node {
+        match stmt.kind {
             hir::StmtKind::Local(ref local) => {
                 if self.remove_mut_rvalue_borrow(&local.pat) {
                     if let Some(init) = &local.init {
@@ -273,14 +273,14 @@ fn check_expr_kind<'a, 'tcx>(
     v: &mut CheckCrateVisitor<'a, 'tcx>,
     e: &'tcx hir::Expr, node_ty: Ty<'tcx>) -> Promotability {
 
-    let ty_result = match node_ty.sty {
+    let ty_result = match node_ty.kind {
         ty::Adt(def, _) if def.has_dtor(v.tcx) => {
             NotPromotable
         }
         _ => Promotable
     };
 
-    let node_result = match e.node {
+    let kind_result = match e.kind {
         hir::ExprKind::Box(ref expr) => {
             let _ = v.check_expr(&expr);
             NotPromotable
@@ -298,7 +298,7 @@ fn check_expr_kind<'a, 'tcx>(
             if v.tables.is_method_call(e) {
                 return NotPromotable;
             }
-            match v.tables.node_type(lhs.hir_id).sty {
+            match v.tables.node_type(lhs.hir_id).kind {
                 ty::RawPtr(_) | ty::FnPtr(..) => {
                     assert!(op.node == hir::BinOpKind::Eq || op.node == hir::BinOpKind::Ne ||
                             op.node == hir::BinOpKind::Le || op.node == hir::BinOpKind::Lt ||
@@ -376,7 +376,7 @@ fn check_expr_kind<'a, 'tcx>(
             }
             let mut callee = &**callee;
             loop {
-                callee = match callee.node {
+                callee = match callee.kind {
                     hir::ExprKind::Block(ref block, _) => match block.expr {
                         Some(ref tail) => &tail,
                         None => break
@@ -385,7 +385,7 @@ fn check_expr_kind<'a, 'tcx>(
                 };
             }
             // The callee is an arbitrary expression, it doesn't necessarily have a definition.
-            let def = if let hir::ExprKind::Path(ref qpath) = callee.node {
+            let def = if let hir::ExprKind::Path(ref qpath) = callee.kind {
                 v.tables.qpath_res(qpath, callee.hir_id)
             } else {
                 Res::Err
@@ -427,7 +427,7 @@ fn check_expr_kind<'a, 'tcx>(
             if let Some(ref expr) = *option_expr {
                 struct_result &= v.check_expr(&expr);
             }
-            if let ty::Adt(adt, ..) = v.tables.expr_ty(e).sty {
+            if let ty::Adt(adt, ..) = v.tables.expr_ty(e).kind {
                 // unsafe_cell_type doesn't necessarily exist with no_core
                 if Some(adt.did) == v.tcx.lang_items().unsafe_cell_type() {
                     return NotPromotable;
@@ -553,7 +553,7 @@ fn check_expr_kind<'a, 'tcx>(
             NotPromotable
         }
     };
-    ty_result & node_result
+    ty_result & kind_result
 }
 
 /// Checks the adjustments of an expression.

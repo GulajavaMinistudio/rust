@@ -177,7 +177,7 @@ pub fn check_loans<'a, 'tcx>(
     let hir_id = bccx.tcx.hir().as_local_hir_id(def_id).unwrap();
     let movable_generator = !match bccx.tcx.hir().get(hir_id) {
         Node::Expr(&hir::Expr {
-            node: hir::ExprKind::Closure(.., Some(hir::GeneratorMovability::Static)),
+            kind: hir::ExprKind::Closure(.., Some(hir::GeneratorMovability::Static)),
             ..
         }) => true,
         _ => false,
@@ -615,7 +615,7 @@ impl<'a, 'tcx> CheckLoanCtxt<'a, 'tcx> {
                 self.check_if_assigned_path_is_moved(id, lp_base);
             }
             LpExtend(ref lp_base, _, LpInterior(_, InteriorField(_))) => {
-                match lp_base.to_type().sty {
+                match lp_base.to_type().kind {
                     ty::Adt(def, _) if def.has_dtor(self.tcx()) => {
                         // In the case where the owner implements drop, then
                         // the path must be initialized to prevent a case of
