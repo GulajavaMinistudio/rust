@@ -566,7 +566,6 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "tempfile",
- "tester",
  "winapi 0.3.6",
 ]
 
@@ -3082,6 +3081,7 @@ dependencies = [
  "rustc_data_structures",
  "rustc_errors",
  "rustc_fs_util",
+ "rustc_index",
  "rustc_macros",
  "rustc_target",
  "scoped-tls",
@@ -3362,6 +3362,7 @@ dependencies = [
  "rustc_errors",
  "rustc_fs_util",
  "rustc_incremental",
+ "rustc_index",
  "rustc_target",
  "serialize",
  "syntax",
@@ -3400,6 +3401,7 @@ dependencies = [
  "rustc-hash",
  "rustc-rayon",
  "rustc-rayon-core",
+ "rustc_index",
  "serialize",
  "smallvec",
  "stable_deref_trait",
@@ -3464,6 +3466,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_index"
+version = "0.0.0"
+dependencies = [
+ "serialize",
+ "smallvec",
+]
+
+[[package]]
 name = "rustc_interface"
 version = "0.0.0"
 dependencies = [
@@ -3507,6 +3517,7 @@ dependencies = [
  "log",
  "rustc",
  "rustc_data_structures",
+ "rustc_index",
  "rustc_target",
  "syntax",
  "syntax_pos",
@@ -3552,6 +3563,7 @@ dependencies = [
  "rustc",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_index",
  "rustc_target",
  "serialize",
  "smallvec",
@@ -3574,6 +3586,7 @@ dependencies = [
  "rustc_apfloat",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_index",
  "rustc_lexer",
  "rustc_target",
  "serialize",
@@ -3673,6 +3686,7 @@ dependencies = [
  "bitflags",
  "log",
  "rustc_data_structures",
+ "rustc_index",
  "serialize",
  "syntax_pos",
 ]
@@ -3721,6 +3735,7 @@ dependencies = [
  "rustc",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_index",
  "rustc_target",
  "smallvec",
  "syntax",
@@ -4237,6 +4252,7 @@ dependencies = [
  "log",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_index",
  "rustc_lexer",
  "rustc_target",
  "scoped-tls",
@@ -4266,6 +4282,7 @@ dependencies = [
  "arena",
  "cfg-if",
  "rustc_data_structures",
+ "rustc_index",
  "rustc_macros",
  "scoped-tls",
  "serialize",
@@ -4325,16 +4342,6 @@ dependencies = [
 
 [[package]]
 name = "term"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa63644f74ce96fbeb9b794f66aff2a52d601cbd5e80f4b97123e3899f4570f1"
-dependencies = [
- "kernel32-sys",
- "winapi 0.2.8",
-]
-
-[[package]]
-name = "term"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dd90505d5006a4422d3520b30c781d480b3f36768c2fa2187c3e950bc110464"
@@ -4387,17 +4394,6 @@ dependencies = [
  "proc_macro",
  "std",
  "term 0.0.0",
-]
-
-[[package]]
-name = "tester"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e812cb26c597f86a49b26dbb58b878bd2a2b4b93fc069dc39499228fe556ff6"
-dependencies = [
- "getopts",
- "libc",
- "term 0.4.6",
 ]
 
 [[package]]

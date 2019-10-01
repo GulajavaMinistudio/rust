@@ -122,9 +122,9 @@ impl fmt::Display for HirId {
 
 // Hack to ensure that we don't try to access the private parts of `ItemLocalId` in this module.
 mod item_local_id_inner {
-    use rustc_data_structures::indexed_vec::Idx;
+    use rustc_index::vec::Idx;
     use rustc_macros::HashStable;
-    newtype_index! {
+    rustc_index::newtype_index! {
         /// An `ItemLocalId` uniquely identifies something within a given "item-like";
         /// that is, within a `hir::Item`, `hir::TraitItem`, or `hir::ImplItem`. There is no
         /// guarantee that the numerical value of a given `ItemLocalId` corresponds to
@@ -2016,9 +2016,6 @@ pub enum TyKind {
     Infer,
     /// Placeholder for a type that has failed to be defined.
     Err,
-    /// Placeholder for C-variadic arguments. We "spoof" the `VaListImpl` created
-    /// from the variadic arguments. This type is only valid up to typeck.
-    CVarArgs(Lifetime),
 }
 
 #[derive(Copy, Clone, RustcEncodable, RustcDecodable, Debug, HashStable)]

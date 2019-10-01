@@ -17,7 +17,7 @@ use crate::util::common::time;
 
 use rustc_target::spec::abi::Abi;
 use rustc_data_structures::svh::Svh;
-use rustc_data_structures::indexed_vec::IndexVec;
+use rustc_index::vec::IndexVec;
 use syntax::ast::{self, Name, NodeId};
 use syntax::source_map::Spanned;
 use syntax::ext::base::MacroKind;
@@ -816,6 +816,32 @@ impl<'hir> Map<'hir> {
             }
         }
         CRATE_HIR_ID
+    }
+
+    /// When on a match arm tail expression or on a match arm, give back the enclosing `match`
+    /// expression.
+    ///
+    /// Used by error reporting when there's a type error in a match arm caused by the `match`
+    /// expression needing to be unit.
+    pub fn get_match_if_cause(&self, hir_id: HirId) -> Option<&Expr> {
+        for (_, node) in ParentHirIterator::new(hir_id, &self) {
+            match node {
+                Node::Item(_) |
+                Node::ForeignItem(_) |
+                Node::TraitItem(_) |
+                Node::ImplItem(_) => break,
+                Node::Expr(expr) => match expr.kind {
+                    ExprKind::Match(_, _, _) => return Some(expr),
+                    _ => {}
+                },
+                Node::Stmt(stmt) => match stmt.kind {
+                    StmtKind::Local(_) => break,
+                    _ => {}
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Returns the nearest enclosing scope. A scope is roughly an item or block.

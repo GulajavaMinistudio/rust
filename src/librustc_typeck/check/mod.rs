@@ -99,7 +99,7 @@ use crate::middle::lang_items;
 use crate::namespace::Namespace;
 use rustc::infer::{self, InferCtxt, InferOk, InferResult};
 use rustc::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
-use rustc_data_structures::indexed_vec::Idx;
+use rustc_index::vec::Idx;
 use rustc_target::spec::abi::Abi;
 use rustc::infer::opaque_types::OpaqueTypeDecl;
 use rustc::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
@@ -1132,8 +1132,29 @@ fn check_fn<'a, 'tcx>(
     let outer_hir_id = fcx.tcx.hir().as_local_hir_id(outer_def_id).unwrap();
     GatherLocalsVisitor { fcx: &fcx, parent_id: outer_hir_id, }.visit_body(body);
 
+    // C-variadic fns also have a `VaList` input that's not listed in `fn_sig`
+    // (as it's created inside the body itself, not passed in from outside).
+    let maybe_va_list = if fn_sig.c_variadic {
+        let va_list_did = fcx.tcx.require_lang_item(
+            lang_items::VaListTypeLangItem,
+            Some(body.params.last().unwrap().span),
+        );
+        let region = fcx.tcx.mk_region(ty::ReScope(region::Scope {
+            id: body.value.hir_id.local_id,
+            data: region::ScopeData::CallSite
+        }));
+
+        Some(fcx.tcx.type_of(va_list_did).subst(fcx.tcx, &[region.into()]))
+    } else {
+        None
+    };
+
     // Add formal parameters.
-    for (param_ty, param) in fn_sig.inputs().iter().zip(&body.params) {
+    for (param_ty, param) in
+        fn_sig.inputs().iter().copied()
+            .chain(maybe_va_list)
+            .zip(&body.params)
+    {
         // Check the pattern.
         fcx.check_pat_top(&param.pat, param_ty, None);
 
@@ -3858,6 +3879,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
     }
 
+    fn suggest_semicolon_at_end(&self, span: Span, err: &mut DiagnosticBuilder<'_>) {
+        err.span_suggestion_short(
+            span.shrink_to_hi(),
+            "consider using a semicolon here",
+            ";".to_string(),
+            Applicability::MachineApplicable,
+        );
+    }
+
     pub fn check_stmt(&self, stmt: &'tcx hir::Stmt) {
         // Don't do all the complex logic below for `DeclItem`.
         match stmt.kind {
@@ -3881,7 +3911,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             hir::StmtKind::Item(_) => {}
             hir::StmtKind::Expr(ref expr) => {
                 // Check with expected type of `()`.
-                self.check_expr_has_type_or_error(&expr, self.tcx.mk_unit());
+
+                self.check_expr_has_type_or_error(&expr, self.tcx.mk_unit(), |err| {
+                    self.suggest_semicolon_at_end(expr.span, err);
+                });
             }
             hir::StmtKind::Semi(ref expr) => {
                 self.check_expr(&expr);
