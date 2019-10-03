@@ -75,7 +75,7 @@ pub use self::binding::BindingMode;
 pub use self::binding::BindingMode::*;
 
 pub use self::context::{TyCtxt, FreeRegionInfo, AllArenas, tls, keep_local};
-pub use self::context::{Lift, TypeckTables, CtxtInterners, GlobalCtxt};
+pub use self::context::{Lift, GeneratorInteriorTypeCause, TypeckTables, CtxtInterners, GlobalCtxt};
 pub use self::context::{
     UserTypeAnnotationIndex, UserType, CanonicalUserType,
     CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations, ResolvedOpaqueTy,
@@ -600,7 +600,8 @@ impl<'tcx> rustc_serialize::UseSpecializedDecodable for Ty<'tcx> {}
 pub type CanonicalTy<'tcx> = Canonical<'tcx, Ty<'tcx>>;
 
 extern {
-    /// A dummy type used to force `List` to by unsized without requiring fat pointers.
+    /// A dummy type used to force `List` to be unsized while not requiring references to it be wide
+    /// pointers.
     type OpaqueListContents;
 }
 

@@ -128,6 +128,7 @@ use syntax::attr;
 use syntax::feature_gate::{GateIssue, emit_feature_err};
 use syntax::source_map::{DUMMY_SP, original_sp};
 use syntax::symbol::{kw, sym};
+use syntax::util::parser::ExprPrecedence;
 
 use std::cell::{Cell, RefCell, Ref, RefMut};
 use std::collections::hash_map::Entry;
@@ -472,7 +473,7 @@ pub enum Diverges {
     WarnedAlways
 }
 
-// Convenience impls for combinig `Diverges`.
+// Convenience impls for combining `Diverges`.
 
 impl ops::BitAnd for Diverges {
     type Output = Self;
@@ -2364,7 +2365,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // which diverges, that we are about to lint on. This gives suboptimal diagnostics.
             // Instead, stop here so that the `if`- or `while`-expression's block is linted instead.
             if !span.is_desugaring(DesugaringKind::CondTemporary) &&
-                !span.is_desugaring(DesugaringKind::Async)
+                !span.is_desugaring(DesugaringKind::Async) &&
+                !orig_span.is_desugaring(DesugaringKind::Await)
             {
                 self.diverges.set(Diverges::WarnedAlways);
 
@@ -4344,7 +4346,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 let max_len = receiver.rfind(".").unwrap();
                                 format!("{}{}", &receiver[..max_len], method_call)
                             } else {
-                                format!("{}{}", receiver, method_call)
+                                if expr.precedence().order() < ExprPrecedence::MethodCall.order() {
+                                    format!("({}){}", receiver, method_call)
+                                } else {
+                                    format!("{}{}", receiver, method_call)
+                                }
                             };
                             Some(if is_struct_pat_shorthand_field {
                                 format!("{}: {}", receiver, sugg)

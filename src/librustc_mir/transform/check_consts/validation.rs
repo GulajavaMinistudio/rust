@@ -137,7 +137,7 @@ pub fn compute_indirectly_mutable_locals<'mir, 'tcx>(
         item.tcx,
         item.body,
         item.def_id,
-        &[],
+        &item.tcx.get_attrs(item.def_id),
         &dead_unwinds,
         old_dataflow::IndirectlyMutableLocals::new(item.tcx, item.body, item.param_env),
         |_, local| old_dataflow::DebugFormatted::new(&local),
@@ -467,8 +467,6 @@ impl Visitor<'tcx> for Validator<'_, 'mir, 'tcx> {
 
         self.qualifs.needs_drop.visit_statement(statement, location);
         self.qualifs.has_mut_interior.visit_statement(statement, location);
-        debug!("needs_drop: {:?}", self.qualifs.needs_drop.get());
-        debug!("has_mut_interior: {:?}", self.qualifs.has_mut_interior.get());
 
         match statement.kind {
             StatementKind::Assign(..) => {
@@ -494,8 +492,6 @@ impl Visitor<'tcx> for Validator<'_, 'mir, 'tcx> {
 
         self.qualifs.needs_drop.visit_terminator(terminator, location);
         self.qualifs.has_mut_interior.visit_terminator(terminator, location);
-        debug!("needs_drop: {:?}", self.qualifs.needs_drop.get());
-        debug!("has_mut_interior: {:?}", self.qualifs.has_mut_interior.get());
 
         self.super_terminator(terminator, location);
     }
