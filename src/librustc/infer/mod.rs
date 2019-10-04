@@ -418,7 +418,19 @@ pub enum NLLRegionVariableOrigin {
     /// from a `for<'a> T` binder). Meant to represent "any region".
     Placeholder(ty::PlaceholderRegion),
 
-    Existential,
+    Existential {
+        /// If this is true, then this variable was created to represent a lifetime
+        /// bound in a `for` binder. For example, it might have been created to
+        /// represent the lifetime `'a` in a type like `for<'a> fn(&'a u32)`.
+        /// Such variables are created when we are trying to figure out if there
+        /// is any valid instantiation of `'a` that could fit into some scenario.
+        ///
+        /// This is used to inform error reporting: in the case that we are trying to
+        /// determine whether there is any valid instantiation of a `'a` variable that meets
+        /// some constraint C, we want to blame the "source" of that `for` type,
+        /// rather than blaming the source of the constraint C.
+        from_forall: bool
+    },
 }
 
 impl NLLRegionVariableOrigin {
@@ -426,7 +438,7 @@ impl NLLRegionVariableOrigin {
         match self {
             NLLRegionVariableOrigin::FreeRegion => true,
             NLLRegionVariableOrigin::Placeholder(..) => true,
-            NLLRegionVariableOrigin::Existential => false,
+            NLLRegionVariableOrigin::Existential{ .. } => false,
         }
     }
 
@@ -1307,6 +1319,14 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         }
     }
 
+    /// Resolve any type variables found in `value` -- but only one
+    /// level.  So, if the variable `?X` is bound to some type
+    /// `Foo<?Y>`, then this would return `Foo<?Y>` (but `?Y` may
+    /// itself be bound to a type).
+    ///
+    /// Useful when you only need to inspect the outermost level of
+    /// the type and don't care about nested types (or perhaps you
+    /// will be resolving them as well, e.g. in a loop).
     pub fn shallow_resolve<T>(&self, value: T) -> T
     where
         T: TypeFoldable<'tcx>,
@@ -1567,6 +1587,9 @@ impl<'a, 'tcx> ShallowResolver<'a, 'tcx> {
         ShallowResolver { infcx }
     }
 
+    /// If `typ` is a type variable of some kind, resolve it one level
+    /// (but do not resolve types found in the result). If `typ` is
+    /// not a type variable, just return it unmodified.
     pub fn shallow_resolve(&mut self, typ: Ty<'tcx>) -> Ty<'tcx> {
         match typ.kind {
             ty::Infer(ty::TyVar(v)) => {
