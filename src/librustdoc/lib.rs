@@ -14,7 +14,6 @@
 #![feature(crate_visibility_modifier)]
 #![feature(const_fn)]
 #![feature(drain_filter)]
-#![feature(inner_deref)]
 #![feature(never_type)]
 #![feature(mem_take)]
 #![feature(unicode_internals)]
@@ -487,8 +486,8 @@ where R: 'static + Send,
         krate.version = crate_version;
 
         f(Output {
-            krate: krate,
-            renderinfo: renderinfo,
+            krate,
+            renderinfo,
             renderopts,
         })
     });

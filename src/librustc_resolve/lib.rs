@@ -9,7 +9,6 @@
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
 
-#![feature(inner_deref)]
 #![feature(crate_visibility_modifier)]
 #![feature(label_break_value)]
 #![feature(mem_take)]
@@ -58,6 +57,7 @@ use std::{cmp, fmt, iter, ptr};
 use std::collections::BTreeSet;
 use rustc_data_structures::ptr_key::PtrKey;
 use rustc_data_structures::sync::Lrc;
+use rustc_data_structures::fx::FxIndexMap;
 
 use diagnostics::{Suggestion, ImportSuggestion};
 use diagnostics::{find_span_of_binding_until_next_binding, extend_span_to_previous_binding};
@@ -431,7 +431,7 @@ impl ModuleKind {
     }
 }
 
-type Resolutions<'a> = RefCell<FxHashMap<(Ident, Namespace), &'a RefCell<NameResolution<'a>>>>;
+type Resolutions<'a> = RefCell<FxIndexMap<(Ident, Namespace), &'a RefCell<NameResolution<'a>>>>;
 
 /// One node in the tree of modules.
 pub struct ModuleData<'a> {
@@ -493,17 +493,6 @@ impl<'a> ModuleData<'a> {
     {
         for (&(ident, ns), name_resolution) in resolver.as_mut().resolutions(self).borrow().iter() {
             name_resolution.borrow().binding.map(|binding| f(resolver, ident, ns, binding));
-        }
-    }
-
-    fn for_each_child_stable<R, F>(&'a self, resolver: &mut R, mut f: F)
-        where R: AsMut<Resolver<'a>>, F: FnMut(&mut R, Ident, Namespace, &'a NameBinding<'a>)
-    {
-        let resolutions = resolver.as_mut().resolutions(self).borrow();
-        let mut resolutions = resolutions.iter().collect::<Vec<_>>();
-        resolutions.sort_by_cached_key(|&(&(ident, ns), _)| (ident.as_str(), ns));
-        for &(&(ident, ns), &resolution) in resolutions.iter() {
-            resolution.borrow().binding.map(|binding| f(resolver, ident, ns, binding));
         }
     }
 
