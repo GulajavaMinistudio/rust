@@ -1,12 +1,15 @@
 syntax::register_diagnostics! {
-/*
 E0014: r##"
+#### Note: this error code is no longer emitted by the compiler.
+
 Constants can only be initialized by a constant value or, in a future
 version of Rust, a call to a const function. This error indicates the use
 of a path (like a::b, or x) denoting something other than one of these
-allowed items. Erroneous code xample:
+allowed items.
 
-```compile_fail
+Erroneous code example:
+
+```
 const FOO: i32 = { let x = 0; x }; // 'x' isn't a constant nor a function!
 ```
 
@@ -18,10 +21,10 @@ const FOO: i32 = { const X : i32 = 0; X };
 const FOO2: i32 = { 0 }; // but brackets are useless here
 ```
 "##,
-*/
 
 E0130: r##"
 You declared a pattern as an argument in a foreign function declaration.
+
 Erroneous code example:
 
 ```compile_fail
@@ -57,6 +60,20 @@ extern {
 E0136: r##"
 A binary can only have one entry point, and by default that entry point is the
 function `main()`. If there are multiple such functions, please rename one.
+
+Erroneous code example:
+
+```compile_fail,E0136
+fn main() {
+    // ...
+}
+
+// ...
+
+fn main() { // error!
+    // ...
+}
+```
 "##,
 
 E0137: r##"
@@ -286,6 +303,62 @@ fn main() {
 ```
 "##,
 
+E0561: r##"
+A non-ident or non-wildcard pattern has been used as a parameter of a function
+pointer type.
+
+Erroneous code example:
+
+```compile_fail,E0561
+type A1 = fn(mut param: u8); // error!
+type A2 = fn(&param: u32); // error!
+```
+
+When using an alias over a function type, you cannot e.g. denote a parameter as
+being mutable.
+
+To fix the issue, remove patterns (`_` is allowed though). Example:
+
+```
+type A1 = fn(param: u8); // ok!
+type A2 = fn(_: u32); // ok!
+```
+
+You can also omit the parameter name:
+
+```
+type A3 = fn(i16); // ok!
+```
+"##,
+
+E0567: r##"
+Generics have been used on an auto trait.
+
+Erroneous code example:
+
+```compile_fail,E0567
+#![feature(optin_builtin_traits)]
+
+auto trait Generic<T> {} // error!
+
+fn main() {}
+```
+
+Since an auto trait is implemented on all existing types, the
+compiler would not be able to infer the types of the trait's generic
+parameters.
+
+To fix this issue, just remove the generics:
+
+```
+#![feature(optin_builtin_traits)]
+
+auto trait Generic {} // ok!
+
+fn main() {}
+```
+"##,
+
 E0571: r##"
 A `break` statement with an argument appeared in a non-`loop` loop.
 
@@ -503,8 +576,6 @@ Switch to the Rust 2018 edition to use `async fn`.
 ;
     E0226, // only a single explicit lifetime bound is permitted
     E0472, // asm! is unsupported on this target
-    E0561, // patterns aren't allowed in function pointer types
-    E0567, // auto traits can not have generic parameters
     E0568, // auto traits can not have super traits
     E0666, // nested `impl Trait` is illegal
     E0667, // `impl Trait` in projections

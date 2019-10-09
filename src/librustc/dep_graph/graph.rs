@@ -9,7 +9,6 @@ use std::hash::Hash;
 use std::collections::hash_map::Entry;
 use std::mem;
 use crate::ty::{self, TyCtxt};
-use crate::util::common::{ProfileQueriesMsg, profq_msg};
 use parking_lot::{Mutex, Condvar};
 
 use crate::ich::{StableHashingContext, StableHashingContextProvider, Fingerprint};
@@ -75,9 +74,6 @@ struct DepGraphData {
     previous_work_products: FxHashMap<WorkProductId, WorkProduct>,
 
     dep_node_debug: Lock<FxHashMap<DepNode, String>>,
-
-    // Used for testing, only populated when -Zquery-dep-graph is specified.
-    loaded_from_cache: Lock<FxHashMap<DepNodeIndex, bool>>,
 }
 
 pub fn hash_result<R>(hcx: &mut StableHashingContext<'_>, result: &R) -> Option<Fingerprint>
@@ -104,7 +100,6 @@ impl DepGraph {
                 emitting_diagnostics_cond_var: Condvar::new(),
                 previous: prev_graph,
                 colors: DepNodeColorMap::new(prev_graph_node_count),
-                loaded_from_cache: Default::default(),
             })),
         }
     }
@@ -260,10 +255,6 @@ impl DepGraph {
             //  - we can get an idea of the runtime cost.
             let mut hcx = cx.get_stable_hashing_context();
 
-            if cfg!(debug_assertions) {
-                profq_msg(hcx.sess(), ProfileQueriesMsg::TaskBegin(key.clone()))
-            };
-
             let result = if no_tcx {
                 task(cx, arg)
             } else {
@@ -277,10 +268,6 @@ impl DepGraph {
                         task(cx, arg)
                     })
                 })
-            };
-
-            if cfg!(debug_assertions) {
-                profq_msg(hcx.sess(), ProfileQueriesMsg::TaskEnd)
             };
 
             let current_fingerprint = hash_result(&mut hcx, &result);
@@ -873,25 +860,6 @@ impl DepGraph {
                 }
             }
         }
-    }
-
-    pub fn mark_loaded_from_cache(&self, dep_node_index: DepNodeIndex, state: bool) {
-        debug!("mark_loaded_from_cache({:?}, {})",
-               self.data.as_ref().unwrap().current.borrow().data[dep_node_index].node,
-               state);
-
-        self.data
-            .as_ref()
-            .unwrap()
-            .loaded_from_cache
-            .borrow_mut()
-            .insert(dep_node_index, state);
-    }
-
-    pub fn was_loaded_from_cache(&self, dep_node: &DepNode) -> Option<bool> {
-        let data = self.data.as_ref().unwrap();
-        let dep_node_index = data.current.borrow().node_to_node_index[dep_node];
-        data.loaded_from_cache.borrow().get(&dep_node_index).cloned()
     }
 }
 

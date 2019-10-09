@@ -1775,6 +1775,10 @@ impl<'tcx> TyS<'tcx> {
     #[inline]
     pub fn is_bool(&self) -> bool { self.kind == Bool }
 
+    /// Returns `true` if this type is a `str`.
+    #[inline]
+    pub fn is_str(&self) -> bool { self.kind == Str }
+
     #[inline]
     pub fn is_param(&self, index: u32) -> bool {
         match self.kind {
@@ -2199,7 +2203,9 @@ impl<'tcx> TyS<'tcx> {
                 _ => bug!("cannot convert type `{:?}` to a closure kind", self),
             },
 
-            Infer(_) => None,
+            // "Bound" types appear in canonical queries when the
+            // closure type is not yet known
+            Bound(..) | Infer(_) => None,
 
             Error => Some(ty::ClosureKind::Fn),
 
