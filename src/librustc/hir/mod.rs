@@ -1053,6 +1053,13 @@ impl Mutability {
             MutImmutable => MutImmutable,
         }
     }
+
+    pub fn invert(self) -> Self {
+        match self {
+            MutMutable => MutImmutable,
+            MutImmutable => MutMutable,
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, RustcEncodable, RustcDecodable, Debug, Hash, HashStable)]
@@ -1358,6 +1365,10 @@ impl Body {
         BodyId {
             hir_id: self.value.hir_id,
         }
+    }
+
+    pub fn generator_kind(&self) -> Option<GeneratorKind> {
+        self.generator_kind
     }
 }
 

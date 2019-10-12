@@ -593,21 +593,32 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 err.emit();
             }
 
-            MethodError::IllegalSizedBound(candidates) => {
+            MethodError::IllegalSizedBound(candidates, needs_mut) => {
                 let msg = format!("the `{}` method cannot be invoked on a trait object", item_name);
                 let mut err = self.sess().struct_span_err(span, &msg);
                 if !candidates.is_empty() {
-                    let help = format!("{an}other candidate{s} {were} found in the following \
-                                        trait{s}, perhaps add a `use` for {one_of_them}:",
-                                    an = if candidates.len() == 1 {"an" } else { "" },
-                                    s = pluralise!(candidates.len()),
-                                    were = if candidates.len() == 1 { "was" } else { "were" },
-                                    one_of_them = if candidates.len() == 1 {
-                                        "it"
-                                    } else {
-                                        "one_of_them"
-                                    });
+                    let help = format!(
+                        "{an}other candidate{s} {were} found in the following trait{s}, perhaps \
+                         add a `use` for {one_of_them}:",
+                        an = if candidates.len() == 1 {"an" } else { "" },
+                        s = pluralise!(candidates.len()),
+                        were = if candidates.len() == 1 { "was" } else { "were" },
+                        one_of_them = if candidates.len() == 1 {
+                            "it"
+                        } else {
+                            "one_of_them"
+                        },
+                    );
                     self.suggest_use_candidates(&mut err, help, candidates);
+                }
+                if let ty::Ref(region, t_type, mutability) = rcvr_ty.kind {
+                    if needs_mut {
+                        let trait_type = self.tcx.mk_ref(region, ty::TypeAndMut {
+                            ty: t_type,
+                            mutbl: mutability.invert(),
+                        });
+                        err.note(&format!("you need `{}` instead of `{}`", trait_type, rcvr_ty));
+                    }
                 }
                 err.emit();
             }
@@ -798,31 +809,25 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // Get the `hir::Param` to verify whether it already has any bounds.
                         // We do this to avoid suggesting code that ends up as `T: FooBar`,
                         // instead we suggest `T: Foo + Bar` in that case.
-                        let mut has_bounds = false;
+                        let mut has_bounds = None;
                         let mut impl_trait = false;
                         if let Node::GenericParam(ref param) = hir.get(id) {
-                            match param.kind {
-                                hir::GenericParamKind::Type { synthetic: Some(_), .. } => {
-                                    // We've found `fn foo(x: impl Trait)` instead of
-                                    // `fn foo<T>(x: T)`. We want to suggest the correct
-                                    // `fn foo(x: impl Trait + TraitBound)` instead of
-                                    // `fn foo<T: TraitBound>(x: T)`. (#63706)
-                                    impl_trait = true;
-                                    has_bounds = param.bounds.len() > 1;
-                                }
-                                _ => {
-                                    has_bounds = !param.bounds.is_empty();
-                                }
+                            let kind = &param.kind;
+                            if let hir::GenericParamKind::Type { synthetic: Some(_), .. } = kind {
+                                // We've found `fn foo(x: impl Trait)` instead of
+                                // `fn foo<T>(x: T)`. We want to suggest the correct
+                                // `fn foo(x: impl Trait + TraitBound)` instead of
+                                // `fn foo<T: TraitBound>(x: T)`. (See #63706.)
+                                impl_trait = true;
+                                has_bounds = param.bounds.get(1);
+                            } else {
+                                has_bounds = param.bounds.get(0);
                             }
                         }
                         let sp = hir.span(id);
-                        // `sp` only covers `T`, change it so that it covers
-                        // `T:` when appropriate
-                        let sp = if has_bounds {
-                            sp.to(self.tcx
-                                .sess
-                                .source_map()
-                                .next_point(self.tcx.sess.source_map().next_point(sp)))
+                        // `sp` only covers `T`, change it so that it covers `T:` when appropriate.
+                        let sp = if let Some(first_bound) = has_bounds {
+                            sp.until(first_bound.span())
                         } else {
                             sp
                         };
@@ -838,7 +843,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 param,
                                 if impl_trait { " +" } else { ":" },
                                 self.tcx.def_path_str(t.def_id),
-                                if has_bounds { " +"} else { "" },
+                                if has_bounds.is_some() { " + " } else { "" },
                             )),
                             Applicability::MaybeIncorrect,
                         );
