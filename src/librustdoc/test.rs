@@ -64,6 +64,7 @@ pub fn run(options: Options) -> i32 {
 
     let mut cfgs = options.cfgs.clone();
     cfgs.push("rustdoc".to_owned());
+    cfgs.push("doctest".to_owned());
     let config = interface::Config {
         opts: sessopts,
         crate_cfg: config::parse_cfgspecs(cfgs),
@@ -704,6 +705,7 @@ impl Tester for Collector {
                 // compiler failures are test failures
                 should_panic: testing::ShouldPanic::No,
                 allow_fail: config.allow_fail,
+                test_type: testing::TestType::DocTest,
             },
             testfn: testing::DynTestFn(box move || {
                 let res = run_test(
