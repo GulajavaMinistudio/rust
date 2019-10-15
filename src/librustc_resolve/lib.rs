@@ -26,7 +26,7 @@ use rustc::session::Session;
 use rustc::lint;
 use rustc::hir::def::{self, DefKind, PartialRes, CtorKind, CtorOf, NonMacroAttrKind, ExportMap};
 use rustc::hir::def::Namespace::*;
-use rustc::hir::def_id::{CRATE_DEF_INDEX, LOCAL_CRATE, DefId};
+use rustc::hir::def_id::{CRATE_DEF_INDEX, LOCAL_CRATE, CrateNum, DefId};
 use rustc::hir::{TraitMap, GlobMap};
 use rustc::ty::{self, DefIdTree};
 use rustc::util::nodemap::{NodeMap, NodeSet, FxHashMap, FxHashSet, DefIdMap};
@@ -38,6 +38,7 @@ use rustc_metadata::cstore::CStore;
 use syntax::ext::hygiene::{ExpnId, Transparency, SyntaxContext};
 use syntax::ast::{self, Name, NodeId, Ident, FloatTy, IntTy, UintTy};
 use syntax::ext::base::{SyntaxExtension, MacroKind, SpecialDerives};
+use syntax::print::pprust;
 use syntax::symbol::{kw, sym};
 
 use syntax::visit::{self, Visitor};
@@ -854,6 +855,8 @@ pub struct Resolver<'a> {
     /// Resolutions for labels (node IDs of their corresponding blocks or loops).
     label_res_map: NodeMap<NodeId>,
 
+    /// `CrateNum` resolutions of `extern crate` items.
+    pub extern_crate_map: NodeMap<CrateNum>,
     pub export_map: ExportMap<NodeId>,
     pub trait_map: TraitMap,
 
@@ -877,7 +880,7 @@ pub struct Resolver<'a> {
     /// language items.
     empty_module: Module<'a>,
     module_map: FxHashMap<DefId, Module<'a>>,
-    extern_module_map: FxHashMap<(DefId, bool /* MacrosOnly? */), Module<'a>>,
+    extern_module_map: FxHashMap<DefId, Module<'a>>,
     binding_parent_modules: FxHashMap<PtrKey<'a, NameBinding<'a>>, Module<'a>>,
 
     /// Maps glob imports to the names of items actually imported.
@@ -899,7 +902,7 @@ pub struct Resolver<'a> {
     arenas: &'a ResolverArenas<'a>,
     dummy_binding: &'a NameBinding<'a>,
 
-    crate_loader: &'a mut CrateLoader<'a>,
+    crate_loader: &'a CrateLoader<'a>,
     macro_names: FxHashSet<Ident>,
     builtin_macros: FxHashMap<Name, SyntaxExtension>,
     macro_use_prelude: FxHashMap<Name, &'a NameBinding<'a>>,
@@ -1069,7 +1072,7 @@ impl<'a> Resolver<'a> {
                cstore: &'a CStore,
                krate: &Crate,
                crate_name: &str,
-               crate_loader: &'a mut CrateLoader<'a>,
+               crate_loader: &'a CrateLoader<'a>,
                arenas: &'a ResolverArenas<'a>)
                -> Resolver<'a> {
         let root_def_id = DefId::local(CRATE_DEF_INDEX);
@@ -1154,6 +1157,7 @@ impl<'a> Resolver<'a> {
             partial_res_map: Default::default(),
             import_res_map: Default::default(),
             label_res_map: Default::default(),
+            extern_crate_map: Default::default(),
             export_map: FxHashMap::default(),
             trait_map: Default::default(),
             empty_module,
@@ -2011,13 +2015,13 @@ impl<'a> Resolver<'a> {
                         let mut candidates =
                             self.lookup_import_candidates(ident, TypeNS, is_mod);
                         candidates.sort_by_cached_key(|c| {
-                            (c.path.segments.len(), c.path.to_string())
+                            (c.path.segments.len(), pprust::path_to_string(&c.path))
                         });
                         if let Some(candidate) = candidates.get(0) {
                             (
                                 String::from("unresolved import"),
                                 Some((
-                                    vec![(ident.span, candidate.path.to_string())],
+                                    vec![(ident.span, pprust::path_to_string(&candidate.path))],
                                     String::from("a similar path exists"),
                                     Applicability::MaybeIncorrect,
                                 )),
