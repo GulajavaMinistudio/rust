@@ -462,7 +462,6 @@ supported_targets! {
     ("wasm32-unknown-emscripten", wasm32_unknown_emscripten),
     ("wasm32-unknown-unknown", wasm32_unknown_unknown),
     ("wasm32-wasi", wasm32_wasi),
-    ("wasm32-experimental-emscripten", wasm32_experimental_emscripten),
 
     ("thumbv6m-none-eabi", thumbv6m_none_eabi),
     ("thumbv7m-none-eabi", thumbv7m_none_eabi),
@@ -692,6 +691,9 @@ pub struct TargetOptions {
     /// defined in libgcc. If this option is enabled, the target must provide
     /// `eh_unwind_resume` lang item.
     pub custom_unwind_resume: bool,
+    /// Whether the runtime startup code requires the `main` function be passed
+    /// `argc` and `argv` values.
+    pub main_needs_argc_argv: bool,
 
     /// Flag indicating whether ELF TLS (e.g., #[thread_local]) is available for
     /// this target.
@@ -850,6 +852,7 @@ impl Default for TargetOptions {
             link_env_remove: Vec::new(),
             archive_format: "gnu".to_string(),
             custom_unwind_resume: false,
+            main_needs_argc_argv: true,
             allow_asm: true,
             has_elf_tls: false,
             obj_is_bitcode: false,
@@ -1160,6 +1163,7 @@ impl Target {
         key!(archive_format);
         key!(allow_asm, bool);
         key!(custom_unwind_resume, bool);
+        key!(main_needs_argc_argv, bool);
         key!(has_elf_tls, bool);
         key!(obj_is_bitcode, bool);
         key!(no_integrated_as, bool);
@@ -1377,6 +1381,7 @@ impl ToJson for Target {
         target_option_val!(archive_format);
         target_option_val!(allow_asm);
         target_option_val!(custom_unwind_resume);
+        target_option_val!(main_needs_argc_argv);
         target_option_val!(has_elf_tls);
         target_option_val!(obj_is_bitcode);
         target_option_val!(no_integrated_as);
