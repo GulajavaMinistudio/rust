@@ -312,10 +312,7 @@ impl<'tcx> fmt::Display for Pat<'tcx> {
             }
             PatKind::Range(PatRange { lo, hi, end }) => {
                 write!(f, "{}", lo)?;
-                match end {
-                    RangeEnd::Included => write!(f, "..=")?,
-                    RangeEnd::Excluded => write!(f, "..")?,
-                }
+                write!(f, "{}", end)?;
                 write!(f, "{}", hi)
             }
             PatKind::Slice { ref prefix, ref slice, ref suffix } |
@@ -1217,7 +1214,7 @@ fn search_for_adt_without_structural_match<'tcx>(tcx: TyCtxt<'tcx>,
 
         // tracks ADT's previously encountered during search, so that
         // we will not recur on them again.
-        seen: FxHashSet<&'tcx AdtDef>,
+        seen: FxHashSet<hir::def_id::DefId>,
     }
 
     impl<'tcx> TypeVisitor<'tcx> for Search<'tcx> {
@@ -1257,13 +1254,11 @@ fn search_for_adt_without_structural_match<'tcx>(tcx: TyCtxt<'tcx>,
                 return true // Halt visiting!
             }
 
-            if self.seen.contains(adt_def) {
+            if !self.seen.insert(adt_def.did) {
                 debug!("Search already seen adt_def: {:?}", adt_def);
                 // let caller continue its search
                 return false;
             }
-
-            self.seen.insert(adt_def);
 
             // `#[structural_match]` does not care about the
             // instantiation of the generics in an ADT (it

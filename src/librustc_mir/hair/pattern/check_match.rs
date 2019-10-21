@@ -10,6 +10,7 @@ use rustc::ty::subst::{InternalSubsts, SubstsRef};
 use rustc::lint;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 
+use rustc::hir::HirId;
 use rustc::hir::def::*;
 use rustc::hir::def_id::DefId;
 use rustc::hir::intravisit::{self, Visitor, NestedVisitorMap};
@@ -153,7 +154,8 @@ impl<'tcx> MatchVisitor<'_, 'tcx> {
                         self.tables
                     );
                     patcx.include_lint_checks();
-                    let pattern = expand_pattern(cx, patcx.lower_pattern(&pat));
+                    let pattern =
+                        cx.pattern_arena.alloc(expand_pattern(cx, patcx.lower_pattern(&pat))) as &_;
                     if !patcx.errors.is_empty() {
                         patcx.report_inlining_errors(pat.span);
                         have_errors = true;
@@ -239,7 +241,7 @@ impl<'tcx> MatchVisitor<'_, 'tcx> {
                 .map(|pat| smallvec![pat.0])
                 .collect();
             let scrut_ty = self.tables.node_type(scrut.hir_id);
-            check_exhaustive(cx, scrut_ty, scrut.span, &matrix);
+            check_exhaustive(cx, scrut_ty, scrut.span, &matrix, scrut.hir_id);
         })
     }
 
@@ -252,11 +254,12 @@ impl<'tcx> MatchVisitor<'_, 'tcx> {
             patcx.include_lint_checks();
             let pattern = patcx.lower_pattern(pat);
             let pattern_ty = pattern.ty;
+            let pattern = expand_pattern(cx, pattern);
             let pats: Matrix<'_, '_> = vec![smallvec![
-                expand_pattern(cx, pattern)
+                &pattern
             ]].into_iter().collect();
 
-            let witnesses = match check_not_useful(cx, pattern_ty, &pats) {
+            let witnesses = match check_not_useful(cx, pattern_ty, &pats, pat.hir_id) {
                 Ok(_) => return,
                 Err(err) => err,
             };
@@ -389,7 +392,7 @@ fn check_arms<'tcx>(
         for &(pat, hir_pat) in pats {
             let v = smallvec![pat];
 
-            match is_useful(cx, &seen, &v, LeaveOutWitness) {
+            match is_useful(cx, &seen, &v, LeaveOutWitness, hir_pat.hir_id) {
                 NotUseful => {
                     match source {
                         hir::MatchSource::IfDesugar { .. } |
@@ -465,9 +468,10 @@ fn check_not_useful(
     cx: &mut MatchCheckCtxt<'_, 'tcx>,
     ty: Ty<'tcx>,
     matrix: &Matrix<'_, 'tcx>,
+    hir_id: HirId,
 ) -> Result<(), Vec<super::Pat<'tcx>>> {
     let wild_pattern = super::Pat { ty, span: DUMMY_SP, kind: box PatKind::Wild };
-    match is_useful(cx, matrix, &[&wild_pattern], ConstructWitness) {
+    match is_useful(cx, matrix, &[&wild_pattern], ConstructWitness, hir_id) {
         NotUseful => Ok(()), // This is good, wildcard pattern isn't reachable.
         UsefulWithWitness(pats) => Err(if pats.is_empty() {
             vec![wild_pattern]
@@ -483,8 +487,9 @@ fn check_exhaustive<'tcx>(
     scrut_ty: Ty<'tcx>,
     sp: Span,
     matrix: &Matrix<'_, 'tcx>,
+    hir_id: HirId,
 ) {
-    let witnesses = match check_not_useful(cx, scrut_ty, matrix) {
+    let witnesses = match check_not_useful(cx, scrut_ty, matrix, hir_id) {
         Ok(_) => return,
         Err(err) => err,
     };

@@ -8,7 +8,7 @@ use rustc::hir::def::DefKind;
 use rustc::hir::def_id::DefId;
 use rustc::mir::{
     AggregateKind, Constant, Location, Place, PlaceBase, Body, Operand, Rvalue,
-    Local, NullOp, UnOp, StatementKind, Statement, LocalKind,
+    Local, UnOp, StatementKind, Statement, LocalKind,
     TerminatorKind, Terminator,  ClearCrossCrate, SourceInfo, BinOp,
     SourceScope, SourceScopeLocalData, LocalDecl, BasicBlock,
 };
@@ -118,7 +118,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
 struct ConstPropMachine;
 
 impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
-    type MemoryKinds= !;
+    type MemoryKinds = !;
     type PointerTag = ();
     type ExtraFnVal = !;
 
@@ -431,35 +431,26 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         place_layout: TyLayout<'tcx>,
         source_info: SourceInfo,
         place: &Place<'tcx>,
-    ) -> Option<Const<'tcx>> {
+    ) -> Option<()> {
         let span = source_info.span;
 
-        // if this isn't a supported operation, then return None
+        let overflow_check = self.tcx.sess.overflow_checks();
+
+        // Perform any special handling for specific Rvalue types.
+        // Generally, checks here fall into one of two categories:
+        //   1. Additional checking to provide useful lints to the user
+        //        - In this case, we will do some validation and then fall through to the
+        //          end of the function which evals the assignment.
+        //   2. Working around bugs in other parts of the compiler
+        //        - In this case, we'll return `None` from this function to stop evaluation.
         match rvalue {
-            Rvalue::Repeat(..) |
-            Rvalue::Aggregate(..) |
-            Rvalue::NullaryOp(NullOp::Box, _) |
-            Rvalue::Discriminant(..) => return None,
+            // Additional checking: if overflow checks are disabled (which is usually the case in
+            // release mode), then we need to do additional checking here to give lints to the user
+            // if an overflow would occur.
+            Rvalue::UnaryOp(UnOp::Neg, arg) if !overflow_check => {
+                trace!("checking UnaryOp(op = Neg, arg = {:?})", arg);
 
-            Rvalue::Use(_) |
-            Rvalue::Len(_) |
-            Rvalue::Cast(..) |
-            Rvalue::NullaryOp(..) |
-            Rvalue::CheckedBinaryOp(..) |
-            Rvalue::Ref(..) |
-            Rvalue::UnaryOp(..) |
-            Rvalue::BinaryOp(..) => { }
-        }
-
-        // perform any special checking for specific Rvalue types
-        if let Rvalue::UnaryOp(op, arg) = rvalue {
-            trace!("checking UnaryOp(op = {:?}, arg = {:?})", op, arg);
-            let overflow_check = self.tcx.sess.overflow_checks();
-
-            self.use_ecx(source_info, |this| {
-                // We check overflow in debug mode already
-                // so should only check in release mode.
-                if *op == UnOp::Neg && !overflow_check {
+                self.use_ecx(source_info, |this| {
                     let ty = arg.ty(&this.local_decls, this.tcx);
 
                     if ty.is_integral() {
@@ -471,76 +462,91 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                             throw_panic!(OverflowNeg)
                         }
                     }
+
+                    Ok(())
+                })?;
+            }
+
+            // Additional checking: check for overflows on integer binary operations and report
+            // them to the user as lints.
+            Rvalue::BinaryOp(op, left, right) => {
+                trace!("checking BinaryOp(op = {:?}, left = {:?}, right = {:?})", op, left, right);
+
+                let r = self.use_ecx(source_info, |this| {
+                    this.ecx.read_immediate(this.ecx.eval_operand(right, None)?)
+                })?;
+                if *op == BinOp::Shr || *op == BinOp::Shl {
+                    let left_bits = place_layout.size.bits();
+                    let right_size = r.layout.size;
+                    let r_bits = r.to_scalar().and_then(|r| r.to_bits(right_size));
+                    if r_bits.ok().map_or(false, |b| b >= left_bits as u128) {
+                        let source_scope_local_data = match self.source_scope_local_data {
+                            ClearCrossCrate::Set(ref data) => data,
+                            ClearCrossCrate::Clear => return None,
+                        };
+                        let dir = if *op == BinOp::Shr {
+                            "right"
+                        } else {
+                            "left"
+                        };
+                        let hir_id = source_scope_local_data[source_info.scope].lint_root;
+                        self.tcx.lint_hir(
+                            ::rustc::lint::builtin::EXCEEDING_BITSHIFTS,
+                            hir_id,
+                            span,
+                            &format!("attempt to shift {} with overflow", dir));
+                        return None;
+                    }
                 }
 
-                Ok(())
-            })?;
-        } else if let Rvalue::BinaryOp(op, left, right) = rvalue {
-            trace!("checking BinaryOp(op = {:?}, left = {:?}, right = {:?})", op, left, right);
+                // If overflow checking is enabled (like in debug mode by default),
+                // then we'll already catch overflow when we evaluate the `Assert` statement
+                // in MIR. However, if overflow checking is disabled, then there won't be any
+                // `Assert` statement and so we have to do additional checking here.
+                if !overflow_check {
+                    self.use_ecx(source_info, |this| {
+                        let l = this.ecx.read_immediate(this.ecx.eval_operand(left, None)?)?;
+                        let (_, overflow, _ty) = this.ecx.overflowing_binary_op(*op, l, r)?;
 
-            let r = self.use_ecx(source_info, |this| {
-                this.ecx.read_immediate(this.ecx.eval_operand(right, None)?)
-            })?;
-            if *op == BinOp::Shr || *op == BinOp::Shl {
-                let left_bits = place_layout.size.bits();
-                let right_size = r.layout.size;
-                let r_bits = r.to_scalar().and_then(|r| r.to_bits(right_size));
-                if r_bits.ok().map_or(false, |b| b >= left_bits as u128) {
-                    let source_scope_local_data = match self.source_scope_local_data {
-                        ClearCrossCrate::Set(ref data) => data,
-                        ClearCrossCrate::Clear => return None,
-                    };
-                    let dir = if *op == BinOp::Shr {
-                        "right"
-                    } else {
-                        "left"
-                    };
-                    let hir_id = source_scope_local_data[source_info.scope].lint_root;
-                    self.tcx.lint_hir(
-                        ::rustc::lint::builtin::EXCEEDING_BITSHIFTS,
-                        hir_id,
-                        span,
-                        &format!("attempt to shift {} with overflow", dir));
-                    return None;
+                        if overflow {
+                            let err = err_panic!(Overflow(*op)).into();
+                            return Err(err);
+                        }
+
+                        Ok(())
+                    })?;
                 }
             }
-            self.use_ecx(source_info, |this| {
-                let l = this.ecx.read_immediate(this.ecx.eval_operand(left, None)?)?;
-                let (_, overflow, _ty) = this.ecx.overflowing_binary_op(*op, l, r)?;
 
-                // We check overflow in debug mode already
-                // so should only check in release mode.
-                if !this.tcx.sess.overflow_checks() && overflow {
-                    let err = err_panic!(Overflow(*op)).into();
-                    return Err(err);
-                }
-
-                Ok(())
-            })?;
-        } else if let Rvalue::Ref(_, _, place) = rvalue {
-            trace!("checking Ref({:?})", place);
-            // FIXME(wesleywiser) we don't currently handle the case where we try to make a ref
-            // from a function argument that hasn't been assigned to in this function.
-            if let Place {
-                base: PlaceBase::Local(local),
-                projection: box []
-            } = place {
+            // Work around: avoid ICE in miri. FIXME(wesleywiser)
+            // The Miri engine ICEs when taking a reference to an uninitialized unsized
+            // local. There's nothing it can do here: taking a reference needs an allocation
+            // which needs to know the size. Normally that's okay as during execution
+            // (e.g. for CTFE) it can never happen. But here in const_prop
+            // unknown data is uninitialized, so if e.g. a function argument is unsized
+            // and has a reference taken, we get an ICE.
+            Rvalue::Ref(_, _, Place { base: PlaceBase::Local(local), projection: box [] }) => {
+                trace!("checking Ref({:?})", place);
                 let alive =
                     if let LocalValue::Live(_) = self.ecx.frame().locals[*local].value {
                         true
-                    } else { false };
+                    } else {
+                        false
+                    };
 
-                if local.as_usize() <= self.ecx.frame().body.arg_count && !alive {
-                    trace!("skipping Ref({:?})", place);
+                if !alive {
+                    trace!("skipping Ref({:?}) to uninitialized local", place);
                     return None;
                 }
             }
+
+            _ => { }
         }
 
         self.use_ecx(source_info, |this| {
             trace!("calling eval_rvalue_into_place(rvalue = {:?}, place = {:?})", rvalue, place);
             this.ecx.eval_rvalue_into_place(rvalue, place)?;
-            this.ecx.eval_place_to_op(place, Some(place_layout))
+            Ok(())
         })
     }
 
@@ -704,16 +710,15 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                     base: PlaceBase::Local(local),
                     projection: box [],
                 } = *place {
-                    if let Some(value) = self.const_prop(rval,
-                                                         place_layout,
-                                                         statement.source_info,
-                                                         place) {
-                        trace!("checking whether {:?} can be stored to {:?}", value, local);
+                    let source = statement.source_info;
+                    if let Some(()) = self.const_prop(rval, place_layout, source, place) {
                         if self.can_const_prop[local] {
-                            trace!("stored {:?} to {:?}", value, local);
-                            assert_eq!(self.get_const(local), Some(value));
+                            trace!("propagated into {:?}", local);
 
                             if self.should_const_prop() {
+                                let value =
+                                    self.get_const(local).expect("local was dead/uninitialized");
+                                trace!("replacing {:?} with {:?}", rval, value);
                                 self.replace_with_const(
                                     rval,
                                     value,
@@ -721,7 +726,7 @@ impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
                                 );
                             }
                         } else {
-                            trace!("can't propagate {:?} to {:?}", value, local);
+                            trace!("can't propagate into {:?}", local);
                             self.remove_const(local);
                         }
                     }
