@@ -1305,6 +1305,7 @@ impl MacroDef {
     }
 }
 
+// Clippy uses Hash and PartialEq
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, Copy, Hash, PartialEq)]
 pub enum StrStyle {
     /// A regular string, like `"foo"`.
@@ -1327,6 +1328,7 @@ pub struct Lit {
     pub span: Span,
 }
 
+// Clippy uses Hash and PartialEq
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, Copy, Hash, PartialEq)]
 pub enum LitIntType {
     Signed(IntTy),
@@ -1337,6 +1339,7 @@ pub enum LitIntType {
 /// Literal kind.
 ///
 /// E.g., `"foo"`, `42`, `12.34`, or `bool`.
+// Clippy uses Hash and PartialEq
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug, Hash, PartialEq)]
 pub enum LitKind {
     /// A string literal (`"foo"`).

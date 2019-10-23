@@ -62,7 +62,7 @@ impl_stable_hash_via_hash!(OptLevel);
 
 /// This is what the `LtoCli` values get mapped to after resolving defaults and
 /// and taking other command line options into account.
-#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+#[derive(Clone, PartialEq)]
 pub enum Lto {
     /// Don't do any LTO whatsoever
     No,
@@ -296,10 +296,10 @@ impl OutputTypes {
 /// Use tree-based collections to cheaply get a deterministic `Hash` implementation.
 /// *Do not* switch `BTreeMap` or `BTreeSet` out for an unsorted container type! That
 /// would break dependency tracking for command-line arguments.
-#[derive(Clone, Hash)]
+#[derive(Clone)]
 pub struct Externs(BTreeMap<String, ExternEntry>);
 
-#[derive(Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ExternEntry {
     pub locations: BTreeSet<Option<String>>,
     pub is_private_dep: bool
@@ -459,7 +459,7 @@ pub enum PrintRequest {
     NativeStaticLibs,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone)]
 pub enum BorrowckMode {
     Mir,
     Migrate,
@@ -1149,7 +1149,8 @@ options! {CodegenOptions, CodegenSetter, basic_codegen_options,
     target_cpu: Option<String> = (None, parse_opt_string, [TRACKED],
         "select target processor (`rustc --print target-cpus` for details)"),
     target_feature: String = (String::new(), parse_string, [TRACKED],
-        "target specific attributes (`rustc --print target-features` for details)"),
+        "target specific attributes. (`rustc --print target-features` for details). \
+        This feature is unsafe."),
     passes: Vec<String> = (Vec::new(), parse_list, [TRACKED],
         "a list of extra LLVM passes to run (space separated)"),
     llvm_args: Vec<String> = (Vec::new(), parse_list, [TRACKED],
