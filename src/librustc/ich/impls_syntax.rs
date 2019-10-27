@@ -9,7 +9,7 @@ use std::mem;
 use syntax::ast;
 use syntax::feature_gate;
 use syntax::parse::token;
-use syntax::symbol::InternedString;
+use syntax::symbol::LocalInternedString;
 use syntax::tokenstream;
 use syntax_pos::SourceFile;
 
@@ -18,20 +18,21 @@ use crate::hir::def_id::{DefId, CrateNum, CRATE_DEF_INDEX};
 use smallvec::SmallVec;
 use rustc_data_structures::stable_hasher::{HashStable, ToStableHashKey, StableHasher};
 
-impl<'a> HashStable<StableHashingContext<'a>> for InternedString {
+impl<'a> HashStable<StableHashingContext<'a>> for LocalInternedString {
     #[inline]
     fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
-        self.with(|s| s.hash_stable(hcx, hasher))
+        let str = self as &str;
+        str.hash_stable(hcx, hasher)
     }
 }
 
-impl<'a> ToStableHashKey<StableHashingContext<'a>> for InternedString {
-    type KeyType = InternedString;
+impl<'a> ToStableHashKey<StableHashingContext<'a>> for LocalInternedString {
+    type KeyType = LocalInternedString;
 
     #[inline]
     fn to_stable_hash_key(&self,
                           _: &StableHashingContext<'a>)
-                          -> InternedString {
+                          -> LocalInternedString {
         self.clone()
     }
 }
@@ -44,13 +45,13 @@ impl<'a> HashStable<StableHashingContext<'a>> for ast::Name {
 }
 
 impl<'a> ToStableHashKey<StableHashingContext<'a>> for ast::Name {
-    type KeyType = InternedString;
+    type KeyType = LocalInternedString;
 
     #[inline]
     fn to_stable_hash_key(&self,
                           _: &StableHashingContext<'a>)
-                          -> InternedString {
-        self.as_interned_str()
+                          -> LocalInternedString {
+        self.as_str()
     }
 }
 
@@ -424,6 +425,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for SourceFile {
             ref lines,
             ref multibyte_chars,
             ref non_narrow_chars,
+            ref normalized_pos,
         } = *self;
 
         (name_hash as u64).hash_stable(hcx, hasher);
@@ -452,6 +454,12 @@ impl<'a> HashStable<StableHashingContext<'a>> for SourceFile {
         for &char_pos in non_narrow_chars.iter() {
             stable_non_narrow_char(char_pos, start_pos).hash_stable(hcx, hasher);
         }
+
+        normalized_pos.len().hash_stable(hcx, hasher);
+        for &char_pos in normalized_pos.iter() {
+            stable_normalized_pos(char_pos, start_pos).hash_stable(hcx, hasher);
+        }
+
     }
 }
 
@@ -480,6 +488,18 @@ fn stable_non_narrow_char(swc: ::syntax_pos::NonNarrowChar,
 
     (pos.0 - source_file_start.0, width as u32)
 }
+
+fn stable_normalized_pos(np: ::syntax_pos::NormalizedPos,
+                         source_file_start: ::syntax_pos::BytePos)
+                         -> (u32, u32) {
+    let ::syntax_pos::NormalizedPos {
+        pos,
+        diff
+    } = np;
+
+    (pos.0 - source_file_start.0, diff)
+}
+
 
 impl<'tcx> HashStable<StableHashingContext<'tcx>> for feature_gate::Features {
     fn hash_stable(&self, hcx: &mut StableHashingContext<'tcx>, hasher: &mut StableHasher) {

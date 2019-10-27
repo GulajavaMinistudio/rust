@@ -374,6 +374,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo_metadata"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d2d1617e838936c0d2323a65cc151e03ae19a7678dd24f72bccf27119b90a5d"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
 name = "cargotest2"
 version = "0.1.0"
 
@@ -443,7 +455,7 @@ dependencies = [
 name = "clippy"
 version = "0.0.212"
 dependencies = [
- "cargo_metadata",
+ "cargo_metadata 0.9.0",
  "clippy-mini-macro-test",
  "clippy_lints",
  "compiletest_rs",
@@ -464,7 +476,7 @@ version = "0.2.0"
 name = "clippy_lints"
 version = "0.0.212"
 dependencies = [
- "cargo_metadata",
+ "cargo_metadata 0.9.0",
  "if_chain",
  "itertools 0.8.0",
  "lazy_static 1.3.0",
@@ -1297,9 +1309,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6587d09be37fb98a11cb08b9000a3f592451c1b1b613ca69d949160e313a430a"
+checksum = "3cd9867f119b19fecb08cd5c326ad4488d7a1da4bf75b4d95d71db742525aaab"
 dependencies = [
  "autocfg",
  "compiler_builtins",
@@ -1314,6 +1326,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea04fa3ead4e05e51a7c806fc07271fdbde4e246a6c6d1efd52e72230b771b82"
 dependencies = [
  "unicode-segmentation",
+]
+
+[[package]]
+name = "hermit-abi"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f22b8f315b98f415780ddbe9163c7dbbc5a07225b6d102ace1d8aeef85775140"
+dependencies = [
+ "compiler_builtins",
+ "libc",
+ "rustc-std-workspace-core",
 ]
 
 [[package]]
@@ -1954,9 +1977,9 @@ dependencies = [
 
 [[package]]
 name = "measureme"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d09de7dafa3aa334bc806447c7e4de69419723312f4b88b80b561dea66601ce8"
+checksum = "cd21b0e6e1af976b269ce062038fe5e1b9ca2f817ab7a3af09ec4210aebf0d30"
 dependencies = [
  "byteorder",
  "memmap",
@@ -2124,7 +2147,7 @@ name = "miri"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "cargo_metadata",
+ "cargo_metadata 0.8.0",
  "colored",
  "compiletest_rs",
  "directories",
@@ -2954,7 +2977,7 @@ name = "rls"
 version = "1.39.0"
 dependencies = [
  "cargo",
- "cargo_metadata",
+ "cargo_metadata 0.8.0",
  "clippy_lints",
  "crossbeam-channel",
  "difference",
@@ -3483,6 +3506,7 @@ dependencies = [
  "rustc_data_structures",
  "rustc_errors",
  "rustc_interface",
+ "rustc_lint",
  "rustc_metadata",
  "rustc_mir",
  "rustc_plugin",
@@ -3871,7 +3895,7 @@ version = "1.4.9"
 dependencies = [
  "annotate-snippets",
  "bytecount",
- "cargo_metadata",
+ "cargo_metadata 0.8.0",
  "derive-new",
  "diff",
  "dirs",
@@ -4145,7 +4169,8 @@ dependencies = [
  "core",
  "dlmalloc",
  "fortanix-sgx-abi",
- "hashbrown 0.6.1",
+ "hashbrown 0.6.2",
+ "hermit-abi",
  "libc",
  "panic_abort",
  "panic_unwind",

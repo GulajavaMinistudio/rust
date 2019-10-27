@@ -56,16 +56,16 @@ where
     fn assign_qualif_direct(&mut self, place: &mir::Place<'tcx>, value: bool) {
         debug_assert!(!place.is_indirect());
 
-        match (value, place) {
-            (true, mir::Place { base: mir::PlaceBase::Local(local), .. }) => {
-                self.qualifs_per_local.insert(*local);
+        match (value, place.as_ref()) {
+            (true, mir::PlaceRef { base: &mir::PlaceBase::Local(local), .. }) => {
+                self.qualifs_per_local.insert(local);
             }
 
             // For now, we do not clear the qualif if a local is overwritten in full by
             // an unqualified rvalue (e.g. `y = 5`). This is to be consistent
             // with aggregates where we overwrite all fields with assignments, which would not
             // get this feature.
-            (false, mir::Place { base: mir::PlaceBase::Local(_local), projection: box [] }) => {
+            (false, mir::PlaceRef { base: &mir::PlaceBase::Local(_local), projection: &[] }) => {
                 // self.qualifs_per_local.remove(*local);
             }
 
@@ -81,7 +81,13 @@ where
         return_place: &mir::Place<'tcx>,
     ) {
         let return_ty = return_place.ty(self.item.body, self.item.tcx).ty;
-        let qualif = Q::in_call(self.item, &mut self.qualifs_per_local, func, args, return_ty);
+        let qualif = Q::in_call(
+            self.item,
+            &|l| self.qualifs_per_local.contains(l),
+            func,
+            args,
+            return_ty,
+        );
         if !return_place.is_indirect() {
             self.assign_qualif_direct(return_place, qualif);
         }
@@ -101,11 +107,10 @@ where
 
         // If a local with no projections is moved from (e.g. `x` in `y = x`), record that
         // it no longer needs to be dropped.
-        if let mir::Operand::Move(mir::Place {
-            base: mir::PlaceBase::Local(local),
-            projection: box [],
-        }) = *operand {
-            self.qualifs_per_local.remove(local);
+        if let mir::Operand::Move(place) = operand {
+            if let Some(local) = place.as_local() {
+                self.qualifs_per_local.remove(local);
+            }
         }
     }
 
@@ -115,7 +120,7 @@ where
         rvalue: &mir::Rvalue<'tcx>,
         location: Location,
     ) {
-        let qualif = Q::in_rvalue(self.item, self.qualifs_per_local, rvalue);
+        let qualif = Q::in_rvalue(self.item, &|l| self.qualifs_per_local.contains(l), rvalue);
         if !place.is_indirect() {
             self.assign_qualif_direct(place, qualif);
         }
@@ -130,7 +135,7 @@ where
         // here; that occurs in `apply_call_return_effect`.
 
         if let mir::TerminatorKind::DropAndReplace { value, location: dest, .. } = kind {
-            let qualif = Q::in_operand(self.item, self.qualifs_per_local, value);
+            let qualif = Q::in_operand(self.item, &|l| self.qualifs_per_local.contains(l), value);
             if !dest.is_indirect() {
                 self.assign_qualif_direct(dest, qualif);
             }

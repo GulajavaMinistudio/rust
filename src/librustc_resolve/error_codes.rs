@@ -1797,6 +1797,31 @@ let _: <u8 as Age>::Empire; // ok!
 ```
 "##,
 
+E0576: r##"
+An associated item wasn't found in the given type.
+
+Erroneous code example:
+
+```compile_fail,E0576
+trait Hello {
+    type Who;
+
+    fn hello() -> <Self as Hello>::You; // error!
+}
+```
+
+In this example, we tried to use the non-existent associated type `You` of the
+`Hello` trait. To fix this error, use an existing associated type:
+
+```
+trait Hello {
+    type Who;
+
+    fn hello() -> <Self as Hello>::Who; // ok!
+}
+```
+"##,
+
 E0603: r##"
 A private item was used outside its scope.
 
@@ -1831,7 +1856,7 @@ An item usage is ambiguous.
 
 Erroneous code example:
 
-```compile_fail,E0659
+```compile_fail,edition2018,E0659
 pub mod moon {
     pub fn foo() {}
 }
@@ -1841,12 +1866,12 @@ pub mod earth {
 }
 
 mod collider {
-    pub use moon::*;
-    pub use earth::*;
+    pub use crate::moon::*;
+    pub use crate::earth::*;
 }
 
 fn main() {
-    collider::foo(); // ERROR: `foo` is ambiguous
+    crate::collider::foo(); // ERROR: `foo` is ambiguous
 }
 ```
 
@@ -1858,7 +1883,7 @@ functions collide.
 To solve this error, the best solution is generally to keep the path before the
 item when using it. Example:
 
-```
+```edition2018
 pub mod moon {
     pub fn foo() {}
 }
@@ -1868,25 +1893,26 @@ pub mod earth {
 }
 
 mod collider {
-    pub use moon;
-    pub use earth;
+    pub use crate::moon;
+    pub use crate::earth;
 }
 
 fn main() {
-    collider::moon::foo(); // ok!
-    collider::earth::foo(); // ok!
+    crate::collider::moon::foo(); // ok!
+    crate::collider::earth::foo(); // ok!
 }
 ```
 "##,
 
 E0671: r##"
+#### Note: this error code is no longer emitted by the compiler.
+
 Const parameters cannot depend on type parameters.
 The following is therefore invalid:
-```compile_fail,E0671
+```compile_fail,E0741
 #![feature(const_generics)]
 
-fn const_id<T, const N: T>() -> T { // error: const parameter
-                                    // depends on type parameter
+fn const_id<T, const N: T>() -> T { // error
     N
 }
 ```
@@ -1924,7 +1950,6 @@ struct Foo<X = Box<Self>> {
 //  E0427, merged into 530
 //  E0467, removed
 //  E0470, removed
-    E0576,
     E0577,
     E0578,
 }

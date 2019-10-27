@@ -195,8 +195,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         obligation: &PredicateObligation<'tcx>,
         error: &MismatchedProjectionTypes<'tcx>,
     ) {
-        let predicate =
-            self.resolve_vars_if_possible(&obligation.predicate);
+        let predicate = self.resolve_vars_if_possible(&obligation.predicate);
 
         if predicate.references_error() {
             return
@@ -228,7 +227,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     &mut obligations
                 );
                 if let Err(error) = self.at(&obligation.cause, obligation.param_env)
-                                        .eq(normalized_ty, data.ty) {
+                    .eq(normalized_ty, data.ty)
+                {
                     values = Some(infer::ValuePairs::Types(ExpectedFound {
                         expected: normalized_ty,
                         found: data.ty,
@@ -239,13 +239,19 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             }
 
             let msg = format!("type mismatch resolving `{}`", predicate);
-            let error_id = (DiagnosticMessageId::ErrorId(271),
-                            Some(obligation.cause.span), msg);
+            let error_id = (
+                DiagnosticMessageId::ErrorId(271),
+                Some(obligation.cause.span),
+                msg,
+            );
             let fresh = self.tcx.sess.one_time_diagnostics.borrow_mut().insert(error_id);
             if fresh {
                 let mut diag = struct_span_err!(
-                    self.tcx.sess, obligation.cause.span, E0271,
-                    "type mismatch resolving `{}`", predicate
+                    self.tcx.sess,
+                    obligation.cause.span,
+                    E0271,
+                    "type mismatch resolving `{}`",
+                    predicate
                 );
                 self.note_type_err(&mut diag, &obligation.cause, None, values, err);
                 self.note_obligation_cause(&mut diag, obligation);
@@ -406,7 +412,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 },
                 GenericParamDefKind::Lifetime => continue,
             };
-            let name = param.name.as_symbol();
+            let name = param.name;
             flags.push((name, Some(value)));
         }
 
@@ -532,23 +538,33 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// whose result could not be truly determined and thus we can't say
     /// if the program type checks or not -- and they are unusual
     /// occurrences in any case.
-    pub fn report_overflow_error<T>(&self,
-                                    obligation: &Obligation<'tcx, T>,
-                                    suggest_increasing_limit: bool) -> !
+    pub fn report_overflow_error<T>(
+        &self,
+        obligation: &Obligation<'tcx, T>,
+        suggest_increasing_limit: bool,
+    ) -> !
         where T: fmt::Display + TypeFoldable<'tcx>
     {
         let predicate =
             self.resolve_vars_if_possible(&obligation.predicate);
-        let mut err = struct_span_err!(self.tcx.sess, obligation.cause.span, E0275,
-                                       "overflow evaluating the requirement `{}`",
-                                       predicate);
+        let mut err = struct_span_err!(
+            self.tcx.sess,
+            obligation.cause.span,
+            E0275,
+            "overflow evaluating the requirement `{}`",
+            predicate
+        );
 
         if suggest_increasing_limit {
             self.suggest_new_overflow_limit(&mut err);
         }
 
-        self.note_obligation_cause_code(&mut err, &obligation.predicate, &obligation.cause.code,
-                                        &mut vec![]);
+        self.note_obligation_cause_code(
+            &mut err,
+            &obligation.predicate,
+            &obligation.cause.code,
+            &mut vec![],
+        );
 
         err.emit();
         self.tcx.sess.abort_if_errors();
@@ -793,15 +809,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
                     ty::Predicate::ObjectSafe(trait_def_id) => {
                         let violations = self.tcx.object_safety_violations(trait_def_id);
-                        if let Some(err) = self.tcx.report_object_safety_error(
+                        self.tcx.report_object_safety_error(
                             span,
                             trait_def_id,
                             violations,
-                        ) {
-                            err
-                        } else {
-                            return;
-                        }
+                        )
                     }
 
                     ty::Predicate::ClosureKind(closure_def_id, closure_substs, kind) => {
@@ -937,11 +949,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
             TraitNotObjectSafe(did) => {
                 let violations = self.tcx.object_safety_violations(did);
-                if let Some(err) = self.tcx.report_object_safety_error(span, did, violations) {
-                    err
-                } else {
-                    return;
-                }
+                self.tcx.report_object_safety_error(span, did, violations)
             }
 
             // already reported in the query
@@ -1665,11 +1673,7 @@ impl<'tcx> TyCtxt<'tcx> {
         span: Span,
         trait_def_id: DefId,
         violations: Vec<ObjectSafetyViolation>,
-    ) -> Option<DiagnosticBuilder<'tcx>> {
-        if self.sess.trait_methods_not_found.borrow().contains(&span) {
-            // Avoid emitting error caused by non-existing method (#58734)
-            return None;
-        }
+    ) -> DiagnosticBuilder<'tcx> {
         let trait_str = self.def_path_str(trait_def_id);
         let span = self.sess.source_map().def_span(span);
         let mut err = struct_span_err!(
@@ -1687,7 +1691,13 @@ impl<'tcx> TyCtxt<'tcx> {
                 };
             }
         }
-        Some(err)
+
+        if self.sess.trait_methods_not_found.borrow().contains(&span) {
+            // Avoid emitting error caused by non-existing method (#58734)
+            err.cancel();
+        }
+
+        err
     }
 }
 
@@ -2098,6 +2108,10 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 err.note(&format!("required for the cast to the object type `{}`",
                                   self.ty_to_string(object_ty)));
             }
+            ObligationCauseCode::Coercion { source: _, target } => {
+                err.note(&format!("required by cast to type `{}`",
+                                  self.ty_to_string(target)));
+            }
             ObligationCauseCode::RepeatVec => {
                 err.note("the `Copy` trait is required because the \
                           repeated element will be copied");
@@ -2153,6 +2167,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             ObligationCauseCode::ConstSized => {
                 err.note("constant expressions must have a statically known size");
             }
+            ObligationCauseCode::ConstPatternStructural => {
+                err.note("constants used for pattern-matching must derive `PartialEq` and `Eq`");
+            }
             ObligationCauseCode::SharedStatic => {
                 err.note("shared static variables must have a type that implements `Sync`");
             }
@@ -2197,6 +2214,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     err.help("add `#![feature(trivial_bounds)]` to the \
                               crate attributes to enable",
                     );
+                }
+            }
+            ObligationCauseCode::AssocTypeBound(impl_span, orig) => {
+                err.span_label(orig, "associated type defined here");
+                if let Some(sp) = impl_span {
+                    err.span_label(sp, "in this `impl` item");
                 }
             }
         }

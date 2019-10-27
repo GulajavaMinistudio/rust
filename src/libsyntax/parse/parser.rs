@@ -1122,6 +1122,7 @@ impl<'a> Parser<'a> {
         self.expected_tokens.push(TokenType::Keyword(kw::Crate));
         if self.is_crate_vis() {
             self.bump(); // `crate`
+            self.sess.gated_spans.crate_visibility_modifier.borrow_mut().push(self.prev_span);
             return Ok(respan(self.prev_span, VisibilityKind::Crate(CrateSugar::JustCrate)));
         }
 
@@ -1366,25 +1367,6 @@ impl<'a> Parser<'a> {
                 Err(err)
             }
         }
-    }
-
-    fn report_invalid_macro_expansion_item(&self) {
-        self.struct_span_err(
-            self.prev_span,
-            "macros that expand to items must be delimited with braces or followed by a semicolon",
-        ).multipart_suggestion(
-            "change the delimiters to curly braces",
-            vec![
-                (self.prev_span.with_hi(self.prev_span.lo() + BytePos(1)), String::from(" {")),
-                (self.prev_span.with_lo(self.prev_span.hi() - BytePos(1)), '}'.to_string()),
-            ],
-            Applicability::MaybeIncorrect,
-        ).span_suggestion(
-            self.sess.source_map().next_point(self.prev_span),
-            "add a semicolon",
-            ';'.to_string(),
-            Applicability::MaybeIncorrect,
-        ).emit();
     }
 }
 

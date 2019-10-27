@@ -330,8 +330,13 @@ declare_features! (
     /// Allows exhaustive pattern matching on types that contain uninhabited types.
     (active, exhaustive_patterns, "1.13.0", Some(51085), None),
 
-    /// Allows untagged unions `union U { ... }`.
-    (active, untagged_unions, "1.13.0", Some(32836), None),
+    /// Allows `union`s to implement `Drop`. Moreover, `union`s may now include fields
+    /// that don't implement `Copy` as long as they don't have any drop glue.
+    /// This is checked recursively. On encountering type variable where no progress can be made,
+    /// `T: Copy` is used as a substitute for "no drop glue".
+    ///
+    /// NOTE: A limited form of `union U { ... }` was accepted in 1.19.0.
+    (active, untagged_unions, "1.13.0", Some(55149), None),
 
     /// Allows `#[link(..., cfg(..))]`.
     (active, link_cfg, "1.14.0", Some(37406), None),
@@ -377,9 +382,6 @@ declare_features! (
 
     /// Allows `#[doc(include = "some-file")]`.
     (active, external_doc, "1.22.0", Some(44732), None),
-
-    /// Allows future-proofing enums/structs with the `#[non_exhaustive]` attribute (RFC 2008).
-    (active, non_exhaustive, "1.22.0", Some(44109), None),
 
     /// Allows using `crate` as visibility modifier, synonymous with `pub(crate)`.
     (active, crate_visibility_modifier, "1.23.0", Some(53120), None),
@@ -522,11 +524,17 @@ declare_features! (
     /// Allows the definition of `const extern fn` and `const unsafe extern fn`.
     (active, const_extern_fn, "1.40.0", Some(64926), None),
 
-    // Allows the use of raw-dylibs (RFC 2627).
+    /// Allows the use of raw-dylibs (RFC 2627).
     (active, raw_dylib, "1.40.0", Some(58713), None),
 
-    /// Enable accurate caller location reporting during panic (RFC 2091).
+    /// Allows `#[track_caller]` to be used which provides
+    /// accurate caller location reporting during panic (RFC 2091).
     (active, track_caller, "1.40.0", Some(47809), None),
+
+    /// Allows making `dyn Trait` well-formed even if `Trait` is not object safe.
+    /// In that case, `dyn Trait: Trait` does not hold. Moreover, coercions and
+    /// casts in safe Rust to `dyn Trait` for such a `Trait` is also forbidden.
+    (active, object_safe_for_dispatch, "1.40.0", Some(43561), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates

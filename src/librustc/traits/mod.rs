@@ -188,6 +188,9 @@ pub enum ObligationCauseCode<'tcx> {
     /// Obligation incurred due to an object cast.
     ObjectCastObligation(/* Object type */ Ty<'tcx>),
 
+    /// Obligation incurred due to a coercion.
+    Coercion { source: Ty<'tcx>, target: Ty<'tcx> },
+
     // Various cases where expressions must be sized/copy/etc:
     /// L = X implies that L is Sized
     AssignmentLhsSized,
@@ -236,6 +239,9 @@ pub enum ObligationCauseCode<'tcx> {
     /// Computing common supertype in the pattern guard for the arms of a match expression
     MatchExpressionArmPattern { span: Span, ty: Ty<'tcx> },
 
+    /// Constants in patterns must have `Structural` type.
+    ConstPatternStructural,
+
     /// Computing common supertype in an if expression
     IfExpression(Box<IfExpressionCause>),
 
@@ -268,6 +274,8 @@ pub enum ObligationCauseCode<'tcx> {
 
     /// #[feature(trivial_bounds)] is not enabled
     TrivialBound,
+
+    AssocTypeBound(/*impl*/ Option<Span>, /*original*/ Span),
 }
 
 // `ObligationCauseCode` is used a lot. Make sure it doesn't unintentionally get bigger.

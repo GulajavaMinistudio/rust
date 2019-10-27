@@ -15,7 +15,7 @@ use crate::traits::query::{
 };
 
 use std::borrow::Cow;
-use syntax_pos::symbol::InternedString;
+use syntax_pos::symbol::Symbol;
 
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
@@ -191,7 +191,7 @@ rustc_queries! {
 
         /// Returns the inferred outlives predicates (e.g., for `struct
         /// Foo<'a, T> { x: &'a T }`, this would return `T: 'a`).
-        query inferred_outlives_of(_: DefId) -> &'tcx [ty::Predicate<'tcx>] {}
+        query inferred_outlives_of(_: DefId) -> &'tcx [(ty::Predicate<'tcx>, Span)] {}
 
         /// Maps from the `DefId` of a trait to the list of
         /// super-predicates. This is a subset of the full list of
@@ -924,7 +924,7 @@ rustc_queries! {
             desc { "collect_and_partition_mono_items" }
         }
         query is_codegened_item(_: DefId) -> bool {}
-        query codegen_unit(_: InternedString) -> Arc<CodegenUnit<'tcx>> {
+        query codegen_unit(_: Symbol) -> Arc<CodegenUnit<'tcx>> {
             no_force
             desc { "codegen_unit" }
         }
