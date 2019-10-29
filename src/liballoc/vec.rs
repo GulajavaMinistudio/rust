@@ -154,8 +154,8 @@ use crate::raw_vec::RawVec;
 /// println!("{}", v[6]); // it will panic!
 /// ```
 ///
-/// In conclusion: always check if the index you want to get really exists
-/// before doing it.
+/// Use [`get`] and [`get_mut`] if you want to check whether the index is in
+/// the `Vec`.
 ///
 /// # Slicing
 ///
@@ -277,6 +277,8 @@ use crate::raw_vec::RawVec;
 /// The order has changed in the past and may change again.
 ///
 /// [`vec!`]: ../../std/macro.vec.html
+/// [`get`]: ../../std/vec/struct.Vec.html#method.get
+/// [`get_mut`]: ../../std/vec/struct.Vec.html#method.get_mut
 /// [`Index`]: ../../std/ops/trait.Index.html
 /// [`String`]: ../../std/string/struct.String.html
 /// [`&str`]: ../../std/primitive.str.html
@@ -411,7 +413,11 @@ impl<T> Vec<T> {
     ///
     /// Violating these may cause problems like corrupting the allocator's
     /// internal data structures. For example it is **not** safe
-    /// to build a `Vec<u8>` from a pointer to a C `char` array and a `size_t`.
+    /// to build a `Vec<u8>` from a pointer to a C `char` array with length `size_t`.
+    /// It's also not safe to build one from a `Vec<u16>` and its length, because
+    /// the allocator cares about the alignment, and these two types have different
+    /// alignments. The buffer was allocated with alignment 2 (for `u16`), but after
+    /// turning it into a `Vec<u8>` it'll be deallocated with alignment 1.
     ///
     /// The ownership of `ptr` is effectively transferred to the
     /// `Vec<T>` which may then deallocate, reallocate or change the

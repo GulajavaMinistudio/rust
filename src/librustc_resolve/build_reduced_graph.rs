@@ -32,9 +32,6 @@ use syntax::attr;
 
 use syntax::ast::{self, Block, ForeignItem, ForeignItemKind, Item, ItemKind, NodeId};
 use syntax::ast::{MetaItemKind, StmtKind, TraitItem, TraitItemKind};
-use syntax_expand::base::{MacroKind, SyntaxExtension};
-use syntax_expand::expand::AstFragment;
-use syntax_expand::hygiene::ExpnId;
 use syntax::feature_gate::is_builtin_attr;
 use syntax::parse::token::{self, Token};
 use syntax::print::pprust;
@@ -42,7 +39,9 @@ use syntax::{span_err, struct_span_err};
 use syntax::source_map::{respan, Spanned};
 use syntax::symbol::{kw, sym};
 use syntax::visit::{self, Visitor};
-
+use syntax_expand::base::SyntaxExtension;
+use syntax_expand::expand::AstFragment;
+use syntax_pos::hygiene::{MacroKind, ExpnId};
 use syntax_pos::{Span, DUMMY_SP};
 
 use log::debug;
@@ -850,12 +849,14 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             Res::Def(kind @ DefKind::Mod, def_id)
             | Res::Def(kind @ DefKind::Enum, def_id)
             | Res::Def(kind @ DefKind::Trait, def_id) => {
-                let module = self.r.new_module(parent,
-                                             ModuleKind::Def(kind, def_id, ident.name),
-                                             def_id,
-                                             expansion,
-                                             span);
-                self.r.define(parent, ident, TypeNS, (module, vis, DUMMY_SP, expansion));
+                let module = self.r.new_module(
+                    parent,
+                    ModuleKind::Def(kind, def_id, ident.name),
+                    def_id,
+                    expansion,
+                    span,
+                );
+                self.r.define(parent, ident, TypeNS, (module, vis, span, expansion));
             }
             Res::Def(DefKind::Struct, _)
             | Res::Def(DefKind::Union, _)
@@ -868,17 +869,17 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             | Res::Def(DefKind::AssocOpaqueTy, _)
             | Res::PrimTy(..)
             | Res::ToolMod =>
-                self.r.define(parent, ident, TypeNS, (res, vis, DUMMY_SP, expansion)),
+                self.r.define(parent, ident, TypeNS, (res, vis, span, expansion)),
             Res::Def(DefKind::Fn, _)
             | Res::Def(DefKind::Method, _)
             | Res::Def(DefKind::Static, _)
             | Res::Def(DefKind::Const, _)
             | Res::Def(DefKind::AssocConst, _)
             | Res::Def(DefKind::Ctor(..), _) =>
-                self.r.define(parent, ident, ValueNS, (res, vis, DUMMY_SP, expansion)),
+                self.r.define(parent, ident, ValueNS, (res, vis, span, expansion)),
             Res::Def(DefKind::Macro(..), _)
             | Res::NonMacroAttr(..) =>
-                self.r.define(parent, ident, MacroNS, (res, vis, DUMMY_SP, expansion)),
+                self.r.define(parent, ident, MacroNS, (res, vis, span, expansion)),
             Res::Def(DefKind::TyParam, _) | Res::Def(DefKind::ConstParam, _)
             | Res::Local(..) | Res::SelfTy(..) | Res::SelfCtor(..) | Res::Err =>
                 bug!("unexpected resolution: {:?}", res)
