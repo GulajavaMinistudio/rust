@@ -1823,6 +1823,61 @@ trait Hello {
 ```
 "##,
 
+E0577: r##"
+Something other than a module was found in visibility scope.
+
+Erroneous code example:
+
+```compile_fail,E0577,edition2018
+pub struct Sea;
+
+pub (in crate::Sea) struct Shark; // error!
+
+fn main() {}
+```
+
+`Sea` is not a module, therefore it is invalid to use it in a visibility path.
+To fix this error we need to ensure `Sea` is a module.
+
+Please note that the visibility scope can only be applied on ancestors!
+
+```edition2018
+pub mod Sea {
+    pub (in crate::Sea) struct Shark; // ok!
+}
+
+fn main() {}
+```
+"##,
+
+E0578: r##"
+A module cannot be found and therefore, the visibility cannot be determined.
+
+Erroneous code example:
+
+```compile_fail,E0578,edition2018
+foo!();
+
+pub (in ::Sea) struct Shark; // error!
+
+fn main() {}
+```
+
+Because of the call to the `foo` macro, the compiler guesses that the missing
+module could be inside it and fails because the macro definition cannot be
+found.
+
+To fix this error, please be sure that the module is in scope:
+
+```edition2018
+pub mod Sea {
+    pub (in crate::Sea) struct Shark;
+}
+
+fn main() {}
+```
+"##,
+
 E0603: r##"
 A private item was used outside its scope.
 
@@ -1990,6 +2045,4 @@ fn main() {}
 //  E0427, merged into 530
 //  E0467, removed
 //  E0470, removed
-    E0577,
-    E0578,
 }

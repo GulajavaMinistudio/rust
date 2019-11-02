@@ -1514,8 +1514,14 @@ impl<'tcx> TyCtxt<'tcx> {
                 CrateType::Executable |
                 CrateType::Staticlib  |
                 CrateType::ProcMacro  |
-                CrateType::Dylib      |
                 CrateType::Cdylib     => false,
+
+                // FIXME rust-lang/rust#64319, rust-lang/rust#64872:
+                // We want to block export of generics from dylibs,
+                // but we must fix rust-lang/rust#65890 before we can
+                // do that robustly.
+                CrateType::Dylib      => true,
+
                 CrateType::Rlib       => true,
             }
         })
@@ -3014,6 +3020,10 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
     providers.all_crate_nums = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);
         tcx.arena.alloc_slice(&tcx.cstore.crates_untracked())
+    };
+    providers.crate_host_hash = |tcx, cnum| {
+        assert_ne!(cnum, LOCAL_CRATE);
+        tcx.cstore.crate_host_hash_untracked(cnum)
     };
     providers.postorder_cnums = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);
