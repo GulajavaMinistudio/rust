@@ -6,14 +6,13 @@ use syntax::source_map::SourceMap;
 use syntax::edition::Edition;
 use syntax::mut_visit::{self, MutVisitor};
 use syntax::parse::{self, parser, DirectoryOwnership};
-use syntax::parse::token;
 use syntax::ptr::P;
 use syntax::sess::ParseSess;
 use syntax::symbol::{kw, sym, Ident, Symbol};
 use syntax::{ThinVec, MACRO_ARGUMENTS};
+use syntax::token;
 use syntax::tokenstream::{self, TokenStream};
 use syntax::visit::Visitor;
-crate use syntax::expand::SpecialDerives;
 
 use errors::{DiagnosticBuilder, DiagnosticId};
 use smallvec::{smallvec, SmallVec};
@@ -860,8 +859,8 @@ pub trait Resolver {
 
     fn check_unused_macros(&mut self);
 
-    fn has_derives(&self, expn_id: ExpnId, derives: SpecialDerives) -> bool;
-    fn add_derives(&mut self, expn_id: ExpnId, derives: SpecialDerives);
+    fn has_derive_copy(&self, expn_id: ExpnId) -> bool;
+    fn add_derive_copy(&mut self, expn_id: ExpnId);
 }
 
 #[derive(Clone)]
@@ -954,18 +953,7 @@ impl<'a> ExtCtxt<'a> {
     ///
     /// Stops backtracing at include! boundary.
     pub fn expansion_cause(&self) -> Option<Span> {
-        let mut expn_id = self.current_expansion.id;
-        let mut last_macro = None;
-        loop {
-            let expn_data = expn_id.expn_data();
-            // Stop going up the backtrace once include! is encountered
-            if expn_data.is_root() || expn_data.kind.descr() == sym::include {
-                break;
-            }
-            expn_id = expn_data.call_site.ctxt().outer_expn();
-            last_macro = Some(expn_data.call_site);
-        }
-        last_macro
+        self.current_expansion.id.expansion_cause()
     }
 
     pub fn struct_span_warn<S: Into<MultiSpan>>(&self,

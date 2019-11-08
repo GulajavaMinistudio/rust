@@ -14,7 +14,7 @@
 //! those that are created by the expansion of a macro.
 
 use crate::ast::*;
-use crate::parse::token::Token;
+use crate::token::Token;
 use crate::tokenstream::{TokenTree, TokenStream};
 
 use syntax_pos::Span;
@@ -846,7 +846,10 @@ pub fn walk_vis<'a, V: Visitor<'a>>(visitor: &mut V, vis: &'a Visibility) {
 }
 
 pub fn walk_attribute<'a, V: Visitor<'a>>(visitor: &mut V, attr: &'a Attribute) {
-    visitor.visit_tts(attr.tokens.clone());
+    match attr.kind {
+        AttrKind::Normal(ref item) => visitor.visit_tts(item.tokens.clone()),
+        AttrKind::DocComment(_) => {}
+    }
 }
 
 pub fn walk_tt<'a, V: Visitor<'a>>(visitor: &mut V, tt: TokenTree) {

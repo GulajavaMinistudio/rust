@@ -9,7 +9,7 @@
 
 use crate::ast::*;
 use crate::source_map::{Spanned, respan};
-use crate::parse::token::{self, Token};
+use crate::token::{self, Token};
 use crate::ptr::P;
 use crate::ThinVec;
 use crate::tokenstream::*;
@@ -550,10 +550,14 @@ pub fn noop_visit_local<T: MutVisitor>(local: &mut P<Local>, vis: &mut T) {
 }
 
 pub fn noop_visit_attribute<T: MutVisitor>(attr: &mut Attribute, vis: &mut T) {
-    let Attribute { item: AttrItem { path, tokens }, id: _, style: _, is_sugared_doc: _, span }
-        = attr;
-    vis.visit_path(path);
-    vis.visit_tts(tokens);
+    let Attribute { kind, id: _, style: _, span } = attr;
+    match kind {
+        AttrKind::Normal(AttrItem { path, tokens }) => {
+            vis.visit_path(path);
+            vis.visit_tts(tokens);
+        }
+        AttrKind::DocComment(_) => {}
+    }
     vis.visit_span(span);
 }
 

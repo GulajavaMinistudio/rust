@@ -1,15 +1,15 @@
-use super::{Parser, PResult, TokenType};
+use super::{Parser, TokenType};
 
 use crate::{maybe_whole, ThinVec};
 use crate::ast::{self, QSelf, Path, PathSegment, Ident, ParenthesizedArgs, AngleBracketedArgs};
 use crate::ast::{AnonConst, GenericArg, AssocTyConstraint, AssocTyConstraintKind, BlockCheckMode};
-use crate::parse::token::{self, Token};
+use crate::token::{self, Token};
 use crate::source_map::{Span, BytePos};
-use crate::symbol::kw;
+use syntax_pos::symbol::{kw, sym};
 
 use std::mem;
 use log::debug;
-use errors::{Applicability, pluralise};
+use errors::{PResult, Applicability, pluralize};
 
 /// Specifies how to parse a path.
 #[derive(Copy, Clone, PartialEq)]
@@ -368,14 +368,14 @@ impl<'a> Parser<'a> {
                         span,
                         &format!(
                             "unmatched angle bracket{}",
-                            pluralise!(snapshot.unmatched_angle_bracket_count)
+                            pluralize!(snapshot.unmatched_angle_bracket_count)
                         ),
                     )
                     .span_suggestion(
                         span,
                         &format!(
                             "remove extra angle bracket{}",
-                            pluralise!(snapshot.unmatched_angle_bracket_count)
+                            pluralize!(snapshot.unmatched_angle_bracket_count)
                         ),
                         String::new(),
                         Applicability::MachineApplicable,
@@ -426,7 +426,7 @@ impl<'a> Parser<'a> {
 
                 // Gate associated type bounds, e.g., `Iterator<Item: Ord>`.
                 if let AssocTyConstraintKind::Bound { .. } = kind {
-                    self.sess.gated_spans.associated_type_bounds.borrow_mut().push(span);
+                    self.sess.gated_spans.gate(sym::associated_type_bounds, span);
                 }
 
                 constraints.push(AssocTyConstraint {

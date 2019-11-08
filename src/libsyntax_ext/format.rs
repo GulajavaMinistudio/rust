@@ -5,11 +5,11 @@ use fmt_macros as parse;
 
 use errors::DiagnosticBuilder;
 use errors::Applicability;
-use errors::pluralise;
+use errors::pluralize;
 
 use syntax::ast;
 use syntax_expand::base::{self, *};
-use syntax::parse::token;
+use syntax::token;
 use syntax::ptr::P;
 use syntax::symbol::{Symbol, sym};
 use syntax::tokenstream::TokenStream;
@@ -300,7 +300,7 @@ impl<'a, 'b> Context<'a, 'b> {
                 &format!(
                     "{} positional argument{} in format string, but {}",
                     count,
-                    pluralise!(count),
+                    pluralize!(count),
                     self.describe_num_args(),
                 ),
             );
@@ -374,10 +374,12 @@ impl<'a, 'b> Context<'a, 'b> {
                                 format!("are {} arguments", count)
                             },
                         ));
-                        e.span_label(
-                            self.args[pos].span,
-                            "this parameter corresponds to the precision flag",
-                        );
+                        if let Some(arg) = self.args.get(pos) {
+                            e.span_label(
+                                arg.span,
+                                "this parameter corresponds to the precision flag",
+                            );
+                        }
                         zero_based_note = true;
                     }
                     _ => {}
@@ -992,7 +994,7 @@ pub fn expand_preparsed_format_args(
         vec![]
     };
 
-    let fmt_str = &*fmt_str.as_str();  // for the suggestions below
+    let fmt_str = &fmt_str.as_str();  // for the suggestions below
     let mut parser = parse::Parser::new(fmt_str, str_style, skips, append_newline);
 
     let mut unverified_pieces = Vec::new();

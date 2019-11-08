@@ -14,7 +14,6 @@ use rustc::{ty, lint, span_bug};
 use syntax::ast::{self, NodeId, Ident};
 use syntax::attr::StabilityLevel;
 use syntax::edition::Edition;
-use syntax::expand::SpecialDerives;
 use syntax::feature_gate::{emit_feature_err, is_builtin_attr_name};
 use syntax::feature_gate::GateIssue;
 use syntax::print::pprust;
@@ -180,7 +179,10 @@ impl<'a> base::Resolver for Resolver<'a> {
 
         let (path, kind, derives, after_derive) = match invoc.kind {
             InvocationKind::Attr { ref attr, ref derives, after_derive, .. } =>
-                (&attr.path, MacroKind::Attr, self.arenas.alloc_ast_paths(derives), after_derive),
+                (&attr.get_normal_item().path,
+                 MacroKind::Attr,
+                 self.arenas.alloc_ast_paths(derives),
+                 after_derive),
             InvocationKind::Bang { ref mac, .. } =>
                 (&mac.path, MacroKind::Bang, &[][..], false),
             InvocationKind::Derive { ref path, .. } =>
@@ -255,12 +257,12 @@ impl<'a> base::Resolver for Resolver<'a> {
         }
     }
 
-    fn has_derives(&self, expn_id: ExpnId, derives: SpecialDerives) -> bool {
-        self.has_derives(expn_id, derives)
+    fn has_derive_copy(&self, expn_id: ExpnId) -> bool {
+        self.containers_deriving_copy.contains(&expn_id)
     }
 
-    fn add_derives(&mut self, expn_id: ExpnId, derives: SpecialDerives) {
-        *self.special_derives.entry(expn_id).or_default() |= derives;
+    fn add_derive_copy(&mut self, expn_id: ExpnId) {
+        self.containers_deriving_copy.insert(expn_id);
     }
 }
 

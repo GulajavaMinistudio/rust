@@ -1,4 +1,4 @@
-use super::{Parser, PResult, PathStyle, PrevTokenKind, TokenType};
+use super::{Parser, PathStyle, PrevTokenKind, TokenType};
 use super::item::ParamCfg;
 
 use crate::{maybe_whole, maybe_recover_from_interpolated_ty_qpath};
@@ -6,11 +6,11 @@ use crate::ptr::P;
 use crate::ast::{self, Ty, TyKind, MutTy, BareFnTy, FunctionRetTy, GenericParam, Lifetime, Ident};
 use crate::ast::{TraitBoundModifier, TraitObjectSyntax, GenericBound, GenericBounds, PolyTraitRef};
 use crate::ast::{Mutability, AnonConst, Mac};
-use crate::parse::token::{self, Token};
+use crate::token::{self, Token};
 use crate::source_map::Span;
 use crate::symbol::{kw};
 
-use errors::{Applicability, pluralise};
+use errors::{PResult, Applicability, pluralize};
 
 /// Returns `true` if `IDENT t` can start a type -- `IDENT::a::b`, `IDENT<u8, u8>`,
 /// `IDENT<<u8 as Trait>::AssocTy>`.
@@ -412,7 +412,7 @@ impl<'a> Parser<'a> {
                 }
                 err.span_suggestion_hidden(
                     bound_list,
-                    &format!("remove the trait bound{}", pluralise!(negative_bounds_len)),
+                    &format!("remove the trait bound{}", pluralize!(negative_bounds_len)),
                     new_bound_list,
                     Applicability::MachineApplicable,
                 );

@@ -1,18 +1,16 @@
-use super::{
-    BlockMode, PathStyle, SemiColonMode, TokenType, TokenExpectType,
-    SeqSep, PResult, Parser
-};
+use super::{BlockMode, PathStyle, SemiColonMode, TokenType, TokenExpectType, SeqSep, Parser};
 use crate::ast::{
     self, Param, BinOpKind, BindingMode, BlockCheckMode, Expr, ExprKind, Ident, Item, ItemKind,
     Mutability, Pat, PatKind, PathSegment, QSelf, Ty, TyKind,
 };
-use crate::parse::token::{self, TokenKind, token_can_begin_expr};
+use crate::token::{self, TokenKind, token_can_begin_expr};
 use crate::print::pprust;
 use crate::ptr::P;
 use crate::symbol::{kw, sym};
 use crate::ThinVec;
 use crate::util::parser::AssocOp;
-use errors::{Applicability, DiagnosticBuilder, DiagnosticId, pluralise};
+
+use errors::{PResult, Applicability, DiagnosticBuilder, DiagnosticId, pluralize};
 use rustc_data_structures::fx::FxHashSet;
 use syntax_pos::{Span, DUMMY_SP, MultiSpan, SpanSnippetError};
 use log::{debug, trace};
@@ -360,11 +358,11 @@ impl<'a> Parser<'a> {
     }
 
     pub fn maybe_annotate_with_ascription(
-        &self,
+        &mut self,
         err: &mut DiagnosticBuilder<'_>,
         maybe_expected_semicolon: bool,
     ) {
-        if let Some((sp, likely_path)) = self.last_type_ascription {
+        if let Some((sp, likely_path)) = self.last_type_ascription.take() {
             let sm = self.sess.source_map();
             let next_pos = sm.lookup_char_pos(self.token.span.lo());
             let op_pos = sm.lookup_char_pos(sp.hi());
@@ -515,11 +513,11 @@ impl<'a> Parser<'a> {
             self.diagnostic()
                 .struct_span_err(
                     span,
-                    &format!("unmatched angle bracket{}", pluralise!(total_num_of_gt)),
+                    &format!("unmatched angle bracket{}", pluralize!(total_num_of_gt)),
                 )
                 .span_suggestion(
                     span,
-                    &format!("remove extra angle bracket{}", pluralise!(total_num_of_gt)),
+                    &format!("remove extra angle bracket{}", pluralize!(total_num_of_gt)),
                     String::new(),
                     Applicability::MachineApplicable,
                 )
@@ -1088,8 +1086,15 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn could_ascription_be_path(&self, node: &ast::ExprKind) -> bool {
-        self.token.is_ident() &&
-            if let ast::ExprKind::Path(..) = node { true } else { false } &&
+        (self.token == token::Lt && // `foo:<bar`, likely a typoed turbofish.
+            self.look_ahead(1, |t| t.is_ident() && !t.is_reserved_ident())
+        ) ||
+            self.token.is_ident() &&
+            match node {
+                // `foo::` → `foo:` or `foo.bar::` → `foo.bar:`
+                ast::ExprKind::Path(..) | ast::ExprKind::Field(..) => true,
+                _ => false,
+            } &&
             !self.token.is_reserved_ident() &&           // v `foo:bar(baz)`
             self.look_ahead(1, |t| t == &token::OpenDelim(token::Paren)) ||
             self.look_ahead(1, |t| t == &token::Lt) &&     // `foo:bar<baz`

@@ -65,9 +65,8 @@ use syntax::ast;
 use syntax::ptr::P as AstP;
 use syntax::ast::*;
 use syntax::errors;
-use syntax::expand::SpecialDerives;
 use syntax::print::pprust;
-use syntax::parse::token::{self, Nonterminal, Token};
+use syntax::token::{self, Nonterminal, Token};
 use syntax::tokenstream::{TokenStream, TokenTree};
 use syntax::sess::ParseSess;
 use syntax::source_map::{respan, ExpnData, ExpnKind, DesugaringKind, Spanned};
@@ -183,8 +182,6 @@ pub trait Resolver {
         components: &[Symbol],
         ns: Namespace,
     ) -> (ast::Path, Res<NodeId>);
-
-    fn has_derives(&self, node_id: NodeId, derives: SpecialDerives) -> bool;
 
     fn lint_buffer(&mut self) -> &mut lint::LintBuffer;
 }
@@ -1000,14 +997,20 @@ impl<'a> LoweringContext<'a> {
         // Note that we explicitly do not walk the path. Since we don't really
         // lower attributes (we use the AST version) there is nowhere to keep
         // the `HirId`s. We don't actually need HIR version of attributes anyway.
+        let kind = match attr.kind {
+            AttrKind::Normal(ref item) => {
+                AttrKind::Normal(AttrItem {
+                    path: item.path.clone(),
+                    tokens: self.lower_token_stream(item.tokens.clone()),
+                })
+            }
+            AttrKind::DocComment(comment) => AttrKind::DocComment(comment)
+        };
+
         Attribute {
-            item: AttrItem {
-                path: attr.path.clone(),
-                tokens: self.lower_token_stream(attr.tokens.clone()),
-            },
+            kind,
             id: attr.id,
             style: attr.style,
-            is_sugared_doc: attr.is_sugared_doc,
             span: attr.span,
         }
     }
@@ -1213,7 +1216,7 @@ impl<'a> LoweringContext<'a> {
                                     ImplTraitContext::disallowed(),
                                 ),
                                 unsafety: this.lower_unsafety(f.unsafety),
-                                abi: f.abi,
+                                abi: this.lower_abi(f.abi),
                                 decl: this.lower_fn_decl(&f.decl, None, false, None),
                                 param_names: this.lower_fn_params_to_names(&f.decl),
                             }))
@@ -3385,7 +3388,7 @@ pub fn is_range_literal(sess: &Session, expr: &hir::Expr) -> bool {
     // either in std or core, i.e. has either a `::std::ops::Range` or
     // `::core::ops::Range` prefix.
     fn is_range_path(path: &Path) -> bool {
-        let segs: Vec<_> = path.segments.iter().map(|seg| seg.ident.as_str().to_string()).collect();
+        let segs: Vec<_> = path.segments.iter().map(|seg| seg.ident.to_string()).collect();
         let segs: Vec<_> = segs.iter().map(|seg| &**seg).collect();
 
         // "{{root}}" is the equivalent of `::` prefix in `Path`.
@@ -3426,7 +3429,7 @@ pub fn is_range_literal(sess: &Session, expr: &hir::Expr) -> bool {
         ExprKind::Call(ref func, _) => {
             if let ExprKind::Path(QPath::TypeRelative(ref ty, ref segment)) = func.kind {
                 if let TyKind::Path(QPath::Resolved(None, ref path)) = ty.kind {
-                    let new_call = segment.ident.as_str() == "new";
+                    let new_call = segment.ident.name == sym::new;
                     return is_range_path(&path) && is_lit(sess, &expr.span) && new_call;
                 }
             }

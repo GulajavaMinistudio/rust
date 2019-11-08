@@ -12,13 +12,13 @@ use crate::hir::def::{Res, DefKind};
 use crate::util::nodemap::NodeMap;
 
 use rustc_data_structures::thin_vec::ThinVec;
+use rustc_target::spec::abi;
 
 use std::collections::BTreeSet;
 use smallvec::SmallVec;
 use syntax::attr;
 use syntax::ast::*;
 use syntax::visit::{self, Visitor};
-use syntax::expand::SpecialDerives;
 use syntax::source_map::{respan, DesugaringKind, Spanned};
 use syntax::symbol::{kw, sym};
 use syntax_pos::Span;
@@ -227,13 +227,7 @@ impl LoweringContext<'_> {
     pub fn lower_item(&mut self, i: &Item) -> Option<hir::Item> {
         let mut ident = i.ident;
         let mut vis = self.lower_visibility(&i.vis, None);
-        let mut attrs = self.lower_attrs_extendable(&i.attrs);
-        if self.resolver.has_derives(i.id, SpecialDerives::PARTIAL_EQ | SpecialDerives::EQ) {
-            // Add `#[structural_match]` if the item derived both `PartialEq` and `Eq`.
-            let ident = Ident::new(sym::structural_match, i.span);
-            attrs.push(attr::mk_attr_outer(attr::mk_word_item(ident)));
-        }
-        let attrs = attrs.into();
+        let attrs = self.lower_attrs(&i.attrs);
 
         if let ItemKind::MacroDef(ref def) = i.kind {
             if !def.legacy || attr::contains_name(&i.attrs, sym::macro_export) {
@@ -742,7 +736,7 @@ impl LoweringContext<'_> {
 
     fn lower_foreign_mod(&mut self, fm: &ForeignMod) -> hir::ForeignMod {
         hir::ForeignMod {
-            abi: fm.abi,
+            abi: self.lower_abi(fm.abi),
             items: fm.items
                 .iter()
                 .map(|x| self.lower_foreign_item(x))
@@ -1298,8 +1292,28 @@ impl LoweringContext<'_> {
             unsafety: self.lower_unsafety(h.unsafety),
             asyncness: self.lower_asyncness(h.asyncness.node),
             constness: self.lower_constness(h.constness),
-            abi: h.abi,
+            abi: self.lower_abi(h.abi),
         }
+    }
+
+    pub(super) fn lower_abi(&mut self, abi: Abi) -> abi::Abi {
+        abi::lookup(&abi.symbol.as_str()).unwrap_or_else(|| {
+            self.error_on_invalid_abi(abi);
+            abi::Abi::Rust
+        })
+    }
+
+    fn error_on_invalid_abi(&self, abi: Abi) {
+        struct_span_err!(
+            self.sess,
+            abi.span,
+            E0703,
+            "invalid ABI: found `{}`",
+            abi.symbol
+        )
+        .span_label(abi.span, "invalid ABI")
+        .help(&format!("valid ABIs: {}", abi::all_names().join(", ")))
+        .emit();
     }
 
     pub(super) fn lower_unsafety(&mut self, u: Unsafety) -> hir::Unsafety {
