@@ -955,7 +955,7 @@ impl EncodeContext<'tcx> {
         record!(self.per_def.kind[def_id] <- match impl_item.kind {
             ty::AssocKind::Const => {
                 if let hir::ImplItemKind::Const(_, body_id) = ast_item.kind {
-                    let mir = self.tcx.at(ast_item.span).mir_const_qualif(def_id).0;
+                    let mir = self.tcx.at(ast_item.span).mir_const_qualif(def_id);
 
                     EntryKind::AssocConst(container,
                         ConstQualif { mir },
@@ -1089,16 +1089,16 @@ impl EncodeContext<'tcx> {
             hir::ItemKind::Static(_, hir::MutMutable, _) => EntryKind::MutStatic,
             hir::ItemKind::Static(_, hir::MutImmutable, _) => EntryKind::ImmStatic,
             hir::ItemKind::Const(_, body_id) => {
-                let mir = self.tcx.at(item.span).mir_const_qualif(def_id).0;
+                let mir = self.tcx.at(item.span).mir_const_qualif(def_id);
                 EntryKind::Const(
                     ConstQualif { mir },
                     self.encode_rendered_const_for_body(body_id)
                 )
             }
-            hir::ItemKind::Fn(_, header, .., body) => {
+            hir::ItemKind::Fn(ref sig, .., body) => {
                 let data = FnData {
-                    asyncness: header.asyncness,
-                    constness: header.constness,
+                    asyncness: sig.header.asyncness,
+                    constness: sig.header.constness,
                     param_names: self.encode_fn_param_names_for_body(body),
                 };
 
@@ -1284,14 +1284,14 @@ impl EncodeContext<'tcx> {
 
         let mir = match item.kind {
             hir::ItemKind::Static(..) | hir::ItemKind::Const(..) => true,
-            hir::ItemKind::Fn(_, header, ..) => {
+            hir::ItemKind::Fn(ref sig, ..) => {
                 let generics = tcx.generics_of(def_id);
                 let needs_inline =
                     (generics.requires_monomorphization(tcx) ||
                         tcx.codegen_fn_attrs(def_id).requests_inline()) &&
                         !self.metadata_output_only();
                 let always_encode_mir = self.tcx.sess.opts.debugging_opts.always_encode_mir;
-                needs_inline || header.constness == hir::Constness::Const || always_encode_mir
+                needs_inline || sig.header.constness == hir::Constness::Const || always_encode_mir
             }
             _ => false,
         };
@@ -1368,7 +1368,7 @@ impl EncodeContext<'tcx> {
         let id = self.tcx.hir().as_local_hir_id(def_id).unwrap();
         let body_id = self.tcx.hir().body_owned_by(id);
         let const_data = self.encode_rendered_const_for_body(body_id);
-        let mir = self.tcx.mir_const_qualif(def_id).0;
+        let mir = self.tcx.mir_const_qualif(def_id);
 
         record!(self.per_def.kind[def_id] <- EntryKind::Const(ConstQualif { mir }, const_data));
         record!(self.per_def.visibility[def_id] <- ty::Visibility::Public);
