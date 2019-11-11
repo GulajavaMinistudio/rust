@@ -74,8 +74,6 @@ mod check_unused;
 mod build_reduced_graph;
 mod resolve_imports;
 
-const KNOWN_TOOLS: &[Name] = &[sym::clippy, sym::rustfmt];
-
 enum Weak {
     Yes,
     No,
@@ -102,6 +100,7 @@ enum Scope<'a> {
     MacroRules(LegacyScope<'a>),
     CrateRoot,
     Module(Module<'a>),
+    RegisteredAttrs,
     MacroUsePrelude,
     BuiltinAttrs,
     LegacyPluginHelpers,
@@ -621,7 +620,6 @@ enum AmbiguityKind {
     Import,
     BuiltinAttr,
     DeriveHelper,
-    LegacyHelperVsPrelude,
     LegacyVsModern,
     GlobVsOuter,
     GlobVsGlob,
@@ -638,8 +636,6 @@ impl AmbiguityKind {
                 "built-in attribute vs any other name",
             AmbiguityKind::DeriveHelper =>
                 "derive helper attribute vs any other name",
-            AmbiguityKind::LegacyHelperVsPrelude =>
-                "legacy plugin helper attribute vs name from prelude",
             AmbiguityKind::LegacyVsModern =>
                 "`macro_rules` vs non-`macro_rules` from other module",
             AmbiguityKind::GlobVsOuter =>
@@ -916,6 +912,8 @@ pub struct Resolver<'a> {
     crate_loader: CrateLoader<'a>,
     macro_names: FxHashSet<Ident>,
     builtin_macros: FxHashMap<Name, SyntaxExtension>,
+    registered_attrs: FxHashSet<Ident>,
+    registered_tools: FxHashSet<Ident>,
     macro_use_prelude: FxHashMap<Name, &'a NameBinding<'a>>,
     all_macros: FxHashMap<Name, Res>,
     macro_map: FxHashMap<DefId, Lrc<SyntaxExtension>>,
@@ -961,6 +959,8 @@ pub struct Resolver<'a> {
     variant_vis: DefIdMap<ty::Visibility>,
 
     lint_buffer: lint::LintBuffer,
+
+    next_node_id: NodeId,
 }
 
 /// Nothing really interesting here; it just provides memory for the rest of the crate.
@@ -1078,6 +1078,10 @@ impl<'a> hir::lowering::Resolver for Resolver<'a> {
     fn lint_buffer(&mut self) -> &mut lint::LintBuffer {
         &mut self.lint_buffer
     }
+
+    fn next_node_id(&mut self) -> NodeId {
+        self.next_node_id()
+    }
 }
 
 impl<'a> Resolver<'a> {
@@ -1131,6 +1135,9 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+
+        let (registered_attrs, registered_tools) =
+            macros::registered_attrs_and_tools(session, &krate.attrs);
 
         let mut invocation_parent_scopes = FxHashMap::default();
         invocation_parent_scopes.insert(ExpnId::root(), ParentScope::module(graph_root));
@@ -1201,6 +1208,8 @@ impl<'a> Resolver<'a> {
             crate_loader: CrateLoader::new(session, metadata_loader, crate_name),
             macro_names: FxHashSet::default(),
             builtin_macros: Default::default(),
+            registered_attrs,
+            registered_tools,
             macro_use_prelude: FxHashMap::default(),
             all_macros: FxHashMap::default(),
             macro_map: FxHashMap::default(),
@@ -1226,7 +1235,16 @@ impl<'a> Resolver<'a> {
                     .collect(),
             variant_vis: Default::default(),
             lint_buffer: lint::LintBuffer::default(),
+            next_node_id: NodeId::from_u32(1),
         }
+    }
+
+    pub fn next_node_id(&mut self) -> NodeId {
+        let next = self.next_node_id.as_usize()
+            .checked_add(1)
+            .expect("input too large; ran out of NodeIds");
+        self.next_node_id = ast::NodeId::from_usize(next);
+        self.next_node_id
     }
 
     pub fn lint_buffer(&mut self) -> &mut lint::LintBuffer {
@@ -1469,6 +1487,7 @@ impl<'a> Resolver<'a> {
                 Scope::MacroRules(..) => true,
                 Scope::CrateRoot => true,
                 Scope::Module(..) => true,
+                Scope::RegisteredAttrs => use_prelude,
                 Scope::MacroUsePrelude => use_prelude || rust_2015,
                 Scope::BuiltinAttrs => true,
                 Scope::LegacyPluginHelpers => use_prelude || rust_2015,
@@ -1513,11 +1532,12 @@ impl<'a> Resolver<'a> {
                             match ns {
                                 TypeNS => Scope::ExternPrelude,
                                 ValueNS => Scope::StdLibPrelude,
-                                MacroNS => Scope::MacroUsePrelude,
+                                MacroNS => Scope::RegisteredAttrs,
                             }
                         }
                     }
                 }
+                Scope::RegisteredAttrs => Scope::MacroUsePrelude,
                 Scope::MacroUsePrelude => Scope::StdLibPrelude,
                 Scope::BuiltinAttrs => Scope::LegacyPluginHelpers,
                 Scope::LegacyPluginHelpers => break, // nowhere else to search
@@ -1673,11 +1693,11 @@ impl<'a> Resolver<'a> {
                 if let Some(binding) = self.extern_prelude_get(ident, !record_used) {
                     return Some(LexicalScopeBinding::Item(binding));
                 }
-            }
-            if ns == TypeNS && KNOWN_TOOLS.contains(&ident.name) {
-                let binding = (Res::ToolMod, ty::Visibility::Public,
-                               DUMMY_SP, ExpnId::root()).to_name_binding(self.arenas);
-                return Some(LexicalScopeBinding::Item(binding));
+                if let Some(ident) = self.registered_tools.get(&ident) {
+                    let binding = (Res::ToolMod, ty::Visibility::Public,
+                                   ident.span, ExpnId::root()).to_name_binding(self.arenas);
+                    return Some(LexicalScopeBinding::Item(binding));
+                }
             }
             if let Some(prelude) = self.prelude {
                 if let Ok(binding) = self.resolve_ident_in_module_unadjusted(
@@ -2827,9 +2847,9 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn new_ast_path_segment(&self, ident: Ident) -> ast::PathSegment {
+    fn new_ast_path_segment(&mut self, ident: Ident) -> ast::PathSegment {
         let mut seg = ast::PathSegment::from_ident(ident);
-        seg.id = self.session.next_node_id();
+        seg.id = self.next_node_id();
         seg
     }
 
