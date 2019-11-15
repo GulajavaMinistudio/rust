@@ -14,7 +14,6 @@ use rustc::ty::{self, TyCtxt, Ty, TypeFoldable};
 use rustc::ty::cast::CastTy;
 use rustc::ty::query::Providers;
 use rustc::mir::*;
-use rustc::mir::interpret::ConstValue;
 use rustc::mir::visit::{PlaceContext, Visitor, MutatingUseContext, NonMutatingUseContext};
 use rustc::middle::lang_items;
 use rustc::session::config::nightly_options;
@@ -31,6 +30,8 @@ use std::usize;
 use rustc::hir::HirId;
 use crate::transform::{MirPass, MirSource};
 use crate::transform::check_consts::ops::{self, NonConstOp};
+
+use rustc_error_codes::*;
 
 /// What kind of item we are in.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -251,7 +252,7 @@ trait Qualif {
             Operand::Move(ref place) => Self::in_place(cx, place.as_ref()),
 
             Operand::Constant(ref constant) => {
-                if let ConstValue::Unevaluated(def_id, _) = constant.literal.val {
+                if let ty::ConstKind::Unevaluated(def_id, _) = constant.literal.val {
                     // Don't peek inside trait associated constants.
                     if cx.tcx.trait_of_item(def_id).is_some() {
                         Self::in_any_value_of_ty(cx, constant.literal.ty).unwrap_or(false)
@@ -723,8 +724,12 @@ impl<'a, 'tcx> Checker<'a, 'tcx> {
                     bb = target;
                 }
                 _ => {
-                    self.not_const(ops::Loop);
-                    validator.check_op(ops::Loop);
+                    if !self.tcx.sess.opts.debugging_opts.unleash_the_miri_inside_of_you {
+                        self.tcx.sess.delay_span_bug(
+                            self.span,
+                            "complex control flow is forbidden in a const context",
+                        );
+                    }
                     break;
                 }
             }
@@ -782,19 +787,6 @@ impl<'a, 'tcx> Visitor<'tcx> for Checker<'a, 'tcx> {
 
                 // Only allow statics (not consts) to refer to other statics.
                 if self.mode == Mode::Static || self.mode == Mode::StaticMut {
-                    if self.mode == Mode::Static
-                        && context.is_mutating_use()
-                        && !self.suppress_errors
-                    {
-                        // this is not strictly necessary as miri will also bail out
-                        // For interior mutability we can't really catch this statically as that
-                        // goes through raw pointers and intermediate temporaries, so miri has
-                        // to catch this anyway
-                        self.tcx.sess.span_err(
-                            self.span,
-                            "cannot mutate statics in the initializer of another static",
-                        );
-                    }
                     return;
                 }
                 unleash_miri!(self);
@@ -1253,7 +1245,12 @@ impl<'a, 'tcx> Visitor<'tcx> for Checker<'a, 'tcx> {
                 self.super_statement(statement, location);
             }
             StatementKind::FakeRead(FakeReadCause::ForMatchedPlace, _) => {
-                self.not_const(ops::IfOrMatch);
+                if !self.tcx.sess.opts.debugging_opts.unleash_the_miri_inside_of_you {
+                    self.tcx.sess.delay_span_bug(
+                        self.span,
+                        "complex control flow is forbidden in a const context",
+                    );
+                }
             }
             // FIXME(eddyb) should these really do nothing?
             StatementKind::FakeRead(..) |

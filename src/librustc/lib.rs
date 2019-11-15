@@ -59,6 +59,7 @@
 #![feature(log_syntax)]
 #![feature(associated_type_bounds)]
 #![feature(rustc_attrs)]
+#![feature(hash_raw_entry)]
 
 #![recursion_limit="512"]
 
@@ -82,8 +83,6 @@ mod tests;
 
 #[macro_use]
 mod macros;
-
-pub mod error_codes;
 
 #[macro_use]
 pub mod query;
@@ -124,7 +123,6 @@ pub mod util {
     pub mod captures;
     pub mod common;
     pub mod nodemap;
-    pub mod profiling;
     pub mod bug;
 }
 

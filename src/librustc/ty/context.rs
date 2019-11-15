@@ -46,11 +46,11 @@ use crate::ty::CanonicalPolyFnSig;
 use crate::util::common::ErrorReported;
 use crate::util::nodemap::{DefIdMap, DefIdSet, ItemLocalMap, ItemLocalSet, NodeMap};
 use crate::util::nodemap::{FxHashMap, FxHashSet};
-use crate::util::profiling::SelfProfilerRef;
 
 use errors::DiagnosticBuilder;
 use arena::SyncDroplessArena;
 use smallvec::SmallVec;
+use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_data_structures::stable_hasher::{
     HashStable, StableHasher, StableVec, hash_stable_hashmap,
 };
@@ -75,6 +75,7 @@ use syntax::source_map::MultiSpan;
 use syntax::feature_gate;
 use syntax::symbol::{Symbol, kw, sym};
 use syntax_pos::Span;
+use syntax::expand::allocator::AllocatorKind;
 
 pub struct AllArenas {
     pub interner: SyncDroplessArena,
@@ -885,7 +886,7 @@ impl CanonicalUserType<'tcx> {
                         },
 
                         GenericArgKind::Const(ct) => match ct.val {
-                            ConstValue::Bound(debruijn, b) => {
+                            ty::ConstKind::Bound(debruijn, b) => {
                                 // We only allow a `ty::INNERMOST` index in substitutions.
                                 assert_eq!(debruijn, ty::INNERMOST);
                                 cvar == b
@@ -986,7 +987,7 @@ impl<'tcx> CommonConsts<'tcx> {
 
         CommonConsts {
             err: mk_const(ty::Const {
-                val: ConstValue::Scalar(Scalar::zst()),
+                val: ty::ConstKind::Value(ConstValue::Scalar(Scalar::zst())),
                 ty: types.err,
             }),
         }
@@ -1336,6 +1337,14 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn crates(self) -> &'tcx [CrateNum] {
         self.all_crate_nums(LOCAL_CRATE)
+    }
+
+    pub fn injected_panic_runtime(self) -> Option<CrateNum> {
+        self.cstore.injected_panic_runtime()
+    }
+
+    pub fn allocator_kind(self) -> Option<AllocatorKind> {
+        self.cstore.allocator_kind()
     }
 
     pub fn features(self) -> &'tcx feature_gate::Features {
@@ -2534,7 +2543,7 @@ impl<'tcx> TyCtxt<'tcx> {
     #[inline]
     pub fn mk_const_var(self, v: ConstVid<'tcx>, ty: Ty<'tcx>) -> &'tcx Const<'tcx> {
         self.mk_const(ty::Const {
-            val: ConstValue::Infer(InferConst::Var(v)),
+            val: ty::ConstKind::Infer(InferConst::Var(v)),
             ty,
         })
     }
@@ -2561,7 +2570,7 @@ impl<'tcx> TyCtxt<'tcx> {
         ty: Ty<'tcx>,
     ) -> &'tcx ty::Const<'tcx> {
         self.mk_const(ty::Const {
-            val: ConstValue::Infer(ic),
+            val: ty::ConstKind::Infer(ic),
             ty,
         })
     }
@@ -2579,7 +2588,7 @@ impl<'tcx> TyCtxt<'tcx> {
         ty: Ty<'tcx>
     ) -> &'tcx Const<'tcx> {
         self.mk_const(ty::Const {
-            val: ConstValue::Param(ParamConst { index, name }),
+            val: ty::ConstKind::Param(ParamConst { index, name }),
             ty,
         })
     }

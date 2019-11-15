@@ -326,17 +326,7 @@ impl Visitor<'tcx> for Validator<'_, 'mir, 'tcx> {
                 let is_thread_local = self.tcx.has_attr(*def_id, sym::thread_local);
                 if is_thread_local {
                     self.check_op(ops::ThreadLocalAccess);
-                } else if self.const_kind() == ConstKind::Static && context.is_mutating_use() {
-                    // this is not strictly necessary as miri will also bail out
-                    // For interior mutability we can't really catch this statically as that
-                    // goes through raw pointers and intermediate temporaries, so miri has
-                    // to catch this anyway
-
-                    self.tcx.sess.span_err(
-                        self.span,
-                        "cannot mutate statics in the initializer of another static",
-                    );
-                } else {
+                } else if self.const_kind() != ConstKind::Static || !context.is_mutating_use() {
                     self.check_op(ops::StaticAccess);
                 }
             }
@@ -461,7 +451,14 @@ impl Visitor<'tcx> for Validator<'_, 'mir, 'tcx> {
                 self.super_statement(statement, location);
             }
             StatementKind::FakeRead(FakeReadCause::ForMatchedPlace, _) => {
-                self.check_op(ops::IfOrMatch);
+                // FIXME: make this the `emit_error` impl of `ops::IfOrMatch` once the const
+                // checker is no longer run in compatability mode.
+                if !self.tcx.sess.opts.debugging_opts.unleash_the_miri_inside_of_you {
+                    self.tcx.sess.delay_span_bug(
+                        self.span,
+                        "complex control flow is forbidden in a const context",
+                    );
+                }
             }
             // FIXME(eddyb) should these really do nothing?
             StatementKind::FakeRead(..) |

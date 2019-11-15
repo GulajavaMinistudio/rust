@@ -181,6 +181,7 @@ pub fn run_compiler(
             crate_name: None,
             lint_caps: Default::default(),
             register_lints: None,
+            override_queries: None,
         };
         callbacks.config(&mut config);
         config
@@ -259,6 +260,7 @@ pub fn run_compiler(
         crate_name: None,
         lint_caps: Default::default(),
         register_lints: None,
+        override_queries: None,
     };
 
     callbacks.config(&mut config);
@@ -522,13 +524,13 @@ fn handle_explain(code: &str,
             let mut text = String::new();
 
             // Slice off the leading newline and print.
-            for line in description[1..].lines() {
+            for line in description.lines() {
                 let indent_level = line.find(|c: char| !c.is_whitespace())
                     .unwrap_or_else(|| line.len());
                 let dedented_line = &line[indent_level..];
                 if dedented_line.starts_with("```") {
                     is_in_code_block = !is_in_code_block;
-                    text.push_str(&line[..(indent_level+3)]);
+                    text.push_str(&line[..(indent_level + 3)]);
                 } else if is_in_code_block && dedented_line.starts_with("# ") {
                     continue;
                 } else {
