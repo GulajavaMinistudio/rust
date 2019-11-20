@@ -633,19 +633,16 @@ function handleThemeButtonsBlur(e) {{
 
 themePicker.onclick = switchThemeButtonState;
 themePicker.onblur = handleThemeButtonsBlur;
-[{}].forEach(function(item) {{
+{}.forEach(function(item) {{
     var but = document.createElement('button');
-    but.innerHTML = item;
+    but.textContent = item;
     but.onclick = function(el) {{
         switchTheme(currentTheme, mainTheme, item, true);
     }};
     but.onblur = handleThemeButtonsBlur;
     themes.appendChild(but);
 }});"#,
-                 themes.iter()
-                       .map(|s| format!("\"{}\"", s))
-                       .collect::<Vec<String>>()
-                       .join(","));
+                 as_json(&themes));
     write(cx.dst.join(&format!("theme{}.js", cx.shared.resource_suffix)),
           theme_js.as_bytes()
     )?;
@@ -700,10 +697,12 @@ themePicker.onblur = handleThemeButtonsBlur;
           static_files::source_serif_pro::ITALIC)?;
     write(cx.dst.join("SourceSerifPro-LICENSE.md"),
           static_files::source_serif_pro::LICENSE)?;
-    write(cx.dst.join("SourceCodePro-Regular.woff"),
+    write(cx.dst.join("SourceCodePro-Regular.ttf.woff"),
           static_files::source_code_pro::REGULAR)?;
-    write(cx.dst.join("SourceCodePro-Semibold.woff"),
+    write(cx.dst.join("SourceCodePro-Semibold.ttf.woff"),
           static_files::source_code_pro::SEMIBOLD)?;
+    write(cx.dst.join("SourceCodePro-It.ttf.woff"),
+          static_files::source_code_pro::ITALIC)?;
     write(cx.dst.join("SourceCodePro-LICENSE.txt"),
           static_files::source_code_pro::LICENSE)?;
     write(cx.dst.join("LICENSE-MIT.txt"),
@@ -883,7 +882,9 @@ themePicker.onblur = handleThemeButtonsBlur;
         v.push_str(&minify_replacer(
             &format!("{}\n{}", variables.join(""), all_indexes.join("\n")),
             options.enable_minification));
-        v.push_str("initSearch(searchIndex);addSearchOptions(searchIndex);");
+        // "addSearchOptions" has to be called first so the crate filtering can be set before the
+        // search might start (if it's set into the URL for example).
+        v.push_str("addSearchOptions(searchIndex);initSearch(searchIndex);");
         cx.shared.fs.write(&dst, &v)?;
     }
     if options.enable_index_page {

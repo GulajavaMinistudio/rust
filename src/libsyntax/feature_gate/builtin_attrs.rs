@@ -231,7 +231,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     ),
     ungated!(link_name, Whitelisted, template!(NameValueStr: "name")),
     ungated!(no_link, Normal, template!(Word)),
-    ungated!(repr, Normal, template!(List: "C, packed, ...")),
+    ungated!(repr, Normal, template!(List: "C")),
     ungated!(export_name, Whitelisted, template!(NameValueStr: "name")),
     ungated!(link_section, Whitelisted, template!(NameValueStr: "name")),
     ungated!(no_mangle, Whitelisted, template!(Word)),
@@ -543,7 +543,10 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     rustc_attr!(TEST, rustc_variance, Normal, template!(Word)),
     rustc_attr!(TEST, rustc_layout, Normal, template!(List: "field1, field2, ...")),
     rustc_attr!(TEST, rustc_regions, Normal, template!(Word)),
-    rustc_attr!(TEST, rustc_error, Whitelisted, template!(Word)),
+    rustc_attr!(
+        TEST, rustc_error, Whitelisted,
+        template!(Word, List: "delay_span_bug_from_inside_query")
+    ),
     rustc_attr!(TEST, rustc_dump_user_substs, Whitelisted, template!(Word)),
     rustc_attr!(TEST, rustc_if_this_changed, Whitelisted, template!(Word, List: "DepNode")),
     rustc_attr!(TEST, rustc_then_this_would_need, Whitelisted, template!(List: "DepNode")),
