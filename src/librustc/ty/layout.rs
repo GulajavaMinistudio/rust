@@ -697,7 +697,7 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
             // SIMD vector types.
             ty::Adt(def, ..) if def.repr.simd() => {
                 let element = self.layout_of(ty.simd_type(tcx))?;
-                let count = ty.simd_size(tcx) as u64;
+                let count = ty.simd_size(tcx);
                 assert!(count > 0);
                 let scalar = match element.abi {
                     Abi::Scalar(ref scalar) => scalar.clone(),
@@ -2103,8 +2103,8 @@ where
             ty::RawPtr(ty::TypeAndMut { ty: pointee, .. }) => {
                 assert!(i < this.fields.count());
 
-                // Reuse the fat *T type as its own thin pointer data field.
-                // This provides information about e.g., DST struct pointees
+                // Reuse the fat `*T` type as its own thin pointer data field.
+                // This provides information about, e.g., DST struct pointees
                 // (which may have no non-DST form), and will work as long
                 // as the `Abi` or `FieldPlacement` is checked by users.
                 if i == 0 {

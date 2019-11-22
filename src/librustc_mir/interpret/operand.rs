@@ -136,7 +136,7 @@ impl<Tag> Operand<Tag> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct OpTy<'tcx, Tag=()> {
-    op: Operand<Tag>, // Keep this private, it helps enforce invariants
+    op: Operand<Tag>, // Keep this private; it helps enforce invariants.
     pub layout: TyLayout<'tcx>,
 }
 
@@ -203,7 +203,7 @@ pub(super) fn from_known_layout<'tcx>(
             if cfg!(debug_assertions) {
                 let layout2 = compute()?;
                 assert_eq!(layout.details, layout2.details,
-                    "Mismatch in layout of supposedly equal-layout types {:?} and {:?}",
+                    "mismatch in layout of supposedly equal-layout types {:?} and {:?}",
                     layout.ty, layout2.ty);
             }
             Ok(layout)
@@ -313,17 +313,6 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             Ok(imm)
         } else {
             bug!("primitive read failed for type: {:?}", op.layout.ty);
-        }
-    }
-
-    /// Read vector length and element type
-    pub fn read_vector_ty(
-        &self, op: OpTy<'tcx, M::PointerTag>
-    ) -> (u64, &rustc::ty::TyS<'tcx>) {
-        if let layout::Abi::Vector { .. } = op.layout.abi {
-            (op.layout.ty.simd_size(*self.tcx) as _, op.layout.ty.simd_type(*self.tcx))
-        } else {
-            bug!("Type `{}` is not a SIMD vector type", op.layout.ty)
         }
     }
 
