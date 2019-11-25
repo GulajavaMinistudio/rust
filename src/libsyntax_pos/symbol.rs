@@ -98,6 +98,7 @@ symbols! {
         Auto:               "auto",
         Catch:              "catch",
         Default:            "default",
+        Raw:                "raw",
         Union:              "union",
     }
 
@@ -546,6 +547,7 @@ symbols! {
         RangeToInclusive,
         raw_dylib,
         raw_identifiers,
+        raw_ref_op,
         Ready,
         reason,
         recursion_limit,
@@ -627,7 +629,6 @@ symbols! {
         rustc_test_marker,
         rustc_then_this_would_need,
         rustc_variance,
-        rustdoc,
         rustfmt,
         rust_eh_personality,
         rust_eh_unwind_resume,
