@@ -55,7 +55,7 @@ fn op_to_const<'tcx>(
     ecx: &CompileTimeEvalContext<'_, 'tcx>,
     op: OpTy<'tcx>,
 ) -> &'tcx ty::Const<'tcx> {
-    // We do not have value optmizations for everything.
+    // We do not have value optimizations for everything.
     // Only scalars and slices, since they are very common.
     // Note that further down we turn scalars of undefined bits back to `ByRef`. These can result
     // from scalar unions that are initialized with one of their zero sized variants. We could
@@ -146,7 +146,16 @@ fn eval_body_using_ecx<'mir, 'tcx>(
     let name = ty::tls::with(|tcx| tcx.def_path_str(cid.instance.def_id()));
     let prom = cid.promoted.map_or(String::new(), |p| format!("::promoted[{:?}]", p));
     trace!("eval_body_using_ecx: pushing stack frame for global: {}{}", name, prom);
-    assert!(body.arg_count == 0);
+
+    // Assert all args (if any) are zero-sized types; `eval_body_using_ecx` doesn't
+    // make sense if the body is expecting nontrivial arguments.
+    // (The alternative would be to use `eval_fn_call` with an args slice.)
+    for arg in body.args_iter() {
+        let decl = body.local_decls.get(arg).expect("arg missing from local_decls");
+        let layout = ecx.layout_of(decl.ty.subst(tcx, cid.instance.substs))?;
+        assert!(layout.is_zst())
+    };
+
     ecx.push_stack_frame(
         cid.instance,
         body.span,
@@ -323,8 +332,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         ecx: &mut InterpCx<'mir, 'tcx, Self>,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx>],
-        dest: Option<PlaceTy<'tcx>>,
-        ret: Option<mir::BasicBlock>,
+        ret: Option<(PlaceTy<'tcx>, mir::BasicBlock)>,
         _unwind: Option<mir::BasicBlock> // unwinding is not supported in consts
     ) -> InterpResult<'tcx, Option<&'mir mir::Body<'tcx>>> {
         debug!("eval_fn_call: {:?}", instance);
@@ -337,8 +345,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
                 // Some functions we support even if they are non-const -- but avoid testing
                 // that for const fn!  We certainly do *not* want to actually call the fn
                 // though, so be sure we return here.
-                return if ecx.hook_panic_fn(instance, args, dest)? {
-                    ecx.goto_block(ret)?; // fully evaluated and done
+                return if ecx.hook_panic_fn(instance, args, ret)? {
                     Ok(None)
                 } else {
                     throw_unsup_format!("calling non-const function `{}`", instance)
@@ -364,8 +371,8 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         fn_val: !,
         _args: &[OpTy<'tcx>],
-        _dest: Option<PlaceTy<'tcx>>,
-        _ret: Option<mir::BasicBlock>,
+        _ret: Option<(PlaceTy<'tcx>, mir::BasicBlock)>,
+        _unwind: Option<mir::BasicBlock>
     ) -> InterpResult<'tcx> {
         match fn_val {}
     }
@@ -375,11 +382,10 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
         span: Span,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx>],
-        dest: Option<PlaceTy<'tcx>>,
-        _ret: Option<mir::BasicBlock>,
+        ret: Option<(PlaceTy<'tcx>, mir::BasicBlock)>,
         _unwind: Option<mir::BasicBlock>
     ) -> InterpResult<'tcx> {
-        if ecx.emulate_intrinsic(span, instance, args, dest)? {
+        if ecx.emulate_intrinsic(span, instance, args, ret)? {
             return Ok(());
         }
         // An intrinsic that we do not support

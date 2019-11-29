@@ -7,6 +7,7 @@ use rustc::mir::{
     PlaceRef, ProjectionElem, Rvalue, Statement, StatementKind, TerminatorKind, VarBindingForm,
 };
 use rustc::ty::{self, Ty};
+use rustc::traits::error_reporting::suggest_constraining_type_param;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_index::vec::Idx;
 use rustc_errors::{Applicability, DiagnosticBuilder};
@@ -231,13 +232,16 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 if let ty::Param(param_ty) = ty.kind {
                     let tcx = self.infcx.tcx;
                     let generics = tcx.generics_of(self.mir_def_id);
-                    let def_id = generics.type_param(&param_ty, tcx).def_id;
-                    if let Some(sp) = tcx.hir().span_if_local(def_id) {
-                        err.span_label(
-                            sp,
-                            "consider adding a `Copy` constraint to this type argument",
-                        );
-                    }
+                    let param = generics.type_param(&param_ty, tcx);
+                    let generics = tcx.hir().get_generics(self.mir_def_id).unwrap();
+                    suggest_constraining_type_param(
+                        generics,
+                        &mut err,
+                        &param.name.as_str(),
+                        "Copy",
+                        tcx.sess.source_map(),
+                        span,
+                    );
                 }
                 let span = if let Some(local) = place.as_local() {
                     let decl = &self.body.local_decls[local];
@@ -308,7 +312,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             location,
             borrow,
             None,
-        ).add_explanation_to_diagnostic(self.infcx.tcx, self.body, &mut err, "", Some(borrow_span));
+        ).add_explanation_to_diagnostic(
+            self.infcx.tcx,
+            self.body,
+            &self.local_names,
+            &mut err,
+            "",
+            Some(borrow_span),
+        );
         err.buffer(&mut self.errors_buffer);
     }
 
@@ -343,7 +354,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         });
 
         self.explain_why_borrow_contains_point(location, borrow, None)
-            .add_explanation_to_diagnostic(self.infcx.tcx, self.body, &mut err, "", None);
+            .add_explanation_to_diagnostic(
+                self.infcx.tcx,
+                self.body,
+                &self.local_names,
+                &mut err,
+                "",
+                None,
+            );
         err
     }
 
@@ -561,6 +579,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         explanation.add_explanation_to_diagnostic(
             self.infcx.tcx,
             self.body,
+            &self.local_names,
             &mut err,
             first_borrow_desc,
             None,
@@ -947,6 +966,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 explanation.add_explanation_to_diagnostic(
                     self.infcx.tcx,
                     self.body,
+                    &self.local_names,
                     &mut err,
                     "",
                     None,
@@ -971,7 +991,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             );
 
             explanation.add_explanation_to_diagnostic(
-                self.infcx.tcx, self.body, &mut err, "", None);
+                self.infcx.tcx, self.body, &self.local_names, &mut err, "", None);
         }
 
         err
@@ -1029,7 +1049,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             _ => {}
         }
 
-        explanation.add_explanation_to_diagnostic(self.infcx.tcx, self.body, &mut err, "", None);
+        explanation.add_explanation_to_diagnostic(
+            self.infcx.tcx,
+            self.body,
+            &self.local_names,
+            &mut err,
+            "",
+            None,
+        );
 
         err.buffer(&mut self.errors_buffer);
     }
@@ -1109,7 +1136,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             }
             _ => {}
         }
-        explanation.add_explanation_to_diagnostic(self.infcx.tcx, self.body, &mut err, "", None);
+        explanation.add_explanation_to_diagnostic(
+            self.infcx.tcx,
+            self.body,
+            &self.local_names,
+            &mut err,
+            "",
+            None,
+        );
 
         let within = if borrow_spans.for_generator() {
             " by generator"
@@ -1264,23 +1298,17 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             Applicability::MachineApplicable,
         );
 
-        match category {
-            ConstraintCategory::Return => {
-                err.span_note(constraint_span, "closure is returned here");
-            }
-            ConstraintCategory::OpaqueType => {
-                err.span_note(constraint_span, "generator is returned here");
-            }
+        let msg = match category {
+            ConstraintCategory::Return => "closure is returned here".to_string(),
+            ConstraintCategory::OpaqueType => "generator is returned here".to_string(),
             ConstraintCategory::CallArgument => {
                 fr_name.highlight_region_name(&mut err);
-                err.span_note(
-                    constraint_span,
-                    &format!("function requires argument type to outlive `{}`", fr_name),
-                );
+                format!("function requires argument type to outlive `{}`", fr_name)
             }
             _ => bug!("report_escaping_closure_capture called with unexpected constraint \
                        category: `{:?}`", category),
-        }
+        };
+        err.span_note(constraint_span, &msg);
         err
     }
 
@@ -1484,7 +1512,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         );
 
         self.explain_why_borrow_contains_point(location, loan, None)
-            .add_explanation_to_diagnostic(self.infcx.tcx, self.body, &mut err, "", None);
+            .add_explanation_to_diagnostic(
+                self.infcx.tcx,
+                self.body,
+                &self.local_names,
+                &mut err,
+                "",
+                None,
+            );
 
         err.buffer(&mut self.errors_buffer);
     }
@@ -1502,14 +1537,13 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         assigned_span: Span,
         err_place: &Place<'tcx>,
     ) {
-        let (from_arg, local_decl) = if let Some(local) = err_place.as_local() {
-            if let LocalKind::Arg = self.body.local_kind(local) {
-                (true, Some(&self.body.local_decls[local]))
-            } else {
-                (false, Some(&self.body.local_decls[local]))
-            }
-        } else {
-            (false, None)
+        let (from_arg, local_decl, local_name) = match err_place.as_local() {
+            Some(local) => (
+                self.body.local_kind(local) == LocalKind::Arg,
+                Some(&self.body.local_decls[local]),
+                self.local_names[local],
+            ),
+            None => (false, None, None),
         };
 
         // If root local is initialized immediately (everything apart from let
@@ -1559,7 +1593,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             }
         }
         if let Some(decl) = local_decl {
-            if let Some(name) = decl.name {
+            if let Some(name) = local_name {
                 if decl.can_be_made_mutable() {
                     err.span_suggestion(
                         decl.source_info.span,

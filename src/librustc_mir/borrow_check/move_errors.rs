@@ -322,7 +322,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             if decl.is_ref_for_guard() {
                 let mut err = self.cannot_move_out_of(
                     span,
-                    &format!("`{}` in pattern guard", decl.name.unwrap()),
+                    &format!("`{}` in pattern guard", self.local_names[*local].unwrap()),
                 );
                 err.note(
                     "variables bound in patterns cannot be moved from \
@@ -558,7 +558,6 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
         err: &mut DiagnosticBuilder<'a>,
         binds_to: &[Local],
     ) {
-        let mut noncopy_var_spans = Vec::new();
         for (j, local) in binds_to.into_iter().enumerate() {
             let bind_to = &self.body.local_decls[*local];
             let binding_span = bind_to.source_info.span;
@@ -572,20 +571,16 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             if binds_to.len() == 1 {
                 self.note_type_does_not_implement_copy(
                     err,
-                    &format!("`{}`", bind_to.name.unwrap()),
+                    &format!("`{}`", self.local_names[*local].unwrap()),
                     bind_to.ty,
                     Some(binding_span)
                 );
-            } else {
-                noncopy_var_spans.push(binding_span);
             }
         }
 
         if binds_to.len() > 1 {
-            err.span_note(
-                noncopy_var_spans,
-                "move occurs because these variables have types that \
-                    don't implement the `Copy` trait",
+            err.note("move occurs because these variables have types that \
+                      don't implement the `Copy` trait",
             );
         }
     }
