@@ -995,7 +995,7 @@ impl<'tcx> Deref for TyCtxt<'tcx> {
 }
 
 pub struct GlobalCtxt<'tcx> {
-    pub arena: WorkerLocal<Arena<'tcx>>,
+    pub arena: &'tcx WorkerLocal<Arena<'tcx>>,
 
     interners: CtxtInterners<'tcx>,
 
@@ -1170,6 +1170,7 @@ impl<'tcx> TyCtxt<'tcx> {
         local_providers: ty::query::Providers<'tcx>,
         extern_providers: ty::query::Providers<'tcx>,
         arenas: &'tcx AllArenas,
+        arena: &'tcx WorkerLocal<Arena<'tcx>>,
         resolutions: ty::ResolverOutputs,
         hir: hir_map::Map<'tcx>,
         on_disk_query_result_cache: query::OnDiskCache<'tcx>,
@@ -1225,7 +1226,7 @@ impl<'tcx> TyCtxt<'tcx> {
             sess: s,
             lint_store,
             cstore,
-            arena: WorkerLocal::new(|_| Arena::default()),
+            arena,
             interners,
             dep_graph,
             prof: s.prof.clone(),
@@ -1305,10 +1306,6 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn crates(self) -> &'tcx [CrateNum] {
         self.all_crate_nums(LOCAL_CRATE)
-    }
-
-    pub fn injected_panic_runtime(self) -> Option<CrateNum> {
-        self.cstore.injected_panic_runtime()
     }
 
     pub fn allocator_kind(self) -> Option<AllocatorKind> {
@@ -1391,8 +1388,8 @@ impl<'tcx> TyCtxt<'tcx> {
 
     // Note that this is *untracked* and should only be used within the query
     // system if the result is otherwise tracked through queries
-    pub fn crate_data_as_any(self, cnum: CrateNum) -> &'tcx dyn Any {
-        self.cstore.crate_data_as_any(cnum)
+    pub fn cstore_as_any(self) -> &'tcx dyn Any {
+        self.cstore.as_any()
     }
 
     #[inline(always)]
@@ -2998,14 +2995,6 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
     providers.all_crate_nums = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);
         tcx.arena.alloc_slice(&tcx.cstore.crates_untracked())
-    };
-    providers.crate_host_hash = |tcx, cnum| {
-        assert_ne!(cnum, LOCAL_CRATE);
-        tcx.cstore.crate_host_hash_untracked(cnum)
-    };
-    providers.postorder_cnums = |tcx, cnum| {
-        assert_eq!(cnum, LOCAL_CRATE);
-        tcx.arena.alloc_slice(&tcx.cstore.postorder_cnums_untracked())
     };
     providers.output_filenames = |tcx, cnum| {
         assert_eq!(cnum, LOCAL_CRATE);
