@@ -21,7 +21,6 @@ use errors::emitter::{Emitter, EmitterWriter};
 use errors::emitter::HumanReadableErrorType;
 use errors::annotate_snippet_emitter_writer::{AnnotateSnippetEmitterWriter};
 use syntax::edition::Edition;
-use syntax::feature_gate;
 use errors::json::JsonEmitter;
 use syntax::source_map;
 use syntax::sess::ParseSess;
@@ -86,7 +85,7 @@ pub struct Session {
     /// `rustc_codegen_llvm::back::symbol_names` module for more information.
     pub crate_disambiguator: Once<CrateDisambiguator>,
 
-    features: Once<feature_gate::Features>,
+    features: Once<rustc_feature::Features>,
 
     /// The maximum recursion limit for potentially infinitely recursive
     /// operations such as auto-dereference and monomorphization.
@@ -94,9 +93,6 @@ pub struct Session {
 
     /// The maximum length of types during monomorphization.
     pub type_length_limit: Once<usize>,
-
-    /// The maximum number of stackframes allowed in const eval.
-    pub const_eval_stack_frame_limit: usize,
 
     /// Map from imported macro spans (which consist of
     /// the localized span for the macro body) to the
@@ -470,11 +466,11 @@ impl Session {
     /// DO NOT USE THIS METHOD if there is a TyCtxt available, as it circumvents
     /// dependency tracking. Use tcx.features() instead.
     #[inline]
-    pub fn features_untracked(&self) -> &feature_gate::Features {
+    pub fn features_untracked(&self) -> &rustc_feature::Features {
         self.features.get()
     }
 
-    pub fn init_features(&self, features: feature_gate::Features) {
+    pub fn init_features(&self, features: rustc_feature::Features) {
         self.features.set(features);
     }
 
@@ -1159,7 +1155,6 @@ fn build_session_(
         features: Once::new(),
         recursion_limit: Once::new(),
         type_length_limit: Once::new(),
-        const_eval_stack_frame_limit: 100,
         imported_macro_spans: OneThread::new(RefCell::new(FxHashMap::default())),
         incr_comp_session: OneThread::new(RefCell::new(IncrCompSession::NotInitialized)),
         cgu_reuse_tracker,

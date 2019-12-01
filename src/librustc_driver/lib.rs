@@ -41,10 +41,10 @@ use rustc::util::common::{set_time_depth, time, print_time_passes_entry, ErrorRe
 use rustc_metadata::locator;
 use rustc_codegen_utils::codegen_backend::CodegenBackend;
 use errors::{PResult, registry::Registry};
-use rustc_interface::interface;
+use rustc_interface::{interface, Queries};
 use rustc_interface::util::get_codegen_sysroot;
 use rustc_data_structures::sync::SeqCst;
-
+use rustc_feature::{find_gated_cfg, UnstableFeatures};
 use rustc_serialize::json::ToJson;
 
 use std::borrow::Cow;
@@ -61,10 +61,9 @@ use std::str;
 use std::time::Instant;
 
 use syntax::ast;
-use syntax::source_map::FileLoader;
-use syntax::feature_gate::{GatedCfg, UnstableFeatures};
-use syntax::symbol::sym;
-use syntax_pos::{DUMMY_SP, FileName};
+use syntax_pos::source_map::FileLoader;
+use syntax_pos::symbol::sym;
+use syntax_pos::FileName;
 
 pub mod pretty;
 mod args;
@@ -99,17 +98,29 @@ pub trait Callbacks {
     fn config(&mut self, _config: &mut interface::Config) {}
     /// Called after parsing. Return value instructs the compiler whether to
     /// continue the compilation afterwards (defaults to `Compilation::Continue`)
-    fn after_parsing(&mut self, _compiler: &interface::Compiler) -> Compilation {
+    fn after_parsing<'tcx>(
+        &mut self,
+        _compiler: &interface::Compiler,
+        _queries: &'tcx Queries<'tcx>,
+    ) -> Compilation {
         Compilation::Continue
     }
     /// Called after expansion. Return value instructs the compiler whether to
     /// continue the compilation afterwards (defaults to `Compilation::Continue`)
-    fn after_expansion(&mut self, _compiler: &interface::Compiler) -> Compilation {
+    fn after_expansion<'tcx>(
+        &mut self,
+        _compiler: &interface::Compiler,
+        _queries: &'tcx Queries<'tcx>,
+    ) -> Compilation {
         Compilation::Continue
     }
     /// Called after analysis. Return value instructs the compiler whether to
     /// continue the compilation afterwards (defaults to `Compilation::Continue`)
-    fn after_analysis(&mut self, _compiler: &interface::Compiler) -> Compilation {
+    fn after_analysis<'tcx>(
+        &mut self,
+        _compiler: &interface::Compiler,
+        _queries: &'tcx Queries<'tcx>,
+    ) -> Compilation {
         Compilation::Continue
     }
 }
@@ -313,7 +324,7 @@ pub fn run_compiler(
                 return early_exit();
             }
 
-            if callbacks.after_parsing(compiler) == Compilation::Stop {
+            if callbacks.after_parsing(compiler, queries) == Compilation::Stop {
                 return early_exit();
             }
 
@@ -334,7 +345,7 @@ pub fn run_compiler(
             }
 
             queries.expansion()?;
-            if callbacks.after_expansion(compiler) == Compilation::Stop {
+            if callbacks.after_expansion(compiler, queries) == Compilation::Stop {
                 return early_exit();
             }
 
@@ -383,7 +394,7 @@ pub fn run_compiler(
 
             queries.global_ctxt()?.peek_mut().enter(|tcx| tcx.analysis(LOCAL_CRATE))?;
 
-            if callbacks.after_analysis(compiler) == Compilation::Stop {
+            if callbacks.after_analysis(compiler, queries) == Compilation::Stop {
                 return early_exit();
             }
 
@@ -684,12 +695,6 @@ impl RustcDefaultCalls {
                         .is_nightly_build();
 
                     let mut cfgs = sess.parse_sess.config.iter().filter_map(|&(name, ref value)| {
-                        let gated_cfg = GatedCfg::gate(&ast::MetaItem {
-                            path: ast::Path::from_ident(ast::Ident::with_dummy_span(name)),
-                            kind: ast::MetaItemKind::Word,
-                            span: DUMMY_SP,
-                        });
-
                         // Note that crt-static is a specially recognized cfg
                         // directive that's printed out here as part of
                         // rust-lang/rust#37406, but in general the
@@ -700,10 +705,11 @@ impl RustcDefaultCalls {
                         // through to build scripts.
                         let value = value.as_ref().map(|s| s.as_str());
                         let value = value.as_ref().map(|s| s.as_ref());
-                        if name != sym::target_feature || value != Some("crt-static") {
-                            if !allow_unstable_cfg && gated_cfg.is_some() {
-                                return None
-                            }
+                        if (name != sym::target_feature || value != Some("crt-static"))
+                            && !allow_unstable_cfg
+                            && find_gated_cfg(|cfg_sym| cfg_sym == name).is_some()
+                        {
+                            return None;
                         }
 
                         if let Some(value) = value {
