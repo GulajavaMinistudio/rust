@@ -47,6 +47,17 @@ pub enum Sanitizer {
     Thread,
 }
 
+impl fmt::Display for Sanitizer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Sanitizer::Address => "address".fmt(f),
+            Sanitizer::Leak => "leak".fmt(f),
+            Sanitizer::Memory => "memory".fmt(f),
+            Sanitizer::Thread => "thread".fmt(f),
+        }
+    }
+}
+
 impl FromStr for Sanitizer {
     type Err = ();
     fn from_str(s: &str) -> Result<Sanitizer, ()> {
@@ -1364,8 +1375,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "enable queries of the dependency graph for regression testing"),
     no_analysis: bool = (false, parse_bool, [UNTRACKED],
         "parse and expand the source, but run no analysis"),
-    extra_plugins: Vec<String> = (Vec::new(), parse_list, [TRACKED],
-        "load extra plugins"),
     unstable_options: bool = (false, parse_bool, [UNTRACKED],
         "adds unstable command line options to rustc interface"),
     force_overflow_checks: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -1581,6 +1590,10 @@ pub fn default_configuration(sess: &Session) -> ast::CrateConfig {
               insert_atomic("ptr");
             }
         }
+    }
+    if let Some(s) = &sess.opts.debugging_opts.sanitizer {
+        let symbol = Symbol::intern(&s.to_string());
+        ret.insert((sym::sanitize, Some(symbol)));
     }
     if sess.opts.debug_assertions {
         ret.insert((Symbol::intern("debug_assertions"), None));
