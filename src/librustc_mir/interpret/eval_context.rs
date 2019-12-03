@@ -164,6 +164,20 @@ impl<'tcx, Tag: Copy + 'static> LocalState<'tcx, Tag> {
     }
 }
 
+impl<'mir, 'tcx, Tag, Extra> Frame<'mir, 'tcx, Tag, Extra> {
+    /// Return the `SourceInfo` of the current instruction.
+    pub fn current_source_info(&self) -> Option<mir::SourceInfo> {
+        self.block.map(|block| {
+            let block = &self.body.basic_blocks()[block];
+            if self.stmt < block.statements.len() {
+                block.statements[self.stmt].source_info
+            } else {
+                block.terminator().source_info
+            }
+        })
+    }
+}
+
 impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> HasDataLayout for InterpCx<'mir, 'tcx, M> {
     #[inline]
     fn data_layout(&self) -> &layout::TargetDataLayout {
@@ -236,6 +250,12 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         self.memory.force_bits(scalar, size)
     }
 
+    /// Call this to turn untagged "global" pointers (obtained via `tcx`) into
+    /// the *canonical* machine pointer to the allocation.  Must never be used
+    /// for any other pointers!
+    ///
+    /// This represents a *direct* access to that memory, as opposed to access
+    /// through a pointer that was created by the program.
     #[inline(always)]
     pub fn tag_static_base_pointer(&self, ptr: Pointer) -> Pointer<M::PointerTag> {
         self.memory.tag_static_base_pointer(ptr)
@@ -292,7 +312,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         &self,
         instance: ty::InstanceDef<'tcx>,
         promoted: Option<mir::Promoted>,
-    ) -> InterpResult<'tcx, &'tcx mir::Body<'tcx>> {
+    ) -> InterpResult<'tcx, mir::ReadOnlyBodyCache<'tcx, 'tcx>> {
         // do not continue if typeck errors occurred (can only occur in local crate)
         let did = instance.def_id();
         if did.is_local()
@@ -303,11 +323,11 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         }
         trace!("load mir(instance={:?}, promoted={:?})", instance, promoted);
         if let Some(promoted) = promoted {
-            return Ok(&self.tcx.promoted_mir(did)[promoted]);
+            return Ok(self.tcx.promoted_mir(did)[promoted].unwrap_read_only());
         }
         match instance {
             ty::InstanceDef::Item(def_id) => if self.tcx.is_mir_available(did) {
-                Ok(self.tcx.optimized_mir(did))
+                Ok(self.tcx.optimized_mir(did).unwrap_read_only())
             } else {
                 throw_unsup!(NoMirFor(self.tcx.def_path_str(def_id)))
             },
@@ -828,34 +848,28 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     pub fn generate_stacktrace(&self, explicit_span: Option<Span>) -> Vec<FrameInfo<'tcx>> {
         let mut last_span = None;
         let mut frames = Vec::new();
-        for &Frame { instance, span, body, block, stmt, .. } in self.stack().iter().rev() {
+        for frame in self.stack().iter().rev() {
             // make sure we don't emit frames that are duplicates of the previous
-            if explicit_span == Some(span) {
-                last_span = Some(span);
+            if explicit_span == Some(frame.span) {
+                last_span = Some(frame.span);
                 continue;
             }
             if let Some(last) = last_span {
-                if last == span {
+                if last == frame.span {
                     continue;
                 }
             } else {
-                last_span = Some(span);
+                last_span = Some(frame.span);
             }
 
-            let lint_root = block.and_then(|block| {
-                let block = &body.basic_blocks()[block];
-                let source_info = if stmt < block.statements.len() {
-                    block.statements[stmt].source_info
-                } else {
-                    block.terminator().source_info
-                };
-                match &body.source_scopes[source_info.scope].local_data {
+            let lint_root = frame.current_source_info().and_then(|source_info| {
+                match &frame.body.source_scopes[source_info.scope].local_data {
                     mir::ClearCrossCrate::Set(data) => Some(data.lint_root),
                     mir::ClearCrossCrate::Clear => None,
                 }
             });
 
-            frames.push(FrameInfo { call_site: span, instance, lint_root });
+            frames.push(FrameInfo { call_site: frame.span, instance: frame.instance, lint_root });
         }
         trace!("generate stacktrace: {:#?}, {:?}", frames, explicit_span);
         frames
