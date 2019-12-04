@@ -12,6 +12,7 @@
 #![feature(const_transmute)]
 #![feature(crate_visibility_modifier)]
 #![feature(label_break_value)]
+#![feature(matches_macro)]
 #![feature(nll)]
 #![feature(try_trait)]
 #![feature(slice_patterns)]
@@ -101,7 +102,7 @@ pub mod ptr;
 pub mod show_span;
 pub use syntax_pos::edition;
 pub use syntax_pos::symbol;
-pub mod sess;
+pub use rustc_session::parse as sess;
 pub mod token;
 pub mod tokenstream;
 pub mod visit;
