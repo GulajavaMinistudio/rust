@@ -35,7 +35,6 @@ extern crate rustc_parse;
 extern crate rustc_target;
 extern crate rustc_typeck;
 extern crate rustc_lexer;
-extern crate serialize;
 extern crate syntax;
 extern crate syntax_expand;
 extern crate syntax_pos;
@@ -144,10 +143,6 @@ fn opts() -> Vec<RustcOptGroup> {
         stable("cfg", |o| o.optmulti("", "cfg", "pass a --cfg to rustc", "")),
         stable("extern", |o| {
             o.optmulti("", "extern", "pass an --extern to rustc", "NAME[=PATH]")
-        }),
-        unstable("extern-private", |o| {
-            o.optmulti("", "extern-private",
-                       "pass an --extern to rustc (compatibility only)", "NAME=PATH")
         }),
         unstable("extern-html-root-url", |o| {
             o.optmulti("", "extern-html-root-url",
