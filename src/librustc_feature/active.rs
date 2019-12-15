@@ -52,6 +52,17 @@ macro_rules! declare_features {
             pub fn walk_feature_fields(&self, mut f: impl FnMut(&str, bool)) {
                 $(f(stringify!($feature), self.$feature);)+
             }
+
+            /// Is the given feature enabled?
+            ///
+            /// Panics if the symbol doesn't correspond to a declared feature.
+            pub fn enabled(&self, feature: Symbol) -> bool {
+                match feature {
+                    $( sym::$feature => self.$feature, )*
+
+                    _ => panic!("`{}` was not listed in `declare_features`", feature),
+                }
+            }
         }
     };
 }
@@ -110,10 +121,6 @@ declare_features! (
     /// below (it has to be checked before expansion possibly makes
     /// macros disappear).
     (active, allow_internal_unsafe, "1.0.0", None, None),
-
-    /// Allows using `#[rustc_const_unstable(feature = "foo", ..)]` which
-    /// lets a function to be `const` when opted into with `#![feature(foo)]`.
-    (active, rustc_const_unstable, "1.0.0", None, None),
 
     /// no-tracking-issue-end
 
@@ -306,6 +313,9 @@ declare_features! (
 
     /// Allows `X..Y` patterns.
     (active, exclusive_range_pattern, "1.11.0", Some(37854), None),
+
+    /// Allows the `!` type. Does not imply 'exhaustive_patterns' (below) any more.
+    (active, never_type, "1.13.0", Some(35121), None),
 
     /// Allows exhaustive pattern matching on types that contain uninhabited types.
     (active, exhaustive_patterns, "1.13.0", Some(51085), None),
@@ -525,6 +535,9 @@ declare_features! (
 
     /// Allows using `&mut` in constant functions.
     (active, const_mut_refs, "1.41.0", Some(57349), None),
+
+    /// Allows the use of `loop` and `while` in constants.
+    (active, const_loop, "1.41.0", Some(52000), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates

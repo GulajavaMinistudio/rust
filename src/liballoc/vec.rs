@@ -315,6 +315,10 @@ impl<T> Vec<T> {
     /// let mut vec: Vec<i32> = Vec::new();
     /// ```
     #[inline]
+    #[cfg_attr(
+        not(bootstrap),
+        rustc_const_stable(feature = "const_vec_new", since = "1.32.0"),
+    )]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub const fn new() -> Vec<T> {
         Vec {
@@ -1075,7 +1079,22 @@ impl<T> Vec<T> {
     pub fn retain<F>(&mut self, mut f: F)
         where F: FnMut(&T) -> bool
     {
-        self.drain_filter(|x| !f(x));
+        let len = self.len();
+        let mut del = 0;
+        {
+            let v = &mut **self;
+
+            for i in 0..len {
+                if !f(&v[i]) {
+                    del += 1;
+                } else if del > 0 {
+                    v.swap(i - del, i);
+                }
+            }
+        }
+        if del > 0 {
+            self.truncate(len - del);
+        }
     }
 
     /// Removes all but the first of consecutive elements in the vector that resolve to the same
