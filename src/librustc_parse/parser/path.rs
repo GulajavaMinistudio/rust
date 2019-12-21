@@ -3,7 +3,6 @@ use crate::maybe_whole;
 use rustc_errors::{PResult, Applicability, pluralize};
 use syntax::ast::{self, QSelf, Path, PathSegment, Ident, ParenthesizedArgs, AngleBracketedArgs};
 use syntax::ast::{AnonConst, GenericArg, AssocTyConstraint, AssocTyConstraintKind, BlockCheckMode};
-use syntax::ThinVec;
 use syntax::token::{self, Token};
 use syntax_pos::source_map::{Span, BytePos};
 use syntax_pos::symbol::{kw, sym};
@@ -182,11 +181,7 @@ impl<'a> Parser<'a> {
                 // `(T, U) -> R`
                 let (inputs, _) = self.parse_paren_comma_seq(|p| p.parse_ty())?;
                 let span = ident.span.to(self.prev_span);
-                let output = if self.eat(&token::RArrow) {
-                    Some(self.parse_ty_common(false, false, false)?)
-                } else {
-                    None
-                };
+                let output = self.parse_ret_ty(false, false)?;
                 ParenthesizedArgs { inputs, output, span }.into()
             };
 
@@ -404,7 +399,7 @@ impl<'a> Parser<'a> {
                 // Parse const argument.
                 let expr = if let token::OpenDelim(token::Brace) = self.token.kind {
                     self.parse_block_expr(
-                        None, self.token.span, BlockCheckMode::Default, ThinVec::new()
+                        None, self.token.span, BlockCheckMode::Default, ast::AttrVec::new()
                     )?
                 } else if self.token.is_ident() {
                     // FIXME(const_generics): to distinguish between idents for types and consts,

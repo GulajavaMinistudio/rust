@@ -7,7 +7,7 @@ use crate::MemFlags;
 use crate::common::{self, RealPredicate, IntPredicate};
 use crate::traits::*;
 
-use rustc::ty::{self, Ty, adjustment::{PointerCast}, Instance};
+use rustc::ty::{self, Ty, TyCtxt, adjustment::{PointerCast}, Instance};
 use rustc::ty::cast::{CastTy, IntTy};
 use rustc::ty::layout::{self, LayoutOf, HasTyCtxt};
 use rustc::mir;
@@ -341,9 +341,15 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                                     llval
                                 }
                             }
+                            (CastTy::Int(_), CastTy::Float) => {
+                                if signed {
+                                    bx.sitofp(llval, ll_t_out)
+                                } else {
+                                    bx.uitofp(llval, ll_t_out)
+                                }
+                            }
                             (CastTy::Ptr(_), CastTy::Ptr(_)) |
-                            (CastTy::FnPtr, CastTy::Ptr(_)) |
-                            (CastTy::RPtr(_), CastTy::Ptr(_)) =>
+                            (CastTy::FnPtr, CastTy::Ptr(_)) =>
                                 bx.pointercast(llval, ll_t_out),
                             (CastTy::Ptr(_), CastTy::Int(_)) |
                             (CastTy::FnPtr, CastTy::Int(_)) =>
@@ -352,8 +358,6 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                                 let usize_llval = bx.intcast(llval, bx.cx().type_isize(), signed);
                                 bx.inttoptr(usize_llval, ll_t_out)
                             }
-                            (CastTy::Int(_), CastTy::Float) =>
-                                cast_int_to_float(&mut bx, signed, llval, ll_t_in, ll_t_out),
                             (CastTy::Float, CastTy::Int(IntTy::I)) =>
                                 cast_float_to_int(&mut bx, true, llval, ll_t_in, ll_t_out),
                             (CastTy::Float, CastTy::Int(_)) =>
@@ -370,24 +374,18 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             }
 
             mir::Rvalue::Ref(_, bk, ref place) => {
-                let cg_place = self.codegen_place(&mut bx, &place.as_ref());
+                let mk_ref = move |tcx: TyCtxt<'tcx>, ty: Ty<'tcx>| tcx.mk_ref(
+                    tcx.lifetimes.re_erased,
+                    ty::TypeAndMut { ty, mutbl: bk.to_mutbl_lossy() }
+                );
+                self.codegen_place_to_pointer(bx, place, mk_ref)
+            }
 
-                let ty = cg_place.layout.ty;
-
-                // Note: places are indirect, so storing the `llval` into the
-                // destination effectively creates a reference.
-                let val = if !bx.cx().type_has_metadata(ty) {
-                    OperandValue::Immediate(cg_place.llval)
-                } else {
-                    OperandValue::Pair(cg_place.llval, cg_place.llextra.unwrap())
-                };
-                (bx, OperandRef {
-                    val,
-                    layout: self.cx.layout_of(self.cx.tcx().mk_ref(
-                        self.cx.tcx().lifetimes.re_erased,
-                        ty::TypeAndMut { ty, mutbl: bk.to_mutbl_lossy() }
-                    )),
-                })
+            mir::Rvalue::AddressOf(mutability, ref place) => {
+                let mk_ptr = move |tcx: TyCtxt<'tcx>, ty: Ty<'tcx>| tcx.mk_ptr(
+                    ty::TypeAndMut { ty, mutbl: mutability.into() }
+                );
+                self.codegen_place_to_pointer(bx, place, mk_ptr)
             }
 
             mir::Rvalue::Len(ref place) => {
@@ -541,6 +539,30 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         // use common size calculation for non zero-sized types
         let cg_value = self.codegen_place(bx, &place.as_ref());
         cg_value.len(bx.cx())
+    }
+
+    /// Codegen an `Rvalue::AddressOf` or `Rvalue::Ref`
+    fn codegen_place_to_pointer(
+        &mut self,
+        mut bx: Bx,
+        place: &mir::Place<'tcx>,
+        mk_ptr_ty: impl FnOnce(TyCtxt<'tcx>, Ty<'tcx>) -> Ty<'tcx>,
+    ) -> (Bx, OperandRef<'tcx, Bx::Value>) {
+        let cg_place = self.codegen_place(&mut bx, &place.as_ref());
+
+        let ty = cg_place.layout.ty;
+
+        // Note: places are indirect, so storing the `llval` into the
+        // destination effectively creates a reference.
+        let val = if !bx.cx().type_has_metadata(ty) {
+            OperandValue::Immediate(cg_place.llval)
+        } else {
+            OperandValue::Pair(cg_place.llval, cg_place.llextra.unwrap())
+        };
+        (bx, OperandRef {
+            val,
+            layout: self.cx.layout_of(mk_ptr_ty(self.cx.tcx(), ty)),
+        })
     }
 
     pub fn codegen_scalar_binop(
@@ -699,6 +721,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     pub fn rvalue_creates_operand(&self, rvalue: &mir::Rvalue<'tcx>, span: Span) -> bool {
         match *rvalue {
             mir::Rvalue::Ref(..) |
+            mir::Rvalue::AddressOf(..) |
             mir::Rvalue::Len(..) |
             mir::Rvalue::Cast(..) | // (*)
             mir::Rvalue::BinaryOp(..) |
@@ -717,40 +740,6 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         }
 
         // (*) this is only true if the type is suitable
-    }
-}
-
-fn cast_int_to_float<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
-    bx: &mut Bx,
-    signed: bool,
-    x: Bx::Value,
-    int_ty: Bx::Type,
-    float_ty: Bx::Type
-) -> Bx::Value {
-    // Most integer types, even i128, fit into [-f32::MAX, f32::MAX] after rounding.
-    // It's only u128 -> f32 that can cause overflows (i.e., should yield infinity).
-    // LLVM's uitofp produces undef in those cases, so we manually check for that case.
-    let is_u128_to_f32 = !signed &&
-        bx.cx().int_width(int_ty) == 128 &&
-        bx.cx().float_width(float_ty) == 32;
-    if is_u128_to_f32 {
-        // All inputs greater or equal to (f32::MAX + 0.5 ULP) are rounded to infinity,
-        // and for everything else LLVM's uitofp works just fine.
-        use rustc_apfloat::ieee::Single;
-        const MAX_F32_PLUS_HALF_ULP: u128 = ((1 << (Single::PRECISION + 1)) - 1)
-                                            << (Single::MAX_EXP - Single::PRECISION as i16);
-        let max = bx.cx().const_uint_big(int_ty, MAX_F32_PLUS_HALF_ULP);
-        let overflow = bx.icmp(IntPredicate::IntUGE, x, max);
-        let infinity_bits = bx.cx().const_u32(ieee::Single::INFINITY.to_bits() as u32);
-        let infinity = bx.bitcast(infinity_bits, float_ty);
-        let fp = bx.uitofp(x, float_ty);
-        bx.select(overflow, infinity, fp)
-    } else {
-        if signed {
-            bx.sitofp(x, float_ty)
-        } else {
-            bx.uitofp(x, float_ty)
-        }
     }
 }
 

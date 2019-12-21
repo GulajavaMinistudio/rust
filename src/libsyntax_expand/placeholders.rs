@@ -5,7 +5,6 @@ use syntax::ast;
 use syntax::source_map::{DUMMY_SP, dummy_spanned};
 use syntax::mut_visit::*;
 use syntax::ptr::P;
-use syntax::ThinVec;
 
 use smallvec::{smallvec, SmallVec};
 
@@ -28,7 +27,7 @@ pub fn placeholder(kind: AstFragmentKind, id: ast::NodeId, vis: Option<ast::Visi
     let span = DUMMY_SP;
     let expr_placeholder = || P(ast::Expr {
         id, span,
-        attrs: ThinVec::new(),
+        attrs: ast::AttrVec::new(),
         kind: ast::ExprKind::Mac(mac_placeholder()),
     });
     let ty = || P(ast::Ty {
@@ -50,14 +49,15 @@ pub fn placeholder(kind: AstFragmentKind, id: ast::NodeId, vis: Option<ast::Visi
             kind: ast::ItemKind::Mac(mac_placeholder()),
             tokens: None,
         })]),
-        AstFragmentKind::TraitItems => AstFragment::TraitItems(smallvec![ast::TraitItem {
+        AstFragmentKind::TraitItems => AstFragment::TraitItems(smallvec![ast::AssocItem {
             id, span, ident, vis, attrs, generics,
-            kind: ast::TraitItemKind::Macro(mac_placeholder()),
+            kind: ast::AssocItemKind::Macro(mac_placeholder()),
+            defaultness: ast::Defaultness::Final,
             tokens: None,
         }]),
-        AstFragmentKind::ImplItems => AstFragment::ImplItems(smallvec![ast::ImplItem {
+        AstFragmentKind::ImplItems => AstFragment::ImplItems(smallvec![ast::AssocItem {
             id, span, ident, vis, attrs, generics,
-            kind: ast::ImplItemKind::Macro(mac_placeholder()),
+            kind: ast::AssocItemKind::Macro(mac_placeholder()),
             defaultness: ast::Defaultness::Final,
             tokens: None,
         }]),
@@ -74,7 +74,7 @@ pub fn placeholder(kind: AstFragmentKind, id: ast::NodeId, vis: Option<ast::Visi
             id, span, kind: ast::TyKind::Mac(mac_placeholder()),
         })),
         AstFragmentKind::Stmts => AstFragment::Stmts(smallvec![{
-            let mac = P((mac_placeholder(), ast::MacStmtStyle::Braces, ThinVec::new()));
+            let mac = P((mac_placeholder(), ast::MacStmtStyle::Braces, ast::AttrVec::new()));
             ast::Stmt { id, span, kind: ast::StmtKind::Mac(mac) }
         }]),
         AstFragmentKind::Arms => AstFragment::Arms(smallvec![
@@ -252,17 +252,17 @@ impl<'a, 'b> MutVisitor for PlaceholderExpander<'a, 'b> {
         noop_flat_map_item(item, self)
     }
 
-    fn flat_map_trait_item(&mut self, item: ast::TraitItem) -> SmallVec<[ast::TraitItem; 1]> {
+    fn flat_map_trait_item(&mut self, item: ast::AssocItem) -> SmallVec<[ast::AssocItem; 1]> {
         match item.kind {
-            ast::TraitItemKind::Macro(_) => self.remove(item.id).make_trait_items(),
-            _ => noop_flat_map_trait_item(item, self),
+            ast::AssocItemKind::Macro(_) => self.remove(item.id).make_trait_items(),
+            _ => noop_flat_map_assoc_item(item, self),
         }
     }
 
-    fn flat_map_impl_item(&mut self, item: ast::ImplItem) -> SmallVec<[ast::ImplItem; 1]> {
+    fn flat_map_impl_item(&mut self, item: ast::AssocItem) -> SmallVec<[ast::AssocItem; 1]> {
         match item.kind {
-            ast::ImplItemKind::Macro(_) => self.remove(item.id).make_impl_items(),
-            _ => noop_flat_map_impl_item(item, self),
+            ast::AssocItemKind::Macro(_) => self.remove(item.id).make_impl_items(),
+            _ => noop_flat_map_assoc_item(item, self),
         }
     }
 

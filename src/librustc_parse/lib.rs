@@ -2,6 +2,7 @@
 
 #![feature(bool_to_option)]
 #![feature(crate_visibility_modifier)]
+#![feature(slice_patterns)]
 
 use syntax::ast;
 use syntax::print::pprust;
@@ -305,10 +306,7 @@ pub fn nt_to_tokenstream(nt: &Nonterminal, sess: &ParseSess, span: Span) -> Toke
         Nonterminal::NtItem(ref item) => {
             prepend_attrs(sess, &item.attrs, item.tokens.as_ref(), span)
         }
-        Nonterminal::NtTraitItem(ref item) => {
-            prepend_attrs(sess, &item.attrs, item.tokens.as_ref(), span)
-        }
-        Nonterminal::NtImplItem(ref item) => {
+        Nonterminal::NtTraitItem(ref item) | Nonterminal::NtImplItem(ref item) => {
             prepend_attrs(sess, &item.attrs, item.tokens.as_ref(), span)
         }
         Nonterminal::NtIdent(ident, is_raw) => {

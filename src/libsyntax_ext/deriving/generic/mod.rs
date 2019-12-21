@@ -181,7 +181,6 @@ use std::cell::RefCell;
 use std::iter;
 use std::vec;
 
-use rustc_data_structures::thin_vec::ThinVec;
 use syntax::ast::{self, BinOpKind, EnumDef, Expr, Generics, Ident, PatKind};
 use syntax::ast::{VariantData, GenericParamKind, GenericArg};
 use syntax::attr;
@@ -504,13 +503,13 @@ impl<'a> TraitDef<'a> {
                            type_ident: Ident,
                            generics: &Generics,
                            field_tys: Vec<P<ast::Ty>>,
-                           methods: Vec<ast::ImplItem>)
+                           methods: Vec<ast::AssocItem>)
                            -> P<ast::Item> {
         let trait_path = self.path.to_path(cx, self.span, type_ident, generics);
 
-        // Transform associated types from `deriving::ty::Ty` into `ast::ImplItem`
+        // Transform associated types from `deriving::ty::Ty` into `ast::AssocItem`
         let associated_types = self.associated_types.iter().map(|&(ident, ref type_def)| {
-            ast::ImplItem {
+            ast::AssocItem {
                 id: ast::DUMMY_NODE_ID,
                 span: self.span,
                 ident,
@@ -518,8 +517,10 @@ impl<'a> TraitDef<'a> {
                 defaultness: ast::Defaultness::Final,
                 attrs: Vec::new(),
                 generics: Generics::default(),
-                kind: ast::ImplItemKind::TyAlias(
-                    type_def.to_ty(cx, self.span, type_ident, generics)),
+                kind: ast::AssocItemKind::TyAlias(
+                    Vec::new(),
+                    Some(type_def.to_ty(cx, self.span, type_ident, generics)),
+                ),
                 tokens: None,
             }
         });
@@ -910,14 +911,14 @@ impl<'a> MethodDef<'a> {
                      explicit_self: Option<ast::ExplicitSelf>,
                      arg_types: Vec<(Ident, P<ast::Ty>)>,
                      body: P<Expr>)
-                     -> ast::ImplItem {
+                     -> ast::AssocItem {
         // Create the generics that aren't for `Self`.
         let fn_generics = self.generics.to_generics(cx, trait_.span, type_ident, generics);
 
         let args = {
             let self_args = explicit_self.map(|explicit_self| {
                 let ident = Ident::with_dummy_span(kw::SelfLower).with_span_pos(trait_.span);
-                ast::Param::from_self(ThinVec::default(), explicit_self, ident)
+                ast::Param::from_self(ast::AttrVec::default(), explicit_self, ident)
             });
             let nonself_args = arg_types.into_iter()
                 .map(|(name, ty)| cx.param(trait_.span, name, ty));
@@ -948,7 +949,7 @@ impl<'a> MethodDef<'a> {
         };
 
         // Create the method.
-        ast::ImplItem {
+        ast::AssocItem {
             id: ast::DUMMY_NODE_ID,
             attrs: self.attributes.clone(),
             generics: fn_generics,
@@ -956,7 +957,7 @@ impl<'a> MethodDef<'a> {
             vis: respan(trait_lo_sp, ast::VisibilityKind::Inherited),
             defaultness: ast::Defaultness::Final,
             ident: method_ident,
-            kind: ast::ImplItemKind::Method(sig, body_block),
+            kind: ast::AssocItemKind::Fn(sig, Some(body_block)),
             tokens: None,
         }
     }
@@ -1606,7 +1607,7 @@ impl<'a> TraitDef<'a> {
                         ast::FieldPat {
                             ident: ident.unwrap(),
                             is_shorthand: false,
-                            attrs: ThinVec::new(),
+                            attrs: ast::AttrVec::new(),
                             id: ast::DUMMY_NODE_ID,
                             span: pat.span.with_ctxt(self.span.ctxt()),
                             pat,
