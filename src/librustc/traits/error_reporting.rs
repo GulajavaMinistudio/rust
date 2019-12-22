@@ -702,6 +702,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             SelectionError::Unimplemented => {
                 if let ObligationCauseCode::CompareImplMethodObligation {
                     item_name, impl_item_def_id, trait_item_def_id,
+                } | ObligationCauseCode::CompareImplTypeObligation {
+                    item_name, impl_item_def_id, trait_item_def_id,
                 } = obligation.cause.code {
                     self.report_extra_impl_obligation(
                         span,
@@ -1548,8 +1550,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
             if let ty::Ref(region, t_type, mutability) = trait_ref.skip_binder().self_ty().kind {
                 let trait_type = match mutability {
-                    hir::Mutability::Mutable => self.tcx.mk_imm_ref(region, t_type),
-                    hir::Mutability::Immutable => self.tcx.mk_mut_ref(region, t_type),
+                    hir::Mutability::Mut => self.tcx.mk_imm_ref(region, t_type),
+                    hir::Mutability::Not => self.tcx.mk_mut_ref(region, t_type),
                 };
 
                 let new_obligation = self.mk_obligation_for_def_id(
@@ -1565,7 +1567,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     let sp = self.tcx.sess.source_map()
                         .span_take_while(span, |c| c.is_whitespace() || *c == '&');
                     if points_at_arg &&
-                        mutability == hir::Mutability::Immutable &&
+                        mutability == hir::Mutability::Not &&
                         refs_number > 0
                     {
                         err.span_suggestion(
@@ -2630,6 +2632,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     &format!("the requirement `{}` appears on the impl method \
                               but not on the corresponding trait method",
                              predicate));
+            }
+            ObligationCauseCode::CompareImplTypeObligation { .. } => {
+                err.note(&format!(
+                    "the requirement `{}` appears on the associated impl type\
+                     but not on the corresponding associated trait type",
+                     predicate));
             }
             ObligationCauseCode::ReturnType |
             ObligationCauseCode::ReturnValue(_) |

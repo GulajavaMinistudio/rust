@@ -1026,11 +1026,11 @@ impl<'tcx> ProjectionTy<'tcx> {
     /// Extracts the underlying trait reference from this projection.
     /// For example, if this is a projection of `<T as Iterator>::Item`,
     /// then this function would return a `T: Iterator` trait reference.
-    pub fn trait_ref(&self, tcx: TyCtxt<'_>) -> ty::TraitRef<'tcx> {
+    pub fn trait_ref(&self, tcx: TyCtxt<'tcx>) -> ty::TraitRef<'tcx> {
         let def_id = tcx.associated_item(self.item_def_id).container.id();
         ty::TraitRef {
             def_id,
-            substs: self.substs,
+            substs: self.substs.truncate_to(tcx, tcx.generics_of(def_id)),
         }
     }
 
@@ -1853,8 +1853,8 @@ impl<'tcx> TyS<'tcx> {
     #[inline]
     pub fn is_mutable_ptr(&self) -> bool {
         match self.kind {
-            RawPtr(TypeAndMut { mutbl: hir::Mutability::Mutable, .. }) |
-            Ref(_, _, hir::Mutability::Mutable) => true,
+            RawPtr(TypeAndMut { mutbl: hir::Mutability::Mut, .. }) |
+            Ref(_, _, hir::Mutability::Mut) => true,
             _ => false
         }
     }
@@ -2044,7 +2044,7 @@ impl<'tcx> TyS<'tcx> {
             Adt(def, _) if def.is_box() => {
                 Some(TypeAndMut {
                     ty: self.boxed_ty(),
-                    mutbl: hir::Mutability::Immutable,
+                    mutbl: hir::Mutability::Not,
                 })
             },
             Ref(_, ty, mutbl) => Some(TypeAndMut { ty, mutbl }),

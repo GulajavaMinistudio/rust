@@ -614,9 +614,9 @@ impl<'l, 'tcx> SaveContext<'l, 'tcx> {
             Node::TraitRef(tr) => tr.path.res,
 
             Node::Item(&hir::Item {
-                kind: hir::ItemKind::Use(ref path, _),
+                kind: hir::ItemKind::Use(path, _),
                 ..
-            }) |
+            }) => path.res,
             Node::Visibility(&Spanned {
                 node: hir::VisibilityKind::Restricted { ref path, .. }, .. }) => path.res,
 
@@ -985,7 +985,7 @@ impl<'l> Visitor<'l> for PathCollector<'l> {
                     // Even if the ref is mut, you can't change the ref, only
                     // the data pointed at, so showing the initialising expression
                     // is still worthwhile.
-                    ast::BindingMode::ByRef(_) => ast::Mutability::Immutable,
+                    ast::BindingMode::ByRef(_) => ast::Mutability::Not,
                     ast::BindingMode::ByValue(mt) => mt,
                 };
                 self.collected_idents

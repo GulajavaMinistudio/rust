@@ -252,7 +252,7 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
-    fn item_scope_tag(item: &hir::Item) -> &'static str {
+    fn item_scope_tag(item: &hir::Item<'_>) -> &'static str {
         match item.kind {
             hir::ItemKind::Impl(..) => "impl",
             hir::ItemKind::Struct(..) => "struct",
@@ -264,14 +264,14 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
-    fn trait_item_scope_tag(item: &hir::TraitItem) -> &'static str {
+    fn trait_item_scope_tag(item: &hir::TraitItem<'_>) -> &'static str {
         match item.kind {
             hir::TraitItemKind::Method(..) => "method body",
             hir::TraitItemKind::Const(..) | hir::TraitItemKind::Type(..) => "associated item",
         }
     }
 
-    fn impl_item_scope_tag(item: &hir::ImplItem) -> &'static str {
+    fn impl_item_scope_tag(item: &hir::ImplItem<'_>) -> &'static str {
         match item.kind {
             hir::ImplItemKind::Method(..) => "method body",
             hir::ImplItemKind::Const(..)
@@ -1912,6 +1912,7 @@ impl<'tcx> ObligationCause<'tcx> {
         use crate::traits::ObligationCauseCode::*;
         match self.code {
             CompareImplMethodObligation { .. } => Error0308("method not compatible with trait"),
+            CompareImplTypeObligation { .. } => Error0308("type not compatible with trait"),
             MatchExpressionArm(box MatchExpressionArmCause { source, .. }) =>
                 Error0308(match source {
                     hir::MatchSource::IfLetDesugar { .. } =>
@@ -1948,6 +1949,7 @@ impl<'tcx> ObligationCause<'tcx> {
         use crate::traits::ObligationCauseCode::*;
         match self.code {
             CompareImplMethodObligation { .. } => "method type is compatible with trait",
+            CompareImplTypeObligation { .. } => "associated type is compatible with trait",
             ExprAssignable => "expression is assignable",
             MatchExpressionArm(box MatchExpressionArmCause { source, .. }) => match source {
                 hir::MatchSource::IfLetDesugar { .. } => "`if let` arms have compatible types",

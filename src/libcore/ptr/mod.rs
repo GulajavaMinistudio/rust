@@ -89,7 +89,7 @@ mod non_null;
 pub use non_null::NonNull;
 
 mod unique;
-#[unstable(feature = "ptr_internals", issue = "0")]
+#[unstable(feature = "ptr_internals", issue = "none")]
 pub use unique::Unique;
 
 mod const_ptr;
@@ -259,7 +259,8 @@ pub(crate) struct FatPtr<T> {
 /// ```
 #[inline]
 #[unstable(feature = "slice_from_raw_parts", reason = "recently added", issue = "36925")]
-pub fn slice_from_raw_parts<T>(data: *const T, len: usize) -> *const [T] {
+#[rustc_const_unstable(feature = "const_slice_from_raw_parts", issue = "67456")]
+pub const fn slice_from_raw_parts<T>(data: *const T, len: usize) -> *const [T] {
     unsafe { Repr { raw: FatPtr { data, len } }.rust }
 }
 
@@ -275,7 +276,8 @@ pub fn slice_from_raw_parts<T>(data: *const T, len: usize) -> *const [T] {
 /// [`from_raw_parts_mut`]: ../../std/slice/fn.from_raw_parts_mut.html
 #[inline]
 #[unstable(feature = "slice_from_raw_parts", reason = "recently added", issue = "36925")]
-pub fn slice_from_raw_parts_mut<T>(data: *mut T, len: usize) -> *mut [T] {
+#[rustc_const_unstable(feature = "const_slice_from_raw_parts", issue = "67456")]
+pub const fn slice_from_raw_parts_mut<T>(data: *mut T, len: usize) -> *mut [T] {
     unsafe { Repr { raw: FatPtr { data, len } }.rust_mut }
 }
 

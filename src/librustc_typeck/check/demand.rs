@@ -436,10 +436,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // bar(&x); // error, expected &mut
                 // ```
                 let ref_ty = match mutability {
-                    hir::Mutability::Mutable => {
+                    hir::Mutability::Mut => {
                         self.tcx.mk_mut_ref(self.tcx.mk_region(ty::ReStatic), checked_ty)
                     }
-                    hir::Mutability::Immutable => {
+                    hir::Mutability::Not => {
                         self.tcx.mk_imm_ref(self.tcx.mk_region(ty::ReStatic), checked_ty)
                     }
                 };
@@ -489,7 +489,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         })) = self.tcx.hir().find(
                             self.tcx.hir().get_parent_node(expr.hir_id),
                         ) {
-                            if mutability == hir::Mutability::Mutable {
+                            if mutability == hir::Mutability::Mut {
                                 // Found the following case:
                                 // fn foo(opt: &mut Option<String>){ opt = None }
                                 //                                   ---   ^^^^
@@ -508,12 +508,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
 
                         return Some(match mutability {
-                            hir::Mutability::Mutable => (
+                            hir::Mutability::Mut => (
                                 sp,
                                 "consider mutably borrowing here",
                                 format!("{}&mut {}", field_name, sugg_expr),
                             ),
-                            hir::Mutability::Immutable => (
+                            hir::Mutability::Not => (
                                 sp,
                                 "consider borrowing here",
                                 format!("{}&{}", field_name, sugg_expr),
@@ -551,15 +551,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // Check for `Deref` implementations by constructing a predicate to
                 // prove: `<T as Deref>::Output == U`
                 let deref_trait = self.tcx.lang_items().deref_trait().unwrap();
-                let item_def_id = self.tcx.associated_items(deref_trait).next().unwrap().def_id;
+                let item_def_id = self.tcx.associated_items(deref_trait)
+                    .find(|item| item.kind == ty::AssocKind::Type)
+                    .unwrap()
+                    .def_id;
                 let predicate = ty::Predicate::Projection(ty::Binder::bind(ty::ProjectionPredicate {
                     // `<T as Deref>::Output`
                     projection_ty: ty::ProjectionTy {
                         // `T`
-                        substs: self.tcx.mk_substs_trait(
-                            checked_ty,
-                            self.fresh_substs_for_item(sp, item_def_id),
-                        ),
+                        substs: self.tcx.intern_substs(&[checked_ty.into()]),
                         // `Deref::Output`
                         item_def_id,
                     },

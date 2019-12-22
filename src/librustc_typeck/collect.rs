@@ -111,7 +111,7 @@ impl Visitor<'tcx> for CollectItemTypesVisitor<'tcx> {
         NestedVisitorMap::OnlyBodies(&self.tcx.hir())
     }
 
-    fn visit_item(&mut self, item: &'tcx hir::Item) {
+    fn visit_item(&mut self, item: &'tcx hir::Item<'tcx>) {
         convert_item(self.tcx, item.hir_id);
         intravisit::walk_item(self, item);
     }
@@ -145,12 +145,12 @@ impl Visitor<'tcx> for CollectItemTypesVisitor<'tcx> {
         intravisit::walk_expr(self, expr);
     }
 
-    fn visit_trait_item(&mut self, trait_item: &'tcx hir::TraitItem) {
+    fn visit_trait_item(&mut self, trait_item: &'tcx hir::TraitItem<'tcx>) {
         convert_trait_item(self.tcx, trait_item.hir_id);
         intravisit::walk_trait_item(self, trait_item);
     }
 
-    fn visit_impl_item(&mut self, impl_item: &'tcx hir::ImplItem) {
+    fn visit_impl_item(&mut self, impl_item: &'tcx hir::ImplItem<'tcx>) {
         convert_impl_item(self.tcx, impl_item.hir_id);
         intravisit::walk_impl_item(self, impl_item);
     }
@@ -224,10 +224,19 @@ impl AstConv<'tcx> for ItemCtxt<'tcx> {
         &self,
         span: Span,
         item_def_id: DefId,
+        item_segment: &hir::PathSegment,
         poly_trait_ref: ty::PolyTraitRef<'tcx>,
     ) -> Ty<'tcx> {
         if let Some(trait_ref) = poly_trait_ref.no_bound_vars() {
-            self.tcx().mk_projection(item_def_id, trait_ref.substs)
+            let item_substs = <dyn AstConv<'tcx>>::create_substs_for_associated_item(
+                self,
+                self.tcx,
+                span,
+                item_def_id,
+                item_segment,
+                trait_ref.substs,
+            );
+            self.tcx().mk_projection(item_def_id, item_substs)
         } else {
             // There are no late-bound regions; we can just ignore the binder.
             span_err!(
@@ -417,7 +426,7 @@ fn convert_item(tcx: TyCtxt<'_>, item_id: hir::HirId) {
         | hir::ItemKind::Mod(_)
         | hir::ItemKind::GlobalAsm(_) => {}
         hir::ItemKind::ForeignMod(ref foreign_mod) => {
-            for item in &foreign_mod.items {
+            for item in foreign_mod.items {
                 let def_id = tcx.hir().local_def_id(item.hir_id);
                 tcx.generics_of(def_id);
                 tcx.type_of(def_id);
@@ -529,7 +538,7 @@ fn convert_variant_ctor(tcx: TyCtxt<'_>, ctor_id: hir::HirId) {
 fn convert_enum_variant_types(
     tcx: TyCtxt<'_>,
     def_id: DefId,
-    variants: &[hir::Variant]
+    variants: &[hir::Variant<'_>]
 ) {
     let def = tcx.adt_def(def_id);
     let repr_type = def.repr.discr_type();
@@ -584,7 +593,7 @@ fn convert_variant(
     ctor_did: Option<DefId>,
     ident: Ident,
     discr: ty::VariantDiscr,
-    def: &hir::VariantData,
+    def: &hir::VariantData<'_>,
     adt_kind: ty::AdtKind,
     parent_did: DefId,
 ) -> ty::VariantDef {
@@ -1693,7 +1702,7 @@ fn find_opaque_ty_constraints(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
         fn nested_visit_map<'this>(&'this mut self) -> intravisit::NestedVisitorMap<'this, 'tcx> {
             intravisit::NestedVisitorMap::All(&self.tcx.hir())
         }
-        fn visit_item(&mut self, it: &'tcx Item) {
+        fn visit_item(&mut self, it: &'tcx Item<'tcx>) {
             debug!("find_existential_constraints: visiting {:?}", it);
             let def_id = self.tcx.hir().local_def_id(it.hir_id);
             // The opaque type itself or its children are not within its reveal scope.
@@ -1702,7 +1711,7 @@ fn find_opaque_ty_constraints(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
                 intravisit::walk_item(self, it);
             }
         }
-        fn visit_impl_item(&mut self, it: &'tcx ImplItem) {
+        fn visit_impl_item(&mut self, it: &'tcx ImplItem<'tcx>) {
             debug!("find_existential_constraints: visiting {:?}", it);
             let def_id = self.tcx.hir().local_def_id(it.hir_id);
             // The opaque type itself or its children are not within its reveal scope.
@@ -1711,7 +1720,7 @@ fn find_opaque_ty_constraints(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
                 intravisit::walk_impl_item(self, it);
             }
         }
-        fn visit_trait_item(&mut self, it: &'tcx TraitItem) {
+        fn visit_trait_item(&mut self, it: &'tcx TraitItem<'tcx>) {
             debug!("find_existential_constraints: visiting {:?}", it);
             let def_id = self.tcx.hir().local_def_id(it.hir_id);
             self.check(def_id);
@@ -2052,8 +2061,6 @@ fn explicit_predicates_of(
 
     const NO_GENERICS: &hir::Generics = &hir::Generics::empty();
 
-    let empty_trait_items = HirVec::new();
-
     let mut predicates = UniquePredicates::new();
 
     let ast_generics = match node {
@@ -2098,12 +2105,12 @@ fn explicit_predicates_of(
                 | ItemKind::Struct(_, ref generics)
                 | ItemKind::Union(_, ref generics) => generics,
 
-                ItemKind::Trait(_, _, ref generics, .., ref items) => {
+                ItemKind::Trait(_, _, ref generics, .., items) => {
                     is_trait = Some((ty::TraitRef::identity(tcx, def_id), items));
                     generics
                 }
                 ItemKind::TraitAlias(ref generics, _) => {
-                    is_trait = Some((ty::TraitRef::identity(tcx, def_id), &empty_trait_items));
+                    is_trait = Some((ty::TraitRef::identity(tcx, def_id), &[]));
                     generics
                 }
                 ItemKind::OpaqueTy(OpaqueTy {
@@ -2291,25 +2298,7 @@ fn explicit_predicates_of(
     // Add predicates from associated type bounds.
     if let Some((self_trait_ref, trait_items)) = is_trait {
         predicates.extend(trait_items.iter().flat_map(|trait_item_ref| {
-            let trait_item = tcx.hir().trait_item(trait_item_ref.id);
-            let bounds = match trait_item.kind {
-                hir::TraitItemKind::Type(ref bounds, _) => bounds,
-                _ => return Vec::new().into_iter()
-            };
-
-            let assoc_ty =
-                tcx.mk_projection(tcx.hir().local_def_id(trait_item.hir_id),
-                    self_trait_ref.substs);
-
-            let bounds = AstConv::compute_bounds(
-                &ItemCtxt::new(tcx, def_id),
-                assoc_ty,
-                bounds,
-                SizedByDefault::Yes,
-                trait_item.span,
-            );
-
-            bounds.predicates(tcx, assoc_ty).into_iter()
+            associated_item_predicates(tcx, def_id, self_trait_ref, trait_item_ref)
         }))
     }
 
@@ -2341,6 +2330,105 @@ fn explicit_predicates_of(
     };
     debug!("explicit_predicates_of(def_id={:?}) = {:?}", def_id, result);
     result
+}
+
+fn associated_item_predicates(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    self_trait_ref: ty::TraitRef<'tcx>,
+    trait_item_ref: &hir::TraitItemRef,
+) -> Vec<(ty::Predicate<'tcx>, Span)> {
+    let trait_item = tcx.hir().trait_item(trait_item_ref.id);
+    let item_def_id = tcx.hir().local_def_id(trait_item_ref.id.hir_id);
+    let bounds = match trait_item.kind {
+        hir::TraitItemKind::Type(ref bounds, _) => bounds,
+        _ => return Vec::new()
+    };
+
+    let is_gat = !tcx.generics_of(item_def_id).params.is_empty();
+
+    let mut had_error = false;
+
+    let mut unimplemented_error = |arg_kind: &str| {
+        if !had_error {
+            tcx.sess.struct_span_err(
+                trait_item.span,
+                &format!("{}-generic associated types are not yet implemented", arg_kind),
+            )
+                .note("for more information, see https://github.com/rust-lang/rust/issues/44265")
+                .emit();
+            had_error = true;
+        }
+    };
+
+    let mk_bound_param = |param: &ty::GenericParamDef, _: &_| {
+        match param.kind {
+            ty::GenericParamDefKind::Lifetime => {
+                tcx.mk_region(ty::RegionKind::ReLateBound(
+                    ty::INNERMOST,
+                    ty::BoundRegion::BrNamed(param.def_id, param.name)
+                )).into()
+            }
+            // FIXME(generic_associated_types): Use bound types and constants
+            // once they are handled by the trait system.
+            ty::GenericParamDefKind::Type { .. } => {
+                unimplemented_error("type");
+                tcx.types.err.into()
+            }
+            ty::GenericParamDefKind::Const => {
+                unimplemented_error("const");
+                tcx.consts.err.into()
+            }
+        }
+    };
+
+    let bound_substs = if is_gat {
+        // Given:
+        //
+        // trait X<'a, B, const C: usize> {
+        //     type T<'d, E, const F: usize>: Default;
+        // }
+        //
+        // We need to create predicates on the trait:
+        //
+        // for<'d, E, const F: usize>
+        // <Self as X<'a, B, const C: usize>>::T<'d, E, const F: usize>: Sized + Default
+        //
+        // We substitute escaping bound parameters for the generic
+        // arguments to the associated type which are then bound by
+        // the `Binder` around the the predicate.
+        //
+        // FIXME(generic_associated_types): Currently only lifetimes are handled.
+        self_trait_ref.substs.extend_to(tcx, item_def_id, mk_bound_param)
+    } else {
+        self_trait_ref.substs
+    };
+
+    let assoc_ty = tcx.mk_projection(
+        tcx.hir().local_def_id(trait_item.hir_id),
+        bound_substs,
+    );
+
+    let bounds = AstConv::compute_bounds(
+        &ItemCtxt::new(tcx, def_id),
+        assoc_ty,
+        bounds,
+        SizedByDefault::Yes,
+        trait_item.span,
+    );
+
+    let predicates = bounds.predicates(tcx, assoc_ty);
+
+    if is_gat {
+        // We use shifts to get the regions that we're substituting to
+        // be bound by the binders in the `Predicate`s rather that
+        // escaping.
+        let shifted_in = ty::fold::shift_vars(tcx, &predicates, 1);
+        let substituted = shifted_in.subst(tcx, bound_substs);
+        ty::fold::shift_out_vars(tcx, &substituted, 1)
+    } else {
+        predicates
+    }
 }
 
 /// Converts a specific `GenericBound` from the AST into a set of

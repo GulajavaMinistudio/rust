@@ -50,7 +50,7 @@ struct InherentCollect<'tcx> {
 }
 
 impl ItemLikeVisitor<'v> for InherentCollect<'tcx> {
-    fn visit_item(&mut self, item: &hir::Item) {
+    fn visit_item(&mut self, item: &hir::Item<'_>) {
         let ty = match item.kind {
             hir::ItemKind::Impl(.., None, ref ty, _) => ty,
             _ => return
@@ -109,7 +109,7 @@ impl ItemLikeVisitor<'v> for InherentCollect<'tcx> {
                                           "[T]",
                                           item.span);
             }
-            ty::RawPtr(ty::TypeAndMut { ty: _, mutbl: hir::Mutability::Immutable }) => {
+            ty::RawPtr(ty::TypeAndMut { ty: _, mutbl: hir::Mutability::Not }) => {
                 self.check_primitive_impl(def_id,
                                           lang_items.const_ptr_impl(),
                                           None,
@@ -117,7 +117,7 @@ impl ItemLikeVisitor<'v> for InherentCollect<'tcx> {
                                           "*const T",
                                           item.span);
             }
-            ty::RawPtr(ty::TypeAndMut { ty: _, mutbl: hir::Mutability::Mutable }) => {
+            ty::RawPtr(ty::TypeAndMut { ty: _, mutbl: hir::Mutability::Mut }) => {
                 self.check_primitive_impl(def_id,
                                           lang_items.mut_ptr_impl(),
                                           None,
@@ -254,15 +254,15 @@ impl ItemLikeVisitor<'v> for InherentCollect<'tcx> {
         }
     }
 
-    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem) {
+    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem<'_>) {
     }
 
-    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem) {
+    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem<'_>) {
     }
 }
 
 impl InherentCollect<'tcx> {
-    fn check_def_id(&mut self, item: &hir::Item, def_id: DefId) {
+    fn check_def_id(&mut self, item: &hir::Item<'_>, def_id: DefId) {
         if def_id.is_local() {
             // Add the implementation to the mapping from implementation to base
             // type def ID, if there is a base type for this implementation and

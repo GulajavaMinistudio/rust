@@ -75,14 +75,14 @@ enum ConstKind {
 }
 
 impl ConstKind {
-    fn for_body(body: &hir::Body, hir_map: &Map<'_>) -> Option<Self> {
+    fn for_body(body: &hir::Body<'_>, hir_map: &Map<'_>) -> Option<Self> {
         let is_const_fn = |id| hir_map.fn_sig_by_hir_id(id).unwrap().header.is_const();
 
         let owner = hir_map.body_owner(body.id());
         let const_kind = match hir_map.body_owner_kind(owner) {
             hir::BodyOwnerKind::Const => Self::Const,
-            hir::BodyOwnerKind::Static(Mutability::Mutable) => Self::StaticMut,
-            hir::BodyOwnerKind::Static(Mutability::Immutable) => Self::Static,
+            hir::BodyOwnerKind::Static(Mutability::Mut) => Self::StaticMut,
+            hir::BodyOwnerKind::Static(Mutability::Not) => Self::Static,
 
             hir::BodyOwnerKind::Fn if is_const_fn(owner) => Self::ConstFn,
             hir::BodyOwnerKind::Fn | hir::BodyOwnerKind::Closure => return None,
@@ -215,7 +215,7 @@ impl<'tcx> Visitor<'tcx> for CheckConstVisitor<'tcx> {
         self.recurse_into(kind, |this| hir::intravisit::walk_anon_const(this, anon));
     }
 
-    fn visit_body(&mut self, body: &'tcx hir::Body) {
+    fn visit_body(&mut self, body: &'tcx hir::Body<'tcx>) {
         let kind = ConstKind::for_body(body, self.tcx.hir());
         self.recurse_into(kind, |this| hir::intravisit::walk_body(this, body));
     }

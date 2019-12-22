@@ -21,7 +21,7 @@ use rustc::hir::def::{CtorKind, DefKind, Res};
 use rustc::hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX};
 use rustc::hir::ptr::P;
 use rustc::ty::subst::InternalSubsts;
-use rustc::ty::{self, TyCtxt, Ty, AdtKind};
+use rustc::ty::{self, TyCtxt, Ty, AdtKind, Lift};
 use rustc::ty::fold::TypeFolder;
 use rustc::util::nodemap::{FxHashMap, FxHashSet};
 use syntax::ast::{self, Ident};
@@ -67,6 +67,12 @@ impl<T: Clean<U>, U> Clean<Vec<U>> for [T] {
 impl<T: Clean<U>, U, V: Idx> Clean<IndexVec<V, U>> for IndexVec<V, T> {
     fn clean(&self, cx: &DocContext<'_>) -> IndexVec<V, U> {
         self.iter().map(|x| x.clean(cx)).collect()
+    }
+}
+
+impl<T: Clean<U>, U> Clean<U> for &T {
+    fn clean(&self, cx: &DocContext<'_>) -> U {
+        (**self).clean(cx)
     }
 }
 
@@ -551,7 +557,8 @@ impl<'tcx> Clean<WherePredicate> for ty::ProjectionPredicate<'tcx> {
 
 impl<'tcx> Clean<Type> for ty::ProjectionTy<'tcx> {
     fn clean(&self, cx: &DocContext<'_>) -> Type {
-        let trait_ = match self.trait_ref(cx.tcx).clean(cx) {
+        let lifted = self.lift_to_tcx(cx.tcx).unwrap();
+        let trait_ = match lifted.trait_ref(cx.tcx).clean(cx) {
             GenericBound::TraitBound(t, _) => t.trait_,
             GenericBound::Outlives(_) => panic!("cleaning a trait got a lifetime"),
         };
@@ -1080,7 +1087,7 @@ impl Clean<PolyTrait> for hir::PolyTraitRef {
     }
 }
 
-impl Clean<Item> for hir::TraitItem {
+impl Clean<Item> for hir::TraitItem<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
         let inner = match self.kind {
             hir::TraitItemKind::Const(ref ty, default) => {
@@ -1121,7 +1128,7 @@ impl Clean<Item> for hir::TraitItem {
     }
 }
 
-impl Clean<Item> for hir::ImplItem {
+impl Clean<Item> for hir::ImplItem<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
         let inner = match self.kind {
             hir::ImplItemKind::Const(ref ty, expr) => {
@@ -1737,7 +1744,7 @@ impl<'tcx> Clean<Constant> for ty::Const<'tcx> {
     }
 }
 
-impl Clean<Item> for hir::StructField {
+impl Clean<Item> for hir::StructField<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
         let local_did = cx.tcx.hir().local_def_id(self.hir_id);
 
@@ -1830,7 +1837,7 @@ impl Clean<Item> for doctree::Union<'_> {
     }
 }
 
-impl Clean<VariantStruct> for ::rustc::hir::VariantData {
+impl Clean<VariantStruct> for ::rustc::hir::VariantData<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> VariantStruct {
         VariantStruct {
             struct_type: doctree::struct_type_from_def(self),
@@ -1917,7 +1924,7 @@ impl Clean<Item> for ty::VariantDef {
     }
 }
 
-impl Clean<VariantKind> for hir::VariantData {
+impl Clean<VariantKind> for hir::VariantData<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> VariantKind {
         match self {
             hir::VariantData::Struct(..) => VariantKind::Struct(self.clean(cx)),
@@ -2101,8 +2108,8 @@ impl Clean<Item> for doctree::Constant<'_> {
 impl Clean<Mutability> for hir::Mutability {
     fn clean(&self, _: &DocContext<'_>) -> Mutability {
         match self {
-            &hir::Mutability::Mutable => Mutable,
-            &hir::Mutability::Immutable => Immutable,
+            &hir::Mutability::Mut => Mutable,
+            &hir::Mutability::Not => Immutable,
         }
     }
 }
@@ -2383,12 +2390,6 @@ impl Clean<Stability> for attr::Stability {
                 _ => None,
             }
         }
-    }
-}
-
-impl<'a> Clean<Stability> for &'a attr::Stability {
-    fn clean(&self, dc: &DocContext<'_>) -> Stability {
-        (**self).clean(dc)
     }
 }
 

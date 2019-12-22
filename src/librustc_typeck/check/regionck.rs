@@ -106,7 +106,7 @@ macro_rules! ignore_err {
 // PUBLIC ENTRY POINTS
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
-    pub fn regionck_expr(&self, body: &'tcx hir::Body) {
+    pub fn regionck_expr(&self, body: &'tcx hir::Body<'tcx>) {
         let subject = self.tcx.hir().body_owner_def_id(body.id());
         let id = body.value.hir_id;
         let mut rcx = RegionCtxt::new(
@@ -159,7 +159,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// rest of type check and because sometimes we need type
     /// inference to have completed before we can determine which
     /// constraints to add.
-    pub fn regionck_fn(&self, fn_id: hir::HirId, body: &'tcx hir::Body) {
+    pub fn regionck_fn(&self, fn_id: hir::HirId, body: &'tcx hir::Body<'tcx>) {
         debug!("regionck_fn(id={})", fn_id);
         let subject = self.tcx.hir().body_owner_def_id(body.id());
         let hir_id = body.value.hir_id;
@@ -300,7 +300,7 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
     fn visit_fn_body(
         &mut self,
         id: hir::HirId, // the id of the fn itself
-        body: &'tcx hir::Body,
+        body: &'tcx hir::Body<'tcx>,
         span: Span,
     ) {
         // When we enter a function, we can derive
@@ -1255,7 +1255,7 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
         // know whether this scenario has occurred; but I wanted to show
         // how all the types get adjusted.)
         match ref_mutability {
-            hir::Mutability::Immutable => {
+            hir::Mutability::Not => {
                 // The reference being reborrowed is a shareable ref of
                 // type `&'a T`. In this case, it doesn't matter where we
                 // *found* the `&T` pointer, the memory it references will
@@ -1263,7 +1263,7 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
                 true
             }
 
-            hir::Mutability::Mutable => {
+            hir::Mutability::Mut => {
                 // The reference being reborrowed is either an `&mut T`. This is
                 // the case where recursion is needed.
                 false
