@@ -606,14 +606,11 @@ where
         let fn_end = span.shrink_to_hi();
         let source_info = builder.source_info(fn_end);
         let return_block = builder.return_block();
-        builder.cfg.terminate(block, source_info,
-                              TerminatorKind::Goto { target: return_block });
-        builder.cfg.terminate(return_block, source_info,
-                              TerminatorKind::Return);
+        builder.cfg.goto(block, source_info, return_block);
+        builder.cfg.terminate(return_block, source_info, TerminatorKind::Return);
         // Attribute any unreachable codepaths to the function's closing brace
         if let Some(unreachable_block) = builder.cached_unreachable_block {
-            builder.cfg.terminate(unreachable_block, source_info,
-                                  TerminatorKind::Unreachable);
+            builder.cfg.terminate(unreachable_block, source_info, TerminatorKind::Unreachable);
         }
         return_block.unit()
     }));
@@ -819,15 +816,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 if let Some(Node::Binding(pat)) = tcx_hir.find(var_id) {
                     if let hir::PatKind::Binding(_, _, ident, _) = pat.kind {
                         name = ident.name;
-
-                        if let Some(&bm) = hir_tables.pat_binding_modes().get(pat.hir_id) {
-                            if bm == ty::BindByValue(hir::Mutability::Mut) {
+                        match hir_tables.extract_binding_mode(tcx.sess, pat.hir_id, pat.span) {
+                            Some(ty::BindByValue(hir::Mutability::Mut)) => {
                                 mutability = Mutability::Mut;
-                            } else {
-                                mutability = Mutability::Not;
                             }
-                        } else {
-                            tcx.sess.delay_span_bug(pat.span, "missing binding mode");
+                            Some(_) => mutability = Mutability::Not,
+                            _ => {}
                         }
                     }
                 }

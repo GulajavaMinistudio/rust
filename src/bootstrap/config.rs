@@ -3,19 +3,20 @@
 //! This module implements parsing `config.toml` configuration files to tweak
 //! how the build runs.
 
+use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::cmp;
 
-use build_helper::t;
-use toml;
-use serde::Deserialize;
-use crate::cache::{INTERNER, Interned};
+use crate::cache::{Interned, INTERNER};
 use crate::flags::Flags;
 pub use crate::flags::Subcommand;
+use build_helper::t;
+use serde::Deserialize;
+use toml;
 
 /// Global configuration for the entire build and/or bootstrap.
 ///
@@ -149,6 +150,7 @@ pub struct Config {
     // These are either the stage0 downloaded binaries or the locally installed ones.
     pub initial_cargo: PathBuf,
     pub initial_rustc: PathBuf,
+    pub initial_rustfmt: Option<PathBuf>,
     pub out: PathBuf,
 }
 
@@ -348,10 +350,14 @@ struct TomlTarget {
 impl Config {
     fn path_from_python(var_key: &str) -> PathBuf {
         match env::var_os(var_key) {
-            // Do not trust paths from Python and normalize them slightly (#49785).
-            Some(var_val) => Path::new(&var_val).components().collect(),
+            Some(var_val) => Self::normalize_python_path(var_val),
             _ => panic!("expected '{}' to be set", var_key),
         }
+    }
+
+    /// Normalizes paths from Python slightly. We don't trust paths from Python (#49785).
+    fn normalize_python_path(path: OsString) -> PathBuf {
+        Path::new(&path).components().collect()
     }
 
     pub fn default_opts() -> Config {
@@ -380,6 +386,7 @@ impl Config {
 
         config.initial_rustc = Config::path_from_python("RUSTC");
         config.initial_cargo = Config::path_from_python("CARGO");
+        config.initial_rustfmt = env::var_os("RUSTFMT").map(Config::normalize_python_path);
 
         config
     }
@@ -413,17 +420,22 @@ impl Config {
         let has_targets = !flags.target.is_empty();
         config.skip_only_host_steps = !has_hosts && has_targets;
 
-        let toml = file.map(|file| {
-            let contents = t!(fs::read_to_string(&file));
-            match toml::from_str(&contents) {
-                Ok(table) => table,
-                Err(err) => {
-                    println!("failed to parse TOML configuration '{}': {}",
-                        file.display(), err);
-                    process::exit(2);
+        let toml = file
+            .map(|file| {
+                let contents = t!(fs::read_to_string(&file));
+                match toml::from_str(&contents) {
+                    Ok(table) => table,
+                    Err(err) => {
+                        println!(
+                            "failed to parse TOML configuration '{}': {}",
+                            file.display(),
+                            err
+                        );
+                        process::exit(2);
+                    }
                 }
-            }
-        }).unwrap_or_else(|| TomlConfig::default());
+            })
+            .unwrap_or_else(|| TomlConfig::default());
 
         let build = toml.build.clone().unwrap_or_default();
         // set by bootstrap.py
@@ -434,24 +446,15 @@ impl Config {
                 config.hosts.push(host);
             }
         }
-        for target in config.hosts.iter().cloned()
-            .chain(build.target.iter().map(|s| INTERNER.intern_str(s)))
+        for target in
+            config.hosts.iter().cloned().chain(build.target.iter().map(|s| INTERNER.intern_str(s)))
         {
             if !config.targets.contains(&target) {
                 config.targets.push(target);
             }
         }
-        config.hosts = if !flags.host.is_empty() {
-            flags.host
-        } else {
-            config.hosts
-        };
-        config.targets = if !flags.target.is_empty() {
-            flags.target
-        } else {
-            config.targets
-        };
-
+        config.hosts = if !flags.host.is_empty() { flags.host } else { config.hosts };
+        config.targets = if !flags.target.is_empty() { flags.target } else { config.targets };
 
         config.nodejs = build.nodejs.map(PathBuf::from);
         config.gdb = build.gdb.map(PathBuf::from);
@@ -500,9 +503,7 @@ impl Config {
 
         if let Some(ref llvm) = toml.llvm {
             match llvm.ccache {
-                Some(StringOrBool::String(ref s)) => {
-                    config.ccache = Some(s.to_string())
-                }
+                Some(StringOrBool::String(ref s)) => config.ccache = Some(s.to_string()),
                 Some(StringOrBool::Bool(true)) => {
                     config.ccache = Some("ccache".to_string());
                 }
@@ -567,9 +568,8 @@ impl Config {
             set(&mut config.rust_remap_debuginfo, rust.remap_debuginfo);
 
             if let Some(ref backends) = rust.codegen_backends {
-                config.rust_codegen_backends = backends.iter()
-                    .map(|s| INTERNER.intern_str(s))
-                    .collect();
+                config.rust_codegen_backends =
+                    backends.iter().map(|s| INTERNER.intern_str(s)).collect();
             }
 
             config.rust_codegen_units = rust.codegen_units.map(threads_from_config);
@@ -627,9 +627,11 @@ impl Config {
         config.rust_debug_assertions = debug_assertions.unwrap_or(default);
 
         let with_defaults = |debuginfo_level_specific: Option<u32>| {
-            debuginfo_level_specific
-                .or(debuginfo_level)
-                .unwrap_or(if debug == Some(true) { 2 } else { 0 })
+            debuginfo_level_specific.or(debuginfo_level).unwrap_or(if debug == Some(true) {
+                2
+            } else {
+                0
+            })
         };
         config.rust_debuginfo_level_rustc = with_defaults(debuginfo_level_rustc);
         config.rust_debuginfo_level_std = with_defaults(debuginfo_level_std);
