@@ -142,7 +142,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for BoxPointers {
         }
     }
 
-    fn check_expr(&mut self, cx: &LateContext<'_, '_>, e: &hir::Expr) {
+    fn check_expr(&mut self, cx: &LateContext<'_, '_>, e: &hir::Expr<'_>) {
         let ty = cx.tables.node_type(e.hir_id);
         self.check_heap_type(cx, e.span, ty);
     }
@@ -157,8 +157,8 @@ declare_lint! {
 declare_lint_pass!(NonShorthandFieldPatterns => [NON_SHORTHAND_FIELD_PATTERNS]);
 
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for NonShorthandFieldPatterns {
-    fn check_pat(&mut self, cx: &LateContext<'_, '_>, pat: &hir::Pat) {
-        if let PatKind::Struct(ref qpath, ref field_pats, _) = pat.kind {
+    fn check_pat(&mut self, cx: &LateContext<'_, '_>, pat: &hir::Pat<'_>) {
+        if let PatKind::Struct(ref qpath, field_pats, _) = pat.kind {
             let variant = cx
                 .tables
                 .pat_ty(pat)
@@ -314,6 +314,10 @@ pub struct MissingDoc {
 impl_lint_pass!(MissingDoc => [MISSING_DOCS]);
 
 fn has_doc(attr: &ast::Attribute) -> bool {
+    if attr.is_doc_comment() {
+        return true;
+    }
+
     if !attr.check_name(sym::doc) {
         return false;
     }
@@ -768,7 +772,7 @@ impl UnusedDocComment {
 
             let span = sugared_span.take().unwrap_or_else(|| attr.span);
 
-            if attr.check_name(sym::doc) {
+            if attr.is_doc_comment() || attr.check_name(sym::doc) {
                 let mut err = cx.struct_span_lint(UNUSED_DOC_COMMENTS, span, "unused doc comment");
 
                 err.span_label(
@@ -901,7 +905,7 @@ declare_lint! {
 declare_lint_pass!(MutableTransmutes => [MUTABLE_TRANSMUTES]);
 
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MutableTransmutes {
-    fn check_expr(&mut self, cx: &LateContext<'_, '_>, expr: &hir::Expr) {
+    fn check_expr(&mut self, cx: &LateContext<'_, '_>, expr: &hir::Expr<'_>) {
         use rustc_target::spec::abi::Abi::RustIntrinsic;
 
         let msg = "mutating transmuted &mut T from &T may cause undefined behavior, \
@@ -917,7 +921,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MutableTransmutes {
 
         fn get_transmute_from_to<'a, 'tcx>(
             cx: &LateContext<'a, 'tcx>,
-            expr: &hir::Expr,
+            expr: &hir::Expr<'_>,
         ) -> Option<(Ty<'tcx>, Ty<'tcx>)> {
             let def = if let hir::ExprKind::Path(ref qpath) = expr.kind {
                 cx.tables.qpath_res(qpath, expr.hir_id)
@@ -1840,7 +1844,7 @@ declare_lint! {
 declare_lint_pass!(InvalidValue => [INVALID_VALUE]);
 
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidValue {
-    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &hir::Expr) {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &hir::Expr<'_>) {
         #[derive(Debug, Copy, Clone, PartialEq)]
         enum InitKind {
             Zeroed,
@@ -1852,7 +1856,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidValue {
         type InitError = (String, Option<Span>);
 
         /// Test if this constant is all-0.
-        fn is_zero(expr: &hir::Expr) -> bool {
+        fn is_zero(expr: &hir::Expr<'_>) -> bool {
             use hir::ExprKind::*;
             use syntax::ast::LitKind::*;
             match &expr.kind {
@@ -1869,7 +1873,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidValue {
         }
 
         /// Determine if this expression is a "dangerous initialization".
-        fn is_dangerous_init(cx: &LateContext<'_, '_>, expr: &hir::Expr) -> Option<InitKind> {
+        fn is_dangerous_init(cx: &LateContext<'_, '_>, expr: &hir::Expr<'_>) -> Option<InitKind> {
             // `transmute` is inside an anonymous module (the `extern` block?);
             // `Invalid` represents the empty string and matches that.
             // FIXME(#66075): use diagnostic items.  Somehow, that does not seem to work

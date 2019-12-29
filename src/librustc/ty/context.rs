@@ -553,11 +553,11 @@ impl<'tcx> TypeckTables<'tcx> {
 
     // Returns the type of a pattern as a monotype. Like @expr_ty, this function
     // doesn't provide type parameter substitutions.
-    pub fn pat_ty(&self, pat: &hir::Pat) -> Ty<'tcx> {
+    pub fn pat_ty(&self, pat: &hir::Pat<'_>) -> Ty<'tcx> {
         self.node_type(pat.hir_id)
     }
 
-    pub fn pat_ty_opt(&self, pat: &hir::Pat) -> Option<Ty<'tcx>> {
+    pub fn pat_ty_opt(&self, pat: &hir::Pat<'_>) -> Option<Ty<'tcx>> {
         self.node_type_opt(pat.hir_id)
     }
 
@@ -571,11 +571,11 @@ impl<'tcx> TypeckTables<'tcx> {
     // NB (2): This type doesn't provide type parameter substitutions; e.g., if you
     // ask for the type of "id" in "id(3)", it will return "fn(&isize) -> isize"
     // instead of "fn(ty) -> T with T = isize".
-    pub fn expr_ty(&self, expr: &hir::Expr) -> Ty<'tcx> {
+    pub fn expr_ty(&self, expr: &hir::Expr<'_>) -> Ty<'tcx> {
         self.node_type(expr.hir_id)
     }
 
-    pub fn expr_ty_opt(&self, expr: &hir::Expr) -> Option<Ty<'tcx>> {
+    pub fn expr_ty_opt(&self, expr: &hir::Expr<'_>) -> Option<Ty<'tcx>> {
         self.node_type_opt(expr.hir_id)
     }
 
@@ -589,22 +589,22 @@ impl<'tcx> TypeckTables<'tcx> {
         LocalTableInContextMut { local_id_root: self.local_id_root, data: &mut self.adjustments }
     }
 
-    pub fn expr_adjustments(&self, expr: &hir::Expr) -> &[ty::adjustment::Adjustment<'tcx>] {
+    pub fn expr_adjustments(&self, expr: &hir::Expr<'_>) -> &[ty::adjustment::Adjustment<'tcx>] {
         validate_hir_id_for_typeck_tables(self.local_id_root, expr.hir_id, false);
         self.adjustments.get(&expr.hir_id.local_id).map_or(&[], |a| &a[..])
     }
 
     /// Returns the type of `expr`, considering any `Adjustment`
     /// entry recorded for that expression.
-    pub fn expr_ty_adjusted(&self, expr: &hir::Expr) -> Ty<'tcx> {
+    pub fn expr_ty_adjusted(&self, expr: &hir::Expr<'_>) -> Ty<'tcx> {
         self.expr_adjustments(expr).last().map_or_else(|| self.expr_ty(expr), |adj| adj.target)
     }
 
-    pub fn expr_ty_adjusted_opt(&self, expr: &hir::Expr) -> Option<Ty<'tcx>> {
+    pub fn expr_ty_adjusted_opt(&self, expr: &hir::Expr<'_>) -> Option<Ty<'tcx>> {
         self.expr_adjustments(expr).last().map(|adj| adj.target).or_else(|| self.expr_ty_opt(expr))
     }
 
-    pub fn is_method_call(&self, expr: &hir::Expr) -> bool {
+    pub fn is_method_call(&self, expr: &hir::Expr<'_>) -> bool {
         // Only paths and method calls/overloaded operators have
         // entries in type_dependent_defs, ignore the former here.
         if let hir::ExprKind::Path(_) = expr.kind {
@@ -1370,19 +1370,6 @@ impl<'tcx> TyCtxt<'tcx> {
         self.borrowck_mode().migrate()
     }
 
-    /// If `true`, make MIR codegen for `match` emit a temp that holds a
-    /// borrow of the input to the match expression.
-    pub fn generate_borrow_of_any_match_input(&self) -> bool {
-        self.emit_read_for_match()
-    }
-
-    /// If `true`, make MIR codegen for `match` emit FakeRead
-    /// statements (which simulate the maximal effect of executing the
-    /// patterns in a match arm).
-    pub fn emit_read_for_match(&self) -> bool {
-        !self.sess.opts.debugging_opts.nll_dont_emit_read_for_match
-    }
-
     /// What mode(s) of borrowck should we run? AST? MIR? both?
     /// (Also considers the `#![feature(nll)]` setting.)
     pub fn borrowck_mode(&self) -> BorrowckMode {
@@ -1623,13 +1610,11 @@ pub mod tls {
 
     use crate::dep_graph::TaskDeps;
     use crate::ty::query;
-    use errors::{Diagnostic, TRACK_DIAGNOSTICS};
+    use errors::Diagnostic;
     use rustc_data_structures::sync::{self, Lock, Lrc};
     use rustc_data_structures::thin_vec::ThinVec;
     use rustc_data_structures::OnDrop;
-    use std::fmt;
     use std::mem;
-    use syntax_pos;
 
     #[cfg(not(parallel_compiler))]
     use std::cell::Cell;
@@ -1703,58 +1688,6 @@ pub mod tls {
     #[cfg(not(parallel_compiler))]
     fn get_tlv() -> usize {
         TLV.with(|tlv| tlv.get())
-    }
-
-    /// This is a callback from libsyntax as it cannot access the implicit state
-    /// in librustc otherwise.
-    fn span_debug(span: syntax_pos::Span, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        with_opt(|tcx| {
-            if let Some(tcx) = tcx {
-                write!(f, "{}", tcx.sess.source_map().span_to_string(span))
-            } else {
-                syntax_pos::default_span_debug(span, f)
-            }
-        })
-    }
-
-    /// This is a callback from libsyntax as it cannot access the implicit state
-    /// in librustc otherwise. It is used to when diagnostic messages are
-    /// emitted and stores them in the current query, if there is one.
-    fn track_diagnostic(diagnostic: &Diagnostic) {
-        with_context_opt(|icx| {
-            if let Some(icx) = icx {
-                if let Some(ref diagnostics) = icx.diagnostics {
-                    let mut diagnostics = diagnostics.lock();
-                    diagnostics.extend(Some(diagnostic.clone()));
-                }
-            }
-        })
-    }
-
-    /// Sets up the callbacks from libsyntax on the current thread.
-    pub fn with_thread_locals<F, R>(f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        syntax_pos::SPAN_DEBUG.with(|span_dbg| {
-            let original_span_debug = span_dbg.get();
-            span_dbg.set(span_debug);
-
-            let _on_drop = OnDrop(move || {
-                span_dbg.set(original_span_debug);
-            });
-
-            TRACK_DIAGNOSTICS.with(|current| {
-                let original = current.get();
-                current.set(track_diagnostic);
-
-                let _on_drop = OnDrop(move || {
-                    current.set(original);
-                });
-
-                f()
-            })
-        })
     }
 
     /// Sets `context` as the new current `ImplicitCtxt` for the duration of the function `f`.
