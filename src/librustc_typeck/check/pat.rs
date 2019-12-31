@@ -353,13 +353,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     fn check_pat_range(
         &self,
         span: Span,
-        begin: &'tcx hir::Expr<'tcx>,
-        end: &'tcx hir::Expr<'tcx>,
+        lhs: &'tcx hir::Expr<'tcx>,
+        rhs: &'tcx hir::Expr<'tcx>,
         expected: Ty<'tcx>,
         discrim_span: Option<Span>,
     ) -> Option<Ty<'tcx>> {
-        let lhs_ty = self.check_expr(begin);
-        let rhs_ty = self.check_expr(end);
+        let lhs_ty = self.check_expr(lhs);
+        let rhs_ty = self.check_expr(rhs);
 
         // Check that both end-points are of numeric or char type.
         let numeric_or_char = |ty: Ty<'_>| ty.is_numeric() || ty.is_char() || ty.references_error();
@@ -367,7 +367,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let rhs_fail = !numeric_or_char(rhs_ty);
 
         if lhs_fail || rhs_fail {
-            self.emit_err_pat_range(span, begin.span, end.span, lhs_fail, rhs_fail, lhs_ty, rhs_ty);
+            self.emit_err_pat_range(span, lhs.span, rhs.span, lhs_fail, rhs_fail, lhs_ty, rhs_ty);
             return None;
         }
 
@@ -376,9 +376,22 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let common_type = self.resolve_vars_if_possible(&lhs_ty);
 
         // Subtyping doesn't matter here, as the value is some kind of scalar.
-        self.demand_eqtype_pat(span, expected, lhs_ty, discrim_span);
-        self.demand_eqtype_pat(span, expected, rhs_ty, discrim_span);
+        let demand_eqtype = |x_span, y_span, x_ty, y_ty| {
+            self.demand_eqtype_pat_diag(x_span, expected, x_ty, discrim_span).map(|mut err| {
+                self.endpoint_has_type(&mut err, y_span, y_ty);
+                err.emit();
+            });
+        };
+        demand_eqtype(lhs.span, rhs.span, lhs_ty, rhs_ty);
+        demand_eqtype(rhs.span, lhs.span, rhs_ty, lhs_ty);
+
         Some(common_type)
+    }
+
+    fn endpoint_has_type(&self, err: &mut DiagnosticBuilder<'_>, span: Span, ty: Ty<'_>) {
+        if !ty.references_error() {
+            err.span_label(span, &format!("this is of type `{}`", ty));
+        }
     }
 
     fn emit_err_pat_range(
@@ -408,9 +421,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let msg = |ty| format!("this is of type `{}` but it should be `char` or numeric", ty);
         let mut one_side_err = |first_span, first_ty, second_span, second_ty: Ty<'_>| {
             err.span_label(first_span, &msg(first_ty));
-            if !second_ty.references_error() {
-                err.span_label(second_span, &format!("this is of type `{}`", second_ty));
-            }
+            self.endpoint_has_type(&mut err, second_span, second_ty);
         };
         if lhs_fail && rhs_fail {
             err.span_label(begin_span, &msg(lhs_ty));
@@ -554,7 +565,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     fn check_pat_struct(
         &self,
         pat: &'tcx Pat<'tcx>,
-        qpath: &hir::QPath,
+        qpath: &hir::QPath<'_>,
         fields: &'tcx [hir::FieldPat<'tcx>],
         etc: bool,
         expected: Ty<'tcx>,
@@ -587,8 +598,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     fn check_pat_path(
         &self,
         pat: &Pat<'_>,
-        path_resolution: (Res, Option<Ty<'tcx>>, &'b [hir::PathSegment]),
-        qpath: &hir::QPath,
+        path_resolution: (Res, Option<Ty<'tcx>>, &'b [hir::PathSegment<'b>]),
+        qpath: &hir::QPath<'_>,
         expected: Ty<'tcx>,
     ) -> Ty<'tcx> {
         let tcx = self.tcx;
@@ -622,7 +633,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     fn check_pat_tuple_struct(
         &self,
         pat: &Pat<'_>,
-        qpath: &hir::QPath,
+        qpath: &hir::QPath<'_>,
         subpats: &'tcx [&'tcx Pat<'tcx>],
         ddpos: Option<usize>,
         expected: Ty<'tcx>,
@@ -724,7 +735,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         pat_span: Span,
         res: Res,
-        qpath: &hir::QPath,
+        qpath: &hir::QPath<'_>,
         subpats: &'tcx [&'tcx Pat<'tcx>],
         fields: &'tcx [ty::FieldDef],
         expected: Ty<'tcx>,
