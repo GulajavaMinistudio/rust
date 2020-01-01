@@ -24,12 +24,13 @@ use rustc::hir::def::Namespace::*;
 use rustc::hir::def::{self, CtorKind, CtorOf, DefKind, ExportMap, NonMacroAttrKind, PartialRes};
 use rustc::hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use rustc::hir::map::Definitions;
-use rustc::hir::{self, Bool, Char, Float, Int, PrimTy, Str, Uint};
+use rustc::hir::{Bool, Char, Float, Int, PrimTy, Str, Uint};
 use rustc::hir::{GlobMap, TraitMap};
 use rustc::lint;
 use rustc::middle::cstore::{CrateStore, MetadataLoaderDyn};
 use rustc::session::Session;
 use rustc::span_bug;
+use rustc::ty::query::Providers;
 use rustc::ty::{self, DefIdTree, ResolverOutputs};
 use rustc::util::nodemap::{DefIdMap, FxHashMap, FxHashSet, NodeMap, NodeSet};
 
@@ -74,6 +75,7 @@ mod def_collector;
 mod diagnostics;
 mod imports;
 mod late;
+mod lifetimes;
 mod macros;
 
 enum Weak {
@@ -1026,7 +1028,7 @@ impl<'a, 'b> DefIdTree for &'a Resolver<'b> {
 
 /// This interface is used through the AST→HIR step, to embed full paths into the HIR. After that
 /// the resolver is no longer needed as all the relevant information is inline.
-impl<'a> hir::lowering::Resolver for Resolver<'a> {
+impl rustc_ast_lowering::Resolver for Resolver<'_> {
     fn cstore(&self) -> &dyn CrateStore {
         self.cstore()
     }
@@ -3088,4 +3090,8 @@ impl CrateLint {
             | CrateLint::QPathTrait { qpath_id: id, .. } => Some(id),
         }
     }
+}
+
+pub fn provide(providers: &mut Providers<'_>) {
+    lifetimes::provide(providers);
 }

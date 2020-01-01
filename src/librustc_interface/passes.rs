@@ -7,10 +7,9 @@ use rustc::arena::Arena;
 use rustc::dep_graph::DepGraph;
 use rustc::hir;
 use rustc::hir::def_id::{CrateNum, LOCAL_CRATE};
-use rustc::hir::lowering::lower_crate;
 use rustc::lint;
 use rustc::middle::cstore::{CrateStore, MetadataLoader, MetadataLoaderDyn};
-use rustc::middle::{self, resolve_lifetime, stability};
+use rustc::middle::{self, stability};
 use rustc::session::config::{self, CrateType, Input, OutputFilenames, OutputType};
 use rustc::session::config::{PpMode, PpSourceMode};
 use rustc::session::search_paths::PathKind;
@@ -442,8 +441,14 @@ pub fn lower_to_hir<'res, 'tcx>(
 ) -> Result<hir::map::Forest<'tcx>> {
     // Lower AST to HIR.
     let hir_forest = time(sess, "lowering AST -> HIR", || {
-        let nt_to_tokenstream = rustc_parse::nt_to_tokenstream;
-        let hir_crate = lower_crate(sess, &dep_graph, &krate, resolver, nt_to_tokenstream, arena);
+        let hir_crate = rustc_ast_lowering::lower_crate(
+            sess,
+            &dep_graph,
+            &krate,
+            resolver,
+            rustc_parse::nt_to_tokenstream,
+            arena,
+        );
 
         if sess.opts.debugging_opts.hir_stats {
             hir_stats::print_hir_stats(&hir_crate);
@@ -678,15 +683,14 @@ pub fn default_provide(providers: &mut ty::query::Providers<'_>) {
     plugin::build::provide(providers);
     hir::provide(providers);
     mir::provide(providers);
-    resolve_lifetime::provide(providers);
     rustc_privacy::provide(providers);
     typeck::provide(providers);
     ty::provide(providers);
     traits::provide(providers);
     stability::provide(providers);
     rustc_passes::provide(providers);
+    rustc_resolve::provide(providers);
     rustc_traits::provide(providers);
-    middle::region::provide(providers);
     rustc_metadata::provide(providers);
     lint::provide(providers);
     rustc_lint::provide(providers);
