@@ -19,6 +19,7 @@ use crate::{Module, ModuleData, ModuleKind, NameBinding, NameBindingKind, Segmen
 use rustc::bug;
 use rustc::hir::def::{self, *};
 use rustc::hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc::hir::exports::Export;
 use rustc::middle::cstore::CrateStore;
 use rustc::ty;
 use rustc_metadata::creader::LoadedMacro;
@@ -31,17 +32,17 @@ use errors::Applicability;
 
 use rustc_expand::base::SyntaxExtension;
 use rustc_expand::expand::AstFragment;
+use rustc_span::hygiene::{ExpnId, MacroKind};
+use rustc_span::source_map::{respan, Spanned};
+use rustc_span::symbol::{kw, sym};
+use rustc_span::{Span, DUMMY_SP};
 use syntax::ast::{self, Block, ForeignItem, ForeignItemKind, Item, ItemKind, NodeId};
 use syntax::ast::{AssocItem, AssocItemKind, MetaItemKind, StmtKind};
 use syntax::ast::{Ident, Name};
 use syntax::attr;
-use syntax::source_map::{respan, Spanned};
 use syntax::span_err;
-use syntax::symbol::{kw, sym};
 use syntax::token::{self, Token};
 use syntax::visit::{self, Visitor};
-use syntax_pos::hygiene::{ExpnId, MacroKind};
-use syntax_pos::{Span, DUMMY_SP};
 
 use log::debug;
 
@@ -472,11 +473,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
 
                         self.r
                             .session
-                            .struct_span_warn(item.span, "`$crate` may not be imported")
-                            .note(
-                                "`use $crate;` was erroneously allowed and \
-                                   will become a hard error in a future release",
-                            )
+                            .struct_span_err(item.span, "`$crate` may not be imported")
                             .emit();
                     }
                 }

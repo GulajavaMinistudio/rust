@@ -9,7 +9,7 @@ use rustc_target::spec::TargetTriple;
 use rustc_target::spec::{LinkerFlavor, MergeFunctions, PanicStrategy, RelroLevel};
 
 use rustc_feature::UnstableFeatures;
-use syntax_pos::edition::Edition;
+use rustc_span::edition::Edition;
 
 use getopts;
 
@@ -946,4 +946,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
     insert_sideeffect: bool = (false, parse_bool, [TRACKED],
         "fix undefined behavior when a thread doesn't eventually make progress \
          (such as entering an empty infinite loop) by inserting llvm.sideeffect"),
+    deduplicate_diagnostics: Option<bool> = (None, parse_opt_bool, [UNTRACKED],
+        "deduplicate identical diagnostics"),
 }

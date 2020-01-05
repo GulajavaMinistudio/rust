@@ -23,6 +23,7 @@ rustc-rayon-core = "0.3.0"
 polonius-engine = "0.11.0"
 rustc_apfloat = { path = "../librustc_apfloat" }
 rustc_feature = { path = "../librustc_feature" }
+rustc_hir = { path = "../librustc_hir" }
 rustc_target = { path = "../librustc_target" }
 rustc_macros = { path = "../librustc_macros" }
 rustc_data_structures = { path = "../librustc_data_structures" }
@@ -30,7 +31,7 @@ rustc_index = { path = "../librustc_index" }
 errors = { path = "../librustc_errors", package = "rustc_errors" }
 rustc_serialize = { path = "../libserialize", package = "serialize" }
 syntax = { path = "../libsyntax" }
-syntax_pos = { path = "../librustc_span", package = "rustc_span" }
+rustc_span = { path = "../librustc_span" }
 backtrace = "0.3.40"
 parking_lot = "0.9"
 byteorder = { version = "1.3" }

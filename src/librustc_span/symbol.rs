@@ -102,7 +102,7 @@ symbols! {
         Union:              "union",
     }
 
-    // Symbols that can be referred to with syntax_pos::sym::*. The symbol is
+    // Symbols that can be referred to with rustc_span::sym::*. The symbol is
     // the stringified identifier unless otherwise specified (e.g.
     // `proc_dash_macro` represents "proc-macro").
     //
@@ -379,8 +379,6 @@ symbols! {
         infer_static_outlives_requirements,
         inline,
         intel,
-        into_future,
-        IntoFuture,
         into_iter,
         IntoIterator,
         into_result,

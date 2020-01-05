@@ -3091,6 +3091,7 @@ dependencies = [
  "rustc_errors",
  "rustc_feature",
  "rustc_fs_util",
+ "rustc_hir",
  "rustc_index",
  "rustc_macros",
  "rustc_session",
@@ -3368,6 +3369,7 @@ dependencies = [
  "rustc_error_codes",
  "rustc_errors",
  "rustc_index",
+ "rustc_session",
  "rustc_span",
  "rustc_target",
  "smallvec 1.0.0",
@@ -3415,7 +3417,7 @@ dependencies = [
  "rustc_session",
  "rustc_span",
  "rustc_target",
- "smallvec 0.6.10",
+ "smallvec 1.0.0",
  "syntax",
 ]
 
@@ -3563,6 +3565,22 @@ name = "rustc_fs_util"
 version = "0.0.0"
 
 [[package]]
+name = "rustc_hir"
+version = "0.0.0"
+dependencies = [
+ "rustc_data_structures",
+ "rustc_errors",
+ "rustc_index",
+ "rustc_macros",
+ "rustc_session",
+ "rustc_span",
+ "rustc_target",
+ "serialize",
+ "smallvec 1.0.0",
+ "syntax",
+]
+
+[[package]]
 name = "rustc_incremental"
 version = "0.0.0"
 dependencies = [
@@ -3602,6 +3620,7 @@ dependencies = [
  "rustc_data_structures",
  "rustc_errors",
  "rustc_expand",
+ "rustc_hir",
  "rustc_incremental",
  "rustc_lint",
  "rustc_metadata",
@@ -3642,6 +3661,7 @@ dependencies = [
  "rustc_span",
  "rustc_target",
  "syntax",
+ "unicode-security",
 ]
 
 [[package]]
@@ -3807,6 +3827,7 @@ dependencies = [
  "rustc_expand",
  "rustc_feature",
  "rustc_metadata",
+ "rustc_session",
  "rustc_span",
  "smallvec 1.0.0",
  "syntax",
@@ -4938,6 +4959,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b561e267b2326bb4cebfc0ef9e68355c7abe6c6f522aeac2f5bf95d56c59bdcf"
 dependencies = [
  "smallvec 1.0.0",
+]
+
+[[package]]
+name = "unicode-script"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b2c5c29e805da6817f5af6a627d65adb045cebf05cccd5a3493d6109454391c"
+
+[[package]]
+name = "unicode-security"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c49d35967fa037b881acc34ef717c38c4b5560eba10e3685271b3f530bb19634"
+dependencies = [
+ "unicode-script",
 ]
 
 [[package]]

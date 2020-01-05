@@ -3,6 +3,8 @@ use super::{BlockMode, Parser, PathStyle, SemiColonMode, SeqSep, TokenExpectType
 use rustc_data_structures::fx::FxHashSet;
 use rustc_error_codes::*;
 use rustc_errors::{self, pluralize, Applicability, DiagnosticBuilder, Handler, PResult};
+use rustc_span::symbol::kw;
+use rustc_span::{MultiSpan, Span, SpanSnippetError, DUMMY_SP};
 use syntax::ast::{
     self, BinOpKind, BindingMode, BlockCheckMode, Expr, ExprKind, Ident, Item, Param,
 };
@@ -12,8 +14,6 @@ use syntax::ptr::P;
 use syntax::struct_span_err;
 use syntax::token::{self, token_can_begin_expr, TokenKind};
 use syntax::util::parser::AssocOp;
-use syntax_pos::symbol::kw;
-use syntax_pos::{MultiSpan, Span, SpanSnippetError, DUMMY_SP};
 
 use log::{debug, trace};
 use std::mem;
@@ -848,7 +848,7 @@ impl<'a> Parser<'a> {
         let appl = Applicability::MachineApplicable;
         if self.token.span == DUMMY_SP || self.prev_span == DUMMY_SP {
             // Likely inside a macro, can't provide meaninful suggestions.
-            return self.expect(&token::Semi).map(|_| ());
+            return self.expect(&token::Semi).map(drop);
         } else if !sm.is_multiline(self.prev_span.until(self.token.span)) {
             // The current token is in the same line as the prior token, not recoverable.
         } else if self.look_ahead(1, |t| {
@@ -887,7 +887,7 @@ impl<'a> Parser<'a> {
                 .emit();
             return Ok(());
         }
-        self.expect(&token::Semi).map(|_| ()) // Error unconditionally
+        self.expect(&token::Semi).map(drop) // Error unconditionally
     }
 
     pub(super) fn parse_semi_or_incorrect_foreign_fn_body(

@@ -1,20 +1,19 @@
 use super::*;
 use crate::dep_graph::{DepGraph, DepKind, DepNodeIndex};
 use crate::hir;
-use crate::hir::def_id::{CrateNum, LOCAL_CRATE};
+use crate::hir::def_id::{CrateNum, DefIndex, LOCAL_CRATE};
 use crate::hir::intravisit::{NestedVisitorMap, Visitor};
 use crate::hir::map::HirEntryMap;
 use crate::ich::Fingerprint;
 use crate::middle::cstore::CrateStore;
-use crate::session::CrateDisambiguator;
-use crate::session::Session;
-use crate::util::nodemap::FxHashMap;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::svh::Svh;
 use rustc_index::vec::IndexVec;
+use rustc_session::{CrateDisambiguator, Session};
+use rustc_span::source_map::SourceMap;
+use rustc_span::Span;
 use std::iter::repeat;
 use syntax::ast::NodeId;
-use syntax::source_map::SourceMap;
-use syntax_pos::Span;
 
 use crate::ich::StableHashingContext;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};

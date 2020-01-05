@@ -2,17 +2,17 @@ use crate::tests::{matches_codepattern, string_to_stream, with_error_checking_pa
 
 use errors::PResult;
 use rustc_parse::new_parser_from_source_str;
+use rustc_span::source_map::FilePathMapping;
+use rustc_span::symbol::{kw, sym, Symbol};
+use rustc_span::{BytePos, FileName, Pos, Span};
 use syntax::ast::{self, Name, PatKind};
 use syntax::print::pprust::item_to_string;
 use syntax::ptr::P;
 use syntax::sess::ParseSess;
-use syntax::source_map::FilePathMapping;
-use syntax::symbol::{kw, sym, Symbol};
 use syntax::token::{self, Token};
 use syntax::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use syntax::visit;
 use syntax::with_default_globals;
-use syntax_pos::{BytePos, FileName, Pos, Span};
 
 use std::path::PathBuf;
 
@@ -32,7 +32,7 @@ fn parse_item_from_source_str(
     new_parser_from_source_str(sess, name, source).parse_item()
 }
 
-// Produces a `syntax_pos::span`.
+// Produces a `rustc_span::span`.
 fn sp(a: u32, b: u32) -> Span {
     Span::with_root_ctxt(BytePos(a), BytePos(b))
 }

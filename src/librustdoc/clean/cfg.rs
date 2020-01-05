@@ -8,11 +8,11 @@ use std::mem;
 use std::ops;
 
 use rustc_feature::Features;
+use rustc_span::symbol::{sym, Symbol};
 use syntax::ast::{LitKind, MetaItem, MetaItemKind, NestedMetaItem};
 use syntax::sess::ParseSess;
-use syntax::symbol::{sym, Symbol};
 
-use syntax_pos::Span;
+use rustc_span::Span;
 
 use crate::html::escape::Escape;
 

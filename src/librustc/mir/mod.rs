@@ -27,6 +27,8 @@ use rustc_index::bit_set::BitMatrix;
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
 use rustc_serialize::{Decodable, Encodable};
+use rustc_span::symbol::Symbol;
+use rustc_span::{Span, DUMMY_SP};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter, Write};
@@ -35,8 +37,6 @@ use std::slice;
 use std::{iter, mem, option, u32};
 pub use syntax::ast::Mutability;
 use syntax::ast::Name;
-use syntax::symbol::Symbol;
-use syntax_pos::{Span, DUMMY_SP};
 
 pub use crate::mir::cache::{BodyAndCache, ReadOnlyBodyAndCache};
 pub use crate::mir::interpret::AssertMessage;

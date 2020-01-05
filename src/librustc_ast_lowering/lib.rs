@@ -37,7 +37,7 @@
 use rustc::arena::Arena;
 use rustc::dep_graph::DepGraph;
 use rustc::hir::def::{DefKind, Namespace, PartialRes, PerNS, Res};
-use rustc::hir::def_id::{DefId, DefIndex, CRATE_DEF_INDEX};
+use rustc::hir::def_id::{DefId, DefIdMap, DefIndex, CRATE_DEF_INDEX};
 use rustc::hir::map::{DefKey, DefPathData, Definitions};
 use rustc::hir::{self, ConstArg, GenericArg, ParamName};
 use rustc::lint;
@@ -47,13 +47,13 @@ use rustc::session::config::nightly_options;
 use rustc::session::Session;
 use rustc::util::captures::Captures;
 use rustc::util::common::FN_OUTPUT_NAME;
-use rustc::util::nodemap::{DefIdMap, NodeMap};
 use rustc::{bug, span_bug};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::sync::Lrc;
 use rustc_error_codes::*;
 use rustc_errors::Applicability;
 use rustc_index::vec::IndexVec;
+use rustc_session::node_id::NodeMap;
 use rustc_span::hygiene::ExpnId;
 use rustc_span::source_map::{respan, DesugaringKind, ExpnData, ExpnKind, Spanned};
 use rustc_span::symbol::{kw, sym, Symbol};
@@ -167,7 +167,6 @@ struct LoweringContext<'a, 'hir: 'a> {
 
     allow_try_trait: Option<Lrc<[Symbol]>>,
     allow_gen_future: Option<Lrc<[Symbol]>>,
-    allow_into_future: Option<Lrc<[Symbol]>>,
 }
 
 pub trait Resolver {
@@ -300,7 +299,6 @@ pub fn lower_crate<'a, 'hir>(
         in_scope_lifetimes: Vec::new(),
         allow_try_trait: Some([sym::try_trait][..].into()),
         allow_gen_future: Some([sym::gen_future][..].into()),
-        allow_into_future: Some([sym::into_future][..].into()),
     }
     .lower_crate(krate)
 }

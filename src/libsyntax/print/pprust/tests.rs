@@ -1,9 +1,9 @@
 use super::*;
 
 use crate::ast;
-use crate::source_map;
 use crate::with_default_globals;
-use syntax_pos;
+use rustc_span;
+use rustc_span::source_map::{dummy_spanned, respan};
 
 fn fun_to_string(
     decl: &ast::FnDecl,
@@ -18,7 +18,7 @@ fn fun_to_string(
             header,
             Some(name),
             generics,
-            &source_map::dummy_spanned(ast::VisibilityKind::Inherited),
+            &dummy_spanned(ast::VisibilityKind::Inherited),
         );
         s.end(); // Close the head box.
         s.end(); // Close the outer box.
@@ -36,7 +36,7 @@ fn test_fun_to_string() {
 
         let decl = ast::FnDecl {
             inputs: Vec::new(),
-            output: ast::FunctionRetTy::Default(syntax_pos::DUMMY_SP),
+            output: ast::FunctionRetTy::Default(rustc_span::DUMMY_SP),
         };
         let generics = ast::Generics::default();
         assert_eq!(
@@ -53,12 +53,12 @@ fn test_variant_to_string() {
 
         let var = ast::Variant {
             ident,
-            vis: source_map::respan(syntax_pos::DUMMY_SP, ast::VisibilityKind::Inherited),
+            vis: respan(rustc_span::DUMMY_SP, ast::VisibilityKind::Inherited),
             attrs: Vec::new(),
             id: ast::DUMMY_NODE_ID,
             data: ast::VariantData::Unit(ast::DUMMY_NODE_ID),
             disr_expr: None,
-            span: syntax_pos::DUMMY_SP,
+            span: rustc_span::DUMMY_SP,
             is_placeholder: false,
         };
 

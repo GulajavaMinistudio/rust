@@ -27,15 +27,15 @@ use rustc::ty::GenericParamDefKind;
 use rustc::ty::{
     self, ParamEnvAnd, ToPolyTraitRef, ToPredicate, TraitRef, Ty, TyCtxt, TypeFoldable,
 };
-use rustc::util::nodemap::FxHashSet;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::sync::Lrc;
+use rustc_span::{symbol::Symbol, Span, DUMMY_SP};
 use std::cmp::max;
 use std::iter;
 use std::mem;
 use std::ops::Deref;
 use syntax::ast;
 use syntax::util::lev_distance::{find_best_match_for_name, lev_distance};
-use syntax_pos::{symbol::Symbol, Span, DUMMY_SP};
 
 use rustc_error_codes::*;
 

@@ -3,8 +3,8 @@
 
 use crate::ich::StableHashingContext;
 
+use rustc_span::SourceFile;
 use syntax::ast;
-use syntax_pos::SourceFile;
 
 use crate::hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX};
 
@@ -43,24 +43,22 @@ impl<'a> HashStable<StableHashingContext<'a>> for [ast::Attribute] {
     }
 }
 
-impl<'a> HashStable<StableHashingContext<'a>> for ast::Attribute {
-    fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
+impl<'ctx> syntax::HashStableContext for StableHashingContext<'ctx> {
+    fn hash_attr(&mut self, attr: &ast::Attribute, hasher: &mut StableHasher) {
         // Make sure that these have been filtered out.
-        debug_assert!(!self.ident().map_or(false, |ident| hcx.is_ignored_attr(ident.name)));
-        debug_assert!(!self.is_doc_comment());
+        debug_assert!(!attr.ident().map_or(false, |ident| self.is_ignored_attr(ident.name)));
+        debug_assert!(!attr.is_doc_comment());
 
-        let ast::Attribute { kind, id: _, style, span } = self;
+        let ast::Attribute { kind, id: _, style, span } = attr;
         if let ast::AttrKind::Normal(item) = kind {
-            item.hash_stable(hcx, hasher);
-            style.hash_stable(hcx, hasher);
-            span.hash_stable(hcx, hasher);
+            item.hash_stable(self, hasher);
+            style.hash_stable(self, hasher);
+            span.hash_stable(self, hasher);
         } else {
             unreachable!();
         }
     }
 }
-
-impl<'ctx> syntax::HashStableContext for StableHashingContext<'ctx> {}
 
 impl<'a> HashStable<StableHashingContext<'a>> for SourceFile {
     fn hash_stable(&self, hcx: &mut StableHashingContext<'a>, hasher: &mut StableHasher) {
@@ -114,22 +112,22 @@ impl<'a> HashStable<StableHashingContext<'a>> for SourceFile {
     }
 }
 
-fn stable_byte_pos(pos: ::syntax_pos::BytePos, source_file_start: ::syntax_pos::BytePos) -> u32 {
+fn stable_byte_pos(pos: ::rustc_span::BytePos, source_file_start: ::rustc_span::BytePos) -> u32 {
     pos.0 - source_file_start.0
 }
 
 fn stable_multibyte_char(
-    mbc: ::syntax_pos::MultiByteChar,
-    source_file_start: ::syntax_pos::BytePos,
+    mbc: ::rustc_span::MultiByteChar,
+    source_file_start: ::rustc_span::BytePos,
 ) -> (u32, u32) {
-    let ::syntax_pos::MultiByteChar { pos, bytes } = mbc;
+    let ::rustc_span::MultiByteChar { pos, bytes } = mbc;
 
     (pos.0 - source_file_start.0, bytes as u32)
 }
 
 fn stable_non_narrow_char(
-    swc: ::syntax_pos::NonNarrowChar,
-    source_file_start: ::syntax_pos::BytePos,
+    swc: ::rustc_span::NonNarrowChar,
+    source_file_start: ::rustc_span::BytePos,
 ) -> (u32, u32) {
     let pos = swc.pos();
     let width = swc.width();
@@ -138,10 +136,10 @@ fn stable_non_narrow_char(
 }
 
 fn stable_normalized_pos(
-    np: ::syntax_pos::NormalizedPos,
-    source_file_start: ::syntax_pos::BytePos,
+    np: ::rustc_span::NormalizedPos,
+    source_file_start: ::rustc_span::BytePos,
 ) -> (u32, u32) {
-    let ::syntax_pos::NormalizedPos { pos, diff } = np;
+    let ::rustc_span::NormalizedPos { pos, diff } = np;
 
     (pos.0 - source_file_start.0, diff)
 }

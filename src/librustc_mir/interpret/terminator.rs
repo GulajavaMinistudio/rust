@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use rustc::ty::layout::{self, LayoutOf, TyLayout};
 use rustc::ty::Instance;
 use rustc::{mir, ty};
+use rustc_span::source_map::Span;
 use rustc_target::spec::abi::Abi;
-use syntax::source_map::Span;
 
 use super::{
     FnVal, ImmTy, InterpCx, InterpResult, MPlaceTy, Machine, OpTy, PlaceTy, StackPopCleanup,
@@ -238,7 +238,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             | ty::InstanceDef::CloneShim(..)
             | ty::InstanceDef::Item(_) => {
                 // We need MIR for this fn
-                let body = match M::find_mir_or_eval_fn(self, instance, args, ret, unwind)? {
+                let body = match M::find_mir_or_eval_fn(self, span, instance, args, ret, unwind)? {
                     Some(body) => body,
                     None => return Ok(()),
                 };

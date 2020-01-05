@@ -96,27 +96,24 @@
 use self::LiveNodeKind::*;
 use self::VarKind::*;
 
-use rustc::hir;
 use rustc::hir::def::*;
 use rustc::hir::def_id::DefId;
 use rustc::hir::intravisit::{self, FnKind, NestedVisitorMap, Visitor};
-use rustc::hir::Node;
-use rustc::hir::{Expr, HirId};
+use rustc::hir::{self, Expr, HirId, HirIdMap, HirIdSet, Node};
 use rustc::lint;
 use rustc::ty::query::Providers;
 use rustc::ty::{self, TyCtxt};
-use rustc::util::nodemap::{HirIdMap, HirIdSet};
 
 use errors::Applicability;
 use rustc_data_structures::fx::FxIndexMap;
+use rustc_span::symbol::sym;
+use rustc_span::Span;
 use std::collections::VecDeque;
 use std::io;
 use std::io::prelude::*;
 use std::rc::Rc;
 use std::{fmt, u32};
 use syntax::ast;
-use syntax::symbol::sym;
-use syntax_pos::Span;
 
 #[derive(Copy, Clone, PartialEq)]
 struct Variable(u32);

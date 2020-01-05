@@ -1,13 +1,13 @@
 use errors::DiagnosticBuilder;
+use rustc_span::Span;
 use smallvec::SmallVec;
-use syntax_pos::Span;
 
 use crate::hir;
 use crate::hir::def_id::DefId;
 use crate::ty::outlives::Component;
 use crate::ty::subst::{GenericArg, Subst, SubstsRef};
 use crate::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt};
-use crate::util::nodemap::FxHashSet;
+use rustc_data_structures::fx::FxHashSet;
 
 use super::{Normalized, Obligation, ObligationCause, PredicateObligation, SelectionContext};
 

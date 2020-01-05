@@ -1,11 +1,11 @@
 //! Inlining pass for MIR functions
 
 use rustc::hir::def_id::DefId;
-use rustc::hir::CodegenFnAttrFlags;
 
 use rustc_index::bit_set::BitSet;
 use rustc_index::vec::{Idx, IndexVec};
 
+use rustc::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc::mir::visit::*;
 use rustc::mir::*;
 use rustc::ty::subst::{InternalSubsts, Subst, SubstsRef};
@@ -671,12 +671,7 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Integrator<'a, 'tcx> {
         *local = self.make_integrate_local(local);
     }
 
-    fn visit_place(
-        &mut self,
-        place: &mut Place<'tcx>,
-        _context: PlaceContext,
-        _location: Location,
-    ) {
+    fn visit_place(&mut self, place: &mut Place<'tcx>, context: PlaceContext, location: Location) {
         match &mut place.base {
             PlaceBase::Static(_) => {}
             PlaceBase::Local(l) => {
@@ -689,10 +684,11 @@ impl<'a, 'tcx> MutVisitor<'tcx> for Integrator<'a, 'tcx> {
 
                     place.projection = self.tcx.intern_place_elems(&*projs);
                 }
-
-                *l = self.make_integrate_local(l);
             }
         }
+        // Handles integrating any locals that occur in the base
+        // or projections
+        self.super_place(place, context, location)
     }
 
     fn process_projection_elem(&mut self, elem: &PlaceElem<'tcx>) -> Option<PlaceElem<'tcx>> {

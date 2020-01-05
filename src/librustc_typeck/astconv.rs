@@ -14,7 +14,6 @@ use crate::middle::resolve_lifetime as rl;
 use crate::namespace::Namespace;
 use crate::require_c_abi_if_c_variadic;
 use crate::util::common::ErrorReported;
-use crate::util::nodemap::FxHashMap;
 use errors::{Applicability, DiagnosticId};
 use rustc::lint::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;
 use rustc::traits;
@@ -22,20 +21,19 @@ use rustc::ty::subst::{self, InternalSubsts, Subst, SubstsRef};
 use rustc::ty::wf::object_region_bounds;
 use rustc::ty::{self, Const, DefIdTree, ToPredicate, Ty, TyCtxt, TypeFoldable};
 use rustc::ty::{GenericParamDef, GenericParamDefKind};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_span::symbol::sym;
+use rustc_span::{MultiSpan, Span, DUMMY_SP};
 use rustc_target::spec::abi;
 use smallvec::SmallVec;
 use syntax::ast;
 use syntax::errors::pluralize;
 use syntax::feature_gate::feature_err;
-use syntax::symbol::sym;
 use syntax::util::lev_distance::find_best_match_for_name;
-use syntax_pos::{MultiSpan, Span, DUMMY_SP};
 
 use std::collections::BTreeSet;
 use std::iter;
 use std::slice;
-
-use rustc_data_structures::fx::FxHashSet;
 
 use rustc_error_codes::*;
 

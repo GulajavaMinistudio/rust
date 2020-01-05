@@ -4,14 +4,14 @@
 //! types computed here.
 
 use super::FnCtxt;
-use crate::util::nodemap::FxHashMap;
 use rustc::hir::def::{CtorKind, DefKind, Res};
 use rustc::hir::def_id::DefId;
 use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc::hir::{self, Expr, ExprKind, Pat, PatKind};
 use rustc::middle::region::{self, YieldData};
 use rustc::ty::{self, Ty};
-use syntax_pos::Span;
+use rustc_data_structures::fx::FxHashMap;
+use rustc_span::Span;
 
 struct InteriorVisitor<'a, 'tcx> {
     fcx: &'a FnCtxt<'a, 'tcx>,
@@ -30,7 +30,7 @@ impl<'a, 'tcx> InteriorVisitor<'a, 'tcx> {
         expr: Option<&'tcx Expr<'tcx>>,
         source_span: Span,
     ) {
-        use syntax_pos::DUMMY_SP;
+        use rustc_span::DUMMY_SP;
 
         debug!(
             "generator_interior: attempting to record type {:?} {:?} {:?} {:?}",

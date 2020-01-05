@@ -15,8 +15,8 @@ use rustc::session::config::{parse_crate_types_from_list, parse_externs, CrateTy
 use rustc::session::config::{CodegenOptions, DebuggingOptions, ErrorOutputType, Externs};
 use rustc::session::search_paths::SearchPath;
 use rustc_driver;
+use rustc_span::edition::{Edition, DEFAULT_EDITION};
 use rustc_target::spec::TargetTriple;
-use syntax::edition::{Edition, DEFAULT_EDITION};
 
 use crate::core::new_handler;
 use crate::externalfiles::ExternalHtml;
@@ -269,12 +269,7 @@ impl Options {
         let codegen_options = build_codegen_options(matches, error_format);
         let debugging_options = build_debugging_options(matches, error_format);
 
-        let diag = new_handler(
-            error_format,
-            None,
-            debugging_options.treat_err_as_bug,
-            debugging_options.ui_testing(),
-        );
+        let diag = new_handler(error_format, None, &debugging_options);
 
         // check for deprecated options
         check_deprecated_options(&matches, &diag);

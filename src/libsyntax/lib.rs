@@ -21,7 +21,7 @@ use ast::AttrId;
 pub use errors;
 use rustc_data_structures::sync::Lock;
 use rustc_index::bit_set::GrowableBitSet;
-use syntax_pos::edition::Edition;
+use rustc_span::edition::{Edition, DEFAULT_EDITION};
 
 #[macro_export]
 macro_rules! unwrap_or {
@@ -36,7 +36,7 @@ macro_rules! unwrap_or {
 pub struct Globals {
     used_attrs: Lock<GrowableBitSet<AttrId>>,
     known_attrs: Lock<GrowableBitSet<AttrId>>,
-    syntax_pos_globals: syntax_pos::Globals,
+    rustc_span_globals: rustc_span::Globals,
 }
 
 impl Globals {
@@ -46,24 +46,18 @@ impl Globals {
             // initiate the vectors with 0 bits. We'll grow them as necessary.
             used_attrs: Lock::new(GrowableBitSet::new_empty()),
             known_attrs: Lock::new(GrowableBitSet::new_empty()),
-            syntax_pos_globals: syntax_pos::Globals::new(edition),
+            rustc_span_globals: rustc_span::Globals::new(edition),
         }
     }
 }
 
-pub fn with_globals<F, R>(edition: Edition, f: F) -> R
-where
-    F: FnOnce() -> R,
-{
+pub fn with_globals<R>(edition: Edition, f: impl FnOnce() -> R) -> R {
     let globals = Globals::new(edition);
-    GLOBALS.set(&globals, || syntax_pos::GLOBALS.set(&globals.syntax_pos_globals, f))
+    GLOBALS.set(&globals, || rustc_span::GLOBALS.set(&globals.rustc_span_globals, f))
 }
 
-pub fn with_default_globals<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    with_globals(edition::DEFAULT_EDITION, f)
+pub fn with_default_globals<R>(f: impl FnOnce() -> R) -> R {
+    with_globals(DEFAULT_EDITION, f)
 }
 
 scoped_tls::scoped_thread_local!(pub static GLOBALS: Globals);
@@ -86,9 +80,8 @@ pub mod util {
 
 pub mod ast;
 pub mod attr;
-pub mod expand;
-pub use syntax_pos::source_map;
 pub mod entry;
+pub mod expand;
 pub mod feature_gate {
     mod check;
     pub use check::{check_attribute, check_crate, feature_err, feature_err_issue, get_features};
@@ -97,8 +90,6 @@ pub mod mut_visit;
 pub mod ptr;
 pub mod show_span;
 pub use rustc_session::parse as sess;
-pub use syntax_pos::edition;
-pub use syntax_pos::symbol;
 pub mod token;
 pub mod tokenstream;
 pub mod visit;
@@ -111,7 +102,17 @@ pub mod print {
 
 pub mod early_buffered_lints;
 
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+
 /// Requirements for a `StableHashingContext` to be used in this crate.
 /// This is a hack to allow using the `HashStable_Generic` derive macro
 /// instead of implementing everything in librustc.
-pub trait HashStableContext: syntax_pos::HashStableContext {}
+pub trait HashStableContext: rustc_span::HashStableContext {
+    fn hash_attr(&mut self, _: &ast::Attribute, hasher: &mut StableHasher);
+}
+
+impl<AstCtx: crate::HashStableContext> HashStable<AstCtx> for ast::Attribute {
+    fn hash_stable(&self, hcx: &mut AstCtx, hasher: &mut StableHasher) {
+        hcx.hash_attr(self, hasher)
+    }
+}

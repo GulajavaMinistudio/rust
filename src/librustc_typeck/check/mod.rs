@@ -92,10 +92,10 @@ use crate::middle::lang_items;
 use crate::namespace::Namespace;
 use errors::{pluralize, Applicability, DiagnosticBuilder, DiagnosticId};
 use rustc::hir::def::{CtorOf, DefKind, Res};
-use rustc::hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
+use rustc::hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LOCAL_CRATE};
 use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc::hir::itemlikevisit::ItemLikeVisitor;
-use rustc::hir::{self, ExprKind, GenericArg, ItemKind, Node, PatKind, QPath};
+use rustc::hir::{self, ExprKind, GenericArg, HirIdMap, ItemKind, Node, PatKind, QPath};
 use rustc::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
 use rustc::infer::error_reporting::TypeAnnotationNeeded::E0282;
 use rustc::infer::opaque_types::OpaqueTypeDecl;
@@ -117,16 +117,17 @@ use rustc::ty::{
     self, AdtKind, CanonicalUserType, Const, GenericParamDefKind, RegionKind, ToPolyTraitRef,
     ToPredicate, Ty, TyCtxt, UserType,
 };
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_index::vec::Idx;
+use rustc_span::hygiene::DesugaringKind;
+use rustc_span::source_map::{original_sp, DUMMY_SP};
+use rustc_span::symbol::{kw, sym, Ident};
+use rustc_span::{self, BytePos, MultiSpan, Span};
 use rustc_target::spec::abi::Abi;
 use syntax::ast;
 use syntax::attr;
 use syntax::feature_gate::feature_err;
-use syntax::source_map::{original_sp, DUMMY_SP};
-use syntax::symbol::{kw, sym, Ident};
 use syntax::util::parser::ExprPrecedence;
-use syntax_pos::hygiene::DesugaringKind;
-use syntax_pos::{self, BytePos, MultiSpan, Span};
 
 use rustc_error_codes::*;
 
@@ -144,7 +145,6 @@ use crate::session::config::EntryFnType;
 use crate::session::Session;
 use crate::util::captures::Captures;
 use crate::util::common::{indenter, ErrorReported};
-use crate::util::nodemap::{DefIdMap, DefIdSet, FxHashMap, FxHashSet, HirIdMap};
 use crate::TypeAndSubsts;
 
 use self::autoderef::Autoderef;
@@ -3354,7 +3354,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
         };
         debug!("fallback_if_possible: defaulting `{:?}` to `{:?}`", ty, fallback);
-        self.demand_eqtype(syntax_pos::DUMMY_SP, ty, fallback);
+        self.demand_eqtype(rustc_span::DUMMY_SP, ty, fallback);
         true
     }
 
@@ -4414,7 +4414,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// if false { return 0i32; } else { 1u32 }
     /// //                               ^^^^ point at this instead of the whole `if` expression
     /// ```
-    fn get_expr_coercion_span(&self, expr: &hir::Expr<'_>) -> syntax_pos::Span {
+    fn get_expr_coercion_span(&self, expr: &hir::Expr<'_>) -> rustc_span::Span {
         if let hir::ExprKind::Match(_, arms, _) = &expr.kind {
             let arm_spans: Vec<Span> = arms
                 .iter()

@@ -8,7 +8,7 @@ use std::hash::Hash;
 use rustc::hir::def_id::DefId;
 use rustc::mir;
 use rustc::ty::{self, Ty, TyCtxt};
-use syntax_pos::Span;
+use rustc_span::Span;
 
 use super::{
     AllocId, Allocation, AllocationExtra, AssertMessage, Frame, ImmTy, InterpCx, InterpResult,
@@ -139,6 +139,7 @@ pub trait Machine<'mir, 'tcx>: Sized {
     /// was used.
     fn find_mir_or_eval_fn(
         ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        span: Span,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx, Self::PointerTag>],
         ret: Option<(PlaceTy<'tcx, Self::PointerTag>, mir::BasicBlock)>,

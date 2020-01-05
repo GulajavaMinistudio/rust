@@ -4,22 +4,20 @@ use crate::hair::cx::Cx;
 use crate::hair::{BindingMode, LintLevel, PatKind};
 use crate::transform::MirSource;
 use crate::util as mir_util;
-use rustc::hir;
 use rustc::hir::def_id::DefId;
-use rustc::hir::{GeneratorKind, Node};
+use rustc::hir::{self, GeneratorKind, HirIdMap, Node};
 use rustc::middle::lang_items;
 use rustc::middle::region;
 use rustc::mir::*;
 use rustc::ty::subst::Subst;
 use rustc::ty::{self, Ty, TyCtxt};
-use rustc::util::nodemap::HirIdMap;
 use rustc_index::vec::{Idx, IndexVec};
+use rustc_span::symbol::kw;
+use rustc_span::Span;
 use rustc_target::spec::abi::Abi;
 use rustc_target::spec::PanicStrategy;
 use std::u32;
 use syntax::attr::{self, UnwindAttr};
-use syntax::symbol::kw;
-use syntax_pos::Span;
 
 use super::lints;
 

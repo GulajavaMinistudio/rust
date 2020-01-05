@@ -5,8 +5,9 @@ use crate::rmeta::*;
 
 use rustc::dep_graph::{self, DepNodeIndex};
 use rustc::hir;
-use rustc::hir::def::{self, CtorKind, CtorOf, DefKind, Res};
+use rustc::hir::def::{CtorKind, CtorOf, DefKind, Res};
 use rustc::hir::def_id::{CrateNum, DefId, DefIndex, LocalDefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc::hir::exports::Export;
 use rustc::hir::map::definitions::DefPathTable;
 use rustc::hir::map::{DefKey, DefPath, DefPathData, DefPathHash};
 use rustc::middle::cstore::{CrateSource, ExternCrate};
@@ -36,11 +37,11 @@ use proc_macro::bridge::client::ProcMacro;
 use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
 use rustc_expand::proc_macro::{AttrProcMacro, BangProcMacro, ProcMacroDerive};
 use rustc_serialize::{opaque, Decodable, Decoder, SpecializedDecoder};
+use rustc_span::source_map::{self, respan, Spanned};
+use rustc_span::symbol::{sym, Symbol};
+use rustc_span::{self, hygiene::MacroKind, BytePos, Pos, Span, DUMMY_SP};
 use syntax::ast::{self, Ident};
 use syntax::attr;
-use syntax::source_map::{self, respan, Spanned};
-use syntax_pos::symbol::{sym, Symbol};
-use syntax_pos::{self, hygiene::MacroKind, BytePos, Pos, Span, DUMMY_SP};
 
 pub use cstore_impl::{provide, provide_extern};
 
@@ -111,15 +112,15 @@ crate struct CrateMetadata {
     extern_crate: Lock<Option<ExternCrate>>,
 }
 
-/// Holds information about a syntax_pos::SourceFile imported from another crate.
+/// Holds information about a rustc_span::SourceFile imported from another crate.
 /// See `imported_source_files()` for more information.
 struct ImportedSourceFile {
     /// This SourceFile's byte-offset within the source_map of its original crate
-    original_start_pos: syntax_pos::BytePos,
+    original_start_pos: rustc_span::BytePos,
     /// The end of this SourceFile within the source_map of its original crate
-    original_end_pos: syntax_pos::BytePos,
+    original_end_pos: rustc_span::BytePos,
     /// The imported SourceFile's representation within the local source_map
-    translated_source_file: Lrc<syntax_pos::SourceFile>,
+    translated_source_file: Lrc<rustc_span::SourceFile>,
 }
 
 pub(super) struct DecodeContext<'a, 'tcx> {
@@ -930,7 +931,7 @@ impl<'a, 'tcx> CrateMetadata {
     /// Iterates over each child of the given item.
     fn each_child_of_item<F>(&self, id: DefIndex, mut callback: F, sess: &Session)
     where
-        F: FnMut(def::Export<hir::HirId>),
+        F: FnMut(Export<hir::HirId>),
     {
         if let Some(proc_macros_ids) = self.root.proc_macro_data.map(|d| d.decode(self)) {
             /* If we are loading as a proc macro, we want to return the view of this crate
@@ -944,12 +945,7 @@ impl<'a, 'tcx> CrateMetadata {
                         self.local_def_id(def_index),
                     );
                     let ident = Ident::from_str(raw_macro.name());
-                    callback(def::Export {
-                        ident: ident,
-                        res: res,
-                        vis: ty::Visibility::Public,
-                        span: DUMMY_SP,
-                    });
+                    callback(Export { ident, res, vis: ty::Visibility::Public, span: DUMMY_SP });
                 }
             }
             return;
@@ -989,7 +985,7 @@ impl<'a, 'tcx> CrateMetadata {
                             .unwrap_or(Lazy::empty());
                         for child_index in child_children.decode((self, sess)) {
                             if let Some(kind) = self.def_kind(child_index) {
-                                callback(def::Export {
+                                callback(Export {
                                     res: Res::Def(kind, self.local_def_id(child_index)),
                                     ident: Ident::with_dummy_span(self.item_name(child_index)),
                                     vis: self.get_visibility(child_index),
@@ -1019,7 +1015,7 @@ impl<'a, 'tcx> CrateMetadata {
                     let vis = self.get_visibility(child_index);
                     let def_id = self.local_def_id(child_index);
                     let res = Res::Def(kind, def_id);
-                    callback(def::Export { res, ident, vis, span });
+                    callback(Export { res, ident, vis, span });
                     // For non-re-export structs and variants add their constructors to children.
                     // Re-export lists automatically contain constructors when necessary.
                     match kind {
@@ -1029,7 +1025,7 @@ impl<'a, 'tcx> CrateMetadata {
                                 let ctor_res =
                                     Res::Def(DefKind::Ctor(CtorOf::Struct, ctor_kind), ctor_def_id);
                                 let vis = self.get_visibility(ctor_def_id.index);
-                                callback(def::Export { res: ctor_res, vis, ident, span });
+                                callback(Export { res: ctor_res, vis, ident, span });
                             }
                         }
                         DefKind::Variant => {
@@ -1053,7 +1049,7 @@ impl<'a, 'tcx> CrateMetadata {
                                     vis = ty::Visibility::Restricted(crate_def_id);
                                 }
                             }
-                            callback(def::Export { res: ctor_res, ident, vis, span });
+                            callback(Export { res: ctor_res, ident, vis, span });
                         }
                         _ => {}
                     }
@@ -1459,7 +1455,7 @@ impl<'a, 'tcx> CrateMetadata {
                 .map(|source_file_to_import| {
                     // We can't reuse an existing SourceFile, so allocate a new one
                     // containing the information we need.
-                    let syntax_pos::SourceFile {
+                    let rustc_span::SourceFile {
                         name,
                         name_was_remapped,
                         src_hash,

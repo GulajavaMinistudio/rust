@@ -18,8 +18,8 @@ use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_data_structures::stable_hasher::StableHasher;
 use rustc_data_structures::sync::{self, Lock, Lrc};
 use rustc_data_structures::AtomicRef;
-use syntax_pos::source_map::SourceMap;
-use syntax_pos::{Loc, MultiSpan, Span};
+use rustc_span::source_map::SourceMap;
+use rustc_span::{Loc, MultiSpan, Span};
 
 use std::borrow::Cow;
 use std::panic;
@@ -146,7 +146,7 @@ impl CodeSuggestion {
     /// Returns the assembled code suggestions, whether they should be shown with an underline
     /// and whether the substitution only differs in capitalization.
     pub fn splice_lines(&self, cm: &SourceMap) -> Vec<(String, Vec<SubstitutionPart>, bool)> {
-        use syntax_pos::{CharPos, Pos};
+        use rustc_span::{CharPos, Pos};
 
         fn push_trailing(
             buf: &mut String,
@@ -240,7 +240,7 @@ impl CodeSuggestion {
     }
 }
 
-pub use syntax_pos::fatal_error::{FatalError, FatalErrorMarker};
+pub use rustc_span::fatal_error::{FatalError, FatalErrorMarker};
 
 /// Signifies that the compiler died with an explicit call to `.bug`
 /// or `.span_bug` rather than a failed assertion, etc.
@@ -329,6 +329,8 @@ pub struct HandlerFlags {
     /// show macro backtraces even for non-local macros.
     /// (rustc: see `-Z external-macro-backtrace`)
     pub external_macro_backtrace: bool,
+    /// If true, identical diagnostics are reported only once.
+    pub deduplicate_diagnostics: bool,
 }
 
 impl Drop for HandlerInner {
@@ -736,16 +738,17 @@ impl HandlerInner {
             self.emitted_diagnostic_codes.insert(code.clone());
         }
 
-        let diagnostic_hash = {
+        let already_emitted = |this: &mut Self| {
             use std::hash::Hash;
             let mut hasher = StableHasher::new();
             diagnostic.hash(&mut hasher);
-            hasher.finish()
+            let diagnostic_hash = hasher.finish();
+            !this.emitted_diagnostics.insert(diagnostic_hash)
         };
 
-        // Only emit the diagnostic if we haven't already emitted an equivalent
-        // one:
-        if self.emitted_diagnostics.insert(diagnostic_hash) {
+        // Only emit the diagnostic if we've been asked to deduplicate and
+        // haven't already emitted an equivalent diagnostic.
+        if !(self.flags.deduplicate_diagnostics && already_emitted(self)) {
             self.emitter.emit_diagnostic(diagnostic);
             if diagnostic.is_error() {
                 self.deduplicated_err_count += 1;

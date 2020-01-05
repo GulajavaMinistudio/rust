@@ -19,7 +19,7 @@ use rustc::session::config::{
 use rustc::session::Session;
 use rustc::ty::TyCtxt;
 use rustc::util::common::{print_time_passes_entry, set_time_depth, time_depth};
-use rustc::util::nodemap::FxHashMap;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::Lrc;
@@ -30,11 +30,11 @@ use rustc_incremental::{
     copy_cgu_workproducts_to_incr_comp_cache_dir, in_incr_comp_dir, in_incr_comp_dir_sess,
 };
 use rustc_session::cgu_reuse_tracker::CguReuseTracker;
+use rustc_span::hygiene::ExpnId;
+use rustc_span::source_map::SourceMap;
+use rustc_span::symbol::{sym, Symbol};
 use rustc_target::spec::MergeFunctions;
 use syntax::attr;
-use syntax_pos::hygiene::ExpnId;
-use syntax_pos::source_map::SourceMap;
-use syntax_pos::symbol::{sym, Symbol};
 
 use std::any::Any;
 use std::fs;

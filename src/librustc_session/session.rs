@@ -24,9 +24,9 @@ use rustc_errors::emitter::HumanReadableErrorType;
 use rustc_errors::emitter::{Emitter, EmitterWriter};
 use rustc_errors::json::JsonEmitter;
 use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticId};
-use syntax_pos::edition::Edition;
-use syntax_pos::source_map;
-use syntax_pos::{MultiSpan, Span};
+use rustc_span::edition::Edition;
+use rustc_span::source_map;
+use rustc_span::{MultiSpan, Span};
 
 use rustc_data_structures::flock;
 use rustc_data_structures::jobserver::{self, Client};
@@ -941,14 +941,7 @@ pub fn build_session_with_source_map(
         .last()
         .unwrap_or(false);
     let cap_lints_allow = sopts.lint_cap.map_or(false, |cap| cap == lint::Allow);
-
     let can_emit_warnings = !(warnings_allow || cap_lints_allow);
-
-    let treat_err_as_bug = sopts.debugging_opts.treat_err_as_bug;
-    let dont_buffer_diagnostics = sopts.debugging_opts.dont_buffer_diagnostics;
-    let report_delayed_bugs = sopts.debugging_opts.report_delayed_bugs;
-
-    let external_macro_backtrace = sopts.debugging_opts.external_macro_backtrace;
 
     let write_dest = match diagnostics_output {
         DiagnosticOutput::Default => None,
@@ -958,14 +951,7 @@ pub fn build_session_with_source_map(
 
     let diagnostic_handler = rustc_errors::Handler::with_emitter_and_flags(
         emitter,
-        rustc_errors::HandlerFlags {
-            can_emit_warnings,
-            treat_err_as_bug,
-            report_delayed_bugs,
-            dont_buffer_diagnostics,
-            external_macro_backtrace,
-            ..Default::default()
-        },
+        sopts.debugging_opts.diagnostic_handler_flags(can_emit_warnings),
     );
 
     build_session_(sopts, local_crate_source_file, diagnostic_handler, source_map, lint_caps)

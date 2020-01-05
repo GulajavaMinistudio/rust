@@ -2,15 +2,13 @@ use crate::lint;
 use rustc::ty::TyCtxt;
 
 use errors::Applicability;
+use rustc_span::Span;
 use syntax::ast;
-use syntax_pos::Span;
 
 use rustc::hir;
-use rustc::hir::def_id::{DefId, LOCAL_CRATE};
+use rustc::hir::def_id::{DefId, DefIdSet, LOCAL_CRATE};
 use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use rustc::hir::print::visibility_qualified;
-use rustc::util::nodemap::DefIdSet;
-
 use rustc_data_structures::fx::FxHashMap;
 
 pub fn check_crate(tcx: TyCtxt<'_>) {

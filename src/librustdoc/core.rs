@@ -8,7 +8,7 @@ use rustc::session::config::ErrorOutputType;
 use rustc::session::DiagnosticOutput;
 use rustc::session::{self, config};
 use rustc::ty::{Ty, TyCtxt};
-use rustc::util::nodemap::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_driver::abort_on_err;
 use rustc_feature::UnstableFeatures;
 use rustc_interface::interface;
@@ -17,11 +17,11 @@ use rustc_resolve as resolve;
 
 use errors::emitter::{Emitter, EmitterWriter};
 use errors::json::JsonEmitter;
+use rustc_span::source_map;
+use rustc_span::symbol::sym;
+use rustc_span::DUMMY_SP;
 use syntax::ast::CRATE_NODE_ID;
 use syntax::attr;
-use syntax::source_map;
-use syntax::symbol::sym;
-use syntax_pos::DUMMY_SP;
 
 use rustc_data_structures::sync::{self, Lrc};
 use std::cell::RefCell;
@@ -35,7 +35,7 @@ use crate::html::render::RenderInfo;
 
 use crate::passes;
 
-pub use rustc::session::config::{CodegenOptions, Input, Options};
+pub use rustc::session::config::{CodegenOptions, DebuggingOptions, Input, Options};
 pub use rustc::session::search_paths::SearchPath;
 
 pub type ExternalPaths = FxHashMap<DefId, (Vec<String>, clean::TypeKind)>;
@@ -170,12 +170,8 @@ impl<'tcx> DocContext<'tcx> {
 pub fn new_handler(
     error_format: ErrorOutputType,
     source_map: Option<Lrc<source_map::SourceMap>>,
-    treat_err_as_bug: Option<usize>,
-    ui_testing: bool,
+    debugging_opts: &DebuggingOptions,
 ) -> errors::Handler {
-    // rustdoc doesn't override (or allow to override) anything from this that is relevant here, so
-    // stick to the defaults
-    let sessopts = Options::default();
     let emitter: Box<dyn Emitter + sync::Send> = match error_format {
         ErrorOutputType::HumanReadable(kind) => {
             let (short, color_config) = kind.unzip();
@@ -184,34 +180,25 @@ pub fn new_handler(
                     color_config,
                     source_map.map(|cm| cm as _),
                     short,
-                    sessopts.debugging_opts.teach,
-                    sessopts.debugging_opts.terminal_width,
+                    debugging_opts.teach,
+                    debugging_opts.terminal_width,
                     false,
                 )
-                .ui_testing(ui_testing),
+                .ui_testing(debugging_opts.ui_testing()),
             )
         }
         ErrorOutputType::Json { pretty, json_rendered } => {
             let source_map = source_map.unwrap_or_else(|| {
-                Lrc::new(source_map::SourceMap::new(sessopts.file_path_mapping()))
+                Lrc::new(source_map::SourceMap::new(source_map::FilePathMapping::empty()))
             });
             Box::new(
                 JsonEmitter::stderr(None, source_map, pretty, json_rendered, false)
-                    .ui_testing(ui_testing),
+                    .ui_testing(debugging_opts.ui_testing()),
             )
         }
     };
 
-    errors::Handler::with_emitter_and_flags(
-        emitter,
-        errors::HandlerFlags {
-            can_emit_warnings: true,
-            treat_err_as_bug,
-            report_delayed_bugs: false,
-            external_macro_backtrace: false,
-            ..Default::default()
-        },
-    )
+    errors::Handler::with_emitter_and_flags(emitter, debugging_opts.diagnostic_handler_flags(true))
 }
 
 pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOptions) {

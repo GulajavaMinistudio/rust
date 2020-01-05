@@ -2,8 +2,9 @@ use decoder::Metadata;
 use table::{Table, TableBuilder};
 
 use rustc::hir;
-use rustc::hir::def::{self, CtorKind};
+use rustc::hir::def::CtorKind;
 use rustc::hir::def_id::{DefId, DefIndex};
+use rustc::hir::exports::Export;
 use rustc::middle::cstore::{DepKind, ForeignModule, LinkagePreference, NativeLibrary};
 use rustc::middle::exported_symbols::{ExportedSymbol, SymbolExportLevel};
 use rustc::middle::lang_items;
@@ -15,11 +16,11 @@ use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::MetadataRef;
 use rustc_index::vec::IndexVec;
 use rustc_serialize::opaque::Encoder;
+use rustc_span::edition::Edition;
+use rustc_span::symbol::Symbol;
+use rustc_span::{self, Span};
 use rustc_target::spec::{PanicStrategy, TargetTriple};
-use syntax::edition::Edition;
-use syntax::symbol::Symbol;
 use syntax::{ast, attr};
-use syntax_pos::{self, Span};
 
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
@@ -190,7 +191,7 @@ crate struct CrateRoot<'tcx> {
     diagnostic_items: Lazy<[(Symbol, DefIndex)]>,
     native_libraries: Lazy<[NativeLibrary]>,
     foreign_modules: Lazy<[ForeignModule]>,
-    source_map: Lazy<[syntax_pos::SourceFile]>,
+    source_map: Lazy<[rustc_span::SourceFile]>,
     def_path_table: Lazy<hir::map::definitions::DefPathTable>,
     impls: Lazy<[TraitImpls]>,
     exported_symbols: Lazy!([(ExportedSymbol<'tcx>, SymbolExportLevel)]),
@@ -317,7 +318,7 @@ struct RenderedConst(String);
 
 #[derive(RustcEncodable, RustcDecodable)]
 struct ModData {
-    reexports: Lazy<[def::Export<hir::HirId>]>,
+    reexports: Lazy<[Export<hir::HirId>]>,
 }
 
 #[derive(RustcEncodable, RustcDecodable)]

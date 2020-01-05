@@ -9,17 +9,15 @@ use rustc::hir::{self, PatKind, TyKind};
 
 use rustc::hir::def::{CtorOf, DefKind, Res};
 use rustc::hir::def_id::{DefId, LOCAL_CRATE};
-use rustc::hir::CodegenFnAttrFlags;
 use rustc::lint;
+use rustc::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc::middle::privacy;
 use rustc::ty::{self, DefIdTree, TyCtxt};
-use rustc::util::nodemap::FxHashSet;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 
-use rustc_data_structures::fx::FxHashMap;
-
-use syntax::symbol::sym;
+use rustc_span;
+use rustc_span::symbol::sym;
 use syntax::{ast, attr};
-use syntax_pos;
 
 // Any local node that may call something in its body block should be
 // explored. For example, if it's a live Node::Item that is a
@@ -231,7 +229,7 @@ impl<'a, 'tcx> Visitor<'tcx> for MarkSymbolVisitor<'a, 'tcx> {
         _: ast::Name,
         _: &hir::Generics<'_>,
         _: hir::HirId,
-        _: syntax_pos::Span,
+        _: rustc_span::Span,
     ) {
         let has_repr_c = self.repr_has_repr_c;
         let inherited_pub_visibility = self.inherited_pub_visibility;
@@ -549,7 +547,7 @@ impl DeadVisitor<'tcx> {
     fn warn_dead_code(
         &mut self,
         id: hir::HirId,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         name: ast::Name,
         node_type: &str,
         participle: &str,

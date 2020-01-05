@@ -1,13 +1,13 @@
 use rustc_expand::base::{self, DummyResult};
+use rustc_span::symbol::Symbol;
 use syntax::ast;
-use syntax::symbol::Symbol;
 use syntax::tokenstream::TokenStream;
 
 use std::string::String;
 
 pub fn expand_concat(
     cx: &mut base::ExtCtxt<'_>,
-    sp: syntax_pos::Span,
+    sp: rustc_span::Span,
     tts: TokenStream,
 ) -> Box<dyn base::MacResult + 'static> {
     let es = match base::get_exprs_from_tts(cx, sp, tts) {

@@ -1,16 +1,16 @@
+use rustc_span::source_map::{SourceMap, Spanned};
+use rustc_span::symbol::kw;
+use rustc_span::{self, BytePos, FileName};
 use rustc_target::spec::abi::Abi;
 use syntax::ast;
 use syntax::print::pp::Breaks::{Consistent, Inconsistent};
 use syntax::print::pp::{self, Breaks};
 use syntax::print::pprust::{self, Comments, PrintState};
 use syntax::sess::ParseSess;
-use syntax::source_map::{SourceMap, Spanned};
-use syntax::symbol::kw;
 use syntax::util::parser::{self, AssocOp, Fixity};
-use syntax_pos::{self, BytePos, FileName};
 
 use crate::hir;
-use crate::hir::{GenericArg, GenericParam, GenericParamKind};
+use crate::hir::{GenericArg, GenericParam, GenericParamKind, Node};
 use crate::hir::{GenericBound, PatKind, RangeEnd, TraitBoundModifier};
 
 use std::borrow::Cow;
@@ -69,6 +69,45 @@ pub struct State<'a> {
     ann: &'a (dyn PpAnn + 'a),
 }
 
+impl<'a> State<'a> {
+    pub fn print_node(&mut self, node: Node<'_>) {
+        match node {
+            Node::Param(a) => self.print_param(&a),
+            Node::Item(a) => self.print_item(&a),
+            Node::ForeignItem(a) => self.print_foreign_item(&a),
+            Node::TraitItem(a) => self.print_trait_item(a),
+            Node::ImplItem(a) => self.print_impl_item(a),
+            Node::Variant(a) => self.print_variant(&a),
+            Node::AnonConst(a) => self.print_anon_const(&a),
+            Node::Expr(a) => self.print_expr(&a),
+            Node::Stmt(a) => self.print_stmt(&a),
+            Node::PathSegment(a) => self.print_path_segment(&a),
+            Node::Ty(a) => self.print_type(&a),
+            Node::TraitRef(a) => self.print_trait_ref(&a),
+            Node::Binding(a) | Node::Pat(a) => self.print_pat(&a),
+            Node::Arm(a) => self.print_arm(&a),
+            Node::Block(a) => {
+                // Containing cbox, will be closed by print-block at `}`.
+                self.cbox(INDENT_UNIT);
+                // Head-ibox, will be closed by print-block after `{`.
+                self.ibox(0);
+                self.print_block(&a)
+            }
+            Node::Lifetime(a) => self.print_lifetime(&a),
+            Node::Visibility(a) => self.print_visibility(&a),
+            Node::GenericParam(_) => panic!("cannot print Node::GenericParam"),
+            Node::Field(_) => panic!("cannot print StructField"),
+            // These cases do not carry enough information in the
+            // `hir_map` to reconstruct their full structure for pretty
+            // printing.
+            Node::Ctor(..) => panic!("cannot print isolated Ctor"),
+            Node::Local(a) => self.print_local_decl(&a),
+            Node::MacroDef(_) => panic!("cannot print MacroDef"),
+            Node::Crate => panic!("cannot print Crate"),
+        }
+    }
+}
+
 impl std::ops::Deref for State<'_> {
     type Target = pp::Printer;
     fn deref(&self) -> &Self::Target {
@@ -92,8 +131,8 @@ impl<'a> PrintState<'a> for State<'a> {
         self.ann.post(self, AnnNode::Name(&ident.name))
     }
 
-    fn print_generic_args(&mut self, args: &ast::GenericArgs, _colons_before_params: bool) {
-        span_bug!(args.span(), "AST generic args printed by HIR pretty-printer");
+    fn print_generic_args(&mut self, _: &ast::GenericArgs, _colons_before_params: bool) {
+        panic!("AST generic args printed by HIR pretty-printer");
     }
 }
 
@@ -178,7 +217,7 @@ impl<'a> State<'a> {
         self.end(); // close the head-box
     }
 
-    pub fn bclose_maybe_open(&mut self, span: syntax_pos::Span, close_box: bool) {
+    pub fn bclose_maybe_open(&mut self, span: rustc_span::Span, close_box: bool) {
         self.maybe_print_comment(span.hi());
         self.break_offset_if_not_bol(1, -(INDENT_UNIT as isize));
         self.s.word("}");
@@ -187,7 +226,7 @@ impl<'a> State<'a> {
         }
     }
 
-    pub fn bclose(&mut self, span: syntax_pos::Span) {
+    pub fn bclose(&mut self, span: rustc_span::Span) {
         self.bclose_maybe_open(span, true)
     }
 
@@ -223,7 +262,7 @@ impl<'a> State<'a> {
     pub fn commasep_cmnt<T, F, G>(&mut self, b: Breaks, elts: &[T], mut op: F, mut get_span: G)
     where
         F: FnMut(&mut State<'_>, &T),
-        G: FnMut(&T) -> syntax_pos::Span,
+        G: FnMut(&T) -> rustc_span::Span,
     {
         self.rbox(0, b);
         let len = elts.len();
@@ -704,7 +743,7 @@ impl<'a> State<'a> {
         enum_definition: &hir::EnumDef<'_>,
         generics: &hir::Generics<'_>,
         name: ast::Name,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         visibility: &hir::Visibility<'_>,
     ) {
         self.head(visibility_qualified(visibility, "enum"));
@@ -715,7 +754,7 @@ impl<'a> State<'a> {
         self.print_variants(&enum_definition.variants, span)
     }
 
-    pub fn print_variants(&mut self, variants: &[hir::Variant<'_>], span: syntax_pos::Span) {
+    pub fn print_variants(&mut self, variants: &[hir::Variant<'_>], span: rustc_span::Span) {
         self.bopen();
         for v in variants {
             self.space_if_not_bol();
@@ -763,7 +802,7 @@ impl<'a> State<'a> {
         struct_def: &hir::VariantData<'_>,
         generics: &hir::Generics<'_>,
         name: ast::Name,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         print_finalizer: bool,
     ) {
         self.print_name(name);
@@ -839,18 +878,18 @@ impl<'a> State<'a> {
         match ti.kind {
             hir::TraitItemKind::Const(ref ty, default) => {
                 let vis =
-                    Spanned { span: syntax_pos::DUMMY_SP, node: hir::VisibilityKind::Inherited };
+                    Spanned { span: rustc_span::DUMMY_SP, node: hir::VisibilityKind::Inherited };
                 self.print_associated_const(ti.ident, &ty, default, &vis);
             }
             hir::TraitItemKind::Method(ref sig, hir::TraitMethod::Required(ref arg_names)) => {
                 let vis =
-                    Spanned { span: syntax_pos::DUMMY_SP, node: hir::VisibilityKind::Inherited };
+                    Spanned { span: rustc_span::DUMMY_SP, node: hir::VisibilityKind::Inherited };
                 self.print_method_sig(ti.ident, sig, &ti.generics, &vis, arg_names, None);
                 self.s.word(";");
             }
             hir::TraitItemKind::Method(ref sig, hir::TraitMethod::Provided(body)) => {
                 let vis =
-                    Spanned { span: syntax_pos::DUMMY_SP, node: hir::VisibilityKind::Inherited };
+                    Spanned { span: rustc_span::DUMMY_SP, node: hir::VisibilityKind::Inherited };
                 self.head("");
                 self.print_method_sig(ti.ident, sig, &ti.generics, &vis, &[], Some(body));
                 self.nbsp();
@@ -1960,7 +1999,7 @@ impl<'a> State<'a> {
                             self.print_lifetime(lt);
                             sep = "+";
                         }
-                        _ => bug!(),
+                        _ => panic!(),
                     }
                 }
             }
@@ -2023,7 +2062,7 @@ impl<'a> State<'a> {
                             GenericBound::Outlives(lt) => {
                                 self.print_lifetime(lt);
                             }
-                            _ => bug!(),
+                            _ => panic!(),
                         }
 
                         if i != 0 {
@@ -2097,8 +2136,8 @@ impl<'a> State<'a> {
         }
         let generics = hir::Generics {
             params: &[],
-            where_clause: hir::WhereClause { predicates: &[], span: syntax_pos::DUMMY_SP },
-            span: syntax_pos::DUMMY_SP,
+            where_clause: hir::WhereClause { predicates: &[], span: rustc_span::DUMMY_SP },
+            span: rustc_span::DUMMY_SP,
         };
         self.print_fn(
             decl,
@@ -2110,7 +2149,7 @@ impl<'a> State<'a> {
             },
             name,
             &generics,
-            &Spanned { span: syntax_pos::DUMMY_SP, node: hir::VisibilityKind::Inherited },
+            &Spanned { span: rustc_span::DUMMY_SP, node: hir::VisibilityKind::Inherited },
             arg_names,
             None,
         );
@@ -2119,7 +2158,7 @@ impl<'a> State<'a> {
 
     pub fn maybe_print_trailing_comment(
         &mut self,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         next_pos: Option<BytePos>,
     ) {
         if let Some(cmnts) = self.comments() {

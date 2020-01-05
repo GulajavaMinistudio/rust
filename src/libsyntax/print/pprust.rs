@@ -6,16 +6,15 @@ use crate::print::pp::Breaks::{Consistent, Inconsistent};
 use crate::print::pp::{self, Breaks};
 use crate::ptr::P;
 use crate::sess::ParseSess;
-use crate::source_map::{self, SourceMap, Spanned};
-use crate::symbol::{kw, sym};
 use crate::token::{self, BinOpToken, DelimToken, Nonterminal, Token, TokenKind};
 use crate::tokenstream::{self, TokenStream, TokenTree};
 use crate::util::classify;
 use crate::util::comments;
 use crate::util::parser::{self, AssocOp, Fixity};
 
-use syntax_pos::{self, BytePos};
-use syntax_pos::{FileName, Span};
+use rustc_span::source_map::{dummy_spanned, SourceMap, Spanned};
+use rustc_span::symbol::{kw, sym};
+use rustc_span::{BytePos, FileName, Span};
 
 use std::borrow::Cow;
 
@@ -71,7 +70,7 @@ impl<'a> Comments<'a> {
 
     pub fn trailing_comment(
         &mut self,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         next_pos: Option<BytePos>,
     ) -> Option<comments::Comment> {
         if let Some(cmnt) = self.next() {
@@ -131,7 +130,7 @@ pub fn print_crate<'a>(
 
         // Currently, in Rust 2018 we don't have `extern crate std;` at the crate
         // root, so this is not needed, and actually breaks things.
-        if sess.edition == syntax_pos::edition::Edition::Edition2015 {
+        if sess.edition == rustc_span::edition::Edition::Edition2015 {
             // `#![no_std]`
             let no_std_meta = attr::mk_word_item(ast::Ident::with_dummy_span(sym::no_std));
             let fake_attr = attr::mk_attr_inner(no_std_meta);
@@ -799,7 +798,7 @@ pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::Dere
         self.end(); // Close the head-box.
     }
 
-    fn bclose_maybe_open(&mut self, span: syntax_pos::Span, close_box: bool) {
+    fn bclose_maybe_open(&mut self, span: rustc_span::Span, close_box: bool) {
         self.maybe_print_comment(span.hi());
         self.break_offset_if_not_bol(1, -(INDENT_UNIT as isize));
         self.word("}");
@@ -808,7 +807,7 @@ pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::Dere
         }
     }
 
-    fn bclose(&mut self, span: syntax_pos::Span) {
+    fn bclose(&mut self, span: rustc_span::Span) {
         self.bclose_maybe_open(span, true)
     }
 
@@ -896,7 +895,7 @@ impl<'a> State<'a> {
     crate fn commasep_cmnt<T, F, G>(&mut self, b: Breaks, elts: &[T], mut op: F, mut get_span: G)
     where
         F: FnMut(&mut State<'_>, &T),
-        G: FnMut(&T) -> syntax_pos::Span,
+        G: FnMut(&T) -> rustc_span::Span,
     {
         self.rbox(0, b);
         let len = elts.len();
@@ -1366,7 +1365,7 @@ impl<'a> State<'a> {
         enum_definition: &ast::EnumDef,
         generics: &ast::Generics,
         ident: ast::Ident,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         visibility: &ast::Visibility,
     ) {
         self.head(visibility_qualified(visibility, "enum"));
@@ -1377,7 +1376,7 @@ impl<'a> State<'a> {
         self.print_variants(&enum_definition.variants, span)
     }
 
-    crate fn print_variants(&mut self, variants: &[ast::Variant], span: syntax_pos::Span) {
+    crate fn print_variants(&mut self, variants: &[ast::Variant], span: rustc_span::Span) {
         self.bopen();
         for v in variants {
             self.space_if_not_bol();
@@ -1422,7 +1421,7 @@ impl<'a> State<'a> {
         struct_def: &ast::VariantData,
         generics: &ast::Generics,
         ident: ast::Ident,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         print_finalizer: bool,
     ) {
         self.print_ident(ident);
@@ -2701,22 +2700,22 @@ impl<'a> State<'a> {
         }
         let generics = ast::Generics {
             params: Vec::new(),
-            where_clause: ast::WhereClause { predicates: Vec::new(), span: syntax_pos::DUMMY_SP },
-            span: syntax_pos::DUMMY_SP,
+            where_clause: ast::WhereClause { predicates: Vec::new(), span: rustc_span::DUMMY_SP },
+            span: rustc_span::DUMMY_SP,
         };
         self.print_fn(
             decl,
             ast::FnHeader { unsafety, ext, ..ast::FnHeader::default() },
             name,
             &generics,
-            &source_map::dummy_spanned(ast::VisibilityKind::Inherited),
+            &dummy_spanned(ast::VisibilityKind::Inherited),
         );
         self.end();
     }
 
     crate fn maybe_print_trailing_comment(
         &mut self,
-        span: syntax_pos::Span,
+        span: rustc_span::Span,
         next_pos: Option<BytePos>,
     ) {
         if let Some(cmnts) = self.comments() {

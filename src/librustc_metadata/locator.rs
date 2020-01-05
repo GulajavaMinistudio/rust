@@ -219,17 +219,16 @@ use rustc::middle::cstore::{CrateSource, MetadataLoader};
 use rustc::session::filesearch::{FileDoesntMatch, FileMatches, FileSearch};
 use rustc::session::search_paths::PathKind;
 use rustc::session::{config, CrateDisambiguator, Session};
-use rustc::util::nodemap::FxHashMap;
-use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::MetadataRef;
 
 use errors::DiagnosticBuilder;
+use rustc_span::symbol::{sym, Symbol};
+use rustc_span::Span;
 use rustc_target::spec::{Target, TargetTriple};
 use syntax::struct_span_err;
-use syntax::symbol::{sym, Symbol};
 use syntax::{span_err, span_fatal};
-use syntax_pos::Span;
 
 use std::cmp;
 use std::fmt;

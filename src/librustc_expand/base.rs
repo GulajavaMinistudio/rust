@@ -1,14 +1,14 @@
 use crate::expand::{self, AstFragment, Invocation};
 
 use rustc_parse::{self, parser, DirectoryOwnership, MACRO_ARGUMENTS};
+use rustc_span::edition::Edition;
+use rustc_span::source_map::SourceMap;
+use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use syntax::ast::{self, Attribute, Name, NodeId, PatKind};
 use syntax::attr::{self, Deprecation, HasAttrs, Stability};
-use syntax::edition::Edition;
 use syntax::mut_visit::{self, MutVisitor};
 use syntax::ptr::P;
 use syntax::sess::ParseSess;
-use syntax::source_map::SourceMap;
-use syntax::symbol::{kw, sym, Ident, Symbol};
 use syntax::token;
 use syntax::tokenstream::{self, TokenStream};
 use syntax::visit::Visitor;
@@ -16,16 +16,16 @@ use syntax::visit::Visitor;
 use errors::{DiagnosticBuilder, DiagnosticId};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::{self, Lrc};
+use rustc_span::hygiene::{AstPass, ExpnData, ExpnId, ExpnKind};
+use rustc_span::{FileName, MultiSpan, Span, DUMMY_SP};
 use smallvec::{smallvec, SmallVec};
-use syntax_pos::hygiene::{AstPass, ExpnData, ExpnId, ExpnKind};
-use syntax_pos::{FileName, MultiSpan, Span, DUMMY_SP};
 
 use std::default::Default;
 use std::iter;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-crate use syntax_pos::hygiene::MacroKind;
+crate use rustc_span::hygiene::MacroKind;
 
 #[derive(Debug, Clone)]
 pub enum Annotatable {

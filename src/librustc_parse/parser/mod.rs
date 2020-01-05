@@ -16,6 +16,9 @@ use crate::{Directory, DirectoryOwnership};
 
 use log::debug;
 use rustc_errors::{Applicability, DiagnosticBuilder, FatalError, PResult};
+use rustc_span::source_map::respan;
+use rustc_span::symbol::{kw, sym, Symbol};
+use rustc_span::{BytePos, FileName, Span, DUMMY_SP};
 use syntax::ast::{self, AttrStyle, AttrVec, CrateSugar, Extern, Ident, Unsafety, DUMMY_NODE_ID};
 use syntax::ast::{IsAsync, MacArgs, MacDelimiter, Mutability, StrLit, Visibility, VisibilityKind};
 use syntax::print::pprust;
@@ -25,9 +28,6 @@ use syntax::struct_span_err;
 use syntax::token::{self, DelimToken, Token, TokenKind};
 use syntax::tokenstream::{self, DelimSpan, TokenStream, TokenTree, TreeAndJoint};
 use syntax::util::comments::{doc_comment_style, strip_doc_comment_decoration};
-use syntax_pos::source_map::respan;
-use syntax_pos::symbol::{kw, sym, Symbol};
-use syntax_pos::{BytePos, FileName, Span, DUMMY_SP};
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -1354,16 +1354,16 @@ crate fn make_unclosed_delims_error(
     let mut err = sess.span_diagnostic.struct_span_err(
         unmatched.found_span,
         &format!(
-            "incorrect close delimiter: `{}`",
+            "mismatched closing delimiter: `{}`",
             pprust::token_kind_to_string(&token::CloseDelim(found_delim)),
         ),
     );
-    err.span_label(unmatched.found_span, "incorrect close delimiter");
+    err.span_label(unmatched.found_span, "mismatched closing delimiter");
     if let Some(sp) = unmatched.candidate_span {
-        err.span_label(sp, "close delimiter possibly meant for this");
+        err.span_label(sp, "closing delimiter possibly meant for this");
     }
     if let Some(sp) = unmatched.unclosed_span {
-        err.span_label(sp, "un-closed delimiter");
+        err.span_label(sp, "unclosed delimiter");
     }
     Some(err)
 }

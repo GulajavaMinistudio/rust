@@ -19,21 +19,21 @@ use rustc::ty::layout::{
     FnAbiExt, HasParamEnv, LayoutError, LayoutOf, PointeeInfo, Size, TyLayout, VariantIdx,
 };
 use rustc::ty::{self, Instance, Ty, TyCtxt};
-use rustc::util::nodemap::FxHashMap;
 use rustc_codegen_ssa::base::wants_msvc_seh;
 use rustc_data_structures::base_n;
 use rustc_data_structures::const_cstr;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_target::spec::{HasTargetSpec, Target};
 
 use crate::abi::Abi;
+use rustc_span::source_map::{Span, DUMMY_SP};
+use rustc_span::symbol::Symbol;
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::iter;
 use std::str;
 use std::sync::Arc;
-use syntax::source_map::{Span, DUMMY_SP};
-use syntax::symbol::Symbol;
 
 /// There is one `CodegenCx` per compilation unit. Each one has its own LLVM
 /// `llvm::Context` so that several compilation units may be optimized in parallel.

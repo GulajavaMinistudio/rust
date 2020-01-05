@@ -12,8 +12,8 @@ use crate::traits::{self, Normalized, Obligation, ObligationCause, SelectionCont
 use crate::ty::fold::TypeFoldable;
 use crate::ty::subst::Subst;
 use crate::ty::{self, Ty, TyCtxt};
-use syntax::symbol::sym;
-use syntax_pos::DUMMY_SP;
+use rustc_span::symbol::sym;
+use rustc_span::DUMMY_SP;
 
 /// Whether we do the orphan check relative to this crate or
 /// to some remote crate.

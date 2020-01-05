@@ -1,7 +1,7 @@
 use rustc_index::vec::Idx;
 use rustc_serialize::{Decoder, Encoder};
+use rustc_span::ExpnId;
 use std::fmt;
-use syntax_pos::ExpnId;
 
 rustc_index::newtype_index! {
     pub struct NodeId {
@@ -9,6 +9,8 @@ rustc_index::newtype_index! {
         DEBUG_FORMAT = "NodeId({})"
     }
 }
+
+rustc_data_structures::define_id_collections!(NodeMap, NodeSet, NodeId);
 
 impl NodeId {
     pub fn placeholder_from_expn_id(expn_id: ExpnId) -> Self {

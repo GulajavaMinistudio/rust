@@ -22,17 +22,17 @@ use crate::ty::relate::RelateResult;
 use crate::ty::subst::{GenericArg, InternalSubsts, SubstsRef};
 use crate::ty::{self, GenericParamDefKind, InferConst, Ty, TyCtxt};
 use crate::ty::{ConstVid, FloatVid, IntVid, TyVid};
-use crate::util::nodemap::{FxHashMap, FxHashSet};
 
 use errors::DiagnosticBuilder;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::unify as ut;
+use rustc_span::symbol::Symbol;
+use rustc_span::Span;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::BTreeMap;
 use std::fmt;
 use syntax::ast;
-use syntax_pos::symbol::Symbol;
-use syntax_pos::Span;
 
 use self::combine::CombineFields;
 use self::lexical_region_resolve::LexicalRegionResolutions;
@@ -1728,7 +1728,7 @@ impl RegionVariableOrigin {
             Coercion(a) => a,
             EarlyBoundRegion(a, ..) => a,
             LateBoundRegion(a, ..) => a,
-            BoundRegionInCoherence(_) => syntax_pos::DUMMY_SP,
+            BoundRegionInCoherence(_) => rustc_span::DUMMY_SP,
             UpvarRegion(_, a) => a,
             NLL(..) => bug!("NLL variable used with `span`"),
         }

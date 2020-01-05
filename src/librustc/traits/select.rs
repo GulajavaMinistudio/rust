@@ -39,9 +39,10 @@ use crate::ty::subst::{Subst, SubstsRef};
 use crate::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable};
 
 use crate::hir;
-use crate::util::nodemap::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lock;
 use rustc_index::bit_set::GrowableBitSet;
+use rustc_span::symbol::sym;
 use rustc_target::spec::abi::Abi;
 use std::cell::{Cell, RefCell};
 use std::cmp;
@@ -49,7 +50,6 @@ use std::fmt::{self, Display};
 use std::iter;
 use std::rc::Rc;
 use syntax::attr;
-use syntax::symbol::sym;
 
 pub struct SelectionContext<'cx, 'tcx> {
     infcx: &'cx InferCtxt<'cx, 'tcx>,

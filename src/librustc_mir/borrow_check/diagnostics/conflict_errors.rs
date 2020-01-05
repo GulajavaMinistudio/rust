@@ -11,8 +11,8 @@ use rustc::ty::{self, Ty};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_index::vec::Idx;
-use syntax::source_map::DesugaringKind;
-use syntax_pos::Span;
+use rustc_span::source_map::DesugaringKind;
+use rustc_span::Span;
 
 use crate::dataflow::drop_flag_effects;
 use crate::dataflow::indexes::{MoveOutIndex, MovePathIndex};
