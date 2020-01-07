@@ -49,9 +49,7 @@ use super::lexical_region_resolve::RegionResolutionError;
 use super::region_constraints::GenericKind;
 use super::{InferCtxt, RegionVariableOrigin, SubregionOrigin, TypeTrace, ValuePairs};
 
-use crate::hir;
-use crate::hir::def_id::DefId;
-use crate::hir::Node;
+use crate::hir::map;
 use crate::infer::opaque_types;
 use crate::infer::{self, SuppressRegionErrors};
 use crate::middle::region;
@@ -64,6 +62,9 @@ use crate::ty::{
     subst::{Subst, SubstsRef},
     Region, Ty, TyCtxt, TypeFoldable,
 };
+use rustc_hir as hir;
+use rustc_hir::def_id::DefId;
+use rustc_hir::Node;
 
 use errors::{Applicability, DiagnosticBuilder, DiagnosticStyledString};
 use rustc_error_codes::*;
@@ -455,7 +456,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         terr: &TypeError<'tcx>,
     ) {
         use hir::def_id::CrateNum;
-        use hir::map::DisambiguatedDefPathData;
+        use map::DisambiguatedDefPathData;
         use ty::print::Printer;
         use ty::subst::GenericArg;
 
@@ -661,7 +662,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             },
             ObligationCauseCode::IfExpression(box IfExpressionCause { then, outer, semicolon }) => {
                 err.span_label(then, "expected because of this");
-                outer.map(|sp| err.span_label(sp, "if and else have incompatible types"));
+                outer.map(|sp| err.span_label(sp, "`if` and `else` have incompatible types"));
                 if let Some(sp) = semicolon {
                     err.span_suggestion_short(
                         sp,
@@ -851,7 +852,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         sig2: &ty::PolyFnSig<'tcx>,
     ) -> (DiagnosticStyledString, DiagnosticStyledString) {
         let get_lifetimes = |sig| {
-            use crate::hir::def::Namespace;
+            use rustc_hir::def::Namespace;
             let mut s = String::new();
             let (_, (sig, reg)) = ty::print::FmtPrinter::new(self.tcx, &mut s, Namespace::TypeNS)
                 .name_all_regions(sig)
@@ -1883,13 +1884,13 @@ impl<'tcx> ObligationCause<'tcx> {
                     hir::MatchSource::TryDesugar => {
                         "try expression alternatives have incompatible types"
                     }
-                    _ => "match arms have incompatible types",
+                    _ => "`match` arms have incompatible types",
                 })
             }
-            IfExpression { .. } => Error0308("if and else have incompatible types"),
-            IfExpressionWithNoElse => Error0317("if may be missing an else clause"),
-            MainFunctionType => Error0580("main function has wrong type"),
-            StartFunctionType => Error0308("start function has wrong type"),
+            IfExpression { .. } => Error0308("`if` and `else` have incompatible types"),
+            IfExpressionWithNoElse => Error0317("`if` may be missing an `else` clause"),
+            MainFunctionType => Error0580("`main` function has wrong type"),
+            StartFunctionType => Error0308("`#[start]` function has wrong type"),
             IntrinsicType => Error0308("intrinsic has wrong type"),
             MethodReceiver => Error0308("mismatched `self` parameter type"),
 
@@ -1917,12 +1918,12 @@ impl<'tcx> ObligationCause<'tcx> {
             ExprAssignable => "expression is assignable",
             MatchExpressionArm(box MatchExpressionArmCause { source, .. }) => match source {
                 hir::MatchSource::IfLetDesugar { .. } => "`if let` arms have compatible types",
-                _ => "match arms have compatible types",
+                _ => "`match` arms have compatible types",
             },
-            IfExpression { .. } => "if and else have incompatible types",
-            IfExpressionWithNoElse => "if missing an else returns ()",
+            IfExpression { .. } => "`if` and `else` have incompatible types",
+            IfExpressionWithNoElse => "`if` missing an `else` returns `()`",
             MainFunctionType => "`main` function has the correct type",
-            StartFunctionType => "`start` function has the correct type",
+            StartFunctionType => "`#[start]` function has the correct type",
             IntrinsicType => "intrinsic has the correct type",
             MethodReceiver => "method receiver has the correct type",
             _ => "types are compatible",

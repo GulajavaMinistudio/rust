@@ -12,11 +12,11 @@ use std::iter;
 use std::mem;
 use std::ops::Bound;
 
-use crate::hir;
 use crate::ich::StableHashingContext;
 use crate::mir::{GeneratorLayout, GeneratorSavedLocal};
 use crate::ty::subst::Subst;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_hir as hir;
 use rustc_index::bit_set::BitSet;
 use rustc_index::vec::{Idx, IndexVec};
 
@@ -2301,7 +2301,7 @@ impl<'tcx> ty::Instance<'tcx> {
     // or should go through `FnAbi` instead, to avoid losing any
     // adjustments `FnAbi::of_instance` might be performing.
     fn fn_sig_for_fn_abi(&self, tcx: TyCtxt<'tcx>) -> ty::PolyFnSig<'tcx> {
-        let ty = self.ty(tcx);
+        let ty = self.monomorphic_ty(tcx);
         match ty.kind {
             ty::FnDef(..) |
             // Shims currently have type FnPtr. Not sure this should remain.

@@ -14,17 +14,15 @@
 //! upon. As the ast is traversed, this keeps track of the current lint level
 //! for all lint attributes.
 
-use rustc::hir;
-use rustc::hir::def_id::{DefId, LOCAL_CRATE};
 use rustc::hir::intravisit as hir_visit;
 use rustc::hir::intravisit::Visitor;
 use rustc::lint::LateContext;
 use rustc::lint::LintPass;
 use rustc::lint::{LateLintPass, LateLintPassObject};
 use rustc::ty::{self, TyCtxt};
-use rustc::util::common::time;
-
 use rustc_data_structures::sync::{join, par_iter, ParallelIterator};
+use rustc_hir as hir;
+use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_span::Span;
 use std::slice;
 use syntax::ast;
@@ -433,7 +431,7 @@ fn late_lint_crate<'tcx, T: for<'a> LateLintPass<'a, 'tcx>>(tcx: TyCtxt<'tcx>, b
         late_lint_pass_crate(tcx, builtin_lints);
     } else {
         for pass in &mut passes {
-            time(tcx.sess, &format!("running late lint: {}", pass.name()), || {
+            tcx.sess.time(&format!("running late lint: {}", pass.name()), || {
                 late_lint_pass_crate(tcx, LateLintPassObjects { lints: slice::from_mut(pass) });
             });
         }
@@ -442,7 +440,7 @@ fn late_lint_crate<'tcx, T: for<'a> LateLintPass<'a, 'tcx>>(tcx: TyCtxt<'tcx>, b
             tcx.lint_store.late_module_passes.iter().map(|pass| (pass)()).collect();
 
         for pass in &mut passes {
-            time(tcx.sess, &format!("running late module lint: {}", pass.name()), || {
+            tcx.sess.time(&format!("running late module lint: {}", pass.name()), || {
                 late_lint_pass_crate(tcx, LateLintPassObjects { lints: slice::from_mut(pass) });
             });
         }
@@ -456,13 +454,13 @@ pub fn check_crate<'tcx, T: for<'a> LateLintPass<'a, 'tcx>>(
 ) {
     join(
         || {
-            time(tcx.sess, "crate lints", || {
+            tcx.sess.time("crate lints", || {
                 // Run whole crate non-incremental lints
                 late_lint_crate(tcx, builtin_lints());
             });
         },
         || {
-            time(tcx.sess, "module lints", || {
+            tcx.sess.time("module lints", || {
                 // Run per-module lints
                 par_iter(&tcx.hir().krate().modules).for_each(|(&module, _)| {
                     tcx.ensure().lint_mod(tcx.hir().local_def_id(module));

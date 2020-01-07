@@ -1,10 +1,11 @@
 use crate::check::coercion::CoerceMany;
 use crate::check::{Diverges, Expectation, FnCtxt, Needs};
-use rustc::hir::{self, ExprKind};
 use rustc::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc::traits::ObligationCauseCode;
 use rustc::traits::{IfExpressionCause, MatchExpressionArmCause, ObligationCause};
 use rustc::ty::Ty;
+use rustc_hir as hir;
+use rustc_hir::ExprKind;
 use rustc_span::Span;
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
@@ -219,7 +220,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         span: Span,
         then_expr: &'tcx hir::Expr<'tcx>,
-        coercion: &mut CoerceMany<'tcx, '_, rustc::hir::Arm<'tcx>>,
+        coercion: &mut CoerceMany<'tcx, '_, rustc_hir::Arm<'tcx>>,
     ) -> bool {
         // If this `if` expr is the parent's function return expr,
         // the cause of the type coercion is the return type, point at it. (#25228)
@@ -298,7 +299,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // LL ||         10u32
             //    ||         ^^^^^ expected `i32`, found `u32`
             // LL ||     };
-            //    ||_____- if and else have incompatible types
+            //    ||_____- `if` and `else` have incompatible types
             // ```
             Some(span)
         } else {
@@ -340,7 +341,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // by not pointing at the entire expression:
                 // ```
                 // 2 |       let x = if true {
-                //   |               ------- if and else have incompatible types
+                //   |               ------- `if` and `else` have incompatible types
                 // 3 |           3
                 //   |           - expected because of this
                 // 4 |       } else {

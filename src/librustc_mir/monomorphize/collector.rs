@@ -176,9 +176,6 @@
 
 use crate::monomorphize;
 
-use rustc::hir;
-use rustc::hir::def_id::{DefId, DefIdMap, LOCAL_CRATE};
-use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use rustc::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc::middle::lang_items::{ExchangeMallocFnLangItem, StartFnLangItem};
 use rustc::mir::interpret::{AllocId, ConstValue};
@@ -191,9 +188,11 @@ use rustc::ty::adjustment::{CustomCoerceUnsized, PointerCast};
 use rustc::ty::print::obsolete::DefPathBasedNames;
 use rustc::ty::subst::{InternalSubsts, Subst, SubstsRef};
 use rustc::ty::{self, GenericParamDefKind, Instance, Ty, TyCtxt, TypeFoldable};
-use rustc::util::common::time;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::{par_iter, MTLock, MTRef, ParallelIterator};
+use rustc_hir as hir;
+use rustc_hir::def_id::{DefId, DefIdMap, LOCAL_CRATE};
+use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_index::bit_set::GrowableBitSet;
 
 use std::iter;
@@ -284,7 +283,7 @@ pub fn collect_crate_mono_items(
 ) -> (FxHashSet<MonoItem<'_>>, InliningMap<'_>) {
     let _prof_timer = tcx.prof.generic_activity("monomorphization_collector");
 
-    let roots = time(tcx.sess, "collecting roots", || {
+    let roots = tcx.sess.time("collecting roots", || {
         let _prof_timer = tcx.prof.generic_activity("monomorphization_collector_root_collections");
         collect_roots(tcx, mode)
     });
@@ -295,12 +294,10 @@ pub fn collect_crate_mono_items(
     let mut inlining_map = MTLock::new(InliningMap::new());
 
     {
-        let _prof_timer = tcx.prof.generic_activity("monomorphization_collector_graph_walk");
-
         let visited: MTRef<'_, _> = &mut visited;
         let inlining_map: MTRef<'_, _> = &mut inlining_map;
 
-        time(tcx.sess, "collecting mono items", || {
+        tcx.sess.time("collecting mono items", || {
             par_iter(roots).for_each(|root| {
                 let mut recursion_depths = DefIdMap::default();
                 collect_items_rec(tcx, root, visited, &mut recursion_depths, inlining_map);
@@ -361,7 +358,7 @@ fn collect_items_rec<'tcx>(
             // Sanity check whether this ended up being collected accidentally
             debug_assert!(should_monomorphize_locally(tcx, &instance));
 
-            let ty = instance.ty(tcx);
+            let ty = instance.monomorphic_ty(tcx);
             visit_drop_use(tcx, ty, true, &mut neighbors);
 
             recursion_depth_reset = None;
@@ -1005,7 +1002,8 @@ impl ItemLikeVisitor<'v> for RootCollector<'_, 'v> {
                             def_id_to_string(self.tcx, def_id)
                         );
 
-                        let ty = Instance::new(def_id, InternalSubsts::empty()).ty(self.tcx);
+                        let ty =
+                            Instance::new(def_id, InternalSubsts::empty()).monomorphic_ty(self.tcx);
                         visit_drop_use(self.tcx, ty, true, self.output);
                     }
                 }

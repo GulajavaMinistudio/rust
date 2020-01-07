@@ -4,17 +4,16 @@ pub use self::definitions::{
 };
 
 use crate::dep_graph::{DepGraph, DepKind, DepNode, DepNodeIndex};
-use crate::hir::def::{DefKind, Res};
-use crate::hir::def_id::{DefId, DefIndex, LocalDefId, CRATE_DEF_INDEX};
-use crate::hir::itemlikevisit::ItemLikeVisitor;
-use crate::hir::print::Nested;
-use crate::hir::*;
+use crate::hir::intravisit;
 use crate::middle::cstore::CrateStoreDyn;
 use crate::ty::query::Providers;
-use crate::util::common::time;
-
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::svh::Svh;
+use rustc_hir::def::{DefKind, Res};
+use rustc_hir::def_id::{DefId, DefIndex, LocalDefId, CRATE_DEF_INDEX};
+use rustc_hir::itemlikevisit::ItemLikeVisitor;
+use rustc_hir::print::Nested;
+use rustc_hir::*;
 use rustc_index::vec::IndexVec;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::Spanned;
@@ -1245,7 +1244,7 @@ pub fn map_crate<'hir>(
         definitions,
     };
 
-    time(sess, "validate HIR map", || {
+    sess.time("validate HIR map", || {
         hir_id_validator::check_crate(&map);
     });
 

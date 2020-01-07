@@ -3,17 +3,17 @@ use crate::passes::{self, BoxedResolver, QueryContext};
 
 use rustc::arena::Arena;
 use rustc::dep_graph::DepGraph;
-use rustc::hir;
-use rustc::hir::def_id::LOCAL_CRATE;
+use rustc::hir::map;
 use rustc::lint;
 use rustc::lint::LintStore;
 use rustc::session::config::{OutputFilenames, OutputType};
 use rustc::session::Session;
 use rustc::ty::steal::Steal;
 use rustc::ty::{AllArenas, GlobalCtxt, ResolverOutputs};
-use rustc::util::common::{time, ErrorReported};
+use rustc::util::common::ErrorReported;
 use rustc_codegen_utils::codegen_backend::CodegenBackend;
 use rustc_data_structures::sync::{Lrc, Once, WorkerLocal};
+use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_incremental::DepGraphFuture;
 use std::any::Any;
 use std::cell::{Ref, RefCell, RefMut};
@@ -76,7 +76,7 @@ pub struct Queries<'tcx> {
     register_plugins: Query<(ast::Crate, Lrc<LintStore>)>,
     expansion: Query<(ast::Crate, Steal<Rc<RefCell<BoxedResolver>>>, Lrc<LintStore>)>,
     dep_graph: Query<DepGraph>,
-    lower_to_hir: Query<(&'tcx hir::map::Forest<'tcx>, Steal<ResolverOutputs>)>,
+    lower_to_hir: Query<(&'tcx map::Forest<'tcx>, Steal<ResolverOutputs>)>,
     prepare_outputs: Query<OutputFilenames>,
     global_ctxt: Query<QueryContext<'tcx>>,
     ongoing_codegen: Query<Box<dyn Any>>,
@@ -195,7 +195,7 @@ impl<'tcx> Queries<'tcx> {
                 None => DepGraph::new_disabled(),
                 Some(future) => {
                     let (prev_graph, prev_work_products) =
-                        time(self.session(), "blocked while dep-graph loading finishes", || {
+                        self.session().time("blocked while dep-graph loading finishes", || {
                             future
                                 .open()
                                 .unwrap_or_else(|e| rustc_incremental::LoadResult::Error {
@@ -211,7 +211,7 @@ impl<'tcx> Queries<'tcx> {
 
     pub fn lower_to_hir(
         &'tcx self,
-    ) -> Result<&Query<(&'tcx hir::map::Forest<'tcx>, Steal<ResolverOutputs>)>> {
+    ) -> Result<&Query<(&'tcx map::Forest<'tcx>, Steal<ResolverOutputs>)>> {
         self.lower_to_hir.compute(|| {
             let expansion_result = self.expansion()?;
             let peeked = expansion_result.peek();

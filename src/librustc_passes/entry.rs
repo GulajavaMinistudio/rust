@@ -1,11 +1,11 @@
-use rustc::hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
-use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use rustc::hir::map as hir_map;
-use rustc::hir::{HirId, ImplItem, Item, ItemKind, TraitItem};
 use rustc::session::config::EntryFnType;
 use rustc::session::{config, Session};
 use rustc::ty::query::Providers;
 use rustc::ty::TyCtxt;
+use rustc_hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::itemlikevisit::ItemLikeVisitor;
+use rustc_hir::{HirId, ImplItem, Item, ItemKind, TraitItem};
 use rustc_span::symbol::sym;
 use rustc_span::Span;
 use syntax::attr;
@@ -134,7 +134,7 @@ fn find_item(item: &Item<'_>, ctxt: &mut EntryContext<'_, '_>, at_root: bool) {
                 ctxt.start_fn = Some((item.hir_id, item.span));
             } else {
                 struct_span_err!(ctxt.session, item.span, E0138, "multiple `start` functions")
-                    .span_label(ctxt.start_fn.unwrap().1, "previous `start` function here")
+                    .span_label(ctxt.start_fn.unwrap().1, "previous `#[start]` function here")
                     .span_label(item.span, "multiple `start` functions")
                     .emit();
             }

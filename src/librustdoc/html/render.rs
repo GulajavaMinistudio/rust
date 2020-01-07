@@ -43,13 +43,14 @@ use std::str;
 use std::sync::Arc;
 
 use errors;
-use rustc::hir::def_id::DefId;
-use rustc::hir::{self, Mutability};
 use rustc::middle::privacy::AccessLevels;
 use rustc::middle::stability;
 use rustc_data_structures::flock;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_feature::UnstableFeatures;
+use rustc_hir as hir;
+use rustc_hir::def_id::DefId;
+use rustc_hir::Mutability;
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::FileName;
@@ -2152,7 +2153,7 @@ fn stability_tags(item: &clean::Item) -> String {
     }
 
     if let Some(stab) = item.stability.as_ref().filter(|s| s.level == stability::Unstable) {
-        if stab.feature.as_ref().map(|s| &**s) == Some("rustc_private") {
+        if stab.feature.as_deref() == Some("rustc_private") {
             tags += &tag_html("internal", "Internal");
         } else {
             tags += &tag_html("unstable", "Experimental");
@@ -2205,7 +2206,7 @@ fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
     }
 
     if let Some(stab) = item.stability.as_ref().filter(|stab| stab.level == stability::Unstable) {
-        let is_rustc_private = stab.feature.as_ref().map(|s| &**s) == Some("rustc_private");
+        let is_rustc_private = stab.feature.as_deref() == Some("rustc_private");
 
         let mut message = if is_rustc_private {
             "<span class='emoji'>⚙️</span> This is an internal compiler API."
@@ -2214,7 +2215,7 @@ fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
         }
         .to_owned();
 
-        if let Some(feature) = stab.feature.as_ref() {
+        if let Some(feature) = stab.feature.as_deref() {
             let mut feature = format!("<code>{}</code>", Escape(&feature));
             if let (Some(url), Some(issue)) = (&cx.shared.issue_tracker_base_url, stab.issue) {
                 feature.push_str(&format!(

@@ -9,12 +9,12 @@
 //! fixed, but for the moment it's easier to do these checks early.
 
 use crate::constrained_generic_params as cgp;
-use rustc::hir;
-use rustc::hir::def_id::DefId;
-use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use rustc::ty::query::Providers;
 use rustc::ty::{self, TyCtxt, TypeFoldable};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_hir as hir;
+use rustc_hir::def_id::DefId;
+use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 
 use rustc_span::Span;
@@ -98,7 +98,10 @@ fn enforce_impl_params_are_constrained(
         // (#36836)
         tcx.sess.delay_span_bug(
             tcx.def_span(impl_def_id),
-            "potentially unconstrained type parameters weren't evaluated",
+            &format!(
+                "potentially unconstrained type parameters weren't evaluated: {:?}",
+                impl_self_ty,
+            ),
         );
         return;
     }

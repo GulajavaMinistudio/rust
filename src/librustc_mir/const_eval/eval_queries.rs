@@ -5,11 +5,11 @@ use crate::interpret::{
     InterpResult, MPlaceTy, MemoryKind, OpTy, RawConst, RefTracking, Scalar, ScalarMaybeUndef,
     StackPopCleanup,
 };
-use rustc::hir::def::DefKind;
 use rustc::mir;
 use rustc::mir::interpret::{ConstEvalErr, ErrorHandled};
 use rustc::traits::Reveal;
 use rustc::ty::{self, layout, layout::LayoutOf, subst::Subst, TyCtxt};
+use rustc_hir::def::DefKind;
 use rustc_span::source_map::Span;
 use std::convert::TryInto;
 
@@ -221,7 +221,7 @@ pub fn const_eval_validated_provider<'tcx>(
     // We call `const_eval` for zero arg intrinsics, too, in order to cache their value.
     // Catch such calls and evaluate them instead of trying to load a constant's MIR.
     if let ty::InstanceDef::Intrinsic(def_id) = key.value.instance.def {
-        let ty = key.value.instance.ty(tcx);
+        let ty = key.value.instance.ty_env(tcx, key.param_env);
         let substs = match ty.kind {
             ty::FnDef(_, substs) => substs,
             _ => bug!("intrinsic with type {:?}", ty),

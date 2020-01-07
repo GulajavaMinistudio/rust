@@ -6,12 +6,10 @@ use super::{
     TraitNotObjectSafe,
 };
 
-use crate::hir;
-use crate::hir::def_id::DefId;
-use crate::hir::Node;
 use crate::infer::error_reporting::TypeAnnotationNeeded as ErrorCode;
 use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::infer::{self, InferCtxt};
+use crate::mir::interpret::ErrorHandled;
 use crate::session::DiagnosticMessageId;
 use crate::ty::error::ExpectedFound;
 use crate::ty::fast_reject;
@@ -21,10 +19,11 @@ use crate::ty::GenericParamDefKind;
 use crate::ty::SubtypePredicate;
 use crate::ty::TypeckTables;
 use crate::ty::{self, AdtKind, DefIdTree, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable};
-
 use errors::{pluralize, Applicability, DiagnosticBuilder, Style};
-use rustc::hir::def_id::LOCAL_CRATE;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_hir as hir;
+use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::Node;
 use rustc_span::source_map::SourceMap;
 use rustc_span::symbol::{kw, sym};
 use rustc_span::{ExpnKind, MultiSpan, Span, DUMMY_SP};
@@ -1086,6 +1085,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
 
             // already reported in the query
             ConstEvalFailure(err) => {
+                if let ErrorHandled::TooGeneric = err {
+                    // Silence this error, as it can be produced during intermediate steps
+                    // when a constant is not yet able to be evaluated (but will be later).
+                    return;
+                }
                 self.tcx.sess.delay_span_bug(
                     span,
                     &format!("constant in type had an ignored error: {:?}", err),
