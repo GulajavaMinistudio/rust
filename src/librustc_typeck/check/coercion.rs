@@ -51,7 +51,7 @@
 //! we may want to adjust precisely when coercions occur.
 
 use crate::check::{FnCtxt, Needs};
-use errors::DiagnosticBuilder;
+use errors::{struct_span_err, DiagnosticBuilder};
 use rustc::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc::infer::{Coercion, InferOk, InferResult};
 use rustc::traits::{self, ObligationCause, ObligationCauseCode};
@@ -544,7 +544,8 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         // and almost never more than 3. By using a SmallVec we avoid an
         // allocation, at the (very small) cost of (occasionally) having to
         // shift subsequent elements down when removing the front element.
-        let mut queue: SmallVec<[_; 4]> = smallvec![self.tcx.predicate_for_trait_def(
+        let mut queue: SmallVec<[_; 4]> = smallvec![traits::predicate_for_trait_def(
+            self.tcx,
             self.fcx.param_env,
             cause,
             coerce_unsized_did,

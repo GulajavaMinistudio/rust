@@ -4,11 +4,13 @@
 // and `#[unstable (..)]`), but are not declared in one single location
 // (unlike lang features), which means we need to collect them instead.
 
-use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
+use errors::struct_span_err;
+use rustc::hir::map::Map;
 use rustc::middle::lib_features::LibFeatures;
 use rustc::ty::query::Providers;
 use rustc::ty::TyCtxt;
 use rustc_hir::def_id::LOCAL_CRATE;
+use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_span::symbol::Symbol;
 use rustc_span::{sym, Span};
 use syntax::ast::{Attribute, MetaItem, MetaItemKind};
@@ -112,7 +114,9 @@ impl LibFeatureCollector<'tcx> {
 }
 
 impl Visitor<'tcx> for LibFeatureCollector<'tcx> {
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::All(&self.tcx.hir())
     }
 

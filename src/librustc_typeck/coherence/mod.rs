@@ -7,6 +7,7 @@
 
 use crate::hir::def_id::{DefId, LOCAL_CRATE};
 use crate::hir::HirId;
+use errors::struct_span_err;
 use rustc::traits;
 use rustc::ty::query::Providers;
 use rustc::ty::{self, TyCtxt, TypeFoldable};
@@ -145,8 +146,8 @@ pub fn check_coherence(tcx: TyCtxt<'_>) {
         tcx.ensure().coherent_trait(trait_def_id);
     }
 
-    tcx.sess.time("unsafety checking", || unsafety::check(tcx));
-    tcx.sess.time("orphan checking", || orphan::check(tcx));
+    tcx.sess.time("unsafety_checking", || unsafety::check(tcx));
+    tcx.sess.time("orphan_checking", || orphan::check(tcx));
 
     // these queries are executed for side-effects (error reporting):
     tcx.ensure().crate_inherent_impls(LOCAL_CRATE);

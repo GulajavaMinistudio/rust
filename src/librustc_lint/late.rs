@@ -14,8 +14,7 @@
 //! upon. As the ast is traversed, this keeps track of the current lint level
 //! for all lint attributes.
 
-use rustc::hir::intravisit as hir_visit;
-use rustc::hir::intravisit::Visitor;
+use rustc::hir::map::Map;
 use rustc::lint::LateContext;
 use rustc::lint::LintPass;
 use rustc::lint::{LateLintPass, LateLintPassObject};
@@ -23,6 +22,8 @@ use rustc::ty::{self, TyCtxt};
 use rustc_data_structures::sync::{join, par_iter, ParallelIterator};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::intravisit as hir_visit;
+use rustc_hir::intravisit::Visitor;
 use rustc_span::Span;
 use std::slice;
 use syntax::ast;
@@ -86,10 +87,12 @@ impl<'a, 'tcx, T: LateLintPass<'a, 'tcx>> LateContextAndPass<'a, 'tcx, T> {
 impl<'a, 'tcx, T: LateLintPass<'a, 'tcx>> hir_visit::Visitor<'tcx>
     for LateContextAndPass<'a, 'tcx, T>
 {
+    type Map = Map<'tcx>;
+
     /// Because lints are scoped lexically, we want to walk nested
     /// items in the context of the outer item, so enable
     /// deep-walking.
-    fn nested_visit_map<'this>(&'this mut self) -> hir_visit::NestedVisitorMap<'this, 'tcx> {
+    fn nested_visit_map<'this>(&'this mut self) -> hir_visit::NestedVisitorMap<'this, Self::Map> {
         hir_visit::NestedVisitorMap::All(&self.context.tcx.hir())
     }
 
@@ -431,18 +434,27 @@ fn late_lint_crate<'tcx, T: for<'a> LateLintPass<'a, 'tcx>>(tcx: TyCtxt<'tcx>, b
         late_lint_pass_crate(tcx, builtin_lints);
     } else {
         for pass in &mut passes {
-            tcx.sess.time(&format!("running late lint: {}", pass.name()), || {
-                late_lint_pass_crate(tcx, LateLintPassObjects { lints: slice::from_mut(pass) });
-            });
+            tcx.sess
+                .prof
+                .extra_verbose_generic_activity(&format!("running late lint: {}", pass.name()))
+                .run(|| {
+                    late_lint_pass_crate(tcx, LateLintPassObjects { lints: slice::from_mut(pass) });
+                });
         }
 
         let mut passes: Vec<_> =
             tcx.lint_store.late_module_passes.iter().map(|pass| (pass)()).collect();
 
         for pass in &mut passes {
-            tcx.sess.time(&format!("running late module lint: {}", pass.name()), || {
-                late_lint_pass_crate(tcx, LateLintPassObjects { lints: slice::from_mut(pass) });
-            });
+            tcx.sess
+                .prof
+                .extra_verbose_generic_activity(&format!(
+                    "running late module lint: {}",
+                    pass.name()
+                ))
+                .run(|| {
+                    late_lint_pass_crate(tcx, LateLintPassObjects { lints: slice::from_mut(pass) });
+                });
         }
     }
 }
@@ -454,13 +466,13 @@ pub fn check_crate<'tcx, T: for<'a> LateLintPass<'a, 'tcx>>(
 ) {
     join(
         || {
-            tcx.sess.time("crate lints", || {
+            tcx.sess.time("crate_lints", || {
                 // Run whole crate non-incremental lints
                 late_lint_crate(tcx, builtin_lints());
             });
         },
         || {
-            tcx.sess.time("module lints", || {
+            tcx.sess.time("module_lints", || {
                 // Run per-module lints
                 par_iter(&tcx.hir().krate().modules).for_each(|(&module, _)| {
                     tcx.ensure().lint_mod(tcx.hir().local_def_id(module));

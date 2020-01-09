@@ -5,8 +5,7 @@
 //! used between functions, and they operate in a purely top-down
 //! way. Therefore, we break lifetime name resolution into a separate pass.
 
-use errors::{pluralize, Applicability, DiagnosticBuilder};
-use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
+use errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder};
 use rustc::hir::map::Map;
 use rustc::lint;
 use rustc::middle::resolve_lifetime::*;
@@ -17,6 +16,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LOCAL_CRATE};
+use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::{GenericArg, GenericParam, LifetimeName, Node, ParamName, QPath};
 use rustc_hir::{GenericParamKind, HirIdMap, HirIdSet, LifetimeParamKind};
 use rustc_span::symbol::{kw, sym};
@@ -26,7 +26,7 @@ use std::cell::Cell;
 use std::mem::{replace, take};
 use syntax::ast;
 use syntax::attr;
-use syntax::{help, span_err, struct_span_err, walk_list};
+use syntax::walk_list;
 
 use log::debug;
 
@@ -361,7 +361,9 @@ fn sub_items_have_self_param(node: &hir::ItemKind<'_>) -> bool {
 }
 
 impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::All(&self.tcx.hir())
     }
 
@@ -591,13 +593,14 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                                     || krate.impl_items.contains_key(&parent_impl_id)
                                     || krate.trait_items.contains_key(&parent_trait_id))
                                 {
-                                    span_err!(
+                                    struct_span_err!(
                                         self.tcx.sess,
                                         lifetime.span,
                                         E0657,
                                         "`impl Trait` can only capture lifetimes \
                                          bound at the fn or impl level"
-                                    );
+                                    )
+                                    .emit();
                                     self.uninsert_lifetime_on_error(lifetime, def.unwrap());
                                 }
                             }
@@ -943,12 +946,13 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
             })
         {
             if self.trait_ref_hack {
-                span_err!(
+                struct_span_err!(
                     self.tcx.sess,
                     trait_ref.span,
                     E0316,
                     "nested quantification of lifetimes"
-                );
+                )
+                .emit();
             }
             let next_early_index = self.next_early_index();
             let scope = Scope::Binder {
@@ -1084,7 +1088,9 @@ fn extract_labels(ctxt: &mut LifetimeContext<'_, '_>, body: &hir::Body<'_>) {
     gather.visit_body(body);
 
     impl<'v, 'a, 'tcx> Visitor<'v> for GatherLabels<'a, 'tcx> {
-        fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'v> {
+        type Map = Map<'v>;
+
+        fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
             NestedVisitorMap::None
         }
 
@@ -2127,7 +2133,9 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             }
 
             impl<'a> Visitor<'a> for SelfVisitor<'a> {
-                fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'a> {
+                type Map = Map<'a>;
+
+                fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
                     NestedVisitorMap::None
                 }
 
@@ -2215,7 +2223,9 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         }
 
         impl<'v, 'a> Visitor<'v> for GatherLifetimes<'a> {
-            fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'v> {
+            type Map = Map<'v>;
+
+            fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
                 NestedVisitorMap::None
             }
 
@@ -2433,36 +2443,32 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         }
 
         if len == 0 {
-            help!(
-                db,
-                "this function's return type contains a borrowed value, but \
-                 there is no value for it to be borrowed from"
+            db.help(
+                "this function's return type contains a borrowed value, \
+                but there is no value for it to be borrowed from",
             );
             self.suggest_lifetime(db, span, "consider giving it a 'static lifetime")
         } else if elided_len == 0 {
-            help!(
-                db,
+            db.help(
                 "this function's return type contains a borrowed value with \
                  an elided lifetime, but the lifetime cannot be derived from \
-                 the arguments"
+                 the arguments",
             );
             let msg = "consider giving it an explicit bounded or 'static lifetime";
             self.suggest_lifetime(db, span, msg)
         } else if elided_len == 1 {
-            help!(
-                db,
-                "this function's return type contains a borrowed value, but \
-                 the signature does not say which {} it is borrowed from",
+            db.help(&format!(
+                "this function's return type contains a borrowed value, \
+                but the signature does not say which {} it is borrowed from",
                 m
-            );
+            ));
             true
         } else {
-            help!(
-                db,
-                "this function's return type contains a borrowed value, but \
-                 the signature does not say whether it is borrowed from {}",
+            db.help(&format!(
+                "this function's return type contains a borrowed value, \
+                but the signature does not say whether it is borrowed from {}",
                 m
-            );
+            ));
             true
         }
     }
@@ -2804,7 +2810,9 @@ fn insert_late_bound_lifetimes(
     }
 
     impl<'v> Visitor<'v> for ConstrainedCollector {
-        fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'v> {
+        type Map = Map<'v>;
+
+        fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
             NestedVisitorMap::None
         }
 
@@ -2845,7 +2853,9 @@ fn insert_late_bound_lifetimes(
     }
 
     impl<'v> Visitor<'v> for AllCollector {
-        fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'v> {
+        type Map = Map<'v>;
+
+        fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
             NestedVisitorMap::None
         }
 

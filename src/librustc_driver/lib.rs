@@ -369,7 +369,7 @@ pub fn run_compiler(
                 queries.global_ctxt()?.peek_mut().enter(|tcx| {
                     let result = tcx.analysis(LOCAL_CRATE);
 
-                    sess.time("save analysis", || {
+                    sess.time("save_analysis", || {
                         save::process_crate(
                             tcx,
                             &expanded_crate,
@@ -1178,7 +1178,6 @@ pub fn report_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str) {
     if !info.payload().is::<errors::ExplicitBug>() {
         let d = errors::Diagnostic::new(errors::Level::Bug, "unexpected panic");
         handler.emit_diagnostic(&d);
-        handler.abort_if_errors_and_should_abort();
     }
 
     let mut xs: Vec<Cow<'static, str>> = vec![

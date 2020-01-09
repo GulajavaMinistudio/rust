@@ -9,18 +9,20 @@ use crate::middle::resolve_lifetime as rl;
 use crate::namespace::Namespace;
 use crate::require_c_abi_if_c_variadic;
 use crate::util::common::ErrorReported;
-use errors::{Applicability, DiagnosticId};
-use rustc::hir::intravisit::Visitor;
+use errors::{struct_span_err, Applicability, DiagnosticId};
 use rustc::lint::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;
 use rustc::traits;
+use rustc::traits::astconv_object_safety_violations;
+use rustc::traits::error_reporting::report_object_safety_error;
+use rustc::traits::wf::object_region_bounds;
 use rustc::ty::subst::{self, InternalSubsts, Subst, SubstsRef};
-use rustc::ty::wf::object_region_bounds;
 use rustc::ty::{self, Const, DefIdTree, ToPredicate, Ty, TyCtxt, TypeFoldable};
 use rustc::ty::{GenericParamDef, GenericParamDefKind};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::DefId;
+use rustc_hir::intravisit::Visitor;
 use rustc_hir::print;
 use rustc_hir::{ExprKind, GenericArg, GenericArgs};
 use rustc_span::symbol::sym;
@@ -1117,13 +1119,14 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 if unbound.is_none() {
                     unbound = Some(&ptr.trait_ref);
                 } else {
-                    span_err!(
+                    struct_span_err!(
                         tcx.sess,
                         span,
                         E0203,
                         "type parameter has more than one relaxed default \
                         bound, only one is supported"
-                    );
+                    )
+                    .emit();
                 }
             }
         }
@@ -1443,7 +1446,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         }
 
         if regular_traits.is_empty() && auto_traits.is_empty() {
-            span_err!(tcx.sess, span, E0224, "at least one trait is required for an object type");
+            struct_span_err!(
+                tcx.sess,
+                span,
+                E0224,
+                "at least one trait is required for an object type"
+            )
+            .emit();
             return tcx.types.err;
         }
 
@@ -1452,9 +1461,10 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         // to avoid ICEs.
         for item in &regular_traits {
             let object_safety_violations =
-                tcx.astconv_object_safety_violations(item.trait_ref().def_id());
+                astconv_object_safety_violations(tcx, item.trait_ref().def_id());
             if !object_safety_violations.is_empty() {
-                tcx.report_object_safety_error(
+                report_object_safety_error(
+                    tcx,
                     span,
                     item.trait_ref().def_id(),
                     object_safety_violations,
@@ -1598,13 +1608,14 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     self.ast_region_to_region(lifetime, None)
                 } else {
                     self.re_infer(None, span).unwrap_or_else(|| {
-                        span_err!(
+                        struct_span_err!(
                             tcx.sess,
                             span,
                             E0228,
                             "the lifetime bound for this object type cannot be deduced \
                              from context; please supply an explicit bound"
-                        );
+                        )
+                        .emit();
                         tcx.lifetimes.re_static
                     })
                 }
@@ -2877,12 +2888,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         // error.
         let r = derived_region_bounds[0];
         if derived_region_bounds[1..].iter().any(|r1| r != *r1) {
-            span_err!(
+            struct_span_err!(
                 tcx.sess,
                 span,
                 E0227,
                 "ambiguous lifetime bound, explicit lifetime bound required"
-            );
+            )
+            .emit();
         }
         return Some(r);
     }

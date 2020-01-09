@@ -1,17 +1,20 @@
 //! A pass that annotates every item and method with its stability level,
 //! propagating default levels lexically from parent to children ast nodes.
 
-use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
+use errors::struct_span_err;
+use rustc::hir::map::Map;
 use rustc::lint;
 use rustc::middle::privacy::AccessLevels;
 use rustc::middle::stability::{DeprecationEntry, Index};
 use rustc::session::Session;
+use rustc::traits::misc::can_type_implement_copy;
 use rustc::ty::query::Providers;
 use rustc::ty::TyCtxt;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::{Generics, HirId, Item, StructField, Variant};
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::Span;
@@ -202,7 +205,9 @@ impl<'a, 'tcx> Visitor<'tcx> for Annotator<'a, 'tcx> {
     /// Because stability levels are scoped lexically, we want to walk
     /// nested items in the context of the outer item, so enable
     /// deep-walking.
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::All(&self.tcx.hir())
     }
 
@@ -291,7 +296,9 @@ impl<'a, 'tcx> MissingStabilityAnnotations<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> Visitor<'tcx> for MissingStabilityAnnotations<'a, 'tcx> {
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::OnlyBodies(&self.tcx.hir())
     }
 
@@ -427,10 +434,12 @@ struct Checker<'tcx> {
 }
 
 impl Visitor<'tcx> for Checker<'tcx> {
+    type Map = Map<'tcx>;
+
     /// Because stability levels are scoped lexically, we want to walk
     /// nested items in the context of the outer item, so enable
     /// deep-walking.
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::OnlyBodies(&self.tcx.hir())
     }
 
@@ -488,7 +497,7 @@ impl Visitor<'tcx> for Checker<'tcx> {
                     .emit();
                 } else {
                     let param_env = self.tcx.param_env(def_id);
-                    if !param_env.can_type_implement_copy(self.tcx, ty).is_ok() {
+                    if !can_type_implement_copy(self.tcx, param_env, ty).is_ok() {
                         feature_err(
                             &self.tcx.sess.parse_sess,
                             sym::untagged_unions,

@@ -25,8 +25,10 @@ use std::fmt::Write;
 
 use lint::{EarlyContext, EarlyLintPass, LateLintPass, LintPass};
 use lint::{LateContext, LintArray, LintContext};
+use rustc::hir::map::Map;
 use rustc::lint;
 use rustc::lint::FutureIncompatibleInfo;
+use rustc::traits::misc::can_type_implement_copy;
 use rustc::ty::{self, layout::VariantIdx, Ty, TyCtxt};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_feature::Stability;
@@ -555,7 +557,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MissingCopyImplementations {
         if ty.is_copy_modulo_regions(cx.tcx, param_env, item.span) {
             return;
         }
-        if param_env.can_type_implement_copy(cx.tcx, ty).is_ok() {
+        if can_type_implement_copy(cx.tcx, param_env, ty).is_ok() {
             cx.span_lint(
                 MISSING_COPY_IMPLEMENTATIONS,
                 item.span,
@@ -1087,12 +1089,14 @@ impl TypeAliasBounds {
         // bound.  Let's see if this type does that.
 
         // We use a HIR visitor to walk the type.
-        use rustc::hir::intravisit::{self, Visitor};
+        use rustc_hir::intravisit::{self, Visitor};
         struct WalkAssocTypes<'a, 'db> {
             err: &'a mut DiagnosticBuilder<'db>,
         }
         impl<'a, 'db, 'v> Visitor<'v> for WalkAssocTypes<'a, 'db> {
-            fn nested_visit_map<'this>(&'this mut self) -> intravisit::NestedVisitorMap<'this, 'v> {
+            type Map = Map<'v>;
+
+            fn nested_visit_map(&mut self) -> intravisit::NestedVisitorMap<'_, Self::Map> {
                 intravisit::NestedVisitorMap::None
             }
 

@@ -35,8 +35,6 @@ Rust MIR: a lowered representation of Rust. Also: an experiment!
 extern crate log;
 #[macro_use]
 extern crate rustc;
-#[macro_use]
-extern crate syntax;
 
 mod borrow_check;
 mod build;
@@ -54,6 +52,7 @@ use rustc::ty::query::Providers;
 
 pub fn provide(providers: &mut Providers<'_>) {
     borrow_check::provide(providers);
+    const_eval::provide(providers);
     shim::provide(providers);
     transform::provide(providers);
     monomorphize::partitioning::provide(providers);

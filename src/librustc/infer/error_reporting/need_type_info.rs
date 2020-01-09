@@ -1,12 +1,12 @@
-use crate::hir::intravisit::{self, NestedVisitorMap, Visitor};
 use crate::hir::map::Map;
 use crate::infer::type_variable::TypeVariableOriginKind;
 use crate::infer::InferCtxt;
 use crate::ty::print::Print;
 use crate::ty::{self, DefIdTree, Infer, Ty, TyVar};
-use errors::{Applicability, DiagnosticBuilder};
+use errors::{struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Namespace};
+use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::{Body, Expr, ExprKind, FunctionRetTy, HirId, Local, Pat};
 use rustc_span::source_map::DesugaringKind;
 use rustc_span::symbol::kw;
@@ -66,7 +66,9 @@ impl<'a, 'tcx> FindLocalByTypeVisitor<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> Visitor<'tcx> for FindLocalByTypeVisitor<'a, 'tcx> {
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, Self::Map> {
         NestedVisitorMap::OnlyBodies(&self.hir_map)
     }
 
@@ -151,14 +153,11 @@ pub enum TypeAnnotationNeeded {
 
 impl Into<errors::DiagnosticId> for TypeAnnotationNeeded {
     fn into(self) -> errors::DiagnosticId {
-        syntax::diagnostic_used!(E0282);
-        syntax::diagnostic_used!(E0283);
-        syntax::diagnostic_used!(E0284);
-        errors::DiagnosticId::Error(match self {
-            Self::E0282 => "E0282".to_string(),
-            Self::E0283 => "E0283".to_string(),
-            Self::E0284 => "E0284".to_string(),
-        })
+        match self {
+            Self::E0282 => errors::error_code!(E0282),
+            Self::E0283 => errors::error_code!(E0283),
+            Self::E0284 => errors::error_code!(E0284),
+        }
     }
 }
 

@@ -32,11 +32,14 @@ use super::FnCtxt;
 
 use crate::hir::def_id::DefId;
 use crate::lint;
+use crate::type_error_struct;
 use crate::util::common::ErrorReported;
-use errors::{Applicability, DiagnosticBuilder};
+use errors::{struct_span_err, Applicability, DiagnosticBuilder};
 use rustc::middle::lang_items;
 use rustc::session::Session;
 use rustc::traits;
+use rustc::traits::error_reporting::report_object_safety_error;
+use rustc::traits::object_safety_violations;
 use rustc::ty::adjustment::AllowTwoPhase;
 use rustc::ty::cast::{CastKind, CastTy};
 use rustc::ty::error::TypeError;
@@ -423,17 +426,16 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                             );
                         }
                         Err(_) => {
-                            span_help!(err, self.cast_span, "did you mean `&{}{}`?", mtstr, tstr)
+                            let msg = &format!("did you mean `&{}{}`?", mtstr, tstr);
+                            err.span_help(self.cast_span, msg);
                         }
                     }
                 } else {
-                    span_help!(
-                        err,
-                        self.span,
+                    let msg = &format!(
                         "consider using an implicit coercion to `&{}{}` instead",
-                        mtstr,
-                        tstr
+                        mtstr, tstr
                     );
+                    err.span_help(self.span, msg);
                 }
             }
             ty::Adt(def, ..) if def.is_box() => {
@@ -446,11 +448,13 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                             Applicability::MachineApplicable,
                         );
                     }
-                    Err(_) => span_help!(err, self.cast_span, "did you mean `Box<{}>`?", tstr),
+                    Err(_) => {
+                        err.span_help(self.cast_span, &format!("did you mean `Box<{}>`?", tstr));
+                    }
                 }
             }
             _ => {
-                span_help!(err, self.expr.span, "consider using a box or reference as appropriate");
+                err.span_help(self.expr.span, "consider using a box or reference as appropriate");
             }
         }
         err.emit();
@@ -518,8 +522,8 @@ impl<'a, 'tcx> CastCheck<'tcx> {
     }
 
     fn report_object_unsafe_cast(&self, fcx: &FnCtxt<'a, 'tcx>, did: DefId) {
-        let violations = fcx.tcx.object_safety_violations(did);
-        let mut err = fcx.tcx.report_object_safety_error(self.cast_span, did, violations);
+        let violations = object_safety_violations(fcx.tcx, did);
+        let mut err = report_object_safety_error(fcx.tcx, self.cast_span, did, violations);
         err.note(&format!("required by cast to type '{}'", fcx.ty_to_string(self.cast_ty)));
         err.emit();
     }

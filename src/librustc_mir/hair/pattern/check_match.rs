@@ -4,16 +4,17 @@ use super::_match::{expand_pattern, is_useful, MatchCheckCtxt, Matrix, PatStack}
 
 use super::{PatCtxt, PatKind, PatternError};
 
-use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
+use rustc::hir::map::Map;
 use rustc::lint;
 use rustc::session::Session;
 use rustc::ty::subst::{InternalSubsts, SubstsRef};
 use rustc::ty::{self, Ty, TyCtxt};
 use rustc_error_codes::*;
-use rustc_errors::{Applicability, DiagnosticBuilder};
+use rustc_errors::{error_code, struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def::*;
 use rustc_hir::def_id::DefId;
+use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::{HirId, Pat};
 use rustc_span::symbol::sym;
 use rustc_span::{MultiSpan, Span};
@@ -49,7 +50,9 @@ struct MatchVisitor<'a, 'tcx> {
 }
 
 impl<'tcx> Visitor<'tcx> for MatchVisitor<'_, 'tcx> {
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::None
     }
 
@@ -116,7 +119,7 @@ impl PatCtxt<'_, '_> {
     }
 
     fn span_e0158(&self, span: Span, text: &str) {
-        span_err!(self.tcx.sess, span, E0158, "{}", text)
+        struct_span_err!(self.tcx.sess, span, E0158, "{}", text).emit();
     }
 }
 
@@ -291,24 +294,26 @@ fn check_for_bindings_named_same_as_variants(cx: &MatchVisitor<'_, '_>, pat: &Pa
                             variant.ident == ident && variant.ctor_kind == CtorKind::Const
                         })
                     {
-                        // FIXME(Centril): Should be a lint?
                         let ty_path = cx.tcx.def_path_str(edef.did);
-                        let mut err = struct_span_warn!(
-                            cx.tcx.sess,
-                            p.span,
-                            E0170,
-                            "pattern binding `{}` is named the same as one \
-                             of the variants of the type `{}`",
-                            ident,
-                            ty_path
-                        );
-                        err.span_suggestion(
-                            p.span,
-                            "to match on the variant, qualify the path",
-                            format!("{}::{}", ty_path, ident),
-                            Applicability::MachineApplicable,
-                        );
-                        err.emit();
+                        cx.tcx
+                            .struct_span_lint_hir(
+                                lint::builtin::BINDINGS_WITH_VARIANT_NAME,
+                                p.hir_id,
+                                p.span,
+                                &format!(
+                                    "pattern binding `{}` is named the same as one \
+                                    of the variants of the type `{}`",
+                                    ident, ty_path
+                                ),
+                            )
+                            .code(error_code!(E0170))
+                            .span_suggestion(
+                                p.span,
+                                "to match on the variant, qualify the path",
+                                format!("{}::{}", ty_path, ident),
+                                Applicability::MachineApplicable,
+                            )
+                            .emit();
                     }
                 }
             }
@@ -728,7 +733,9 @@ fn check_legality_of_bindings_in_at_patterns(cx: &MatchVisitor<'_, '_>, pat: &Pa
     }
 
     impl<'v> Visitor<'v> for AtBindingPatternVisitor<'_, '_, '_> {
-        fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'v> {
+        type Map = Map<'v>;
+
+        fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
             NestedVisitorMap::None
         }
 

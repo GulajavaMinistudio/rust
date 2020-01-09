@@ -1,6 +1,7 @@
 use crate::check::{FnCtxt, Inherited};
 use crate::constrained_generic_params::{identify_constrained_generic_params, Parameter};
 
+use errors::{struct_span_err, DiagnosticBuilder};
 use rustc::infer::opaque_types::may_define_opaque_type;
 use rustc::middle::lang_items;
 use rustc::traits::{self, ObligationCause, ObligationCauseCode};
@@ -9,8 +10,6 @@ use rustc::ty::{self, AdtKind, GenericParamDefKind, ToPredicate, Ty, TyCtxt, Typ
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
 use rustc_hir::ItemKind;
-
-use errors::DiagnosticBuilder;
 use rustc_span::symbol::sym;
 use rustc_span::Span;
 use syntax::ast;
@@ -113,13 +112,14 @@ pub fn check_item_well_formed(tcx: TyCtxt<'_>, def_id: DefId) {
                 ty::ImplPolarity::Negative => {
                     // FIXME(#27579): what amount of WF checking do we need for neg impls?
                     if trait_ref.is_some() && !is_auto {
-                        span_err!(
+                        struct_span_err!(
                             tcx.sess,
                             item.span,
                             E0192,
                             "negative impls are only allowed for \
                                    auto traits (e.g., `Send` and `Sync`)"
                         )
+                        .emit()
                     }
                 }
                 ty::ImplPolarity::Reservation => {
@@ -417,7 +417,7 @@ fn check_impl<'tcx>(
                 let trait_ref = fcx.tcx.impl_trait_ref(item_def_id).unwrap();
                 let trait_ref =
                     fcx.normalize_associated_types_in(ast_trait_ref.path.span, &trait_ref);
-                let obligations = ty::wf::trait_obligations(
+                let obligations = traits::wf::trait_obligations(
                     fcx,
                     fcx.param_env,
                     fcx.body_id,
@@ -596,7 +596,7 @@ fn check_where_clauses<'tcx, 'fcx>(
     let wf_obligations = predicates
         .predicates
         .iter()
-        .flat_map(|p| ty::wf::predicate_obligations(fcx, fcx.param_env, fcx.body_id, p, span));
+        .flat_map(|p| traits::wf::predicate_obligations(fcx, fcx.param_env, fcx.body_id, p, span));
 
     for obligation in wf_obligations.chain(default_obligations) {
         debug!("next obligation cause: {:?}", obligation.cause);

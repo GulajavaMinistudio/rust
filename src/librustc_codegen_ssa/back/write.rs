@@ -1511,7 +1511,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
         llvm_start_time: &mut Option<VerboseTimingGuard<'a>>,
     ) {
         if config.time_module && llvm_start_time.is_none() {
-            *llvm_start_time = Some(prof.generic_pass("LLVM passes"));
+            *llvm_start_time = Some(prof.extra_verbose_generic_activity("LLVM_passes"));
         }
     }
 }
@@ -1679,7 +1679,6 @@ impl SharedEmitterMain {
                         d.code(code);
                     }
                     handler.emit_diagnostic(&d);
-                    handler.abort_if_errors_and_should_abort();
                 }
                 Ok(SharedEmitterMessage::InlineAsmError(cookie, msg)) => {
                     sess.span_err(ExpnId::from_u32(cookie).expn_data().call_site, &msg)

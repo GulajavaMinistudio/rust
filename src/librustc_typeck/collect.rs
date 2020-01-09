@@ -20,9 +20,11 @@ use crate::constrained_generic_params as cgp;
 use crate::lint;
 use crate::middle::resolve_lifetime as rl;
 use crate::middle::weak_lang_items;
-use rustc::hir::intravisit::{self, NestedVisitorMap, Visitor};
+use errors::{struct_span_err, Applicability, StashKey};
+use rustc::hir::map::Map;
 use rustc::middle::codegen_fn_attrs::{CodegenFnAttrFlags, CodegenFnAttrs};
 use rustc::mir::mono::Linkage;
+use rustc::traits;
 use rustc::ty::query::Providers;
 use rustc::ty::subst::GenericArgKind;
 use rustc::ty::subst::{InternalSubsts, Subst};
@@ -35,6 +37,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::{GenericParamKind, Node, Unsafety};
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{Span, DUMMY_SP};
@@ -43,8 +46,6 @@ use syntax::ast;
 use syntax::ast::{Ident, MetaItemKind};
 use syntax::attr::{list_contains_name, mark_used, InlineAttr, OptimizeAttr};
 use syntax::feature_gate;
-
-use errors::{Applicability, StashKey};
 
 use rustc_error_codes::*;
 
@@ -104,7 +105,9 @@ pub struct ItemCtxt<'tcx> {
 crate struct PlaceholderHirTyCollector(crate Vec<Span>);
 
 impl<'v> Visitor<'v> for PlaceholderHirTyCollector {
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'v> {
+    type Map = Map<'v>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::None
     }
     fn visit_ty(&mut self, t: &'v hir::Ty<'v>) {
@@ -185,7 +188,9 @@ fn reject_placeholder_type_signatures_in_item(tcx: TyCtxt<'tcx>, item: &'tcx hir
 }
 
 impl Visitor<'tcx> for CollectItemTypesVisitor<'tcx> {
-    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
         NestedVisitorMap::OnlyBodies(&self.tcx.hir())
     }
 
@@ -319,13 +324,14 @@ impl AstConv<'tcx> for ItemCtxt<'tcx> {
             self.tcx().mk_projection(item_def_id, item_substs)
         } else {
             // There are no late-bound regions; we can just ignore the binder.
-            span_err!(
+            struct_span_err!(
                 self.tcx().sess,
                 span,
                 E0212,
                 "cannot extract an associated type from a higher-ranked trait bound \
                  in this context"
-            );
+            )
+            .emit();
             self.tcx().types.err
         }
     }
@@ -860,17 +866,14 @@ fn trait_def(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::TraitDef {
 
     let paren_sugar = tcx.has_attr(def_id, sym::rustc_paren_sugar);
     if paren_sugar && !tcx.features().unboxed_closures {
-        let mut err = tcx.sess.struct_span_err(
-            item.span,
-            "the `#[rustc_paren_sugar]` attribute is a temporary means of controlling \
+        tcx.sess
+            .struct_span_err(
+                item.span,
+                "the `#[rustc_paren_sugar]` attribute is a temporary means of controlling \
              which traits can use parenthetical notation",
-        );
-        help!(
-            &mut err,
-            "add `#![feature(unboxed_closures)]` to \
-             the crate attributes to use it"
-        );
-        err.emit();
+            )
+            .help("add `#![feature(unboxed_closures)]` to the crate attributes to use it")
+            .emit();
     }
 
     let is_marker = tcx.has_attr(def_id, sym::marker);
@@ -887,7 +890,9 @@ fn has_late_bound_regions<'tcx>(tcx: TyCtxt<'tcx>, node: Node<'tcx>) -> Option<S
     }
 
     impl Visitor<'tcx> for LateBoundRegionsDetector<'tcx> {
-        fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+        type Map = Map<'tcx>;
+
+        fn nested_visit_map(&mut self) -> NestedVisitorMap<'_, Self::Map> {
             NestedVisitorMap::None
         }
 
@@ -1205,12 +1210,13 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::Generics {
 }
 
 fn report_assoc_ty_on_inherent_impl(tcx: TyCtxt<'_>, span: Span) {
-    span_err!(
+    struct_span_err!(
         tcx.sess,
         span,
         E0202,
         "associated types are not yet supported in inherent impls (see #8995)"
-    );
+    )
+    .emit();
 }
 
 fn infer_placeholder_type(
@@ -1509,48 +1515,48 @@ fn type_of(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
             }
         }
 
-        Node::GenericParam(param) => {
-            match &param.kind {
-                hir::GenericParamKind::Type { default: Some(ref ty), .. } => icx.to_ty(ty),
-                hir::GenericParamKind::Const { ty: ref hir_ty, .. } => {
-                    let ty = icx.to_ty(hir_ty);
-                    if !tcx.features().const_compare_raw_pointers {
-                        let err = match ty.peel_refs().kind {
-                            ty::FnPtr(_) => Some("function pointers"),
-                            ty::RawPtr(_) => Some("raw pointers"),
-                            _ => None,
-                        };
-                        if let Some(unsupported_type) = err {
-                            feature_gate::feature_err(
-                                &tcx.sess.parse_sess,
-                                sym::const_compare_raw_pointers,
-                                hir_ty.span,
-                                &format!(
-                                    "using {} as const generic parameters is unstable",
-                                    unsupported_type
-                                ),
-                            )
-                            .emit();
-                        };
-                    }
-                    if ty::search_for_structural_match_violation(param.hir_id, param.span, tcx, ty)
-                        .is_some()
-                    {
-                        struct_span_err!(
+        Node::GenericParam(param) => match &param.kind {
+            hir::GenericParamKind::Type { default: Some(ref ty), .. } => icx.to_ty(ty),
+            hir::GenericParamKind::Const { ty: ref hir_ty, .. } => {
+                let ty = icx.to_ty(hir_ty);
+                if !tcx.features().const_compare_raw_pointers {
+                    let err = match ty.peel_refs().kind {
+                        ty::FnPtr(_) => Some("function pointers"),
+                        ty::RawPtr(_) => Some("raw pointers"),
+                        _ => None,
+                    };
+                    if let Some(unsupported_type) = err {
+                        feature_gate::feature_err(
+                            &tcx.sess.parse_sess,
+                            sym::const_compare_raw_pointers,
+                            hir_ty.span,
+                            &format!(
+                                "using {} as const generic parameters is unstable",
+                                unsupported_type
+                            ),
+                        )
+                        .emit();
+                    };
+                }
+                if traits::search_for_structural_match_violation(param.hir_id, param.span, tcx, ty)
+                    .is_some()
+                {
+                    struct_span_err!(
                         tcx.sess,
                         hir_ty.span,
                         E0741,
                         "the types of const generic parameters must derive `PartialEq` and `Eq`",
-                    ).span_label(
+                    )
+                    .span_label(
                         hir_ty.span,
                         format!("`{}` doesn't derive both `PartialEq` and `Eq`", ty),
-                    ).emit();
-                    }
-                    ty
+                    )
+                    .emit();
                 }
-                x => bug!("unexpected non-type Node::GenericParam: {:?}", x),
+                ty
             }
-        }
+            x => bug!("unexpected non-type Node::GenericParam: {:?}", x),
+        },
 
         x => {
             bug!("unexpected sort of node in type_of_def_id(): {:?}", x);
@@ -1716,7 +1722,9 @@ fn find_opaque_ty_constraints(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
     }
 
     impl<'tcx> intravisit::Visitor<'tcx> for ConstraintLocator<'tcx> {
-        fn nested_visit_map<'this>(&'this mut self) -> intravisit::NestedVisitorMap<'this, 'tcx> {
+        type Map = Map<'tcx>;
+
+        fn nested_visit_map(&mut self) -> intravisit::NestedVisitorMap<'_, Self::Map> {
             intravisit::NestedVisitorMap::All(&self.tcx.hir())
         }
         fn visit_item(&mut self, it: &'tcx Item<'tcx>) {
@@ -2766,14 +2774,26 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
                 mark_used(attr);
                 inline_span = Some(attr.span);
                 if items.len() != 1 {
-                    span_err!(tcx.sess.diagnostic(), attr.span, E0534, "expected one argument");
+                    struct_span_err!(
+                        tcx.sess.diagnostic(),
+                        attr.span,
+                        E0534,
+                        "expected one argument"
+                    )
+                    .emit();
                     InlineAttr::None
                 } else if list_contains_name(&items[..], sym::always) {
                     InlineAttr::Always
                 } else if list_contains_name(&items[..], sym::never) {
                     InlineAttr::Never
                 } else {
-                    span_err!(tcx.sess.diagnostic(), items[0].span(), E0535, "invalid argument");
+                    struct_span_err!(
+                        tcx.sess.diagnostic(),
+                        items[0].span(),
+                        E0535,
+                        "invalid argument"
+                    )
+                    .emit();
 
                     InlineAttr::None
                 }
@@ -2787,7 +2807,7 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
         if !attr.has_name(sym::optimize) {
             return ia;
         }
-        let err = |sp, s| span_err!(tcx.sess.diagnostic(), sp, E0722, "{}", s);
+        let err = |sp, s| struct_span_err!(tcx.sess.diagnostic(), sp, E0722, "{}", s).emit();
         match attr.meta().map(|i| i.kind) {
             Some(MetaItemKind::Word) => {
                 err(attr.span, "expected one argument");

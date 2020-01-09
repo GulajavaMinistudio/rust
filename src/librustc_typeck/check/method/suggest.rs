@@ -4,9 +4,9 @@
 use crate::check::FnCtxt;
 use crate::middle::lang_items::FnOnceTraitLangItem;
 use crate::namespace::Namespace;
-use errors::{pluralize, Applicability, DiagnosticBuilder};
-use rustc::hir::intravisit;
+use errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder};
 use rustc::hir::map as hir_map;
+use rustc::hir::map::Map;
 use rustc::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc::traits::Obligation;
 use rustc::ty::print::with_crate_prefix;
@@ -15,6 +15,7 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::intravisit;
 use rustc_hir::{ExprKind, Node, QPath};
 use rustc_span::{source_map, FileName, Span};
 use syntax::ast;
@@ -193,21 +194,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         let item_span =
                             self.tcx.sess.source_map().def_span(self.tcx.def_span(item.def_id));
                         let idx = if sources.len() > 1 {
-                            span_note!(
-                                err,
-                                item_span,
+                            let msg = &format!(
                                 "candidate #{} is defined in the trait `{}`",
                                 idx + 1,
                                 self.tcx.def_path_str(trait_did)
                             );
+                            err.span_note(item_span, msg);
                             Some(idx + 1)
                         } else {
-                            span_note!(
-                                err,
-                                item_span,
+                            let msg = &format!(
                                 "the candidate is defined in the trait `{}`",
                                 self.tcx.def_path_str(trait_did)
                             );
+                            err.span_note(item_span, msg);
                             None
                         };
                         let path = self.tcx.def_path_str(trait_did);
@@ -1126,7 +1125,9 @@ impl intravisit::Visitor<'tcx> for UsePlacementFinder<'tcx> {
         }
     }
 
-    fn nested_visit_map<'this>(&'this mut self) -> intravisit::NestedVisitorMap<'this, 'tcx> {
+    type Map = Map<'tcx>;
+
+    fn nested_visit_map(&mut self) -> intravisit::NestedVisitorMap<'_, Self::Map> {
         intravisit::NestedVisitorMap::None
     }
 }

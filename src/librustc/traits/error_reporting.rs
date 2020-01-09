@@ -11,6 +11,7 @@ use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::infer::{self, InferCtxt};
 use crate::mir::interpret::ErrorHandled;
 use crate::session::DiagnosticMessageId;
+use crate::traits::object_safety_violations;
 use crate::ty::error::ExpectedFound;
 use crate::ty::fast_reject;
 use crate::ty::fold::TypeFolder;
@@ -19,7 +20,8 @@ use crate::ty::GenericParamDefKind;
 use crate::ty::SubtypePredicate;
 use crate::ty::TypeckTables;
 use crate::ty::{self, AdtKind, DefIdTree, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable};
-use errors::{pluralize, Applicability, DiagnosticBuilder, Style};
+
+use errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, Style};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
@@ -915,8 +917,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     }
 
                     ty::Predicate::ObjectSafe(trait_def_id) => {
-                        let violations = self.tcx.object_safety_violations(trait_def_id);
-                        self.tcx.report_object_safety_error(span, trait_def_id, violations)
+                        let violations = object_safety_violations(self.tcx, trait_def_id);
+                        report_object_safety_error(self.tcx, span, trait_def_id, violations)
                     }
 
                     ty::Predicate::ClosureKind(closure_def_id, closure_substs, kind) => {
@@ -1079,8 +1081,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             }
 
             TraitNotObjectSafe(did) => {
-                let violations = self.tcx.object_safety_violations(did);
-                self.tcx.report_object_safety_error(span, did, violations)
+                let violations = object_safety_violations(self.tcx, did);
+                report_object_safety_error(self.tcx, span, did, violations)
             }
 
             // already reported in the query
@@ -1945,64 +1947,62 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     }
 }
 
-impl<'tcx> TyCtxt<'tcx> {
-    pub fn recursive_type_with_infinite_size_error(
-        self,
-        type_def_id: DefId,
-    ) -> DiagnosticBuilder<'tcx> {
-        assert!(type_def_id.is_local());
-        let span = self.hir().span_if_local(type_def_id).unwrap();
-        let span = self.sess.source_map().def_span(span);
-        let mut err = struct_span_err!(
-            self.sess,
-            span,
-            E0072,
-            "recursive type `{}` has infinite size",
-            self.def_path_str(type_def_id)
-        );
-        err.span_label(span, "recursive type has infinite size");
-        err.help(&format!(
-            "insert indirection (e.g., a `Box`, `Rc`, or `&`) \
+pub fn recursive_type_with_infinite_size_error(
+    tcx: TyCtxt<'tcx>,
+    type_def_id: DefId,
+) -> DiagnosticBuilder<'tcx> {
+    assert!(type_def_id.is_local());
+    let span = tcx.hir().span_if_local(type_def_id).unwrap();
+    let span = tcx.sess.source_map().def_span(span);
+    let mut err = struct_span_err!(
+        tcx.sess,
+        span,
+        E0072,
+        "recursive type `{}` has infinite size",
+        tcx.def_path_str(type_def_id)
+    );
+    err.span_label(span, "recursive type has infinite size");
+    err.help(&format!(
+        "insert indirection (e.g., a `Box`, `Rc`, or `&`) \
                            at some point to make `{}` representable",
-            self.def_path_str(type_def_id)
-        ));
-        err
+        tcx.def_path_str(type_def_id)
+    ));
+    err
+}
+
+pub fn report_object_safety_error(
+    tcx: TyCtxt<'tcx>,
+    span: Span,
+    trait_def_id: DefId,
+    violations: Vec<ObjectSafetyViolation>,
+) -> DiagnosticBuilder<'tcx> {
+    let trait_str = tcx.def_path_str(trait_def_id);
+    let span = tcx.sess.source_map().def_span(span);
+    let mut err = struct_span_err!(
+        tcx.sess,
+        span,
+        E0038,
+        "the trait `{}` cannot be made into an object",
+        trait_str
+    );
+    err.span_label(span, format!("the trait `{}` cannot be made into an object", trait_str));
+
+    let mut reported_violations = FxHashSet::default();
+    for violation in violations {
+        if reported_violations.insert(violation.clone()) {
+            match violation.span() {
+                Some(span) => err.span_label(span, violation.error_msg()),
+                None => err.note(&violation.error_msg()),
+            };
+        }
     }
 
-    pub fn report_object_safety_error(
-        self,
-        span: Span,
-        trait_def_id: DefId,
-        violations: Vec<ObjectSafetyViolation>,
-    ) -> DiagnosticBuilder<'tcx> {
-        let trait_str = self.def_path_str(trait_def_id);
-        let span = self.sess.source_map().def_span(span);
-        let mut err = struct_span_err!(
-            self.sess,
-            span,
-            E0038,
-            "the trait `{}` cannot be made into an object",
-            trait_str
-        );
-        err.span_label(span, format!("the trait `{}` cannot be made into an object", trait_str));
-
-        let mut reported_violations = FxHashSet::default();
-        for violation in violations {
-            if reported_violations.insert(violation.clone()) {
-                match violation.span() {
-                    Some(span) => err.span_label(span, violation.error_msg()),
-                    None => err.note(&violation.error_msg()),
-                };
-            }
-        }
-
-        if self.sess.trait_methods_not_found.borrow().contains(&span) {
-            // Avoid emitting error caused by non-existing method (#58734)
-            err.cancel();
-        }
-
-        err
+    if tcx.sess.trait_methods_not_found.borrow().contains(&span) {
+        // Avoid emitting error caused by non-existing method (#58734)
+        err.cancel();
     }
+
+    err
 }
 
 impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
@@ -2075,7 +2075,12 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 }
                 let mut err = self.need_type_info_err(body_id, span, self_ty, ErrorCode::E0283);
                 err.note(&format!("cannot resolve `{}`", predicate));
-                if let (Ok(ref snippet), ObligationCauseCode::BindingObligation(ref def_id, _)) =
+                if let ObligationCauseCode::ItemObligation(def_id) = obligation.cause.code {
+                    self.suggest_fully_qualified_path(&mut err, def_id, span, trait_ref.def_id());
+                } else if let (
+                    Ok(ref snippet),
+                    ObligationCauseCode::BindingObligation(ref def_id, _),
+                ) =
                     (self.tcx.sess.source_map().span_to_snippet(span), &obligation.cause.code)
                 {
                     let generics = self.tcx.generics_of(*def_id);
@@ -2171,6 +2176,30 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         };
         self.note_obligation_cause(&mut err, obligation);
         err.emit();
+    }
+
+    fn suggest_fully_qualified_path(
+        &self,
+        err: &mut DiagnosticBuilder<'_>,
+        def_id: DefId,
+        span: Span,
+        trait_ref: DefId,
+    ) {
+        if let Some(assoc_item) = self.tcx.opt_associated_item(def_id) {
+            if let ty::AssocKind::Const | ty::AssocKind::Type = assoc_item.kind {
+                err.note(&format!(
+                    "{}s cannot be accessed directly on a `trait`, they can only be \
+                        accessed through a specific `impl`",
+                    assoc_item.kind.suggestion_descr(),
+                ));
+                err.span_suggestion(
+                    span,
+                    "use the fully qualified path to an implementation",
+                    format!("<Type as {}>::{}", self.tcx.def_path_str(trait_ref), assoc_item.ident),
+                    Applicability::HasPlaceholders,
+                );
+            }
+        }
     }
 
     /// Returns `true` if the trait predicate may apply for *some* assignment

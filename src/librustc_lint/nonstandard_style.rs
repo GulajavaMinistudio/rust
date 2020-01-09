@@ -1,10 +1,10 @@
 use lint::{EarlyContext, LateContext, LintArray, LintContext};
 use lint::{EarlyLintPass, LateLintPass, LintPass};
-use rustc::hir::intravisit::FnKind;
 use rustc::lint;
 use rustc::ty;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
+use rustc_hir::intravisit::FnKind;
 use rustc_hir::{GenericParamKind, PatKind};
 use rustc_span::symbol::sym;
 use rustc_span::{symbol::Ident, BytePos, Span};
@@ -140,6 +140,12 @@ impl EarlyLintPass for NonCamelCaseTypes {
             | ast::ItemKind::Union(..) => self.check_case(cx, "type", &it.ident),
             ast::ItemKind::Trait(..) => self.check_case(cx, "trait", &it.ident),
             _ => (),
+        }
+    }
+
+    fn check_trait_item(&mut self, cx: &EarlyContext<'_>, it: &ast::AssocItem) {
+        if let ast::AssocItemKind::TyAlias(..) = it.kind {
+            self.check_case(cx, "associated type", &it.ident);
         }
     }
 
