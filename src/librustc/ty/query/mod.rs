@@ -1,7 +1,7 @@
 use crate::dep_graph::{self, DepNode};
 use crate::hir::exports::Export;
 use crate::infer::canonical::{self, Canonical};
-use crate::lint;
+use crate::lint::LintLevelMap;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
 use crate::middle::cstore::{CrateSource, DepKind, NativeLibraryKind};
 use crate::middle::cstore::{ExternCrate, ForeignModule, LinkagePreference, NativeLibrary};
@@ -80,6 +80,9 @@ pub(crate) use self::config::QueryDescription;
 
 mod on_disk_cache;
 pub use self::on_disk_cache::OnDiskCache;
+
+mod profiling_support;
+pub use self::profiling_support::{IntoSelfProfilingString, QueryKeyStringBuilder};
 
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method

@@ -96,12 +96,12 @@
 use self::LiveNodeKind::*;
 use self::VarKind::*;
 
-use errors::Applicability;
 use rustc::hir::map::Map;
 use rustc::lint;
 use rustc::ty::query::Providers;
 use rustc::ty::{self, TyCtxt};
 use rustc_data_structures::fx::FxIndexMap;
+use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_hir::def::*;
 use rustc_hir::def_id::DefId;
@@ -1064,7 +1064,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
                             .sess
                             .struct_span_err(expr.span, "`break` to unknown label")
                             .emit();
-                        errors::FatalError.raise()
+                        rustc_errors::FatalError.raise()
                     }
                 }
             }
@@ -1513,13 +1513,16 @@ impl<'tcx> Liveness<'_, 'tcx> {
                 if ln == self.s.exit_ln { false } else { self.assigned_on_exit(ln, var).is_some() };
 
             if is_assigned {
-                self.ir.tcx.lint_hir_note(
-                    lint::builtin::UNUSED_VARIABLES,
-                    hir_id,
-                    spans,
-                    &format!("variable `{}` is assigned to, but never used", name),
-                    &format!("consider using `_{}` instead", name),
-                );
+                self.ir
+                    .tcx
+                    .struct_span_lint_hir(
+                        lint::builtin::UNUSED_VARIABLES,
+                        hir_id,
+                        spans,
+                        &format!("variable `{}` is assigned to, but never used", name),
+                    )
+                    .note(&format!("consider using `_{}` instead", name))
+                    .emit();
             } else {
                 let mut err = self.ir.tcx.struct_span_lint_hir(
                     lint::builtin::UNUSED_VARIABLES,

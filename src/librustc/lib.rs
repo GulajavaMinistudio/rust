@@ -31,7 +31,6 @@
 #![feature(bool_to_option)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(const_fn)]
 #![feature(const_transmute)]
 #![feature(core_intrinsics)]
 #![feature(drain_filter)]
@@ -50,6 +49,7 @@
 #![feature(thread_local)]
 #![feature(trace_macros)]
 #![feature(trusted_len)]
+#![feature(vec_remove_item)]
 #![feature(stmt_expr_attributes)]
 #![feature(integer_atomics)]
 #![feature(test)]
@@ -71,8 +71,6 @@ extern crate rustc_macros;
 extern crate rustc_data_structures;
 #[macro_use]
 extern crate log;
-#[macro_use]
-extern crate syntax;
 #[macro_use]
 extern crate smallvec;
 
@@ -100,7 +98,6 @@ pub mod ty;
 
 pub mod util {
     pub mod bug;
-    pub mod captures;
     pub mod common;
 }
 

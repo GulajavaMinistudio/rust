@@ -4,8 +4,6 @@ use crate::passes::{self, BoxedResolver, QueryContext};
 use rustc::arena::Arena;
 use rustc::dep_graph::DepGraph;
 use rustc::hir::map;
-use rustc::lint;
-use rustc::lint::LintStore;
 use rustc::session::config::{OutputFilenames, OutputType};
 use rustc::session::Session;
 use rustc::ty::steal::Steal;
@@ -15,6 +13,7 @@ use rustc_codegen_utils::codegen_backend::CodegenBackend;
 use rustc_data_structures::sync::{Lrc, Once, WorkerLocal};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_incremental::DepGraphFuture;
+use rustc_lint::LintStore;
 use std::any::Any;
 use std::cell::{Ref, RefCell, RefMut};
 use std::mem;
@@ -133,7 +132,7 @@ impl<'tcx> Queries<'tcx> {
             let crate_name = self.crate_name()?.peek().clone();
             let krate = self.parse()?.take();
 
-            let empty: &(dyn Fn(&Session, &mut lint::LintStore) + Sync + Send) = &|_, _| {};
+            let empty: &(dyn Fn(&Session, &mut LintStore) + Sync + Send) = &|_, _| {};
             let result = passes::register_plugins(
                 self.session(),
                 &*self.codegen_backend().metadata_loader(),
@@ -176,6 +175,7 @@ impl<'tcx> Queries<'tcx> {
         self.expansion.compute(|| {
             let crate_name = self.crate_name()?.peek().clone();
             let (krate, lint_store) = self.register_plugins()?.take();
+            let _timer = self.session().timer("configure_and_expand");
             passes::configure_and_expand(
                 self.session().clone(),
                 lint_store.clone(),
@@ -256,6 +256,7 @@ impl<'tcx> Queries<'tcx> {
             let lint_store = self.expansion()?.peek().2.clone();
             let hir = self.lower_to_hir()?.peek();
             let (ref hir_forest, ref resolver_outputs) = &*hir;
+            let _timer = self.session().timer("create_global_ctxt");
             Ok(passes::create_global_ctxt(
                 self.compiler,
                 lint_store,
@@ -312,14 +313,19 @@ pub struct Linker {
 
 impl Linker {
     pub fn link(self) -> Result<()> {
-        self.codegen_backend
+        let r = self
+            .codegen_backend
             .join_codegen_and_link(
                 self.ongoing_codegen,
                 &self.sess,
                 &self.dep_graph,
                 &self.prepare_outputs,
             )
-            .map_err(|_| ErrorReported)
+            .map_err(|_| ErrorReported);
+        let prof = self.sess.prof.clone();
+        let dep_graph = self.dep_graph;
+        prof.generic_activity("drop_dep_graph").run(move || drop(dep_graph));
+        r
     }
 }
 
@@ -328,6 +334,7 @@ impl Compiler {
     where
         F: for<'tcx> FnOnce(&'tcx Queries<'tcx>) -> T,
     {
+        let mut _timer = None;
         let queries = Queries::new(&self);
         let ret = f(&queries);
 
@@ -336,6 +343,8 @@ impl Compiler {
                 gcx.peek().print_stats();
             }
         }
+
+        _timer = Some(self.session().timer("free_global_ctxt"));
 
         ret
     }

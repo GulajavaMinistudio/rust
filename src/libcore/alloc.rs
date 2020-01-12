@@ -17,7 +17,7 @@ use crate::usize;
 #[derive(Debug)]
 pub struct Excess(pub NonNull<u8>, pub usize);
 
-fn size_align<T>() -> (usize, usize) {
+const fn size_align<T>() -> (usize, usize) {
     (mem::size_of::<T>(), mem::align_of::<T>())
 }
 
@@ -64,8 +64,9 @@ impl Layout {
     ///    must not overflow (i.e., the rounded value must be less than
     ///    `usize::MAX`).
     #[stable(feature = "alloc_layout", since = "1.28.0")]
+    #[rustc_const_unstable(feature = "const_alloc_layout", issue = "67521")]
     #[inline]
-    pub fn from_size_align(size: usize, align: usize) -> Result<Self, LayoutErr> {
+    pub const fn from_size_align(size: usize, align: usize) -> Result<Self, LayoutErr> {
         if !align.is_power_of_two() {
             return Err(LayoutErr { private: () });
         }
@@ -106,28 +107,30 @@ impl Layout {
 
     /// The minimum size in bytes for a memory block of this layout.
     #[stable(feature = "alloc_layout", since = "1.28.0")]
+    #[rustc_const_unstable(feature = "const_alloc_layout", issue = "67521")]
     #[inline]
-    pub fn size(&self) -> usize {
+    pub const fn size(&self) -> usize {
         self.size_
     }
 
     /// The minimum byte alignment for a memory block of this layout.
     #[stable(feature = "alloc_layout", since = "1.28.0")]
+    #[rustc_const_unstable(feature = "const_alloc_layout", issue = "67521")]
     #[inline]
-    pub fn align(&self) -> usize {
+    pub const fn align(&self) -> usize {
         self.align_.get()
     }
 
     /// Constructs a `Layout` suitable for holding a value of type `T`.
     #[stable(feature = "alloc_layout", since = "1.28.0")]
+    #[rustc_const_stable(feature = "alloc_layout_const_new", since = "1.42.0")]
     #[inline]
-    pub fn new<T>() -> Self {
+    pub const fn new<T>() -> Self {
         let (size, align) = size_align::<T>();
         // Note that the align is guaranteed by rustc to be a power of two and
         // the size+align combo is guaranteed to fit in our address space. As a
         // result use the unchecked constructor here to avoid inserting code
         // that panics if it isn't optimized well enough.
-        debug_assert!(Layout::from_size_align(size, align).is_ok());
         unsafe { Layout::from_size_align_unchecked(size, align) }
     }
 
@@ -181,8 +184,9 @@ impl Layout {
     /// address for the whole allocated block of memory. One way to
     /// satisfy this constraint is to ensure `align <= self.align()`.
     #[unstable(feature = "alloc_layout_extra", issue = "55724")]
+    #[rustc_const_unstable(feature = "const_alloc_layout", issue = "67521")]
     #[inline]
-    pub fn padding_needed_for(&self, align: usize) -> usize {
+    pub const fn padding_needed_for(&self, align: usize) -> usize {
         let len = self.size();
 
         // Rounded up value is:

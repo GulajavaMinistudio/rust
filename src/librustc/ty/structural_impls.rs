@@ -45,12 +45,6 @@ impl fmt::Debug for ty::AdtDef {
     }
 }
 
-impl fmt::Debug for ty::ClosureUpvar<'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ClosureUpvar({:?},{:?})", self.res, self.ty)
-    }
-}
-
 impl fmt::Debug for ty::UpvarId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = ty::tls::with(|tcx| tcx.hir().name(self.var_path.hir_id));
@@ -1043,8 +1037,8 @@ impl<'tcx> TypeFoldable<'tcx> for ty::ConstKind<'tcx> {
         match *self {
             ty::ConstKind::Infer(ic) => ty::ConstKind::Infer(ic.fold_with(folder)),
             ty::ConstKind::Param(p) => ty::ConstKind::Param(p.fold_with(folder)),
-            ty::ConstKind::Unevaluated(did, substs) => {
-                ty::ConstKind::Unevaluated(did, substs.fold_with(folder))
+            ty::ConstKind::Unevaluated(did, substs, promoted) => {
+                ty::ConstKind::Unevaluated(did, substs.fold_with(folder), promoted)
             }
             ty::ConstKind::Value(_) | ty::ConstKind::Bound(..) | ty::ConstKind::Placeholder(..) => {
                 *self
@@ -1056,7 +1050,7 @@ impl<'tcx> TypeFoldable<'tcx> for ty::ConstKind<'tcx> {
         match *self {
             ty::ConstKind::Infer(ic) => ic.visit_with(visitor),
             ty::ConstKind::Param(p) => p.visit_with(visitor),
-            ty::ConstKind::Unevaluated(_, substs) => substs.visit_with(visitor),
+            ty::ConstKind::Unevaluated(_, substs, _) => substs.visit_with(visitor),
             ty::ConstKind::Value(_) | ty::ConstKind::Bound(..) | ty::ConstKind::Placeholder(_) => {
                 false
             }

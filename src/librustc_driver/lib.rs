@@ -23,10 +23,7 @@ extern crate lazy_static;
 
 pub extern crate rustc_plugin_impl as plugin;
 
-//use rustc_resolve as resolve;
-use errors::{registry::Registry, PResult};
-use rustc::lint;
-use rustc::lint::Lint;
+use rustc::lint::{Lint, LintId};
 use rustc::middle::cstore::MetadataLoader;
 use rustc::session::config::nightly_options;
 use rustc::session::config::{ErrorOutputType, Input, OutputType, PrintRequest};
@@ -37,10 +34,12 @@ use rustc::util::common::ErrorReported;
 use rustc_codegen_utils::codegen_backend::CodegenBackend;
 use rustc_data_structures::profiling::print_time_passes_entry;
 use rustc_data_structures::sync::SeqCst;
+use rustc_errors::{registry::Registry, PResult};
 use rustc_feature::{find_gated_cfg, UnstableFeatures};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_interface::util::get_builtin_codegen_backend;
 use rustc_interface::{interface, Queries};
+use rustc_lint::LintStore;
 use rustc_metadata::locator;
 use rustc_save_analysis as save;
 use rustc_save_analysis::DumpHandler;
@@ -389,6 +388,7 @@ pub fn run_compiler(
                 })?;
             } else {
                 // Drop AST after creating GlobalCtxt to free memory
+                let _timer = sess.prof.generic_activity("drop_ast");
                 mem::drop(queries.expansion()?.take());
             }
 
@@ -413,6 +413,7 @@ pub fn run_compiler(
         })?;
 
         if let Some(linker) = linker {
+            let _timer = sess.timer("link");
             linker.link()?
         }
 
@@ -809,7 +810,7 @@ the command line flag directly.
     );
 }
 
-fn describe_lints(sess: &Session, lint_store: &lint::LintStore, loaded_plugins: bool) {
+fn describe_lints(sess: &Session, lint_store: &LintStore, loaded_plugins: bool) {
     println!(
         "
 Available lint options:
@@ -830,8 +831,8 @@ Available lint options:
     }
 
     fn sort_lint_groups(
-        lints: Vec<(&'static str, Vec<lint::LintId>, bool)>,
-    ) -> Vec<(&'static str, Vec<lint::LintId>)> {
+        lints: Vec<(&'static str, Vec<LintId>, bool)>,
+    ) -> Vec<(&'static str, Vec<LintId>)> {
         let mut lints: Vec<_> = lints.into_iter().map(|(x, y, _)| (x, y)).collect();
         lints.sort_by_key(|l| l.0);
         lints
@@ -890,7 +891,7 @@ Available lint options:
     println!("    {}  {}", padded("----"), "---------");
     println!("    {}  {}", padded("warnings"), "all lints that are set to issue warnings");
 
-    let print_lint_groups = |lints: Vec<(&'static str, Vec<lint::LintId>)>| {
+    let print_lint_groups = |lints: Vec<(&'static str, Vec<LintId>)>| {
         for (name, to) in lints {
             let name = name.to_lowercase().replace("_", "-");
             let desc = to
@@ -1134,7 +1135,7 @@ fn extra_compiler_flags() -> Option<(Vec<String>, bool)> {
 /// the panic into a `Result` instead.
 pub fn catch_fatal_errors<F: FnOnce() -> R, R>(f: F) -> Result<R, ErrorReported> {
     catch_unwind(panic::AssertUnwindSafe(f)).map_err(|value| {
-        if value.is::<errors::FatalErrorMarker>() {
+        if value.is::<rustc_errors::FatalErrorMarker>() {
             ErrorReported
         } else {
             panic::resume_unwind(value);
@@ -1163,20 +1164,20 @@ pub fn report_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str) {
     // Separate the output with an empty line
     eprintln!();
 
-    let emitter = Box::new(errors::emitter::EmitterWriter::stderr(
-        errors::ColorConfig::Auto,
+    let emitter = Box::new(rustc_errors::emitter::EmitterWriter::stderr(
+        rustc_errors::ColorConfig::Auto,
         None,
         false,
         false,
         None,
         false,
     ));
-    let handler = errors::Handler::with_emitter(true, None, emitter);
+    let handler = rustc_errors::Handler::with_emitter(true, None, emitter);
 
     // a .span_bug or .bug call has already printed what
     // it wants to print.
-    if !info.payload().is::<errors::ExplicitBug>() {
-        let d = errors::Diagnostic::new(errors::Level::Bug, "unexpected panic");
+    if !info.payload().is::<rustc_errors::ExplicitBug>() {
+        let d = rustc_errors::Diagnostic::new(rustc_errors::Level::Bug, "unexpected panic");
         handler.emit_diagnostic(&d);
     }
 

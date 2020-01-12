@@ -82,7 +82,7 @@ rustc_queries! {
             desc { "looking up the native libraries of a linked crate" }
         }
 
-        query lint_levels(_: CrateNum) -> &'tcx lint::LintLevelMap {
+        query lint_levels(_: CrateNum) -> &'tcx LintLevelMap {
             eval_always
             desc { "computing the lint levels for items in this crate" }
         }
@@ -685,10 +685,6 @@ rustc_queries! {
         query has_panic_handler(_: CrateNum) -> bool {
             fatal_cycle
             desc { "checking if the crate has_panic_handler" }
-        }
-        query is_sanitizer_runtime(_: CrateNum) -> bool {
-            fatal_cycle
-            desc { "query a crate is `#![sanitizer_runtime]`" }
         }
         query is_profiler_runtime(_: CrateNum) -> bool {
             fatal_cycle

@@ -905,7 +905,7 @@ pub enum PatKind<'hir> {
     Lit(&'hir Expr<'hir>),
 
     /// A range pattern (e.g., `1..=2` or `1..2`).
-    Range(&'hir Expr<'hir>, &'hir Expr<'hir>, RangeEnd),
+    Range(Option<&'hir Expr<'hir>>, Option<&'hir Expr<'hir>>, RangeEnd),
 
     /// A slice pattern, `[before_0, ..., before_n, (slice, after_0, ..., after_n)?]`.
     ///
@@ -1874,6 +1874,9 @@ pub enum ImplItemKind<'hir> {
     /// An associated `type = impl Trait`.
     OpaqueTy(GenericBounds<'hir>),
 }
+
+// The name of the associated type for `Fn` return types.
+pub const FN_OUTPUT_NAME: Symbol = sym::Output;
 
 /// Bind a type to an associated type (i.e., `A = Foo`).
 ///

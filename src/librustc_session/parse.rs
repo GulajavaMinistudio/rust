@@ -1,15 +1,15 @@
 //! Contains `ParseSess` which holds state living beyond what one `Parser` might.
 //! It also serves as an input to the parser itself.
 
-use crate::lint::BufferedEarlyLint;
+use crate::lint::{BufferedEarlyLint, BuiltinLintDiagnostics, Lint, LintId};
 use crate::node_id::NodeId;
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::{Lock, Lrc, Once};
-use rustc_errors::{
-    emitter::SilentEmitter, Applicability, ColorConfig, DiagnosticBuilder, Handler,
-};
-use rustc_feature::UnstableFeatures;
+use rustc_error_codes::E0658;
+use rustc_errors::{emitter::SilentEmitter, ColorConfig, Handler};
+use rustc_errors::{error_code, Applicability, DiagnosticBuilder};
+use rustc_feature::{find_feature_issue, GateIssue, UnstableFeatures};
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::ExpnId;
 use rustc_span::source_map::{FilePathMapping, SourceMap};
@@ -60,6 +60,45 @@ impl GatedSpans {
         }
         *inner = spans;
     }
+}
+
+/// Construct a diagnostic for a language feature error due to the given `span`.
+/// The `feature`'s `Symbol` is the one you used in `active.rs` and `rustc_span::symbols`.
+pub fn feature_err<'a>(
+    sess: &'a ParseSess,
+    feature: Symbol,
+    span: impl Into<MultiSpan>,
+    explain: &str,
+) -> DiagnosticBuilder<'a> {
+    feature_err_issue(sess, feature, span, GateIssue::Language, explain)
+}
+
+/// Construct a diagnostic for a feature gate error.
+///
+/// This variant allows you to control whether it is a library or language feature.
+/// Almost always, you want to use this for a language feature. If so, prefer `feature_err`.
+pub fn feature_err_issue<'a>(
+    sess: &'a ParseSess,
+    feature: Symbol,
+    span: impl Into<MultiSpan>,
+    issue: GateIssue,
+    explain: &str,
+) -> DiagnosticBuilder<'a> {
+    let mut err = sess.span_diagnostic.struct_span_err_with_code(span, explain, error_code!(E0658));
+
+    if let Some(n) = find_feature_issue(feature, issue) {
+        err.note(&format!(
+            "for more information, see https://github.com/rust-lang/rust/issues/{}",
+            n,
+        ));
+    }
+
+    // #23973: do not suggest `#![feature(...)]` if we are in beta/stable
+    if sess.unstable_features.is_nightly_build() {
+        err.help(&format!("add `#![feature({})]` to the crate attributes to enable", feature));
+    }
+
+    err
 }
 
 /// Info about a parsing session.
@@ -123,17 +162,18 @@ impl ParseSess {
 
     pub fn buffer_lint(
         &self,
-        lint_id: &'static crate::lint::Lint,
+        lint: &'static Lint,
         span: impl Into<MultiSpan>,
-        id: NodeId,
+        node_id: NodeId,
         msg: &str,
     ) {
         self.buffered_lints.with_lock(|buffered_lints| {
             buffered_lints.push(BufferedEarlyLint {
                 span: span.into(),
-                id,
+                node_id,
                 msg: msg.into(),
-                lint_id,
+                lint_id: LintId::of(lint),
+                diagnostic: BuiltinLintDiagnostics::Normal,
             });
         });
     }

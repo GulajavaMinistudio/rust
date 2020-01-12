@@ -14,17 +14,16 @@
 //! upon. As the ast is traversed, this keeps track of the current lint level
 //! for all lint attributes.
 
-use rustc::lint::{EarlyContext, LintStore};
-use rustc::lint::{EarlyLintPass, EarlyLintPassObject};
-use rustc::lint::{LintBuffer, LintContext, LintPass};
-use rustc::session::Session;
-
+use crate::context::{EarlyContext, LintContext, LintStore};
+use crate::passes::{EarlyLintPass, EarlyLintPassObject};
+use rustc_session::lint::{LintBuffer, LintPass};
+use rustc_session::Session;
 use rustc_span::Span;
-use std::slice;
 use syntax::ast;
 use syntax::visit as ast_visit;
 
 use log::debug;
+use std::slice;
 
 macro_rules! run_early_pass { ($cx:expr, $f:ident, $($args:expr),*) => ({
     $cx.pass.$f(&$cx.context, $($args),*);
@@ -291,7 +290,7 @@ macro_rules! early_lint_pass_impl {
     )
 }
 
-early_lint_methods!(early_lint_pass_impl, []);
+crate::early_lint_methods!(early_lint_pass_impl, []);
 
 fn early_lint_crate<T: EarlyLintPass>(
     sess: &Session,

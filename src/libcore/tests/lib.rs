@@ -31,7 +31,6 @@
 #![feature(slice_internals)]
 #![feature(slice_partition_dedup)]
 #![feature(int_error_matching)]
-#![feature(const_fn)]
 #![feature(array_value_iter)]
 #![feature(iter_partition_in_place)]
 #![feature(iter_is_partitioned)]
@@ -40,6 +39,8 @@
 #![feature(slice_from_raw_parts)]
 #![feature(const_slice_from_raw_parts)]
 #![feature(const_raw_ptr_deref)]
+#![feature(never_type)]
+#![feature(unwrap_infallible)]
 
 extern crate test;
 

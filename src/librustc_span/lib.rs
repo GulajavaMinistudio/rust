@@ -5,7 +5,6 @@
 //! This API is completely unstable and subject to change.
 
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
-#![feature(const_fn)]
 #![feature(crate_visibility_modifier)]
 #![feature(nll)]
 #![feature(optin_builtin_traits)]
@@ -307,6 +306,11 @@ impl Span {
     #[inline]
     pub fn from_expansion(self) -> bool {
         self.ctxt() != SyntaxContext::root()
+    }
+
+    /// Returns `true` if `span` originates in a derive-macro's expansion.
+    pub fn in_derive_expansion(self) -> bool {
+        matches!(self.ctxt().outer_expn_data().kind, ExpnKind::Macro(MacroKind::Derive, _))
     }
 
     #[inline]

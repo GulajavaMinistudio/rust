@@ -16,8 +16,8 @@ use rustc::mir::{self, interpret, BodyAndCache, Promoted};
 use rustc::session::Session;
 use rustc::ty::codec::TyDecoder;
 use rustc::ty::{self, Ty, TyCtxt};
-use rustc::util::captures::Captures;
 use rustc::util::common::record_time;
+use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::svh::Svh;
@@ -1585,10 +1585,6 @@ impl<'a, 'tcx> CrateMetadata {
 
     crate fn is_panic_runtime(&self) -> bool {
         self.root.panic_runtime
-    }
-
-    crate fn is_sanitizer_runtime(&self) -> bool {
-        self.root.sanitizer_runtime
     }
 
     crate fn is_profiler_runtime(&self) -> bool {

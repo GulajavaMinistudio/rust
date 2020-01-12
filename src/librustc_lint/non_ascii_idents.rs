@@ -1,4 +1,4 @@
-use crate::lint::{EarlyContext, EarlyLintPass, LintArray, LintContext, LintPass};
+use crate::{EarlyContext, EarlyLintPass, LintContext};
 use syntax::ast;
 
 declare_lint! {

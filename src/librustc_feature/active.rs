@@ -192,9 +192,6 @@ declare_features! (
     /// Allows using the `unadjusted` ABI; perma-unstable.
     (active, abi_unadjusted, "1.16.0", None, None),
 
-    /// Allows identifying crates that contain sanitizer runtimes.
-    (active, sanitizer_runtime, "1.17.0", None, None),
-
     /// Used to identify crates that contain the profiler runtime.
     (active, profiler_runtime, "1.18.0", None, None),
 
@@ -534,6 +531,9 @@ declare_features! (
     /// Allows the use of `#[cfg(sanitize = "option")]`; set when -Zsanitizer is used.
     (active, cfg_sanitize, "1.41.0", Some(39699), None),
 
+    /// Allows using `..X`, `..=X`, `...X`, and `X..` as a pattern.
+    (active, half_open_range_patterns, "1.41.0", Some(67264), None),
+
     /// Allows using `&mut` in constant functions.
     (active, const_mut_refs, "1.41.0", Some(57349), None),
 
@@ -543,6 +543,12 @@ declare_features! (
     /// Allows bindings in the subpattern of a binding pattern.
     /// For example, you can write `x @ Some(y)`.
     (active, bindings_after_at, "1.41.0", Some(65490), None),
+
+    /// Allows `impl const Trait for T` syntax.
+    (active, const_trait_impl, "1.42.0", Some(67792), None),
+
+    /// Allows `T: ?const Trait` syntax in bounds.
+    (active, const_trait_bound_opt_out, "1.42.0", Some(67794), None),
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
@@ -559,4 +565,6 @@ pub const INCOMPLETE_FEATURES: &[Symbol] = &[
     sym::or_patterns,
     sym::let_chains,
     sym::raw_dylib,
+    sym::const_trait_impl,
+    sym::const_trait_bound_opt_out,
 ];

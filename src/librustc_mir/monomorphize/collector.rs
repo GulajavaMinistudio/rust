@@ -182,11 +182,11 @@ use rustc::mir::interpret::{AllocId, ConstValue};
 use rustc::mir::interpret::{ErrorHandled, GlobalAlloc, Scalar};
 use rustc::mir::mono::{InstantiationMode, MonoItem};
 use rustc::mir::visit::Visitor as MirVisitor;
-use rustc::mir::{self, Location, PlaceBase, Static, StaticKind};
+use rustc::mir::{self, Local, Location};
 use rustc::session::config::EntryFnType;
 use rustc::ty::adjustment::{CustomCoerceUnsized, PointerCast};
 use rustc::ty::print::obsolete::DefPathBasedNames;
-use rustc::ty::subst::{InternalSubsts, Subst, SubstsRef};
+use rustc::ty::subst::{InternalSubsts, SubstsRef};
 use rustc::ty::{self, GenericParamDefKind, Instance, Ty, TyCtxt, TypeFoldable};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::{par_iter, MTLock, MTRef, ParallelIterator};
@@ -194,7 +194,7 @@ use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, DefIdMap, LOCAL_CRATE};
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_index::bit_set::GrowableBitSet;
-
+use smallvec::SmallVec;
 use std::iter;
 
 #[derive(PartialEq)]
@@ -227,12 +227,7 @@ impl<'tcx> InliningMap<'tcx> {
         }
     }
 
-    fn record_accesses<I>(&mut self, source: MonoItem<'tcx>, new_targets: I)
-    where
-        I: Iterator<Item = (MonoItem<'tcx>, bool)> + ExactSizeIterator,
-    {
-        assert!(!self.index.contains_key(&source));
-
+    fn record_accesses(&mut self, source: MonoItem<'tcx>, new_targets: &[(MonoItem<'tcx>, bool)]) {
         let start_index = self.targets.len();
         let new_items_count = new_targets.len();
         let new_items_count_total = new_items_count + self.targets.len();
@@ -240,15 +235,15 @@ impl<'tcx> InliningMap<'tcx> {
         self.targets.reserve(new_items_count);
         self.inlines.ensure(new_items_count_total);
 
-        for (i, (target, inline)) in new_targets.enumerate() {
-            self.targets.push(target);
-            if inline {
+        for (i, (target, inline)) in new_targets.iter().enumerate() {
+            self.targets.push(*target);
+            if *inline {
                 self.inlines.insert(i + start_index);
             }
         }
 
         let end_index = self.targets.len();
-        self.index.insert(source, (start_index, end_index));
+        assert!(self.index.insert(source, (start_index, end_index)).is_none());
     }
 
     // Internally iterate over all items referenced by `source` which will be
@@ -403,10 +398,15 @@ fn record_accesses<'tcx>(
         mono_item.instantiation_mode(tcx) == InstantiationMode::LocalCopy
     };
 
-    let accesses =
-        callees.into_iter().map(|mono_item| (*mono_item, is_inlining_candidate(mono_item)));
+    // We collect this into a `SmallVec` to avoid calling `is_inlining_candidate` in the lock.
+    // FIXME: Call `is_inlining_candidate` when pushing to `neighbors` in `collect_items_rec`
+    // instead to avoid creating this `SmallVec`.
+    let accesses: SmallVec<[_; 128]> = callees
+        .into_iter()
+        .map(|mono_item| (*mono_item, is_inlining_candidate(mono_item)))
+        .collect();
 
-    inlining_map.lock_mut().record_accesses(caller, accesses);
+    inlining_map.lock_mut().record_accesses(caller, &accesses);
 }
 
 fn check_recursion_limit<'tcx>(
@@ -642,39 +642,10 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
 
     fn visit_place_base(
         &mut self,
-        place_base: &mir::PlaceBase<'tcx>,
+        _place_local: &Local,
         _context: mir::visit::PlaceContext,
-        location: Location,
+        _location: Location,
     ) {
-        match place_base {
-            PlaceBase::Static(box Static { kind: StaticKind::Static, def_id, .. }) => {
-                debug!("visiting static {:?} @ {:?}", def_id, location);
-
-                let tcx = self.tcx;
-                let instance = Instance::mono(tcx, *def_id);
-                if should_monomorphize_locally(tcx, &instance) {
-                    self.output.push(MonoItem::Static(*def_id));
-                }
-            }
-            PlaceBase::Static(box Static {
-                kind: StaticKind::Promoted(promoted, substs),
-                def_id,
-                ..
-            }) => {
-                let instance = Instance::new(*def_id, substs.subst(self.tcx, self.param_substs));
-                match self.tcx.const_eval_promoted(instance, *promoted) {
-                    Ok(val) => collect_const(self.tcx, val, substs, self.output),
-                    Err(ErrorHandled::Reported) => {}
-                    Err(ErrorHandled::TooGeneric) => {
-                        let span = self.tcx.promoted_mir(*def_id)[*promoted].span;
-                        span_bug!(span, "collection encountered polymorphic constant")
-                    }
-                }
-            }
-            PlaceBase::Local(_) => {
-                // Locals have no relevance for collector.
-            }
-        }
     }
 }
 
@@ -1249,8 +1220,8 @@ fn collect_const<'tcx>(
                 collect_miri(tcx, id, output);
             }
         }
-        ty::ConstKind::Unevaluated(def_id, substs) => {
-            match tcx.const_eval_resolve(param_env, def_id, substs, None) {
+        ty::ConstKind::Unevaluated(def_id, substs, promoted) => {
+            match tcx.const_eval_resolve(param_env, def_id, substs, promoted, None) {
                 Ok(val) => collect_const(tcx, val, param_substs, output),
                 Err(ErrorHandled::Reported) => {}
                 Err(ErrorHandled::TooGeneric) => {

@@ -90,7 +90,6 @@ pub mod writeback;
 use crate::astconv::{AstConv, PathSeg};
 use crate::middle::lang_items;
 use crate::namespace::Namespace;
-use errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, DiagnosticId};
 use rustc::hir::map::Map;
 use rustc::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
 use rustc::infer::error_reporting::TypeAnnotationNeeded::E0282;
@@ -100,6 +99,7 @@ use rustc::infer::unify_key::{ConstVariableOrigin, ConstVariableOriginKind};
 use rustc::infer::{self, InferCtxt, InferOk, InferResult};
 use rustc::middle::region;
 use rustc::mir::interpret::ConstValue;
+use rustc::session::parse::feature_err;
 use rustc::traits::error_reporting::recursive_type_with_infinite_size_error;
 use rustc::traits::{self, ObligationCause, ObligationCauseCode, TraitEngine};
 use rustc::ty::adjustment::{
@@ -114,7 +114,9 @@ use rustc::ty::{
     self, AdtKind, CanonicalUserType, Const, GenericParamDefKind, RegionKind, ToPolyTraitRef,
     ToPredicate, Ty, TyCtxt, UserType,
 };
+use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, DiagnosticId};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LOCAL_CRATE};
@@ -129,7 +131,6 @@ use rustc_span::{self, BytePos, MultiSpan, Span};
 use rustc_target::spec::abi::Abi;
 use syntax::ast;
 use syntax::attr;
-use syntax::feature_gate::feature_err;
 use syntax::util::parser::ExprPrecedence;
 
 use rustc_error_codes::*;
@@ -146,7 +147,6 @@ use crate::lint;
 use crate::require_c_abi_if_c_variadic;
 use crate::session::config::EntryFnType;
 use crate::session::Session;
-use crate::util::captures::Captures;
 use crate::util::common::{indenter, ErrorReported};
 use crate::TypeAndSubsts;
 
@@ -164,7 +164,7 @@ macro_rules! type_error_struct {
         if $typ.references_error() {
             $session.diagnostic().struct_dummy()
         } else {
-            errors::struct_span_err!($session, $span, $code, $($message)*)
+            rustc_errors::struct_span_err!($session, $span, $code, $($message)*)
         }
     })
 }
@@ -4746,14 +4746,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         .join(", ");
                 }
                 Some(Node::Expr(hir::Expr {
-                    kind: ExprKind::Closure(_, _, body_id, closure_span, _),
+                    kind: ExprKind::Closure(_, _, body_id, _, _),
                     span: full_closure_span,
                     ..
                 })) => {
                     if *full_closure_span == expr.span {
                         return false;
                     }
-                    err.span_label(*closure_span, "closure defined here");
                     msg = "call this closure";
                     let body = hir.body(*body_id);
                     sugg_call = body
@@ -4953,9 +4952,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 | ExprKind::Loop(..)
                 | ExprKind::Match(..)
                 | ExprKind::Block(..) => {
-                    let sp = self.tcx.sess.source_map().next_point(cause_span);
                     err.span_suggestion(
-                        sp,
+                        cause_span.shrink_to_hi(),
                         "try adding a semicolon",
                         ";".to_string(),
                         Applicability::MachineApplicable,

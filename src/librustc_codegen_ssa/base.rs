@@ -14,8 +14,8 @@
 //!   int)` and `rec(x=int, y=int, z=int)` will have the same `llvm::Type`.
 
 use crate::back::write::{
-    start_async_codegen, submit_post_lto_module_to_llvm, submit_pre_lto_module_to_llvm,
-    OngoingCodegen,
+    start_async_codegen, submit_codegened_module_to_llvm, submit_post_lto_module_to_llvm,
+    submit_pre_lto_module_to_llvm, OngoingCodegen,
 };
 use crate::common::{IntPredicate, RealPredicate, TypeKind};
 use crate::meth;
@@ -40,6 +40,7 @@ use rustc::ty::{self, Instance, Ty, TyCtxt};
 use rustc_codegen_utils::{check_for_rustc_errors_attr, symbol_names_test};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::profiling::print_time_passes_entry;
+use rustc_data_structures::sync::{par_iter, Lock, ParallelIterator};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_index::vec::Idx;
@@ -85,7 +86,7 @@ pub fn bin_op_to_icmp_predicate(op: hir::BinOpKind, signed: bool) -> IntPredicat
         }
         op => bug!(
             "comparison_op_to_icmp_predicate: expected comparison operator, \
-                  found {:?}",
+             found {:?}",
             op
         ),
     }
@@ -102,7 +103,7 @@ pub fn bin_op_to_fcmp_predicate(op: hir::BinOpKind) -> RealPredicate {
         op => {
             bug!(
                 "comparison_op_to_fcmp_predicate: expected comparison operator, \
-                  found {:?}",
+                 found {:?}",
                 op
             );
         }
@@ -519,7 +520,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
         ongoing_codegen.codegen_finished(tcx);
 
-        assert_and_save_dep_graph(tcx);
+        finalize_tcx(tcx);
 
         ongoing_codegen.check_for_errors(tcx.sess);
 
@@ -606,20 +607,83 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
         codegen_units
     };
 
-    let mut total_codegen_time = Duration::new(0, 0);
+    let total_codegen_time = Lock::new(Duration::new(0, 0));
 
-    for cgu in codegen_units.into_iter() {
+    // The non-parallel compiler can only translate codegen units to LLVM IR
+    // on a single thread, leading to a staircase effect where the N LLVM
+    // threads have to wait on the single codegen threads to generate work
+    // for them. The parallel compiler does not have this restriction, so
+    // we can pre-load the LLVM queue in parallel before handing off
+    // coordination to the OnGoingCodegen scheduler.
+    //
+    // This likely is a temporary measure. Once we don't have to support the
+    // non-parallel compiler anymore, we can compile CGUs end-to-end in
+    // parallel and get rid of the complicated scheduling logic.
+    let pre_compile_cgus = |cgu_reuse: &[CguReuse]| {
+        if cfg!(parallel_compiler) {
+            tcx.sess.time("compile_first_CGU_batch", || {
+                // Try to find one CGU to compile per thread.
+                let cgus: Vec<_> = cgu_reuse
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, reuse)| reuse == &CguReuse::No)
+                    .take(tcx.sess.threads())
+                    .collect();
+
+                // Compile the found CGUs in parallel.
+                par_iter(cgus)
+                    .map(|(i, _)| {
+                        let start_time = Instant::now();
+                        let module = backend.compile_codegen_unit(tcx, codegen_units[i].name());
+                        let mut time = total_codegen_time.lock();
+                        *time += start_time.elapsed();
+                        (i, module)
+                    })
+                    .collect()
+            })
+        } else {
+            FxHashMap::default()
+        }
+    };
+
+    let mut cgu_reuse = Vec::new();
+    let mut pre_compiled_cgus: Option<FxHashMap<usize, _>> = None;
+
+    for (i, cgu) in codegen_units.iter().enumerate() {
         ongoing_codegen.wait_for_signal_to_codegen_item();
         ongoing_codegen.check_for_errors(tcx.sess);
 
-        let cgu_reuse = determine_cgu_reuse(tcx, &cgu);
+        // Do some setup work in the first iteration
+        if pre_compiled_cgus.is_none() {
+            // Calculate the CGU reuse
+            cgu_reuse = tcx.sess.time("find_cgu_reuse", || {
+                codegen_units.iter().map(|cgu| determine_cgu_reuse(tcx, &cgu)).collect()
+            });
+            // Pre compile some CGUs
+            pre_compiled_cgus = Some(pre_compile_cgus(&cgu_reuse));
+        }
+
+        let cgu_reuse = cgu_reuse[i];
         tcx.sess.cgu_reuse_tracker.set_actual_reuse(&cgu.name().as_str(), cgu_reuse);
 
         match cgu_reuse {
             CguReuse::No => {
-                let start_time = Instant::now();
-                backend.compile_codegen_unit(tcx, cgu.name(), &ongoing_codegen.coordinator_send);
-                total_codegen_time += start_time.elapsed();
+                let (module, cost) =
+                    if let Some(cgu) = pre_compiled_cgus.as_mut().unwrap().remove(&i) {
+                        cgu
+                    } else {
+                        let start_time = Instant::now();
+                        let module = backend.compile_codegen_unit(tcx, cgu.name());
+                        let mut time = total_codegen_time.lock();
+                        *time += start_time.elapsed();
+                        module
+                    };
+                submit_codegened_module_to_llvm(
+                    &backend,
+                    &ongoing_codegen.coordinator_send,
+                    module,
+                    cost,
+                );
                 false
             }
             CguReuse::PreLto => {
@@ -652,7 +716,11 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
     // Since the main thread is sometimes blocked during codegen, we keep track
     // -Ztime-passes output manually.
-    print_time_passes_entry(tcx.sess.time_passes(), "codegen_to_LLVM_IR", total_codegen_time);
+    print_time_passes_entry(
+        tcx.sess.time_passes(),
+        "codegen_to_LLVM_IR",
+        total_codegen_time.into_inner(),
+    );
 
     ::rustc_incremental::assert_module_sources::assert_module_sources(tcx);
 
@@ -660,7 +728,8 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
 
     ongoing_codegen.check_for_errors(tcx.sess);
 
-    assert_and_save_dep_graph(tcx);
+    finalize_tcx(tcx);
+
     ongoing_codegen.into_inner()
 }
 
@@ -711,10 +780,16 @@ impl<B: ExtraBackendMethods> Drop for AbortCodegenOnDrop<B> {
     }
 }
 
-fn assert_and_save_dep_graph(tcx: TyCtxt<'_>) {
+fn finalize_tcx(tcx: TyCtxt<'_>) {
     tcx.sess.time("assert_dep_graph", || ::rustc_incremental::assert_dep_graph(tcx));
-
     tcx.sess.time("serialize_dep_graph", || ::rustc_incremental::save_dep_graph(tcx));
+
+    // We assume that no queries are run past here. If there are new queries
+    // after this point, they'll show up as "<unknown>" in self-profiling data.
+    {
+        let _prof_timer = tcx.prof.generic_activity("self_profile_alloc_query_strings");
+        tcx.alloc_self_profile_query_strings();
+    }
 }
 
 impl CrateInfo {
@@ -723,7 +798,6 @@ impl CrateInfo {
             panic_runtime: None,
             compiler_builtins: None,
             profiler_runtime: None,
-            sanitizer_runtime: None,
             is_no_builtins: Default::default(),
             native_libraries: Default::default(),
             used_libraries: tcx.native_libraries(LOCAL_CRATE),
@@ -758,9 +832,6 @@ impl CrateInfo {
             }
             if tcx.is_profiler_runtime(cnum) {
                 info.profiler_runtime = Some(cnum);
-            }
-            if tcx.is_sanitizer_runtime(cnum) {
-                info.sanitizer_runtime = Some(cnum);
             }
             if tcx.is_no_builtins(cnum) {
                 info.is_no_builtins.insert(cnum);

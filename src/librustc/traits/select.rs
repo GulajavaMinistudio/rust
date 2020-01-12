@@ -102,7 +102,7 @@ pub enum IntercrateAmbiguityCause {
 impl IntercrateAmbiguityCause {
     /// Emits notes when the overlap is caused by complex intercrate ambiguities.
     /// See #23980 for details.
-    pub fn add_intercrate_ambiguity_hint(&self, err: &mut errors::DiagnosticBuilder<'_>) {
+    pub fn add_intercrate_ambiguity_hint(&self, err: &mut rustc_errors::DiagnosticBuilder<'_>) {
         err.note(&self.intercrate_ambiguity_hint());
     }
 
@@ -802,8 +802,13 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
             ty::Predicate::ConstEvaluatable(def_id, substs) => {
                 if !(obligation.param_env, substs).has_local_value() {
-                    match self.tcx().const_eval_resolve(obligation.param_env, def_id, substs, None)
-                    {
+                    match self.tcx().const_eval_resolve(
+                        obligation.param_env,
+                        def_id,
+                        substs,
+                        None,
+                        None,
+                    ) {
                         Ok(_) => Ok(EvaluatedToOk),
                         Err(_) => Ok(EvaluatedToErr),
                     }
