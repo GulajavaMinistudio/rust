@@ -52,6 +52,16 @@ impl<'tcx> Key for mir::interpret::GlobalId<'tcx> {
     }
 }
 
+impl<'tcx> Key for mir::interpret::LitToConstInput<'tcx> {
+    fn query_crate(&self) -> CrateNum {
+        LOCAL_CRATE
+    }
+
+    fn default_span(&self, _tcx: TyCtxt<'_>) -> Span {
+        DUMMY_SP
+    }
+}
+
 impl Key for CrateNum {
     fn query_crate(&self) -> CrateNum {
         *self
@@ -107,6 +117,15 @@ impl Key for (DefId, SimplifiedType) {
 }
 
 impl<'tcx> Key for (DefId, SubstsRef<'tcx>) {
+    fn query_crate(&self) -> CrateNum {
+        self.0.krate
+    }
+    fn default_span(&self, tcx: TyCtxt<'_>) -> Span {
+        self.0.default_span(tcx)
+    }
+}
+
+impl<'tcx> Key for (DefId, SubstsRef<'tcx>, traits::TraitQueryMode) {
     fn query_crate(&self) -> CrateNum {
         self.0.krate
     }
