@@ -339,7 +339,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                 }
             }
 
-            ast::ItemKind::Impl(_, polarity, defaultness, ..) => {
+            ast::ItemKind::Impl { polarity, defaultness, .. } => {
                 if polarity == ast::ImplPolarity::Negative {
                     gate_feature_post!(
                         &self,
@@ -413,7 +413,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                 self.check_extern(bare_fn_ty.ext);
             }
             ast::TyKind::Never => {
-                gate_feature_post!(&self, never_type, ty.span, "The `!` type is experimental");
+                gate_feature_post!(&self, never_type, ty.span, "the `!` type is experimental");
             }
             _ => {}
         }
