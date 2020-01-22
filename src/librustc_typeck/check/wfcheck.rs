@@ -6,7 +6,9 @@ use rustc::middle::lang_items;
 use rustc::session::parse::feature_err;
 use rustc::traits::{self, ObligationCause, ObligationCauseCode};
 use rustc::ty::subst::{InternalSubsts, Subst};
-use rustc::ty::{self, AdtKind, GenericParamDefKind, ToPredicate, Ty, TyCtxt, TypeFoldable};
+use rustc::ty::{
+    self, AdtKind, GenericParamDefKind, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness,
+};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{struct_span_err, DiagnosticBuilder};
 use rustc_hir::def_id::DefId;
@@ -17,8 +19,6 @@ use syntax::ast;
 
 use rustc_hir as hir;
 use rustc_hir::itemlikevisit::ParItemLikeVisitor;
-
-use rustc_error_codes::*;
 
 /// Helper type of a temporary returned by `.for_item(...)`.
 /// This is necessary because we can't write the following bound:
@@ -955,7 +955,8 @@ fn receiver_is_implemented(
         substs: fcx.tcx.mk_substs_trait(receiver_ty, &[]),
     };
 
-    let obligation = traits::Obligation::new(cause, fcx.param_env, trait_ref.to_predicate());
+    let obligation =
+        traits::Obligation::new(cause, fcx.param_env, trait_ref.without_const().to_predicate());
 
     if fcx.predicate_must_hold_modulo_regions(&obligation) {
         true

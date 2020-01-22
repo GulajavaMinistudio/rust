@@ -109,8 +109,6 @@ use rustc_hir::Node;
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::spec::abi::Abi;
 
-use rustc_error_codes::*;
-
 use std::iter;
 
 use astconv::{AstConv, Bounds};
@@ -382,6 +380,7 @@ pub fn hir_trait_to_predicates<'tcx>(
         &item_cx,
         hir_trait,
         DUMMY_SP,
+        syntax::ast::Constness::NotConst,
         tcx.types.err,
         &mut bounds,
         true,

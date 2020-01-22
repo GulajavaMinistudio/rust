@@ -14,8 +14,6 @@ use rustc_errors::struct_span_err;
 
 use rustc_span::Span;
 
-use rustc_error_codes::*;
-
 /// This function confirms that the `Drop` implementation identified by
 /// `drop_impl_did` is not any more specialized than the type it is
 /// attached to (Issue #8142).
@@ -234,7 +232,7 @@ fn ensure_drop_predicates_are_implied_by_item_defn<'tcx>(
         let predicate_matches_closure = |p: &'_ Predicate<'tcx>| {
             let mut relator: SimpleEqRelation<'tcx> = SimpleEqRelation::new(tcx, self_param_env);
             match (predicate, p) {
-                (Predicate::Trait(a), Predicate::Trait(b)) => relator.relate(a, b).is_ok(),
+                (Predicate::Trait(a, _), Predicate::Trait(b, _)) => relator.relate(a, b).is_ok(),
                 (Predicate::Projection(a), Predicate::Projection(b)) => {
                     relator.relate(a, b).is_ok()
                 }

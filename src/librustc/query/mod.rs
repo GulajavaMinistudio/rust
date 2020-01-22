@@ -557,6 +557,9 @@ rustc_queries! {
             desc { |tcx| "generating MIR shim for `{}`", tcx.def_path_str(key.def_id()) }
         }
 
+        /// The `symbol_name` query provides the symbol name for calling a
+        /// given instance from the local crate. In particular, it will also
+        /// look up the correct symbol name of instances from upstream crates.
         query symbol_name(key: ty::Instance<'tcx>) -> ty::SymbolName {
             no_force
             desc { "computing the symbol for `{}`", key }
@@ -971,6 +974,11 @@ rustc_queries! {
     }
 
     Linking {
+        /// The list of symbols exported from the given crate.
+        ///
+        /// - All names contained in `exported_symbols(cnum)` are guaranteed to
+        ///   correspond to a publicly visible symbol in `cnum` machine code.
+        /// - The `exported_symbols` sets of different crates do not intersect.
         query exported_symbols(_: CrateNum)
             -> Arc<Vec<(ExportedSymbol<'tcx>, SymbolExportLevel)>> {
             desc { "exported_symbols" }
@@ -1148,11 +1156,11 @@ rustc_queries! {
             desc { "normalizing `{:?}`", goal }
         }
 
-        query substitute_normalize_and_test_predicates(key: (DefId, SubstsRef<'tcx>, traits::TraitQueryMode)) -> bool {
+        query substitute_normalize_and_test_predicates(key: (DefId, SubstsRef<'tcx>)) -> bool {
             no_force
             desc { |tcx|
-                "testing substituted normalized predicates in mode {:?}:`{}`",
-                key.2, tcx.def_path_str(key.0)
+                "testing substituted normalized predicates:`{}`",
+                tcx.def_path_str(key.0)
             }
         }
 

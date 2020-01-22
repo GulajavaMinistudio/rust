@@ -65,7 +65,6 @@ use rustc::ty::fold::TypeFoldable;
 use rustc::ty::relate::RelateResult;
 use rustc::ty::subst::SubstsRef;
 use rustc::ty::{self, Ty, TypeAndMut};
-use rustc_error_codes::*;
 use rustc_errors::{struct_span_err, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -565,7 +564,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             let obligation = queue.remove(0);
             debug!("coerce_unsized resolve step: {:?}", obligation);
             let trait_ref = match obligation.predicate {
-                ty::Predicate::Trait(ref tr) if traits.contains(&tr.def_id()) => {
+                ty::Predicate::Trait(ref tr, _) if traits.contains(&tr.def_id()) => {
                     if unsize_did == tr.def_id() {
                         let sty = &tr.skip_binder().input_types().nth(1).unwrap().kind;
                         if let ty::Tuple(..) = sty {

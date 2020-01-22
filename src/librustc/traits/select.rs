@@ -37,7 +37,7 @@ use crate::middle::lang_items;
 use crate::ty::fast_reject;
 use crate::ty::relate::TypeRelation;
 use crate::ty::subst::{Subst, SubstsRef};
-use crate::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable};
+use crate::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness};
 use rustc_hir::def_id::DefId;
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -51,7 +51,7 @@ use std::cmp;
 use std::fmt::{self, Display};
 use std::iter;
 use std::rc::Rc;
-use syntax::attr;
+use syntax::{ast, attr};
 
 pub struct SelectionContext<'cx, 'tcx> {
     infcx: &'cx InferCtxt<'cx, 'tcx>,
@@ -718,7 +718,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
 
         match obligation.predicate {
-            ty::Predicate::Trait(ref t) => {
+            ty::Predicate::Trait(ref t, _) => {
                 debug_assert!(!t.has_escaping_bound_vars());
                 let obligation = obligation.with(t.clone());
                 self.evaluate_trait_predicate_recursively(previous_stack, obligation)
@@ -945,7 +945,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             // trait refs. This is important because it's only a cycle
             // if the regions match exactly.
             let cycle = stack.iter().skip(1).take_while(|s| s.depth >= cycle_depth);
-            let cycle = cycle.map(|stack| ty::Predicate::Trait(stack.obligation.predicate));
+            let cycle = cycle.map(|stack| {
+                ty::Predicate::Trait(stack.obligation.predicate, ast::Constness::NotConst)
+            });
             if self.coinductive_match(cycle) {
                 debug!("evaluate_stack({:?}) --> recursive, coinductive", stack.fresh_trait_ref);
                 Some(EvaluatedToOk)
@@ -1060,7 +1062,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
     fn coinductive_predicate(&self, predicate: ty::Predicate<'tcx>) -> bool {
         let result = match predicate {
-            ty::Predicate::Trait(ref data) => self.tcx().trait_is_auto(data.def_id()),
+            ty::Predicate::Trait(ref data, _) => self.tcx().trait_is_auto(data.def_id()),
             _ => false,
         };
         debug!("coinductive_predicate({:?}) = {:?}", predicate, result);
@@ -1417,6 +1419,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         debug!("winnowed to {} candidates for {:?}: {:?}", candidates.len(), stack, candidates);
 
+        let needs_infer = stack.obligation.predicate.needs_infer();
+
         // If there are STILL multiple candidates, we can further
         // reduce the list by dropping duplicates -- including
         // resolving specializations.
@@ -1424,7 +1428,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             let mut i = 0;
             while i < candidates.len() {
                 let is_dup = (0..candidates.len()).filter(|&j| i != j).any(|j| {
-                    self.candidate_should_be_dropped_in_favor_of(&candidates[i], &candidates[j])
+                    self.candidate_should_be_dropped_in_favor_of(
+                        &candidates[i],
+                        &candidates[j],
+                        needs_infer,
+                    )
                 });
                 if is_dup {
                     debug!("Dropping candidate #{}/{}: {:?}", i, candidates.len(), candidates[i]);
@@ -2258,6 +2266,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         &mut self,
         victim: &EvaluatedCandidate<'tcx>,
         other: &EvaluatedCandidate<'tcx>,
+        needs_infer: bool,
     ) -> bool {
         if victim.candidate == other.candidate {
             return true;
@@ -2339,10 +2348,55 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     match victim.candidate {
                         ImplCandidate(victim_def) => {
                             let tcx = self.tcx();
-                            return tcx.specializes((other_def, victim_def))
-                                || tcx
-                                    .impls_are_allowed_to_overlap(other_def, victim_def)
-                                    .is_some();
+                            if tcx.specializes((other_def, victim_def)) {
+                                return true;
+                            }
+                            return match tcx.impls_are_allowed_to_overlap(other_def, victim_def) {
+                                Some(ty::ImplOverlapKind::Permitted { marker: true }) => {
+                                    // Subtle: If the predicate we are evaluating has inference
+                                    // variables, do *not* allow discarding candidates due to
+                                    // marker trait impls.
+                                    //
+                                    // Without this restriction, we could end up accidentally
+                                    // constrainting inference variables based on an arbitrarily
+                                    // chosen trait impl.
+                                    //
+                                    // Imagine we have the following code:
+                                    //
+                                    // ```rust
+                                    // #[marker] trait MyTrait {}
+                                    // impl MyTrait for u8 {}
+                                    // impl MyTrait for bool {}
+                                    // ```
+                                    //
+                                    // And we are evaluating the predicate `<_#0t as MyTrait>`.
+                                    //
+                                    // During selection, we will end up with one candidate for each
+                                    // impl of `MyTrait`. If we were to discard one impl in favor
+                                    // of the other, we would be left with one candidate, causing
+                                    // us to "successfully" select the predicate, unifying
+                                    // _#0t with (for example) `u8`.
+                                    //
+                                    // However, we have no reason to believe that this unification
+                                    // is correct - we've essentially just picked an arbitrary
+                                    // *possibility* for _#0t, and required that this be the *only*
+                                    // possibility.
+                                    //
+                                    // Eventually, we will either:
+                                    // 1) Unify all inference variables in the predicate through
+                                    // some other means (e.g. type-checking of a function). We will
+                                    // then be in a position to drop marker trait candidates
+                                    // without constraining inference variables (since there are
+                                    // none left to constrin)
+                                    // 2) Be left with some unconstrained inference variables. We
+                                    // will then correctly report an inference error, since the
+                                    // existence of multiple marker trait impls tells us nothing
+                                    // about which one should actually apply.
+                                    !needs_infer
+                                }
+                                Some(_) => true,
+                                None => false,
+                            };
                         }
                         ParamCandidate(ref cand) => {
                             // Prefer the impl to a global where clause candidate.
@@ -3314,7 +3368,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     tcx.require_lang_item(lang_items::SizedTraitLangItem, None),
                     tcx.mk_substs_trait(source, &[]),
                 );
-                nested.push(predicate_to_obligation(tr.to_predicate()));
+                nested.push(predicate_to_obligation(tr.without_const().to_predicate()));
 
                 // If the type is `Foo + 'a`, ensure that the type
                 // being cast to `Foo + 'a` outlives `'a`:

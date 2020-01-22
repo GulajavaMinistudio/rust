@@ -9,7 +9,7 @@ use rustc::hir::map::Map;
 use rustc::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc::traits::Obligation;
 use rustc::ty::print::with_crate_prefix;
-use rustc::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable};
+use rustc::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
@@ -20,8 +20,6 @@ use rustc_hir::{ExprKind, Node, QPath};
 use rustc_span::{source_map, FileName, Span};
 use syntax::ast;
 use syntax::util::lev_distance;
-
-use rustc_error_codes::*;
 
 use std::cmp::Ordering;
 
@@ -59,7 +57,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             span,
                             self.body_id,
                             self.param_env,
-                            poly_trait_ref.to_predicate(),
+                            poly_trait_ref.without_const().to_predicate(),
                         );
                         self.predicate_may_hold(&obligation)
                     })

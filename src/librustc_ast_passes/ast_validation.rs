@@ -23,8 +23,6 @@ use syntax::print::pprust;
 use syntax::visit::{self, Visitor};
 use syntax::walk_list;
 
-use rustc_error_codes::*;
-
 /// A syntactic context that disallows certain kinds of bounds (e.g., `?Trait` or `?const Trait`).
 #[derive(Clone, Copy)]
 enum BoundContext {
@@ -616,6 +614,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 unsafety,
                 polarity,
                 defaultness: _,
+                constness: _,
                 generics: _,
                 of_trait: Some(_),
                 ref self_ty,
@@ -649,6 +648,7 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                 unsafety,
                 polarity,
                 defaultness,
+                constness,
                 generics: _,
                 of_trait: None,
                 self_ty: _,
@@ -674,6 +674,12 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                     self.err_handler()
                         .struct_span_err(item.span, "inherent impls cannot be default")
                         .note("only trait implementations may be annotated with default")
+                        .emit();
+                }
+                if constness == Constness::Const {
+                    self.err_handler()
+                        .struct_span_err(item.span, "inherent impls cannot be `const`")
+                        .note("only trait implementations may be annotated with `const`")
                         .emit();
                 }
             }
@@ -909,23 +915,20 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
     }
 
     fn visit_param_bound(&mut self, bound: &'a GenericBound) {
-        if let GenericBound::Trait(poly, maybe_bound) = bound {
-            match poly.trait_ref.constness {
-                Some(Constness::NotConst) => {
-                    if *maybe_bound == TraitBoundModifier::Maybe {
-                        self.err_handler()
-                            .span_err(bound.span(), "`?const` and `?` are mutually exclusive");
-                    }
-
-                    if let Some(ctx) = self.bound_context {
-                        let msg = format!("`?const` is not permitted in {}", ctx.description());
-                        self.err_handler().span_err(bound.span(), &msg);
-                    }
+        match bound {
+            GenericBound::Trait(_, TraitBoundModifier::MaybeConst) => {
+                if let Some(ctx) = self.bound_context {
+                    let msg = format!("`?const` is not permitted in {}", ctx.description());
+                    self.err_handler().span_err(bound.span(), &msg);
                 }
-
-                Some(Constness::Const) => panic!("Parser should reject bare `const` on bounds"),
-                None => {}
             }
+
+            GenericBound::Trait(_, TraitBoundModifier::MaybeConstMaybe) => {
+                self.err_handler()
+                    .span_err(bound.span(), "`?const` and `?` are mutually exclusive");
+            }
+
+            _ => {}
         }
 
         visit::walk_param_bound(self, bound)

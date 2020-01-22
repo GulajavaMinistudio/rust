@@ -3,7 +3,6 @@ use super::{Parser, PathStyle, PrevTokenKind, TokenType};
 
 use crate::{maybe_recover_from_interpolated_ty_qpath, maybe_whole};
 
-use rustc_error_codes::*;
 use rustc_errors::{pluralize, struct_span_err, Applicability, PResult};
 use rustc_span::source_map::Span;
 use rustc_span::symbol::{kw, sym};
@@ -27,10 +26,12 @@ struct BoundModifiers {
 }
 
 impl BoundModifiers {
-    fn trait_bound_modifier(&self) -> TraitBoundModifier {
-        match self.maybe {
-            Some(_) => TraitBoundModifier::Maybe,
-            None => TraitBoundModifier::None,
+    fn to_trait_bound_modifier(&self) -> TraitBoundModifier {
+        match (self.maybe, self.maybe_const) {
+            (None, None) => TraitBoundModifier::None,
+            (Some(_), None) => TraitBoundModifier::Maybe,
+            (None, Some(_)) => TraitBoundModifier::MaybeConst,
+            (Some(_), Some(_)) => TraitBoundModifier::MaybeConstMaybe,
         }
     }
 }
@@ -215,7 +216,7 @@ impl<'a> Parser<'a> {
     ) -> PResult<'a, TyKind> {
         assert_ne!(self.token, token::Question);
 
-        let poly_trait_ref = PolyTraitRef::new(generic_params, path, None, lo.to(self.prev_span));
+        let poly_trait_ref = PolyTraitRef::new(generic_params, path, lo.to(self.prev_span));
         let mut bounds = vec![GenericBound::Trait(poly_trait_ref, TraitBoundModifier::None)];
         if parse_plus {
             self.eat_plus(); // `+`, or `+=` gets split and `+` is discarded
@@ -557,9 +558,9 @@ impl<'a> Parser<'a> {
             self.expect(&token::CloseDelim(token::Paren))?;
         }
 
-        let constness = modifiers.maybe_const.map(|_| ast::Constness::NotConst);
-        let poly_trait = PolyTraitRef::new(lifetime_defs, path, constness, lo.to(self.prev_span));
-        Ok(GenericBound::Trait(poly_trait, modifiers.trait_bound_modifier()))
+        let modifier = modifiers.to_trait_bound_modifier();
+        let poly_trait = PolyTraitRef::new(lifetime_defs, path, lo.to(self.prev_span));
+        Ok(GenericBound::Trait(poly_trait, modifier))
     }
 
     /// Optionally parses `for<$generic_params>`.
