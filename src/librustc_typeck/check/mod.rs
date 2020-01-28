@@ -1208,8 +1208,7 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherLocalsVisitor<'a, 'tcx> {
         debug!(
             "local variable {:?} is assigned type {}",
             local.pat,
-            self.fcx
-                .ty_to_string(self.fcx.locals.borrow().get(&local.hir_id).unwrap().clone().decl_ty)
+            self.fcx.ty_to_string(&*self.fcx.locals.borrow().get(&local.hir_id).unwrap().decl_ty)
         );
         intravisit::walk_local(self, local);
     }
@@ -1226,8 +1225,7 @@ impl<'a, 'tcx> Visitor<'tcx> for GatherLocalsVisitor<'a, 'tcx> {
             debug!(
                 "pattern binding {} is assigned to {} with type {:?}",
                 ident,
-                self.fcx
-                    .ty_to_string(self.fcx.locals.borrow().get(&p.hir_id).unwrap().clone().decl_ty),
+                self.fcx.ty_to_string(&*self.fcx.locals.borrow().get(&p.hir_id).unwrap().decl_ty),
                 var_ty
             );
         }
@@ -1275,7 +1273,7 @@ fn check_fn<'a, 'tcx>(
     body: &'tcx hir::Body<'tcx>,
     can_be_generator: Option<hir::Movability>,
 ) -> (FnCtxt<'a, 'tcx>, Option<GeneratorTypes<'tcx>>) {
-    let mut fn_sig = fn_sig.clone();
+    let mut fn_sig = fn_sig;
 
     debug!("check_fn(sig={:?}, fn_id={}, param_env={:?})", fn_sig, fn_id, param_env);
 
@@ -2433,16 +2431,6 @@ fn check_transparent(tcx: TyCtxt<'_>, sp: Span, def_id: DefId) {
         return;
     }
     let sp = tcx.sess.source_map().def_span(sp);
-
-    if adt.is_enum() && !tcx.features().transparent_enums {
-        feature_err(
-            &tcx.sess.parse_sess,
-            sym::transparent_enums,
-            sp,
-            "transparent enums are unstable",
-        )
-        .emit();
-    }
 
     if adt.is_union() && !tcx.features().transparent_unions {
         feature_err(
