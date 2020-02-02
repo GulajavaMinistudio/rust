@@ -14,6 +14,7 @@ use rustc_resolve::{self, Resolver};
 use rustc_session as session;
 use rustc_session::config::{ErrorOutputType, Input, OutputFilenames};
 use rustc_session::lint::{BuiltinLintDiagnostics, LintBuffer};
+use rustc_session::parse::CrateConfig;
 use rustc_session::CrateDisambiguator;
 use rustc_session::{config, early_error, filesearch, DiagnosticOutput, Session};
 use rustc_span::edition::Edition;
@@ -32,7 +33,7 @@ use syntax::ast::{AttrVec, BlockCheckMode};
 use syntax::mut_visit::{visit_clobber, MutVisitor, *};
 use syntax::ptr::P;
 use syntax::util::lev_distance::find_best_match_for_name;
-use syntax::{self, ast, attr};
+use syntax::{self, ast};
 
 /// Adds `target_feature = "..."` cfgs for a variety of platform
 /// specific features (SSE, NEON etc.).
@@ -40,7 +41,7 @@ use syntax::{self, ast, attr};
 /// This is performed by checking whether a whitelisted set of
 /// features is available on the target machine, by querying LLVM.
 pub fn add_configuration(
-    cfg: &mut ast::CrateConfig,
+    cfg: &mut CrateConfig,
     sess: &Session,
     codegen_backend: &dyn CodegenBackend,
 ) {
@@ -547,7 +548,7 @@ pub fn build_output_filenames(
                 .opts
                 .crate_name
                 .clone()
-                .or_else(|| attr::find_crate_name(attrs).map(|n| n.to_string()))
+                .or_else(|| rustc_attr::find_crate_name(attrs).map(|n| n.to_string()))
                 .unwrap_or_else(|| input.filestem().to_owned());
 
             OutputFilenames::new(
@@ -682,7 +683,7 @@ impl<'a> MutVisitor for ReplaceBodyWithLoop<'a, '_> {
         self.run(is_const, |s| noop_visit_item_kind(i, s))
     }
 
-    fn flat_map_trait_item(&mut self, i: ast::AssocItem) -> SmallVec<[ast::AssocItem; 1]> {
+    fn flat_map_trait_item(&mut self, i: P<ast::AssocItem>) -> SmallVec<[P<ast::AssocItem>; 1]> {
         let is_const = match i.kind {
             ast::AssocItemKind::Const(..) => true,
             ast::AssocItemKind::Fn(ref sig, _) => Self::is_sig_const(sig),
@@ -691,7 +692,7 @@ impl<'a> MutVisitor for ReplaceBodyWithLoop<'a, '_> {
         self.run(is_const, |s| noop_flat_map_assoc_item(i, s))
     }
 
-    fn flat_map_impl_item(&mut self, i: ast::AssocItem) -> SmallVec<[ast::AssocItem; 1]> {
+    fn flat_map_impl_item(&mut self, i: P<ast::AssocItem>) -> SmallVec<[P<ast::AssocItem>; 1]> {
         self.flat_map_trait_item(i)
     }
 

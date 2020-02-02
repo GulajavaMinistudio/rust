@@ -1,16 +1,16 @@
 //! Parsing and validation of builtin attributes
 
-use super::{mark_used, MetaItemKind};
-use crate::ast::{self, Attribute, MetaItem, NestedMetaItem};
-use crate::print::pprust;
-use crate::sess::{feature_err, ParseSess};
+use super::{find_by_name, mark_used};
 
+use rustc_ast_pretty::pprust;
 use rustc_errors::{struct_span_err, Applicability, Handler};
 use rustc_feature::{find_gated_cfg, is_builtin_attr_name, Features, GatedCfg};
 use rustc_macros::HashStable_Generic;
+use rustc_session::parse::{feature_err, ParseSess};
 use rustc_span::hygiene::Transparency;
 use rustc_span::{symbol::sym, symbol::Symbol, Span};
 use std::num::NonZeroU32;
+use syntax::ast::{self, Attribute, MetaItem, MetaItemKind, NestedMetaItem};
 
 pub fn is_builtin_attr(attr: &Attribute) -> bool {
     attr.is_doc_comment() || attr.ident().filter(|ident| is_builtin_attr_name(ident.name)).is_some()
@@ -371,6 +371,7 @@ where
                     let mut feature = None;
                     let mut reason = None;
                     let mut issue = None;
+                    let mut issue_num = None;
                     let mut is_soft = false;
                     for meta in metas {
                         if let Some(mi) = meta.meta_item() {
@@ -389,6 +390,37 @@ where
                                     if !get(mi, &mut issue) {
                                         continue 'outer;
                                     }
+
+                                    // These unwraps are safe because `get` ensures the meta item
+                                    // is a name/value pair string literal.
+                                    issue_num = match &*issue.unwrap().as_str() {
+                                        "none" => None,
+                                        issue => {
+                                            match issue.parse() {
+                                                Ok(num) => {
+                                                    // FIXME(rossmacarthur): disallow 0
+                                                    // Disallowing this requires updates to
+                                                    // some submodules
+                                                    NonZeroU32::new(num)
+                                                }
+                                                Err(err) => {
+                                                    struct_span_err!(
+                                                        diagnostic,
+                                                        mi.span,
+                                                        E0545,
+                                                        "`issue` must be a numeric string \
+                                                        or \"none\"",
+                                                    )
+                                                    .span_label(
+                                                        mi.name_value_literal().unwrap().span,
+                                                        &err.to_string(),
+                                                    )
+                                                    .emit();
+                                                    continue 'outer;
+                                                }
+                                            }
+                                        }
+                                    };
                                 }
                                 sym::soft => {
                                     if !mi.is_word() {
@@ -420,27 +452,8 @@ where
                     }
 
                     match (feature, reason, issue) {
-                        (Some(feature), reason, Some(issue)) => {
-                            let issue = match &*issue.as_str() {
-                                "none" => None,
-                                issue => {
-                                    if let Ok(num) = issue.parse() {
-                                        // FIXME(rossmacarthur): disallow 0
-                                        // Disallowing this requires updates to some submodules
-                                        NonZeroU32::new(num)
-                                    } else {
-                                        struct_span_err!(
-                                            diagnostic,
-                                            attr.span,
-                                            E0545,
-                                            "incorrect 'issue'"
-                                        )
-                                        .emit();
-                                        continue;
-                                    }
-                                }
-                            };
-                            let level = Unstable { reason, issue, is_soft };
+                        (Some(feature), reason, Some(_)) => {
+                            let level = Unstable { reason, issue: issue_num, is_soft };
                             if sym::unstable == meta_name {
                                 stab = Some(Stability { level, feature, rustc_depr: None });
                             } else {
@@ -1029,4 +1042,22 @@ pub fn find_transparency(
     }
     let fallback = if is_legacy { Transparency::SemiTransparent } else { Transparency::Opaque };
     (transparency.map_or(fallback, |t| t.0), error)
+}
+
+pub fn allow_internal_unstable<'a>(
+    attrs: &[Attribute],
+    diag: &'a rustc_errors::Handler,
+) -> Option<impl Iterator<Item = Symbol> + 'a> {
+    let attr = find_by_name(attrs, sym::allow_internal_unstable)?;
+    let list = attr.meta_item_list().or_else(|| {
+        diag.span_err(attr.span, "allow_internal_unstable expects list of feature names");
+        None
+    })?;
+    Some(list.into_iter().filter_map(move |it| {
+        let name = it.ident().map(|ident| ident.name);
+        if name.is_none() {
+            diag.span_err(it.span(), "`allow_internal_unstable` expects feature names");
+        }
+        name
+    }))
 }

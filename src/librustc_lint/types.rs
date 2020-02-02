@@ -5,6 +5,7 @@ use rustc::mir::interpret::{sign_extend, truncate};
 use rustc::ty::layout::{self, IntegerExt, LayoutOf, SizeSkeleton, VariantIdx};
 use rustc::ty::subst::SubstsRef;
 use rustc::ty::{self, AdtKind, ParamEnv, Ty, TyCtxt};
+use rustc_attr as attr;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::Applicability;
 use rustc_hir as hir;
@@ -15,7 +16,7 @@ use rustc_span::source_map;
 use rustc_span::symbol::sym;
 use rustc_span::Span;
 use rustc_target::spec::abi::Abi;
-use syntax::{ast, attr};
+use syntax::ast;
 
 use log::debug;
 use std::cmp;
@@ -894,7 +895,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
         diag.note(note);
         if let ty::Adt(def, _) = ty.kind {
             if let Some(sp) = self.cx.tcx.hir().span_if_local(def.did) {
-                diag.span_note(sp, "type defined here");
+                diag.span_note(sp, "the type is defined here");
             }
         }
         diag.emit();

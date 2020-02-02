@@ -5,6 +5,8 @@ use crate::mbe::macro_rules::annotate_err_with_kind;
 use crate::placeholders::{placeholder, PlaceholderExpander};
 use crate::proc_macro::collect_derives;
 
+use rustc_ast_pretty::pprust;
+use rustc_attr::{self as attr, is_builtin_attr, HasAttrs};
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{Applicability, FatalError, PResult};
 use rustc_feature::Features;
@@ -12,16 +14,14 @@ use rustc_parse::configure;
 use rustc_parse::parser::Parser;
 use rustc_parse::validate_attr;
 use rustc_parse::DirectoryOwnership;
+use rustc_session::parse::{feature_err, ParseSess};
 use rustc_span::source_map::respan;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::{FileName, Span, DUMMY_SP};
 use syntax::ast::{self, AttrItem, Block, Ident, LitKind, NodeId, PatKind, Path};
 use syntax::ast::{ItemKind, MacArgs, MacStmtStyle, StmtKind};
-use syntax::attr::{self, is_builtin_attr, HasAttrs};
 use syntax::mut_visit::*;
-use syntax::print::pprust;
 use syntax::ptr::P;
-use syntax::sess::{feature_err, ParseSess};
 use syntax::token;
 use syntax::tokenstream::{TokenStream, TokenTree};
 use syntax::util::map_in_place::MapInPlace;
@@ -152,13 +152,13 @@ ast_fragments! {
     Items(SmallVec<[P<ast::Item>; 1]>) {
         "item"; many fn flat_map_item; fn visit_item; fn make_items;
     }
-    TraitItems(SmallVec<[ast::AssocItem; 1]>) {
+    TraitItems(SmallVec<[P<ast::AssocItem>; 1]>) {
         "trait item"; many fn flat_map_trait_item; fn visit_trait_item; fn make_trait_items;
     }
-    ImplItems(SmallVec<[ast::AssocItem; 1]>) {
+    ImplItems(SmallVec<[P<ast::AssocItem>; 1]>) {
         "impl item"; many fn flat_map_impl_item; fn visit_impl_item; fn make_impl_items;
     }
-    ForeignItems(SmallVec<[ast::ForeignItem; 1]>) {
+    ForeignItems(SmallVec<[P<ast::ForeignItem>; 1]>) {
         "foreign item";
         many fn flat_map_foreign_item;
         fn visit_foreign_item;
@@ -554,15 +554,15 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         // we know that fold result vector will contain exactly one element
         match item {
             Annotatable::Item(item) => Annotatable::Item(cfg.flat_map_item(item).pop().unwrap()),
-            Annotatable::TraitItem(item) => Annotatable::TraitItem(
-                item.map(|item| cfg.flat_map_trait_item(item).pop().unwrap()),
-            ),
-            Annotatable::ImplItem(item) => {
-                Annotatable::ImplItem(item.map(|item| cfg.flat_map_impl_item(item).pop().unwrap()))
+            Annotatable::TraitItem(item) => {
+                Annotatable::TraitItem(cfg.flat_map_trait_item(item).pop().unwrap())
             }
-            Annotatable::ForeignItem(item) => Annotatable::ForeignItem(
-                item.map(|item| cfg.flat_map_foreign_item(item).pop().unwrap()),
-            ),
+            Annotatable::ImplItem(item) => {
+                Annotatable::ImplItem(cfg.flat_map_impl_item(item).pop().unwrap())
+            }
+            Annotatable::ForeignItem(item) => {
+                Annotatable::ForeignItem(cfg.flat_map_foreign_item(item).pop().unwrap())
+            }
             Annotatable::Stmt(stmt) => {
                 Annotatable::Stmt(stmt.map(|stmt| cfg.flat_map_stmt(stmt).pop().unwrap()))
             }
@@ -643,11 +643,9 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                     let item_tok = TokenTree::token(
                         token::Interpolated(Lrc::new(match item {
                             Annotatable::Item(item) => token::NtItem(item),
-                            Annotatable::TraitItem(item) => token::NtTraitItem(item.into_inner()),
-                            Annotatable::ImplItem(item) => token::NtImplItem(item.into_inner()),
-                            Annotatable::ForeignItem(item) => {
-                                token::NtForeignItem(item.into_inner())
-                            }
+                            Annotatable::TraitItem(item) => token::NtTraitItem(item),
+                            Annotatable::ImplItem(item) => token::NtImplItem(item),
+                            Annotatable::ForeignItem(item) => token::NtForeignItem(item),
                             Annotatable::Stmt(stmt) => token::NtStmt(stmt.into_inner()),
                             Annotatable::Expr(expr) => token::NtExpr(expr),
                             Annotatable::Arm(..)
@@ -1411,7 +1409,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
         }
     }
 
-    fn flat_map_trait_item(&mut self, item: ast::AssocItem) -> SmallVec<[ast::AssocItem; 1]> {
+    fn flat_map_trait_item(&mut self, item: P<ast::AssocItem>) -> SmallVec<[P<ast::AssocItem>; 1]> {
         let mut item = configure!(self, item);
 
         let (attr, traits, after_derive) = self.classify_item(&mut item);
@@ -1420,7 +1418,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .collect_attr(
                     attr,
                     traits,
-                    Annotatable::TraitItem(P(item)),
+                    Annotatable::TraitItem(item),
                     AstFragmentKind::TraitItems,
                     after_derive,
                 )
@@ -1428,16 +1426,20 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
         }
 
         match item.kind {
-            ast::AssocItemKind::Macro(mac) => {
-                let ast::AssocItem { attrs, span, .. } = item;
-                self.check_attributes(&attrs);
-                self.collect_bang(mac, span, AstFragmentKind::TraitItems).make_trait_items()
+            ast::AssocItemKind::Macro(..) => {
+                self.check_attributes(&item.attrs);
+                item.and_then(|item| match item.kind {
+                    ast::AssocItemKind::Macro(mac) => self
+                        .collect_bang(mac, item.span, AstFragmentKind::TraitItems)
+                        .make_trait_items(),
+                    _ => unreachable!(),
+                })
             }
             _ => noop_flat_map_assoc_item(item, self),
         }
     }
 
-    fn flat_map_impl_item(&mut self, item: ast::AssocItem) -> SmallVec<[ast::AssocItem; 1]> {
+    fn flat_map_impl_item(&mut self, item: P<ast::AssocItem>) -> SmallVec<[P<ast::AssocItem>; 1]> {
         let mut item = configure!(self, item);
 
         let (attr, traits, after_derive) = self.classify_item(&mut item);
@@ -1446,7 +1448,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .collect_attr(
                     attr,
                     traits,
-                    Annotatable::ImplItem(P(item)),
+                    Annotatable::ImplItem(item),
                     AstFragmentKind::ImplItems,
                     after_derive,
                 )
@@ -1454,10 +1456,14 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
         }
 
         match item.kind {
-            ast::AssocItemKind::Macro(mac) => {
-                let ast::AssocItem { attrs, span, .. } = item;
-                self.check_attributes(&attrs);
-                self.collect_bang(mac, span, AstFragmentKind::ImplItems).make_impl_items()
+            ast::AssocItemKind::Macro(..) => {
+                self.check_attributes(&item.attrs);
+                item.and_then(|item| match item.kind {
+                    ast::AssocItemKind::Macro(mac) => self
+                        .collect_bang(mac, item.span, AstFragmentKind::ImplItems)
+                        .make_impl_items(),
+                    _ => unreachable!(),
+                })
             }
             _ => noop_flat_map_assoc_item(item, self),
         }
@@ -1482,8 +1488,8 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
 
     fn flat_map_foreign_item(
         &mut self,
-        mut foreign_item: ast::ForeignItem,
-    ) -> SmallVec<[ast::ForeignItem; 1]> {
+        mut foreign_item: P<ast::ForeignItem>,
+    ) -> SmallVec<[P<ast::ForeignItem>; 1]> {
         let (attr, traits, after_derive) = self.classify_item(&mut foreign_item);
 
         if attr.is_some() || !traits.is_empty() {
@@ -1491,21 +1497,25 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                 .collect_attr(
                     attr,
                     traits,
-                    Annotatable::ForeignItem(P(foreign_item)),
+                    Annotatable::ForeignItem(foreign_item),
                     AstFragmentKind::ForeignItems,
                     after_derive,
                 )
                 .make_foreign_items();
         }
 
-        if let ast::ForeignItemKind::Macro(mac) = foreign_item.kind {
-            self.check_attributes(&foreign_item.attrs);
-            return self
-                .collect_bang(mac, foreign_item.span, AstFragmentKind::ForeignItems)
-                .make_foreign_items();
+        match foreign_item.kind {
+            ast::ForeignItemKind::Macro(..) => {
+                self.check_attributes(&foreign_item.attrs);
+                foreign_item.and_then(|item| match item.kind {
+                    ast::ForeignItemKind::Macro(mac) => self
+                        .collect_bang(mac, item.span, AstFragmentKind::ForeignItems)
+                        .make_foreign_items(),
+                    _ => unreachable!(),
+                })
+            }
+            _ => noop_flat_map_foreign_item(foreign_item, self),
         }
-
-        noop_flat_map_foreign_item(foreign_item, self)
     }
 
     fn visit_item_kind(&mut self, item: &mut ast::ItemKind) {
@@ -1661,7 +1671,7 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
             }
 
             let meta = attr::mk_list_item(Ident::with_dummy_span(sym::doc), items);
-            *at = attr::Attribute {
+            *at = ast::Attribute {
                 kind: ast::AttrKind::Normal(AttrItem {
                     path: meta.path,
                     args: meta.kind.mac_args(meta.span),

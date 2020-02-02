@@ -1,9 +1,9 @@
 use super::{Parser, PathStyle, TokenType};
+use rustc_ast_pretty::pprust;
 use rustc_errors::PResult;
 use rustc_span::{Span, Symbol};
 use syntax::ast;
 use syntax::attr;
-use syntax::print::pprust;
 use syntax::token::{self, Nonterminal};
 use syntax::util::comments;
 
@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
     pub fn parse_attr_item(&mut self) -> PResult<'a, ast::AttrItem> {
         let item = match self.token.kind {
             token::Interpolated(ref nt) => match **nt {
-                Nonterminal::NtMeta(ref item) => Some(item.clone()),
+                Nonterminal::NtMeta(ref item) => Some(item.clone().into_inner()),
                 _ => None,
             },
             _ => None,

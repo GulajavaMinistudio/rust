@@ -16,21 +16,20 @@
 use rustc::session::config::Input;
 use rustc::span_bug;
 use rustc::ty::{self, DefIdTree, TyCtxt};
+use rustc_ast_pretty::pprust::{bounds_to_string, generic_params_to_string, ty_to_string};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def::{DefKind as HirDefKind, Res};
 use rustc_hir::def_id::DefId;
-
-use std::env;
-use std::path::Path;
-
 use rustc_span::source_map::{respan, DUMMY_SP};
 use rustc_span::*;
 use syntax::ast::{self, Attribute, NodeId, PatKind};
-use syntax::print::pprust::{bounds_to_string, generic_params_to_string, ty_to_string};
 use syntax::ptr::P;
 use syntax::token;
 use syntax::visit::{self, Visitor};
 use syntax::walk_list;
+
+use std::env;
+use std::path::Path;
 
 use crate::dumper::{Access, Dumper};
 use crate::sig;
@@ -650,7 +649,7 @@ impl<'l, 'tcx> DumpVisitor<'l, 'tcx> {
         generics: &'l ast::Generics,
         trait_ref: &'l Option<ast::TraitRef>,
         typ: &'l ast::Ty,
-        impl_items: &'l [ast::AssocItem],
+        impl_items: &'l [P<ast::AssocItem>],
     ) {
         if let Some(impl_data) = self.save_ctxt.get_item_data(item) {
             if !self.span.filter_generated(item.span) {
@@ -681,7 +680,7 @@ impl<'l, 'tcx> DumpVisitor<'l, 'tcx> {
         item: &'l ast::Item,
         generics: &'l ast::Generics,
         trait_refs: &'l ast::GenericBounds,
-        methods: &'l [ast::AssocItem],
+        methods: &'l [P<ast::AssocItem>],
     ) {
         let name = item.ident.to_string();
         let qualname = format!(
