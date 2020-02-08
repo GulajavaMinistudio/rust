@@ -43,6 +43,18 @@ rustc_queries! {
     }
 
     Other {
+        // Represents crate as a whole (as distinct from the top-level crate module).
+        // If you call `hir_crate` (e.g., indirectly by calling `tcx.hir().krate()`),
+        // we will have to assume that any change means that you need to be recompiled.
+        // This is because the `hir_crate` query gives you access to all other items.
+        // To avoid this fate, do not call `tcx.hir().krate()`; instead,
+        // prefer wrappers like `tcx.visit_all_items_in_krate()`.
+        query hir_crate(key: CrateNum) -> &'tcx Crate<'tcx> {
+            eval_always
+            no_hash
+            desc { "get the crate HIR" }
+        }
+
         /// Records the type of every item.
         query type_of(key: DefId) -> Ty<'tcx> {
             cache_on_disk_if { key.is_local() }
@@ -309,6 +321,11 @@ rustc_queries! {
 
         /// Maps from a trait item to the trait item "descriptor".
         query associated_item(_: DefId) -> ty::AssocItem {}
+
+        /// Collects the associated items defined on a trait or impl.
+        query associated_items(key: DefId) -> ty::AssocItemsIterator<'tcx> {
+            desc { |tcx| "collecting associated items of {}", tcx.def_path_str(key) }
+        }
 
         query impl_trait_ref(_: DefId) -> Option<ty::TraitRef<'tcx>> {}
         query impl_polarity(_: DefId) -> ty::ImplPolarity {}

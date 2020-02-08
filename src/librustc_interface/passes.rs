@@ -17,7 +17,6 @@ use rustc::traits;
 use rustc::ty::steal::Steal;
 use rustc::ty::{self, GlobalCtxt, ResolverOutputs, TyCtxt};
 use rustc::util::common::ErrorReported;
-use rustc_builtin_macros;
 use rustc_codegen_ssa::back::link::emit_metadata;
 use rustc_codegen_utils::codegen_backend::CodegenBackend;
 use rustc_codegen_utils::link::filename_for_metadata;
@@ -26,18 +25,16 @@ use rustc_data_structures::{box_region_allow_access, declare_box_region_type, pa
 use rustc_errors::PResult;
 use rustc_expand::base::ExtCtxt;
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
-use rustc_incremental;
+use rustc_hir::Crate;
 use rustc_lint::LintStore;
 use rustc_mir as mir;
 use rustc_mir_build as mir_build;
 use rustc_parse::{parse_crate_from_file, parse_crate_from_source_str};
 use rustc_passes::{self, hir_stats, layout_test};
 use rustc_plugin_impl as plugin;
-use rustc_privacy;
 use rustc_resolve::{Resolver, ResolverArenas};
 use rustc_span::symbol::Symbol;
 use rustc_span::FileName;
-use rustc_traits;
 use rustc_typeck as typeck;
 use syntax::mut_visit::MutVisitor;
 use syntax::{self, ast, visit};
@@ -426,7 +423,7 @@ pub fn lower_to_hir<'res, 'tcx>(
     dep_graph: &'res DepGraph,
     krate: &'res ast::Crate,
     arena: &'tcx Arena<'tcx>,
-) -> Result<map::Forest<'tcx>> {
+) -> Crate<'tcx> {
     // Lower AST to HIR.
     let hir_crate = rustc_ast_lowering::lower_crate(
         sess,
@@ -440,8 +437,6 @@ pub fn lower_to_hir<'res, 'tcx>(
     if sess.opts.debugging_opts.hir_stats {
         hir_stats::print_hir_stats(&hir_crate);
     }
-
-    let hir_forest = map::Forest::new(hir_crate, &dep_graph);
 
     sess.time("early_lint_checks", || {
         rustc_lint::check_ast_crate(
@@ -459,7 +454,7 @@ pub fn lower_to_hir<'res, 'tcx>(
         rustc_span::hygiene::clear_syntax_context_map();
     }
 
-    Ok(hir_forest)
+    hir_crate
 }
 
 // Returns all the paths that correspond to generated files.
@@ -709,7 +704,8 @@ impl<'tcx> QueryContext<'tcx> {
 pub fn create_global_ctxt<'tcx>(
     compiler: &'tcx Compiler,
     lint_store: Lrc<LintStore>,
-    hir_forest: &'tcx map::Forest<'tcx>,
+    krate: &'tcx Crate<'tcx>,
+    dep_graph: DepGraph,
     mut resolver_outputs: ResolverOutputs,
     outputs: OutputFilenames,
     crate_name: &str,
@@ -720,7 +716,7 @@ pub fn create_global_ctxt<'tcx>(
     let defs = mem::take(&mut resolver_outputs.definitions);
 
     // Construct the HIR map.
-    let hir_map = map::map_crate(sess, &*resolver_outputs.cstore, &hir_forest, defs);
+    let hir_map = map::map_crate(sess, &*resolver_outputs.cstore, krate, dep_graph, defs);
 
     let query_result_on_disk_cache = rustc_incremental::load_query_result_cache(sess);
 

@@ -1307,12 +1307,15 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             );
                         }
                     };
+                    // FIXME: point at the type params that don't have appropriate lifetimes:
+                    // struct S1<F: for<'a> Fn(&i32, &i32) -> &'a i32>(F);
+                    //                         ----  ----     ^^^^^^^
                     struct_span_err!(
                         tcx.sess,
                         binding.span,
                         E0582,
                         "binding for associated type `{}` references lifetime `{}`, \
-                                     which does not appear in the trait input types",
+                         which does not appear in the trait input types",
                         binding.item_name,
                         br_name
                     )
@@ -1438,10 +1441,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         // Expand trait aliases recursively and check that only one regular (non-auto) trait
         // is used and no 'maybe' bounds are used.
-        let expanded_traits = traits::expand_trait_aliases(
-            tcx,
-            bounds.trait_bounds.iter().map(|&(a, b, _)| (a.clone(), b)),
-        );
+        let expanded_traits =
+            traits::expand_trait_aliases(tcx, bounds.trait_bounds.iter().map(|&(a, b, _)| (a, b)));
         let (mut auto_traits, regular_traits): (Vec<_>, Vec<_>) =
             expanded_traits.partition(|i| tcx.trait_is_auto(i.trait_ref().def_id()));
         if regular_traits.len() > 1 {

@@ -145,12 +145,14 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     let param_name = self_ty.to_string();
                     let constraint = trait_ref.print_only_trait_path().to_string();
                     if suggest_constraining_type_param(
+                        self.tcx,
                         generics,
                         &mut err,
                         &param_name,
                         &constraint,
                         self.tcx.sess.source_map(),
                         *span,
+                        Some(trait_ref.def_id()),
                     ) {
                         return;
                     }
@@ -1644,26 +1646,34 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         let current_limit = self.tcx.sess.recursion_limit.get();
         let suggested_limit = current_limit * 2;
         err.help(&format!(
-            "consider adding a `#![recursion_limit=\"{}\"]` attribute to your crate",
-            suggested_limit
+            "consider adding a `#![recursion_limit=\"{}\"]` attribute to your crate (`{}`)",
+            suggested_limit, self.tcx.crate_name,
         ));
     }
 }
 
 /// Suggest restricting a type param with a new bound.
 pub fn suggest_constraining_type_param(
+    tcx: TyCtxt<'_>,
     generics: &hir::Generics<'_>,
     err: &mut DiagnosticBuilder<'_>,
     param_name: &str,
     constraint: &str,
     source_map: &SourceMap,
     span: Span,
+    def_id: Option<DefId>,
 ) -> bool {
     let restrict_msg = "consider further restricting this bound";
     if let Some(param) =
         generics.params.iter().filter(|p| p.name.ident().as_str() == param_name).next()
     {
-        if param_name.starts_with("impl ") {
+        if def_id == tcx.lang_items().sized_trait() {
+            // Type parameters are already `Sized` by default.
+            err.span_label(
+                param.span,
+                &format!("this type parameter needs to be `{}`", constraint),
+            );
+        } else if param_name.starts_with("impl ") {
             // `impl Trait` in argument:
             // `fn foo(x: impl Trait) {}` → `fn foo(t: impl Trait + Trait2) {}`
             err.span_suggestion(

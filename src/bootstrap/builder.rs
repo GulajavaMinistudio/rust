@@ -510,7 +510,7 @@ impl<'a> Builder<'a> {
             Subcommand::Format { .. } | Subcommand::Clean { .. } => panic!(),
         };
 
-        let builder = Builder {
+        Builder {
             build,
             top_stage: build.config.stage.unwrap_or(2),
             kind,
@@ -518,9 +518,7 @@ impl<'a> Builder<'a> {
             stack: RefCell::new(Vec::new()),
             time_spent_on_dependencies: Cell::new(Duration::new(0, 0)),
             paths: paths.to_owned(),
-        };
-
-        builder
+        }
     }
 
     pub fn execute_cli(&self) {
@@ -753,13 +751,12 @@ impl<'a> Builder<'a> {
             cargo.env("RUST_CHECK", "1");
         }
 
-        let stage;
-        if compiler.stage == 0 && self.local_rebuild {
+        let stage = if compiler.stage == 0 && self.local_rebuild {
             // Assume the local-rebuild rustc already has stage1 features.
-            stage = 1;
+            1
         } else {
-            stage = compiler.stage;
-        }
+            compiler.stage
+        };
 
         let mut rustflags = Rustflags::new(&target);
         if stage != 0 {
@@ -850,7 +847,13 @@ impl<'a> Builder<'a> {
             rustflags.arg("-Zforce-unstable-if-unmarked");
         }
 
-        rustflags.arg("-Zexternal-macro-backtrace");
+        // cfg(bootstrap): the flag was renamed from `-Zexternal-macro-backtrace`
+        // to `-Zmacro-backtrace`, keep only the latter after beta promotion.
+        if stage == 0 {
+            rustflags.arg("-Zexternal-macro-backtrace");
+        } else {
+            rustflags.arg("-Zmacro-backtrace");
+        }
 
         let want_rustdoc = self.doc_tests != DocTests::No;
 
@@ -1252,12 +1255,7 @@ impl<'a> Builder<'a> {
         };
 
         if self.config.print_step_timings && dur > Duration::from_millis(100) {
-            println!(
-                "[TIMING] {:?} -- {}.{:03}",
-                step,
-                dur.as_secs(),
-                dur.subsec_nanos() / 1_000_000
-            );
+            println!("[TIMING] {:?} -- {}.{:03}", step, dur.as_secs(), dur.subsec_millis());
         }
 
         {
@@ -1302,7 +1300,7 @@ impl Rustflags {
 
     fn arg(&mut self, arg: &str) -> &mut Self {
         assert_eq!(arg.split_whitespace().count(), 1);
-        if self.0.len() > 0 {
+        if !self.0.is_empty() {
             self.0.push_str(" ");
         }
         self.0.push_str(arg);

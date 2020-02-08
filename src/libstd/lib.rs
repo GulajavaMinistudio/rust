@@ -294,7 +294,6 @@
 #![feature(shrink_to)]
 #![feature(slice_concat_ext)]
 #![feature(slice_internals)]
-#![cfg_attr(bootstrap, feature(slice_patterns))]
 #![feature(specialization)]
 #![feature(staged_api)]
 #![feature(std_internals)]
@@ -334,12 +333,6 @@ extern crate libc;
 #[doc(masked)]
 #[allow(unused_extern_crates)]
 extern crate unwind;
-
-// Only needed for now for the `std_detect` module until that crate changes to
-// use `cfg_if::cfg_if!`
-#[macro_use]
-#[cfg(not(test))]
-extern crate cfg_if;
 
 // During testing, this crate is not actually the "real" std library, but rather
 // it links to the real std library, which was compiled from this same source

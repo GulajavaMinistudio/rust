@@ -46,7 +46,6 @@ use rustc_target::abi::Align;
 use syntax::ast::{self, Constness, Ident, Name};
 use syntax::node_id::{NodeId, NodeMap, NodeSet};
 
-use smallvec;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::fmt;
@@ -1015,6 +1014,7 @@ impl<'tcx> GenericPredicates<'tcx> {
     ) -> InstantiatedPredicates<'tcx> {
         InstantiatedPredicates {
             predicates: self.predicates.iter().map(|(p, _)| p.subst(tcx, substs)).collect(),
+            spans: self.predicates.iter().map(|(_, sp)| *sp).collect(),
         }
     }
 
@@ -1028,6 +1028,7 @@ impl<'tcx> GenericPredicates<'tcx> {
             tcx.predicates_of(def_id).instantiate_into(tcx, instantiated, substs);
         }
         instantiated.predicates.extend(self.predicates.iter().map(|(p, _)| p.subst(tcx, substs)));
+        instantiated.spans.extend(self.predicates.iter().map(|(_, sp)| *sp));
     }
 
     pub fn instantiate_identity(&self, tcx: TyCtxt<'tcx>) -> InstantiatedPredicates<'tcx> {
@@ -1044,7 +1045,8 @@ impl<'tcx> GenericPredicates<'tcx> {
         if let Some(def_id) = self.parent {
             tcx.predicates_of(def_id).instantiate_identity_into(tcx, instantiated);
         }
-        instantiated.predicates.extend(self.predicates.iter().map(|&(p, _)| p))
+        instantiated.predicates.extend(self.predicates.iter().map(|(p, _)| p));
+        instantiated.spans.extend(self.predicates.iter().map(|(_, s)| s));
     }
 
     pub fn instantiate_supertrait(
@@ -1059,6 +1061,7 @@ impl<'tcx> GenericPredicates<'tcx> {
                 .iter()
                 .map(|(pred, _)| pred.subst_supertrait(tcx, poly_trait_ref))
                 .collect(),
+            spans: self.predicates.iter().map(|(_, sp)| *sp).collect(),
         }
     }
 }
@@ -1344,7 +1347,7 @@ pub trait ToPredicate<'tcx> {
 impl<'tcx> ToPredicate<'tcx> for ConstnessAnd<TraitRef<'tcx>> {
     fn to_predicate(&self) -> Predicate<'tcx> {
         ty::Predicate::Trait(
-            ty::Binder::dummy(ty::TraitPredicate { trait_ref: self.value.clone() }),
+            ty::Binder::dummy(ty::TraitPredicate { trait_ref: self.value }),
             self.constness,
         )
     }
@@ -1511,11 +1514,12 @@ impl<'tcx> Predicate<'tcx> {
 #[derive(Clone, Debug, TypeFoldable)]
 pub struct InstantiatedPredicates<'tcx> {
     pub predicates: Vec<Predicate<'tcx>>,
+    pub spans: Vec<Span>,
 }
 
 impl<'tcx> InstantiatedPredicates<'tcx> {
     pub fn empty() -> InstantiatedPredicates<'tcx> {
-        InstantiatedPredicates { predicates: vec![] }
+        InstantiatedPredicates { predicates: vec![], spans: vec![] }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -2642,9 +2646,7 @@ impl<'tcx> ::std::ops::Deref for Attributes<'tcx> {
 pub enum ImplOverlapKind {
     /// These impls are always allowed to overlap.
     Permitted {
-        /// Whether or not the impl is permitted due to the trait being
-        /// a marker trait (a trait with #[marker], or a trait with
-        /// no associated items and #![feature(overlapping_marker_traits)] enabled)
+        /// Whether or not the impl is permitted due to the trait being a `#[marker]` trait
         marker: bool,
     },
     /// These impls are allowed to overlap, but that raises
@@ -2741,19 +2743,6 @@ impl<'tcx> TyCtxt<'tcx> {
         variant.fields.iter().position(|field| self.hygienic_eq(ident, field.ident, variant.def_id))
     }
 
-    pub fn associated_items(self, def_id: DefId) -> AssocItemsIterator<'tcx> {
-        // Ideally, we would use `-> impl Iterator` here, but it falls
-        // afoul of the conservative "capture [restrictions]" we put
-        // in place, so we use a hand-written iterator.
-        //
-        // [restrictions]: https://github.com/rust-lang/rust/issues/34511#issuecomment-373423999
-        AssocItemsIterator {
-            tcx: self,
-            def_ids: self.associated_item_def_ids(def_id),
-            next_index: 0,
-        }
-    }
-
     /// Returns `true` if the impls are the same polarity and the trait either
     /// has no items or is annotated #[marker] and prevents item overrides.
     pub fn impls_are_allowed_to_overlap(
@@ -2791,15 +2780,7 @@ impl<'tcx> TyCtxt<'tcx> {
             | (ImplPolarity::Negative, ImplPolarity::Negative) => {}
         };
 
-        let is_marker_overlap = if self.features().overlapping_marker_traits {
-            let trait1_is_empty = self.impl_trait_ref(def_id1).map_or(false, |trait_ref| {
-                self.associated_item_def_ids(trait_ref.def_id).is_empty()
-            });
-            let trait2_is_empty = self.impl_trait_ref(def_id2).map_or(false, |trait_ref| {
-                self.associated_item_def_ids(trait_ref.def_id).is_empty()
-            });
-            trait1_is_empty && trait2_is_empty
-        } else {
+        let is_marker_overlap = {
             let is_marker_impl = |def_id: DefId| -> bool {
                 let trait_ref = self.impl_trait_ref(def_id);
                 trait_ref.map_or(false, |tr| self.trait_def(tr.def_id).is_marker)
@@ -2993,20 +2974,22 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Copy, Clone, HashStable)]
 pub struct AssocItemsIterator<'tcx> {
-    tcx: TyCtxt<'tcx>,
-    def_ids: &'tcx [DefId],
-    next_index: usize,
+    pub items: &'tcx [AssocItem],
 }
 
-impl Iterator for AssocItemsIterator<'_> {
+impl<'tcx> Iterator for AssocItemsIterator<'tcx> {
     type Item = AssocItem;
 
+    #[inline]
     fn next(&mut self) -> Option<AssocItem> {
-        let def_id = self.def_ids.get(self.next_index)?;
-        self.next_index += 1;
-        Some(self.tcx.associated_item(*def_id))
+        if let Some((first, rest)) = self.items.split_first() {
+            self.items = rest;
+            Some(*first)
+        } else {
+            None
+        }
     }
 }
 
