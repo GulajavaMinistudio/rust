@@ -8,7 +8,6 @@ use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_span::symbol::{kw, Ident};
 use rustc_span::Span;
-use std::iter::once;
 
 /// Returns the set of obligations needed to make `ty` well-formed.
 /// If `ty` contains unresolved inference variables, this may include
@@ -26,6 +25,7 @@ pub fn obligations<'a, 'tcx>(
     let mut wf = WfPredicates { infcx, param_env, body_id, span, out: vec![], item: None };
     if wf.compute(ty) {
         debug!("wf::obligations({:?}, body_id={:?}) = {:?}", ty, body_id, wf.out);
+
         let result = wf.normalize();
         debug!("wf::obligations({:?}, body_id={:?}) ~~> {:?}", ty, body_id, result);
         Some(result)
@@ -143,15 +143,15 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
         let cause = self.cause(traits::MiscObligation);
         let infcx = &mut self.infcx;
         let param_env = self.param_env;
-        self.out
-            .iter()
-            .inspect(|pred| assert!(!pred.has_escaping_bound_vars()))
-            .flat_map(|pred| {
-                let mut selcx = traits::SelectionContext::new(infcx);
-                let pred = traits::normalize(&mut selcx, param_env, cause.clone(), pred);
-                once(pred.value).chain(pred.obligations)
-            })
-            .collect()
+        let mut obligations = Vec::new();
+        self.out.iter().inspect(|pred| assert!(!pred.has_escaping_bound_vars())).for_each(|pred| {
+            let mut selcx = traits::SelectionContext::new(infcx);
+            let i = obligations.len();
+            let value =
+                traits::normalize_to(&mut selcx, param_env, cause.clone(), pred, &mut obligations);
+            obligations.insert(i, value);
+        });
+        obligations
     }
 
     /// Pushes the obligations required for `trait_ref` to be WF into `self.out`.
@@ -166,7 +166,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
         let extend_cause_with_original_assoc_item_obligation =
             |cause: &mut traits::ObligationCause<'_>,
              pred: &ty::Predicate<'_>,
-             trait_assoc_items: ty::AssocItemsIterator<'_>| {
+             trait_assoc_items: &[ty::AssocItem]| {
                 let trait_item = tcx
                     .hir()
                     .as_local_hir_id(trait_ref.def_id)
@@ -283,6 +283,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                         ) = (&proj.skip_binder().self_ty().kind, item.map(|i| &i.kind))
                         {
                             if let Some((impl_item, trait_assoc_item)) = trait_assoc_items
+                                .iter()
                                 .filter(|i| i.def_id == *item_def_id)
                                 .next()
                                 .and_then(|trait_assoc_item| {
@@ -325,7 +326,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                 extend_cause_with_original_assoc_item_obligation(
                     &mut cause,
                     &pred,
-                    trait_assoc_items.clone(),
+                    trait_assoc_items,
                 );
                 traits::Obligation::new(cause, param_env, pred)
             });
