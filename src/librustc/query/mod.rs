@@ -125,7 +125,9 @@ rustc_queries! {
 
         /// Fetch the MIR for a given `DefId` right after it's built - this includes
         /// unreachable code.
-        query mir_built(_: DefId) -> &'tcx Steal<mir::BodyAndCache<'tcx>> {}
+        query mir_built(_: DefId) -> &'tcx Steal<mir::BodyAndCache<'tcx>> {
+            desc { "building MIR for" }
+        }
 
         /// Fetch the MIR for a given `DefId` up till the point where it is
         /// ready for const evaluation.
@@ -345,6 +347,7 @@ rustc_queries! {
     TypeChecking {
         /// The result of unsafety-checking this `DefId`.
         query unsafety_check_result(key: DefId) -> mir::UnsafetyCheckResult {
+            desc { |tcx| "unsafety-checking `{}`", tcx.def_path_str(key) }
             cache_on_disk_if { key.is_local() }
         }
 
@@ -414,14 +417,8 @@ rustc_queries! {
         }
 
         query typeck_tables_of(key: DefId) -> &'tcx ty::TypeckTables<'tcx> {
+            desc { |tcx| "type-checking `{}`", tcx.def_path_str(key) }
             cache_on_disk_if { key.is_local() }
-            load_cached(tcx, id) {
-                let typeck_tables: Option<ty::TypeckTables<'tcx>> = tcx
-                    .queries.on_disk_cache
-                    .try_load_query_result(tcx, id);
-
-                typeck_tables.map(|tables| &*tcx.arena.alloc(tables))
-            }
         }
         query diagnostic_only_typeck_tables_of(key: DefId) -> &'tcx ty::TypeckTables<'tcx> {
             cache_on_disk_if { key.is_local() }
@@ -452,8 +449,13 @@ rustc_queries! {
     BorrowChecking {
         /// Borrow-checks the function body. If this is a closure, returns
         /// additional requirements that the closure's creator must verify.
-        query mir_borrowck(key: DefId) -> mir::BorrowCheckResult<'tcx> {
-            cache_on_disk_if(tcx, _) { key.is_local() && tcx.is_closure(key) }
+        query mir_borrowck(key: DefId) -> &'tcx mir::BorrowCheckResult<'tcx> {
+            desc { |tcx| "borrow-checking `{}`", tcx.def_path_str(key) }
+            cache_on_disk_if(tcx, opt_result) {
+                key.is_local()
+                    && (tcx.is_closure(key)
+                        || opt_result.map_or(false, |r| !r.concrete_opaque_types.is_empty()))
+            }
         }
     }
 
@@ -647,7 +649,8 @@ rustc_queries! {
         query trait_impls_of(key: DefId) -> &'tcx ty::trait_def::TraitImpls {
             desc { |tcx| "trait impls of `{}`", tcx.def_path_str(key) }
         }
-        query specialization_graph_of(_: DefId) -> &'tcx specialization_graph::Graph {
+        query specialization_graph_of(key: DefId) -> &'tcx specialization_graph::Graph {
+            desc { |tcx| "building specialization graph of trait `{}`", tcx.def_path_str(key) }
             cache_on_disk_if { true }
         }
         query is_object_safe(key: DefId) -> bool {
@@ -668,24 +671,27 @@ rustc_queries! {
             no_force
             desc { "computing whether `{}` is `Copy`", env.value }
         }
+        /// Query backing `TyS::is_sized`.
         query is_sized_raw(env: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> bool {
             no_force
             desc { "computing whether `{}` is `Sized`", env.value }
         }
+        /// Query backing `TyS::is_freeze`.
         query is_freeze_raw(env: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> bool {
             no_force
             desc { "computing whether `{}` is freeze", env.value }
         }
-
-        // The cycle error here should be reported as an error by `check_representable`.
-        // We consider the type as not needing drop in the meanwhile to avoid
-        // further errors (done in impl Value for NeedsDrop).
-        // Use `cycle_delay_bug` to delay the cycle error here to be emitted later
-        // in case we accidentally otherwise don't emit an error.
-        query needs_drop_raw(env: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> NeedsDrop {
-            cycle_delay_bug
+        /// Query backing `TyS::needs_drop`.
+        query needs_drop_raw(env: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> bool {
             no_force
             desc { "computing whether `{}` needs drop", env.value }
+        }
+
+        /// A list of types where the ADT requires drop if and only if any of
+        /// those types require drop. If the ADT is known to always need drop
+        /// then `Err(AlwaysRequiresDrop)` is returned.
+        query adt_drop_tys(_: DefId) -> Result<&'tcx ty::List<Ty<'tcx>>, AlwaysRequiresDrop> {
+            cache_on_disk_if { true }
         }
 
         query layout_raw(

@@ -405,17 +405,15 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     }
 
                     RegionResolutionError::MemberConstraintFailure {
-                        opaque_type_def_id,
                         hidden_ty,
                         member_region,
-                        span: _,
-                        choice_regions: _,
+                        span,
                     } => {
                         let hidden_ty = self.resolve_vars_if_possible(&hidden_ty);
                         opaque_types::unexpected_hidden_region_diagnostic(
                             self.tcx,
                             Some(region_scope_tree),
-                            opaque_type_def_id,
+                            span,
                             hidden_ty,
                             member_region,
                         )
@@ -1701,7 +1699,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         sub: Region<'tcx>,
     ) {
         self.construct_generic_bound_failure(region_scope_tree, span, origin, bound_kind, sub)
-            .emit()
+            .emit();
     }
 
     pub fn construct_generic_bound_failure(

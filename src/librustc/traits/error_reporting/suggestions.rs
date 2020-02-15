@@ -701,10 +701,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     })
                     .collect::<Vec<_>>();
                 // Add the suggestion for the return type.
-                suggestions.push((
-                    ret_ty.span,
-                    format!("Box<{}{}>", if has_dyn { "" } else { "dyn " }, snippet),
-                ));
+                suggestions.push((ret_ty.span, format!("Box<dyn {}>", trait_obj)));
                 err.multipart_suggestion(
                     "return a boxed trait object instead",
                     suggestions,
@@ -1511,9 +1508,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 );
                 if suggest_const_in_array_repeat_expressions {
                     err.note(
-                        "this array initializer can be evaluated at compile-time, for more \
-                         information, see issue \
-                         https://github.com/rust-lang/rust/issues/49147",
+                        "this array initializer can be evaluated at compile-time, see issue \
+                         #48147 <https://github.com/rust-lang/rust/issues/49147> \
+                         for more information",
                     );
                     if tcx.sess.opts.unstable_features.is_nightly_build() {
                         err.help(

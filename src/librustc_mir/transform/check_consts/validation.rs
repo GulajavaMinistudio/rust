@@ -22,6 +22,7 @@ use super::resolver::FlowSensitiveAnalysis;
 use super::{is_lang_panic_fn, ConstKind, Item, Qualif};
 use crate::const_eval::{is_const_fn, is_unstable_const_fn};
 use crate::dataflow::{self as old_dataflow, generic as dataflow};
+use dataflow::Analysis;
 
 pub type IndirectlyMutableResults<'mir, 'tcx> =
     old_dataflow::DataflowResultsCursor<'mir, 'tcx, IndirectlyMutableLocals<'mir, 'tcx>>;
@@ -33,10 +34,10 @@ struct QualifCursor<'a, 'mir, 'tcx, Q: Qualif> {
 
 impl<Q: Qualif> QualifCursor<'a, 'mir, 'tcx, Q> {
     pub fn new(q: Q, item: &'a Item<'mir, 'tcx>) -> Self {
-        let analysis = FlowSensitiveAnalysis::new(q, item);
-        let results = dataflow::Engine::new_generic(item.tcx, &item.body, item.def_id, analysis)
-            .iterate_to_fixpoint();
-        let cursor = dataflow::ResultsCursor::new(*item.body, results);
+        let cursor = FlowSensitiveAnalysis::new(q, item)
+            .into_engine(item.tcx, &item.body, item.def_id)
+            .iterate_to_fixpoint()
+            .into_results_cursor(*item.body);
 
         let mut in_any_value_of_ty = BitSet::new_empty(item.body.local_decls.len());
         for (local, decl) in item.body.local_decls.iter_enumerated() {
@@ -565,7 +566,10 @@ impl Visitor<'tcx> for Validator<'_, 'mir, 'tcx> {
 
 fn error_min_const_fn_violation(tcx: TyCtxt<'_>, span: Span, msg: Cow<'_, str>) {
     struct_span_err!(tcx.sess, span, E0723, "{}", msg)
-        .note("for more information, see issue https://github.com/rust-lang/rust/issues/57563")
+        .note(
+            "see issue #57563 <https://github.com/rust-lang/rust/issues/57563> \
+             for more information",
+        )
         .help("add `#![feature(const_fn)]` to the crate attributes to enable")
         .emit();
 }
@@ -593,9 +597,9 @@ fn check_short_circuiting_in_const_local(item: &Item<'_, 'tcx>) {
                 *span,
                 &format!(
                     "use of {} here does not actually short circuit due to \
-                the const evaluator presently not being able to do control flow. \
-                See https://github.com/rust-lang/rust/issues/49146 for more \
-                information.",
+                     the const evaluator presently not being able to do control flow. \
+                     See issue #49146 <https://github.com/rust-lang/rust/issues/49146> \
+                     for more information.",
                     kind
                 ),
             );

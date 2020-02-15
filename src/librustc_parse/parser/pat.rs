@@ -542,11 +542,14 @@ impl<'a> Parser<'a> {
             }
 
             fn visit_pat(&mut self, pat: &mut P<Pat>) {
-                if let PatKind::Ident(BindingMode::ByValue(ref mut m @ Mutability::Not), ..) =
-                    pat.kind
-                {
-                    *m = Mutability::Mut;
+                if let PatKind::Ident(ref mut bm, ..) = pat.kind {
+                    if let BindingMode::ByValue(ref mut m @ Mutability::Not) = bm {
+                        *m = Mutability::Mut;
+                    }
                     self.0 = true;
+                    // Don't recurse into the subpattern, mut on the outer
+                    // binding doesn't affect the inner bindings.
+                    return;
                 }
                 noop_visit_pat(pat, self);
             }
@@ -569,7 +572,7 @@ impl<'a> Parser<'a> {
         self.struct_span_err(span, problem)
             .span_suggestion(span, suggestion, fix, Applicability::MachineApplicable)
             .note("`mut` may be followed by `variable` and `variable @ pattern`")
-            .emit()
+            .emit();
     }
 
     /// Eat any extraneous `mut`s and error + recover if we ate any.

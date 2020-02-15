@@ -78,13 +78,6 @@ pub use self::chalk_fulfill::{
 
 pub use self::types::*;
 
-/// Whether to enable bug compatibility with issue #43355.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum IntercrateMode {
-    Issue43355,
-    Fixed,
-}
-
 /// Whether to skip the leak check, as part of a future compatibility warning step.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SkipLeakCheck {
@@ -640,7 +633,6 @@ impl<'tcx> TraitObligation<'tcx> {
 }
 
 pub fn provide(providers: &mut ty::query::Providers<'_>) {
-    misc::provide(providers);
     *providers = ty::query::Providers {
         is_object_safe: object_safety::is_object_safe_provider,
         specialization_graph_of: specialize::specialization_graph_provider,

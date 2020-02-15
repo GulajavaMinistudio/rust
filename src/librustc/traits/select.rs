@@ -19,8 +19,8 @@ use super::DerivedObligationCause;
 use super::Selection;
 use super::SelectionResult;
 use super::TraitNotObjectSafe;
+use super::TraitQueryMode;
 use super::{BuiltinDerivedObligation, ImplDerivedObligation, ObligationCauseCode};
-use super::{IntercrateMode, TraitQueryMode};
 use super::{ObjectCastObligation, Obligation};
 use super::{ObligationCause, PredicateObligation, TraitObligation};
 use super::{OutputTypeParameterMismatch, Overflow, SelectionError, Unimplemented};
@@ -40,19 +40,19 @@ use crate::ty::fast_reject;
 use crate::ty::relate::TypeRelation;
 use crate::ty::subst::{Subst, SubstsRef};
 use crate::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness};
-use rustc_hir::def_id::DefId;
-
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir as hir;
+use rustc_hir::def_id::DefId;
 use rustc_index::bit_set::GrowableBitSet;
 use rustc_span::symbol::sym;
 use rustc_target::spec::abi::Abi;
+use syntax::attr;
+
 use std::cell::{Cell, RefCell};
 use std::cmp;
 use std::fmt::{self, Display};
 use std::iter;
 use std::rc::Rc;
-use syntax::{ast, attr};
 
 pub use rustc::traits::types::select::*;
 
@@ -80,7 +80,7 @@ pub struct SelectionContext<'cx, 'tcx> {
     /// other words, we consider `$0: Bar` to be unimplemented if
     /// there is no type that the user could *actually name* that
     /// would satisfy it. This avoids crippling inference, basically.
-    intercrate: Option<IntercrateMode>,
+    intercrate: bool,
 
     intercrate_ambiguity_causes: Option<Vec<IntercrateAmbiguityCause>>,
 
@@ -218,22 +218,18 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         SelectionContext {
             infcx,
             freshener: infcx.freshener(),
-            intercrate: None,
+            intercrate: false,
             intercrate_ambiguity_causes: None,
             allow_negative_impls: false,
             query_mode: TraitQueryMode::Standard,
         }
     }
 
-    pub fn intercrate(
-        infcx: &'cx InferCtxt<'cx, 'tcx>,
-        mode: IntercrateMode,
-    ) -> SelectionContext<'cx, 'tcx> {
-        debug!("intercrate({:?})", mode);
+    pub fn intercrate(infcx: &'cx InferCtxt<'cx, 'tcx>) -> SelectionContext<'cx, 'tcx> {
         SelectionContext {
             infcx,
             freshener: infcx.freshener(),
-            intercrate: Some(mode),
+            intercrate: true,
             intercrate_ambiguity_causes: None,
             allow_negative_impls: false,
             query_mode: TraitQueryMode::Standard,
@@ -248,7 +244,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         SelectionContext {
             infcx,
             freshener: infcx.freshener(),
-            intercrate: None,
+            intercrate: false,
             intercrate_ambiguity_causes: None,
             allow_negative_impls,
             query_mode: TraitQueryMode::Standard,
@@ -263,7 +259,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         SelectionContext {
             infcx,
             freshener: infcx.freshener(),
-            intercrate: None,
+            intercrate: false,
             intercrate_ambiguity_causes: None,
             allow_negative_impls: false,
             query_mode,
@@ -276,7 +272,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     /// false overflow results (#47139) and because it costs
     /// computation time.
     pub fn enable_tracking_intercrate_ambiguity_causes(&mut self) {
-        assert!(self.intercrate.is_some());
+        assert!(self.intercrate);
         assert!(self.intercrate_ambiguity_causes.is_none());
         self.intercrate_ambiguity_causes = Some(vec![]);
         debug!("selcx: enable_tracking_intercrate_ambiguity_causes");
@@ -286,7 +282,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     /// was enabled and disables tracking at the same time. If
     /// tracking is not enabled, just returns an empty vector.
     pub fn take_intercrate_ambiguity_causes(&mut self) -> Vec<IntercrateAmbiguityCause> {
-        assert!(self.intercrate.is_some());
+        assert!(self.intercrate);
         self.intercrate_ambiguity_causes.take().unwrap_or(vec![])
     }
 
@@ -513,7 +509,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         if let Some(key) =
                             ProjectionCacheKey::from_poly_projection_predicate(self, data)
                         {
-                            self.infcx.projection_cache.borrow_mut().complete(key);
+                            self.infcx.inner.borrow_mut().projection_cache.complete(key);
                         }
                         result
                     }
@@ -562,7 +558,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     ) -> Result<EvaluationResult, OverflowError> {
         debug!("evaluate_trait_predicate_recursively({:?})", obligation);
 
-        if self.intercrate.is_none()
+        if !self.intercrate
             && obligation.is_global()
             && obligation.param_env.caller_bounds.iter().all(|bound| bound.needs_subst())
         {
@@ -681,7 +677,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             // if the regions match exactly.
             let cycle = stack.iter().skip(1).take_while(|s| s.depth >= cycle_depth);
             let cycle = cycle.map(|stack| {
-                ty::Predicate::Trait(stack.obligation.predicate, ast::Constness::NotConst)
+                ty::Predicate::Trait(stack.obligation.predicate, hir::Constness::NotConst)
             });
             if self.coinductive_match(cycle) {
                 debug!("evaluate_stack({:?}) --> recursive, coinductive", stack.fresh_trait_ref);
@@ -727,7 +723,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             stack.fresh_trait_ref.skip_binder().input_types().any(|ty| ty.is_fresh());
         // This check was an imperfect workaround for a bug in the old
         // intercrate mode; it should be removed when that goes away.
-        if unbound_input_types && self.intercrate == Some(IntercrateMode::Issue43355) {
+        if unbound_input_types && self.intercrate {
             debug!(
                 "evaluate_stack({:?}) --> unbound argument, intercrate -->  ambiguous",
                 stack.fresh_trait_ref
@@ -1206,7 +1202,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     fn is_knowable<'o>(&mut self, stack: &TraitObligationStack<'o, 'tcx>) -> Option<Conflict> {
         debug!("is_knowable(intercrate={:?})", self.intercrate);
 
-        if !self.intercrate.is_some() {
+        if !self.intercrate {
             return None;
         }
 
@@ -1218,17 +1214,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // bound regions.
         let trait_ref = predicate.skip_binder().trait_ref;
 
-        let result = coherence::trait_ref_is_knowable(self.tcx(), trait_ref);
-        if let (
-            Some(Conflict::Downstream { used_to_be_broken: true }),
-            Some(IntercrateMode::Issue43355),
-        ) = (result, self.intercrate)
-        {
-            debug!("is_knowable: IGNORING conflict to be bug-compatible with #43355");
-            None
-        } else {
-            result
-        }
+        coherence::trait_ref_is_knowable(self.tcx(), trait_ref)
     }
 
     /// Returns `true` if the global caches can be used.
@@ -1249,7 +1235,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // the master cache. Since coherence executes pretty quickly,
         // it's not worth going to more trouble to increase the
         // hit-rate, I don't think.
-        if self.intercrate.is_some() {
+        if self.intercrate {
             return false;
         }
 
@@ -1648,7 +1634,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         obligation: &TraitObligation<'tcx>,
         candidates: &mut SelectionCandidateSet<'tcx>,
     ) -> Result<(), SelectionError<'tcx>> {
-        let kind = match self.tcx().lang_items().fn_trait_kind(obligation.predicate.def_id()) {
+        let kind = match self.tcx().fn_trait_kind_from_lang_item(obligation.predicate.def_id()) {
             Some(k) => k,
             None => {
                 return Ok(());
@@ -1691,7 +1677,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         candidates: &mut SelectionCandidateSet<'tcx>,
     ) -> Result<(), SelectionError<'tcx>> {
         // We provide impl of all fn traits for fn pointers.
-        if self.tcx().lang_items().fn_trait_kind(obligation.predicate.def_id()).is_none() {
+        if self.tcx().fn_trait_kind_from_lang_item(obligation.predicate.def_id()).is_none() {
             return Ok(());
         }
 
@@ -2903,8 +2889,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         let kind = self
             .tcx()
-            .lang_items()
-            .fn_trait_kind(obligation.predicate.def_id())
+            .fn_trait_kind_from_lang_item(obligation.predicate.def_id())
             .unwrap_or_else(|| bug!("closure candidate for non-fn trait {:?}", obligation));
 
         // Okay to skip binder because the substs on closure types never
@@ -3305,7 +3290,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             return Err(());
         }
 
-        if self.intercrate.is_none()
+        if !self.intercrate
             && self.tcx().impl_polarity(impl_def_id) == ty::ImplPolarity::Reservation
         {
             debug!("match_impl: reservation impls only apply in intercrate mode");
@@ -3486,7 +3471,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // that order.
         let predicates = tcx.predicates_of(def_id);
         assert_eq!(predicates.parent, None);
-        let mut obligations = Vec::new();
+        let mut obligations = Vec::with_capacity(predicates.predicates.len());
         for (predicate, _) in predicates.predicates {
             let predicate = normalize_with_depth_to(
                 self,

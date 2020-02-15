@@ -9,7 +9,6 @@ use crate::ty::fold::TypeFolder;
 use crate::ty::{Region, RegionVid};
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use syntax::ast;
 
 use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
@@ -199,12 +198,22 @@ impl<'tcx> AutoTraitFinder<'tcx> {
                 panic!("Unable to fulfill trait {:?} for '{:?}': {:?}", trait_did, ty, e)
             });
 
-            let body_id_map: FxHashMap<_, _> =
-                infcx.region_obligations.borrow().iter().map(|&(id, _)| (id, vec![])).collect();
+            let body_id_map: FxHashMap<_, _> = infcx
+                .inner
+                .borrow()
+                .region_obligations
+                .iter()
+                .map(|&(id, _)| (id, vec![]))
+                .collect();
 
             infcx.process_registered_region_obligations(&body_id_map, None, full_env);
 
-            let region_data = infcx.borrow_region_constraints().region_constraint_data().clone();
+            let region_data = infcx
+                .inner
+                .borrow_mut()
+                .unwrap_region_constraints()
+                .region_constraint_data()
+                .clone();
 
             let vid_to_region = self.map_vid_to_region(&region_data);
 
@@ -340,7 +349,7 @@ impl AutoTraitFinder<'tcx> {
                         already_visited.remove(&pred);
                         self.add_user_pred(
                             &mut user_computed_preds,
-                            ty::Predicate::Trait(pred, ast::Constness::NotConst),
+                            ty::Predicate::Trait(pred, hir::Constness::NotConst),
                         );
                         predicates.push_back(pred);
                     } else {

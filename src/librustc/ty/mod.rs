@@ -35,7 +35,7 @@ use rustc_data_structures::sync::{self, par_iter, Lrc, ParallelIterator};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX, LOCAL_CRATE};
-use rustc_hir::{GlobMap, Node, TraitMap};
+use rustc_hir::{Constness, GlobMap, Node, TraitMap};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
 use rustc_serialize::{self, Encodable, Encoder};
@@ -43,7 +43,7 @@ use rustc_span::hygiene::ExpnId;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::Span;
 use rustc_target::abi::Align;
-use syntax::ast::{self, Constness, Ident, Name};
+use syntax::ast::{self, Ident, Name};
 use syntax::node_id::{NodeId, NodeMap, NodeSet};
 
 use std::cell::RefCell;
@@ -83,6 +83,7 @@ pub use self::context::{
     CtxtInterners, GeneratorInteriorTypeCause, GlobalCtxt, Lift, TypeckTables,
 };
 
+pub use self::instance::RESOLVE_INSTANCE;
 pub use self::instance::{Instance, InstanceDef};
 
 pub use self::trait_def::TraitDef;
@@ -126,7 +127,7 @@ pub struct ResolverOutputs {
     pub definitions: hir_map::Definitions,
     pub cstore: Box<CrateStoreDyn>,
     pub extern_crate_map: NodeMap<CrateNum>,
-    pub trait_map: TraitMap,
+    pub trait_map: TraitMap<NodeId>,
     pub maybe_unused_trait_imports: NodeSet,
     pub maybe_unused_extern_crates: Vec<(NodeId, Span)>,
     pub export_map: ExportMap<NodeId>,
@@ -473,10 +474,15 @@ bitflags! {
         /// if a global bound is safe to evaluate.
         const HAS_RE_LATE_BOUND  = 1 << 11;
 
-        const HAS_TY_PLACEHOLDER = 1 << 12;
+        /// Does this have any `ReErased` regions?
+        const HAS_RE_ERASED  = 1 << 12;
 
-        const HAS_CT_INFER       = 1 << 13;
-        const HAS_CT_PLACEHOLDER = 1 << 14;
+        const HAS_TY_PLACEHOLDER = 1 << 13;
+
+        const HAS_CT_INFER       = 1 << 14;
+        const HAS_CT_PLACEHOLDER = 1 << 15;
+        /// Does this have any [Opaque] types.
+        const HAS_TY_OPAQUE      = 1 << 16;
 
         const NEEDS_SUBST        = TypeFlags::HAS_PARAMS.bits |
                                    TypeFlags::HAS_RE_EARLY_BOUND.bits;
@@ -496,9 +502,11 @@ bitflags! {
                                   TypeFlags::HAS_FREE_LOCAL_NAMES.bits |
                                   TypeFlags::KEEP_IN_LOCAL_TCX.bits |
                                   TypeFlags::HAS_RE_LATE_BOUND.bits |
+                                  TypeFlags::HAS_RE_ERASED.bits |
                                   TypeFlags::HAS_TY_PLACEHOLDER.bits |
                                   TypeFlags::HAS_CT_INFER.bits |
-                                  TypeFlags::HAS_CT_PLACEHOLDER.bits;
+                                  TypeFlags::HAS_CT_PLACEHOLDER.bits |
+                                  TypeFlags::HAS_TY_OPAQUE.bits;
     }
 }
 
@@ -1796,19 +1804,22 @@ bitflags! {
         const IS_STRUCT           = 1 << 2;
         /// Indicates whether the ADT is a struct and has a constructor.
         const HAS_CTOR            = 1 << 3;
-        /// Indicates whether the type is a `PhantomData`.
+        /// Indicates whether the type is `PhantomData`.
         const IS_PHANTOM_DATA     = 1 << 4;
         /// Indicates whether the type has a `#[fundamental]` attribute.
         const IS_FUNDAMENTAL      = 1 << 5;
-        /// Indicates whether the type is a `Box`.
+        /// Indicates whether the type is `Box`.
         const IS_BOX              = 1 << 6;
+        /// Indicates whether the type is `ManuallyDrop`.
+        const IS_MANUALLY_DROP    = 1 << 7;
+        // FIXME(matthewjasper) replace these with diagnostic items
         /// Indicates whether the type is an `Arc`.
-        const IS_ARC              = 1 << 7;
+        const IS_ARC              = 1 << 8;
         /// Indicates whether the type is an `Rc`.
-        const IS_RC               = 1 << 8;
+        const IS_RC               = 1 << 9;
         /// Indicates whether the variant list of this ADT is `#[non_exhaustive]`.
         /// (i.e., this flag is never set unless this ADT is an enum).
-        const IS_VARIANT_LIST_NON_EXHAUSTIVE = 1 << 9;
+        const IS_VARIANT_LIST_NON_EXHAUSTIVE = 1 << 10;
     }
 }
 
@@ -2041,7 +2052,8 @@ bitflags! {
         const IS_TRANSPARENT     = 1 << 2;
         // Internal only for now. If true, don't reorder fields.
         const IS_LINEAR          = 1 << 3;
-
+        // If true, don't expose any niche to type's context.
+        const HIDE_NICHE         = 1 << 4;
         // Any of these flags being set prevent field reordering optimisation.
         const IS_UNOPTIMISABLE   = ReprFlags::IS_C.bits |
                                    ReprFlags::IS_SIMD.bits |
@@ -2078,6 +2090,7 @@ impl ReprOptions {
                         ReprFlags::empty()
                     }
                     attr::ReprTransparent => ReprFlags::IS_TRANSPARENT,
+                    attr::ReprNoNiche => ReprFlags::HIDE_NICHE,
                     attr::ReprSimd => ReprFlags::IS_SIMD,
                     attr::ReprInt(i) => {
                         size = Some(i);
@@ -2117,6 +2130,10 @@ impl ReprOptions {
     #[inline]
     pub fn linear(&self) -> bool {
         self.flags.contains(ReprFlags::IS_LINEAR)
+    }
+    #[inline]
+    pub fn hide_niche(&self) -> bool {
+        self.flags.contains(ReprFlags::HIDE_NICHE)
     }
 
     pub fn discr_type(&self) -> attr::IntType {
@@ -2183,6 +2200,9 @@ impl<'tcx> AdtDef {
         }
         if Some(did) == tcx.lang_items().owned_box() {
             flags |= AdtFlags::IS_BOX;
+        }
+        if Some(did) == tcx.lang_items().manually_drop() {
+            flags |= AdtFlags::IS_MANUALLY_DROP;
         }
         if Some(did) == tcx.lang_items().arc() {
             flags |= AdtFlags::IS_ARC;
@@ -2282,6 +2302,12 @@ impl<'tcx> AdtDef {
     #[inline]
     pub fn is_box(&self) -> bool {
         self.flags.contains(AdtFlags::IS_BOX)
+    }
+
+    /// Returns `true` if this is `ManuallyDrop<T>`.
+    #[inline]
+    pub fn is_manually_drop(&self) -> bool {
+        self.flags.contains(AdtFlags::IS_MANUALLY_DROP)
     }
 
     /// Returns `true` if this type has a destructor.

@@ -24,6 +24,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.annotate_expected_due_to_let_ty(err, expr);
         self.suggest_compatible_variants(err, expr, expected, expr_ty);
         self.suggest_ref_or_into(err, expr, expected, expr_ty);
+        if self.suggest_calling_boxed_future_when_appropriate(err, expr, expected, expr_ty) {
+            return;
+        }
         self.suggest_boxing_when_appropriate(err, expr, expected, expr_ty);
         self.suggest_missing_await(err, expr, expected, expr_ty);
     }
@@ -798,9 +801,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         );
                         err.warn(
                             "if the rounded value cannot be represented by the target \
-                                  integer type, including `Inf` and `NaN`, casting will cause \
-                                  undefined behavior \
-                                  (https://github.com/rust-lang/rust/issues/10184)",
+                                integer type, including `Inf` and `NaN`, casting will cause \
+                                undefined behavior \
+                                (see issue #10184 <https://github.com/rust-lang/rust/issues/10184> \
+                                for more information)",
                         );
                     }
                     true
