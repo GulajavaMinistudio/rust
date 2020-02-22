@@ -1499,7 +1499,7 @@ fn contains_nonascii(x: usize) -> bool {
 
 /// Walks through `v` checking that it's a valid UTF-8 sequence,
 /// returning `Ok(())` in that case, or, if it is invalid, `Err(err)`.
-#[inline]
+#[inline(always)]
 fn run_utf8_validation(v: &[u8]) -> Result<(), Utf8Error> {
     let mut index = 0;
     let len = v.len();
@@ -2658,7 +2658,8 @@ impl str {
     ///
     /// It's important to remember that [`char`] represents a Unicode Scalar
     /// Value, and may not match your idea of what a 'character' is. Iteration
-    /// over grapheme clusters may be what you actually want.
+    /// over grapheme clusters may be what you actually want. This functionality
+    /// is not provided by Rust's standard library, check crates.io instead.
     ///
     /// # Examples
     ///
