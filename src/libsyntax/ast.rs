@@ -2106,7 +2106,7 @@ pub enum Const {
 /// For details see the [RFC #2532](https://github.com/rust-lang/rfcs/pull/2532).
 #[derive(Copy, Clone, PartialEq, RustcEncodable, RustcDecodable, Debug, HashStable_Generic)]
 pub enum Defaultness {
-    Default,
+    Default(Span),
     Final,
 }
 
@@ -2411,15 +2411,15 @@ impl VariantData {
     }
 }
 
-/// An item.
-///
-/// The name might be a dummy name in case of anonymous items.
+/// An item definition.
 #[derive(Clone, RustcEncodable, RustcDecodable, Debug)]
 pub struct Item<K = ItemKind> {
     pub attrs: Vec<Attribute>,
     pub id: NodeId,
     pub span: Span,
     pub vis: Visibility,
+    /// The name of the item.
+    /// It might be a dummy name in case of anonymous items.
     pub ident: Ident,
 
     pub kind: K,
@@ -2438,6 +2438,13 @@ impl Item {
     /// Return the span that encompasses the attributes.
     pub fn span_with_attributes(&self) -> Span {
         self.attrs.iter().fold(self.span, |acc, attr| acc.to(attr.span))
+    }
+}
+
+impl<K: IntoItemKind> Item<K> {
+    pub fn into_item(self) -> Item {
+        let Item { attrs, id, span, vis, ident, kind, tokens } = self;
+        Item { attrs, id, span, vis, ident, kind: kind.into_item_kind(), tokens }
     }
 }
 
@@ -2506,11 +2513,11 @@ pub enum ItemKind {
     /// A constant item (`const`).
     ///
     /// E.g., `const FOO: i32 = 42;`.
-    Const(P<Ty>, Option<P<Expr>>),
+    Const(Defaultness, P<Ty>, Option<P<Expr>>),
     /// A function declaration (`fn`).
     ///
     /// E.g., `fn foo(bar: usize) -> usize { .. }`.
-    Fn(FnSig, Generics, Option<P<Block>>),
+    Fn(Defaultness, FnSig, Generics, Option<P<Block>>),
     /// A module declaration (`mod`).
     ///
     /// E.g., `mod foo;` or `mod foo { .. }`.
@@ -2524,7 +2531,7 @@ pub enum ItemKind {
     /// A type alias (`type`).
     ///
     /// E.g., `type Foo = Bar<u8>;`.
-    TyAlias(P<Ty>, Generics),
+    TyAlias(Defaultness, Generics, GenericBounds, Option<P<Ty>>),
     /// An enum definition (`enum`).
     ///
     /// E.g., `enum Foo<A, B> { C<A>, D<B> }`.
@@ -2571,30 +2578,41 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub fn descriptive_variant(&self) -> &str {
-        match *self {
+    pub fn article(&self) -> &str {
+        use ItemKind::*;
+        match self {
+            Use(..) | Static(..) | Const(..) | Fn(..) | Mod(..) | GlobalAsm(..) | TyAlias(..)
+            | Struct(..) | Union(..) | Trait(..) | TraitAlias(..) | MacroDef(..) => "a",
+            ExternCrate(..) | ForeignMod(..) | Mac(..) | Enum(..) | Impl { .. } => "an",
+        }
+    }
+
+    pub fn descr(&self) -> &str {
+        match self {
             ItemKind::ExternCrate(..) => "extern crate",
-            ItemKind::Use(..) => "use",
+            ItemKind::Use(..) => "`use` import",
             ItemKind::Static(..) => "static item",
             ItemKind::Const(..) => "constant item",
             ItemKind::Fn(..) => "function",
             ItemKind::Mod(..) => "module",
-            ItemKind::ForeignMod(..) => "foreign module",
-            ItemKind::GlobalAsm(..) => "global asm",
+            ItemKind::ForeignMod(..) => "extern block",
+            ItemKind::GlobalAsm(..) => "global asm item",
             ItemKind::TyAlias(..) => "type alias",
             ItemKind::Enum(..) => "enum",
             ItemKind::Struct(..) => "struct",
             ItemKind::Union(..) => "union",
             ItemKind::Trait(..) => "trait",
             ItemKind::TraitAlias(..) => "trait alias",
-            ItemKind::Mac(..) | ItemKind::MacroDef(..) | ItemKind::Impl { .. } => "item",
+            ItemKind::Mac(..) => "item macro invocation",
+            ItemKind::MacroDef(..) => "macro definition",
+            ItemKind::Impl { .. } => "implementation",
         }
     }
 
     pub fn generics(&self) -> Option<&Generics> {
         match self {
-            Self::Fn(_, generics, _)
-            | Self::TyAlias(_, generics)
+            Self::Fn(_, _, generics, _)
+            | Self::TyAlias(_, generics, ..)
             | Self::Enum(_, generics)
             | Self::Struct(_, generics)
             | Self::Union(_, generics)
@@ -2606,6 +2624,10 @@ impl ItemKind {
     }
 }
 
+pub trait IntoItemKind {
+    fn into_item_kind(self) -> ItemKind;
+}
+
 // FIXME(Centril): These definitions should be unmerged;
 // see https://github.com/rust-lang/rust/pull/69194#discussion_r379899975
 pub type ForeignItem = Item<AssocItemKind>;
@@ -2613,19 +2635,7 @@ pub type ForeignItemKind = AssocItemKind;
 
 /// Represents associated items.
 /// These include items in `impl` and `trait` definitions.
-#[derive(Clone, RustcEncodable, RustcDecodable, Debug)]
-pub struct AssocItem {
-    pub attrs: Vec<Attribute>,
-    pub id: NodeId,
-    pub span: Span,
-    pub vis: Visibility,
-    pub ident: Ident,
-
-    pub defaultness: Defaultness,
-    pub kind: AssocItemKind,
-    /// See `Item::tokens` for what this is.
-    pub tokens: Option<TokenStream>,
-}
+pub type AssocItem = Item<AssocItemKind>;
 
 /// Represents non-free item kinds.
 ///
@@ -2638,13 +2648,34 @@ pub struct AssocItem {
 pub enum AssocItemKind {
     /// A constant, `const $ident: $ty $def?;` where `def ::= "=" $expr? ;`.
     /// If `def` is parsed, then the constant is provided, and otherwise required.
-    Const(P<Ty>, Option<P<Expr>>),
+    Const(Defaultness, P<Ty>, Option<P<Expr>>),
     /// A static item (`static FOO: u8`).
     Static(P<Ty>, Mutability, Option<P<Expr>>),
     /// A function.
-    Fn(FnSig, Generics, Option<P<Block>>),
+    Fn(Defaultness, FnSig, Generics, Option<P<Block>>),
     /// A type.
-    TyAlias(Generics, GenericBounds, Option<P<Ty>>),
+    TyAlias(Defaultness, Generics, GenericBounds, Option<P<Ty>>),
     /// A macro expanding to items.
     Macro(Mac),
+}
+
+impl AssocItemKind {
+    pub fn defaultness(&self) -> Defaultness {
+        match *self {
+            Self::Const(def, ..) | Self::Fn(def, ..) | Self::TyAlias(def, ..) => def,
+            Self::Macro(..) | Self::Static(..) => Defaultness::Final,
+        }
+    }
+}
+
+impl IntoItemKind for AssocItemKind {
+    fn into_item_kind(self) -> ItemKind {
+        match self {
+            AssocItemKind::Const(a, b, c) => ItemKind::Const(a, b, c),
+            AssocItemKind::Static(a, b, c) => ItemKind::Static(a, b, c),
+            AssocItemKind::Fn(a, b, c, d) => ItemKind::Fn(a, b, c, d),
+            AssocItemKind::TyAlias(a, b, c, d) => ItemKind::TyAlias(a, b, c, d),
+            AssocItemKind::Macro(a) => ItemKind::Mac(a),
+        }
+    }
 }

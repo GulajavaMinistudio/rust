@@ -87,7 +87,7 @@ mod upvar;
 mod wfcheck;
 pub mod writeback;
 
-use crate::astconv::{AstConv, PathSeg};
+use crate::astconv::{AstConv, GenericArgCountMismatch, PathSeg};
 use crate::middle::lang_items;
 use rustc::hir::map::blocks::FnLikeNode;
 use rustc::hir::map::Map;
@@ -1964,7 +1964,6 @@ fn check_impl_items_against_trait<'tcx>(
 
     // Locate trait definition and items
     let trait_def = tcx.trait_def(impl_trait_ref.def_id);
-    let mut overridden_associated_type = None;
 
     let impl_items = || impl_item_refs.iter().map(|iiref| tcx.hir().impl_item(iiref.id));
 
@@ -2046,9 +2045,6 @@ fn check_impl_items_against_trait<'tcx>(
                 hir::ImplItemKind::OpaqueTy(..) | hir::ImplItemKind::TyAlias(_) => {
                     let opt_trait_span = tcx.hir().span_if_local(ty_trait_item.def_id);
                     if ty_trait_item.kind == ty::AssocKind::Type {
-                        if ty_trait_item.defaultness.has_value() {
-                            overridden_associated_type = Some(impl_item);
-                        }
                         compare_ty_impl(
                             tcx,
                             &ty_impl_item,
@@ -2082,8 +2078,6 @@ fn check_impl_items_against_trait<'tcx>(
 
     // Check for missing items from trait
     let mut missing_items = Vec::new();
-    let mut invalidated_items = Vec::new();
-    let associated_type_overridden = overridden_associated_type.is_some();
     for trait_item in tcx.associated_items(impl_trait_ref.def_id).in_definition_order() {
         let is_implemented = trait_def
             .ancestors(tcx, impl_id)
@@ -2094,27 +2088,12 @@ fn check_impl_items_against_trait<'tcx>(
         if !is_implemented && !traits::impl_is_default(tcx, impl_id) {
             if !trait_item.defaultness.has_value() {
                 missing_items.push(*trait_item);
-            } else if associated_type_overridden {
-                invalidated_items.push(trait_item.ident);
             }
         }
     }
 
     if !missing_items.is_empty() {
         missing_items_err(tcx, impl_span, &missing_items, full_impl_span);
-    }
-
-    if !invalidated_items.is_empty() {
-        let invalidator = overridden_associated_type.unwrap();
-        struct_span_err!(
-            tcx.sess,
-            invalidator.span,
-            E0399,
-            "the following trait items need to be reimplemented as `{}` was overridden: `{}`",
-            invalidator.ident,
-            invalidated_items.iter().map(|name| name.to_string()).collect::<Vec<_>>().join("`, `")
-        )
-        .emit();
     }
 }
 
@@ -5452,10 +5431,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // parameter internally, but we don't allow users to specify the
             // parameter's value explicitly, so we have to do some error-
             // checking here.
-            let suppress_errors = AstConv::check_generic_arg_count_for_call(
-                tcx, span, &generics, &seg, false, // `is_method_call`
-            );
-            if suppress_errors {
+            if let Err(GenericArgCountMismatch { reported: Some(ErrorReported), .. }) =
+                AstConv::check_generic_arg_count_for_call(
+                    tcx, span, &generics, &seg, false, // `is_method_call`
+                )
+            {
                 infer_args_for_err.insert(index);
                 self.set_tainted_by_errors(); // See issue #53251.
             }
@@ -5520,6 +5500,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 &[][..],
                 has_self,
                 self_ty,
+                infer_args_for_err.is_empty(),
                 // Provide the generic args, and whether types should be inferred.
                 |def_id| {
                     if let Some(&PathSeg(_, index)) =

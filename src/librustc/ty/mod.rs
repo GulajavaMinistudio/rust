@@ -931,7 +931,17 @@ pub enum GenericParamDefKind {
     Const,
 }
 
-#[derive(Clone, RustcEncodable, RustcDecodable, HashStable)]
+impl GenericParamDefKind {
+    pub fn descr(&self) -> &'static str {
+        match self {
+            GenericParamDefKind::Lifetime => "lifetime",
+            GenericParamDefKind::Type { .. } => "type",
+            GenericParamDefKind::Const => "constant",
+        }
+    }
+}
+
+#[derive(Clone, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub struct GenericParamDef {
     pub name: Symbol,
     pub def_id: DefId,
@@ -1447,7 +1457,7 @@ impl<'tcx> ToPredicate<'tcx> for ConstnessAnd<TraitRef<'tcx>> {
 impl<'tcx> ToPredicate<'tcx> for ConstnessAnd<&TraitRef<'tcx>> {
     fn to_predicate(&self) -> Predicate<'tcx> {
         ty::Predicate::Trait(
-            ty::Binder::dummy(ty::TraitPredicate { trait_ref: self.value.clone() }),
+            ty::Binder::dummy(ty::TraitPredicate { trait_ref: *self.value }),
             self.constness,
         )
     }

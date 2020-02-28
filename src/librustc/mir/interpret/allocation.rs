@@ -472,7 +472,7 @@ impl<'tcx, Tag: Copy, Extra: AllocationExtra<Tag>> Allocation<Tag, Extra> {
         val: ScalarMaybeUndef<Tag>,
     ) -> InterpResult<'tcx> {
         let ptr_size = cx.data_layout().pointer_size;
-        self.write_scalar(cx, ptr.into(), val, ptr_size)
+        self.write_scalar(cx, ptr, val, ptr_size)
     }
 }
 
@@ -598,7 +598,7 @@ impl AllocationDefinedness {
     pub fn all_bytes_undef(&self) -> bool {
         // The `ranges` are run-length encoded and of alternating definedness.
         // So if `ranges.len() > 1` then the second block is a range of defined.
-        self.initial == false && self.ranges.len() == 1
+        !self.initial && self.ranges.len() == 1
     }
 }
 

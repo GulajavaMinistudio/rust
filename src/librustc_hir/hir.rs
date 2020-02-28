@@ -298,6 +298,14 @@ impl GenericArg<'_> {
             _ => false,
         }
     }
+
+    pub fn descr(&self) -> &'static str {
+        match self {
+            GenericArg::Lifetime(_) => "lifetime",
+            GenericArg::Type(_) => "type",
+            GenericArg::Const(_) => "constant",
+        }
+    }
 }
 
 #[derive(RustcEncodable, RustcDecodable, Debug, HashStable_Generic)]
@@ -2500,16 +2508,16 @@ pub enum ItemKind<'hir> {
 }
 
 impl ItemKind<'_> {
-    pub fn descriptive_variant(&self) -> &str {
+    pub fn descr(&self) -> &str {
         match *self {
             ItemKind::ExternCrate(..) => "extern crate",
-            ItemKind::Use(..) => "use",
+            ItemKind::Use(..) => "`use` import",
             ItemKind::Static(..) => "static item",
             ItemKind::Const(..) => "constant item",
             ItemKind::Fn(..) => "function",
             ItemKind::Mod(..) => "module",
-            ItemKind::ForeignMod(..) => "foreign module",
-            ItemKind::GlobalAsm(..) => "global asm",
+            ItemKind::ForeignMod(..) => "extern block",
+            ItemKind::GlobalAsm(..) => "global asm item",
             ItemKind::TyAlias(..) => "type alias",
             ItemKind::OpaqueTy(..) => "opaque type",
             ItemKind::Enum(..) => "enum",
@@ -2517,7 +2525,7 @@ impl ItemKind<'_> {
             ItemKind::Union(..) => "union",
             ItemKind::Trait(..) => "trait",
             ItemKind::TraitAlias(..) => "trait alias",
-            ItemKind::Impl { .. } => "impl",
+            ItemKind::Impl { .. } => "implementation",
         }
     }
 

@@ -177,7 +177,7 @@ pub fn new_handler(
             Box::new(
                 EmitterWriter::stderr(
                     color_config,
-                    source_map.map(|cm| cm as _),
+                    source_map.map(|sm| sm as _),
                     short,
                     debugging_opts.teach,
                     debugging_opts.terminal_width,
@@ -283,7 +283,7 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
         .filter_map(|lint| {
             // We don't want to whitelist *all* lints so let's
             // ignore those ones.
-            if whitelisted_lints.iter().any(|l| &lint.name == l) {
+            if whitelisted_lints.iter().any(|l| lint.name == l) {
                 None
             } else {
                 Some((lint::LintId::of(lint), lint::Allow))

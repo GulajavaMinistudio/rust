@@ -3,7 +3,7 @@ use crate::pp::{self, Breaks};
 
 use rustc_span::edition::Edition;
 use rustc_span::source_map::{SourceMap, Spanned};
-use rustc_span::symbol::{kw, sym};
+use rustc_span::symbol::{kw, sym, IdentPrinter};
 use rustc_span::{BytePos, FileName, Span};
 use syntax::ast::{self, BlockCheckMode, PatKind, RangeEnd, RangeSyntax};
 use syntax::ast::{Attribute, GenericArg, MacArgs};
@@ -47,15 +47,15 @@ pub struct NoAnn;
 impl PpAnn for NoAnn {}
 
 pub struct Comments<'a> {
-    cm: &'a SourceMap,
+    sm: &'a SourceMap,
     comments: Vec<comments::Comment>,
     current: usize,
 }
 
 impl<'a> Comments<'a> {
-    pub fn new(cm: &'a SourceMap, filename: FileName, input: String) -> Comments<'a> {
-        let comments = comments::gather_comments(cm, filename, input);
-        Comments { cm, comments, current: 0 }
+    pub fn new(sm: &'a SourceMap, filename: FileName, input: String) -> Comments<'a> {
+        let comments = comments::gather_comments(sm, filename, input);
+        Comments { sm, comments, current: 0 }
     }
 
     pub fn next(&self) -> Option<comments::Comment> {
@@ -71,8 +71,8 @@ impl<'a> Comments<'a> {
             if cmnt.style != comments::Trailing {
                 return None;
             }
-            let span_line = self.cm.lookup_char_pos(span.hi());
-            let comment_line = self.cm.lookup_char_pos(cmnt.pos);
+            let span_line = self.sm.lookup_char_pos(span.hi());
+            let comment_line = self.sm.lookup_char_pos(cmnt.pos);
             let next = next_pos.unwrap_or_else(|| cmnt.pos + BytePos(1));
             if span.hi() < cmnt.pos && cmnt.pos < next && span_line.line == comment_line.line {
                 return Some(cmnt);
@@ -95,7 +95,7 @@ crate const INDENT_UNIT: usize = 4;
 /// Requires you to pass an input filename and reader so that
 /// it can scan the input text for comments to copy forward.
 pub fn print_crate<'a>(
-    cm: &'a SourceMap,
+    sm: &'a SourceMap,
     krate: &ast::Crate,
     filename: FileName,
     input: String,
@@ -106,7 +106,7 @@ pub fn print_crate<'a>(
 ) -> String {
     let mut s = State {
         s: pp::mk_printer(),
-        comments: Some(Comments::new(cm, filename, input)),
+        comments: Some(Comments::new(sm, filename, input)),
         ann,
         is_expanded,
     };
@@ -196,40 +196,6 @@ pub fn literal_to_string(lit: token::Lit) -> String {
     out
 }
 
-/// Print an ident from AST, `$crate` is converted into its respective crate name.
-pub fn ast_ident_to_string(ident: ast::Ident, is_raw: bool) -> String {
-    ident_to_string(ident.name, is_raw, Some(ident.span))
-}
-
-// AST pretty-printer is used as a fallback for turning AST structures into token streams for
-// proc macros. Additionally, proc macros may stringify their input and expect it survive the
-// stringification (especially true for proc macro derives written between Rust 1.15 and 1.30).
-// So we need to somehow pretty-print `$crate` in a way preserving at least some of its
-// hygiene data, most importantly name of the crate it refers to.
-// As a result we print `$crate` as `crate` if it refers to the local crate
-// and as `::other_crate_name` if it refers to some other crate.
-// Note, that this is only done if the ident token is printed from inside of AST pretty-pringing,
-// but not otherwise. Pretty-printing is the only way for proc macros to discover token contents,
-// so we should not perform this lossy conversion if the top level call to the pretty-printer was
-// done for a token stream or a single token.
-fn ident_to_string(name: ast::Name, is_raw: bool, convert_dollar_crate: Option<Span>) -> String {
-    if is_raw {
-        format!("r#{}", name)
-    } else {
-        if name == kw::DollarCrate {
-            if let Some(span) = convert_dollar_crate {
-                let converted = span.ctxt().dollar_crate_name();
-                return if converted.is_path_segment_keyword() {
-                    converted.to_string()
-                } else {
-                    format!("::{}", converted)
-                };
-            }
-        }
-        name.to_string()
-    }
-}
-
 /// Print the token kind precisely, without converting `$crate` into its respective crate name.
 pub fn token_kind_to_string(tok: &TokenKind) -> String {
     token_kind_to_string_ext(tok, None)
@@ -280,7 +246,7 @@ fn token_kind_to_string_ext(tok: &TokenKind, convert_dollar_crate: Option<Span>)
         token::Literal(lit) => literal_to_string(lit),
 
         /* Name components */
-        token::Ident(s, is_raw) => ident_to_string(s, is_raw, convert_dollar_crate),
+        token::Ident(s, is_raw) => IdentPrinter::new(s, is_raw, convert_dollar_crate).to_string(),
         token::Lifetime(s) => s.to_string(),
 
         /* Other */
@@ -315,14 +281,11 @@ pub fn nonterminal_to_string(nt: &Nonterminal) -> String {
         token::NtBlock(ref e) => block_to_string(e),
         token::NtStmt(ref e) => stmt_to_string(e),
         token::NtPat(ref e) => pat_to_string(e),
-        token::NtIdent(e, is_raw) => ast_ident_to_string(e, is_raw),
+        token::NtIdent(e, is_raw) => IdentPrinter::for_ast_ident(e, is_raw).to_string(),
         token::NtLifetime(e) => e.to_string(),
         token::NtLiteral(ref e) => expr_to_string(e),
         token::NtTT(ref tree) => tt_to_string(tree.clone()),
-        // FIXME(Centril): merge these variants.
-        token::NtImplItem(ref e) | token::NtTraitItem(ref e) => assoc_item_to_string(e),
         token::NtVis(ref e) => vis_to_string(e),
-        token::NtForeignItem(ref e) => foreign_item_to_string(e),
     }
 }
 
@@ -356,10 +319,6 @@ pub fn stmt_to_string(stmt: &ast::Stmt) -> String {
 
 pub fn item_to_string(i: &ast::Item) -> String {
     to_string(|s| s.print_item(i))
-}
-
-fn assoc_item_to_string(i: &ast::AssocItem) -> String {
-    to_string(|s| s.print_assoc_item(i))
 }
 
 pub fn generic_params_to_string(generic_params: &[ast::GenericParam]) -> String {
@@ -402,10 +361,6 @@ pub fn attribute_to_string(attr: &ast::Attribute) -> String {
 
 pub fn param_to_string(arg: &ast::Param) -> String {
     to_string(|s| s.print_param(arg, false))
-}
-
-fn foreign_item_to_string(arg: &ast::ForeignItem) -> String {
-    to_string(|s| s.print_foreign_item(arg))
 }
 
 fn visibility_qualified(vis: &ast::Visibility, s: &str) -> String {
@@ -522,8 +477,8 @@ pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::Dere
                 self.hardbreak();
             }
         }
-        if let Some(cm) = self.comments() {
-            cm.current += 1;
+        if let Some(cmnts) = self.comments() {
+            cmnts.current += 1;
         }
     }
 
@@ -819,7 +774,7 @@ impl<'a> PrintState<'a> for State<'a> {
     }
 
     fn print_ident(&mut self, ident: ast::Ident) {
-        self.s.word(ast_ident_to_string(ident, ident.is_raw_guess()));
+        self.s.word(IdentPrinter::for_ast_ident(ident, ident.is_raw_guess()).to_string());
         self.ann.post(self, AnnNode::Ident(&ident))
     }
 
@@ -1016,8 +971,8 @@ impl<'a> State<'a> {
     }
 
     crate fn print_foreign_item(&mut self, item: &ast::ForeignItem) {
-        let ast::ForeignItem { id, span, ident, attrs, kind, vis, tokens: _ } = item;
-        self.print_nested_item_kind(*id, *span, *ident, attrs, ast::Defaultness::Final, kind, vis);
+        let ast::Item { id, span, ident, attrs, kind, vis, tokens: _ } = item;
+        self.print_nested_item_kind(*id, *span, *ident, attrs, kind, vis);
     }
 
     fn print_nested_item_kind(
@@ -1026,7 +981,6 @@ impl<'a> State<'a> {
         span: Span,
         ident: ast::Ident,
         attrs: &[Attribute],
-        def: ast::Defaultness,
         kind: &ast::AssocItemKind,
         vis: &ast::Visibility,
     ) {
@@ -1035,17 +989,18 @@ impl<'a> State<'a> {
         self.maybe_print_comment(span.lo());
         self.print_outer_attributes(attrs);
         match kind {
-            ast::ForeignItemKind::Fn(sig, gen, body) => {
-                self.print_fn_full(sig, ident, gen, vis, def, body.as_deref(), attrs);
+            ast::ForeignItemKind::Fn(def, sig, gen, body) => {
+                self.print_fn_full(sig, ident, gen, vis, *def, body.as_deref(), attrs);
             }
-            ast::ForeignItemKind::Const(ty, body) => {
-                self.print_item_const(ident, None, ty, body.as_deref(), vis, def);
+            ast::ForeignItemKind::Const(def, ty, body) => {
+                self.print_item_const(ident, None, ty, body.as_deref(), vis, *def);
             }
             ast::ForeignItemKind::Static(ty, mutbl, body) => {
+                let def = ast::Defaultness::Final;
                 self.print_item_const(ident, Some(*mutbl), ty, body.as_deref(), vis, def);
             }
-            ast::ForeignItemKind::TyAlias(generics, bounds, ty) => {
-                self.print_associated_type(ident, generics, bounds, ty.as_deref(), vis, def);
+            ast::ForeignItemKind::TyAlias(def, generics, bounds, ty) => {
+                self.print_associated_type(ident, generics, bounds, ty.as_deref(), vis, *def);
             }
             ast::ForeignItemKind::Macro(m) => {
                 self.print_mac(m);
@@ -1146,12 +1101,10 @@ impl<'a> State<'a> {
                 let def = ast::Defaultness::Final;
                 self.print_item_const(item.ident, Some(mutbl), ty, body.as_deref(), &item.vis, def);
             }
-            ast::ItemKind::Const(ref ty, ref body) => {
-                let def = ast::Defaultness::Final;
+            ast::ItemKind::Const(def, ref ty, ref body) => {
                 self.print_item_const(item.ident, None, ty, body.as_deref(), &item.vis, def);
             }
-            ast::ItemKind::Fn(ref sig, ref gen, ref body) => {
-                let def = ast::Defaultness::Final;
+            ast::ItemKind::Fn(def, ref sig, ref gen, ref body) => {
                 let body = body.as_deref();
                 self.print_fn_full(sig, item.ident, gen, &item.vis, def, body, &item.attrs);
             }
@@ -1185,18 +1138,9 @@ impl<'a> State<'a> {
                 self.s.word(ga.asm.to_string());
                 self.end();
             }
-            ast::ItemKind::TyAlias(ref ty, ref generics) => {
-                self.head(visibility_qualified(&item.vis, "type"));
-                self.print_ident(item.ident);
-                self.print_generic_params(&generics.params);
-                self.end(); // end the inner ibox
-
-                self.print_where_clause(&generics.where_clause);
-                self.s.space();
-                self.word_space("=");
-                self.print_type(ty);
-                self.s.word(";");
-                self.end(); // end the outer ibox
+            ast::ItemKind::TyAlias(def, ref generics, ref bounds, ref ty) => {
+                let ty = ty.as_deref();
+                self.print_associated_type(item.ident, generics, bounds, ty, &item.vis, def);
             }
             ast::ItemKind::Enum(ref enum_definition, ref params) => {
                 self.print_enum_def(enum_definition, params, item.ident, item.span, &item.vis);
@@ -1397,7 +1341,7 @@ impl<'a> State<'a> {
     }
 
     crate fn print_defaultness(&mut self, defaultness: ast::Defaultness) {
-        if let ast::Defaultness::Default = defaultness {
+        if let ast::Defaultness::Default(_) = defaultness {
             self.word_nbsp("default");
         }
     }
@@ -1469,8 +1413,8 @@ impl<'a> State<'a> {
     }
 
     crate fn print_assoc_item(&mut self, item: &ast::AssocItem) {
-        let ast::AssocItem { id, span, ident, attrs, defaultness, kind, vis, tokens: _ } = item;
-        self.print_nested_item_kind(*id, *span, *ident, attrs, *defaultness, kind, vis);
+        let ast::Item { id, span, ident, attrs, kind, vis, tokens: _ } = item;
+        self.print_nested_item_kind(*id, *span, *ident, attrs, kind, vis);
     }
 
     crate fn print_stmt(&mut self, st: &ast::Stmt) {

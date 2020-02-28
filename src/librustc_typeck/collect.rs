@@ -76,6 +76,7 @@ pub fn provide(providers: &mut Providers<'_>) {
         impl_polarity,
         is_foreign_item,
         static_mutability,
+        generator_kind,
         codegen_fn_attrs,
         collect_mod_item_types,
         ..*providers
@@ -319,7 +320,7 @@ impl AstConv<'tcx> for ItemCtxt<'tcx> {
     }
 
     fn ty_infer(&self, _: Option<&ty::GenericParamDef>, span: Span) -> Ty<'tcx> {
-        self.tcx().sess.delay_span_bug(span, "bad placeholder type");
+        placeholder_type_error(self.tcx(), span, &[], vec![span], false);
         self.tcx().types.err
     }
 
@@ -1006,7 +1007,7 @@ fn trait_def(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::TraitDef {
             .struct_span_err(
                 item.span,
                 "the `#[rustc_paren_sugar]` attribute is a temporary means of controlling \
-             which traits can use parenthetical notation",
+                 which traits can use parenthetical notation",
             )
             .help("add `#![feature(unboxed_closures)]` to the crate attributes to use it")
             .emit();
@@ -1269,7 +1270,7 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::Generics {
 
     let object_lifetime_defaults = tcx.object_lifetime_defaults(hir_id);
 
-    // Now create the real type parameters.
+    // Now create the real type and const parameters.
     let type_start = own_start - has_self as u32 + params.len() as u32;
     let mut i = 0;
     params.extend(ast_generics.params.iter().filter_map(|param| {
@@ -2106,7 +2107,7 @@ fn compute_sig_of_foreign_fn_decl<'tcx>(
                         ast_ty.span,
                         &format!(
                             "use of SIMD type `{}` in FFI is highly experimental and \
-                            may result in invalid code",
+                             may result in invalid code",
                             tcx.hir().hir_to_pretty_string(ast_ty.hir_id)
                         ),
                     )
@@ -2142,6 +2143,17 @@ fn static_mutability(tcx: TyCtxt<'_>, def_id: DefId) -> Option<hir::Mutability> 
         })) => Some(mutbl),
         Some(_) => None,
         _ => bug!("static_mutability applied to non-local def-id {:?}", def_id),
+    }
+}
+
+fn generator_kind(tcx: TyCtxt<'_>, def_id: DefId) -> Option<hir::GeneratorKind> {
+    match tcx.hir().get_if_local(def_id) {
+        Some(Node::Expr(&rustc_hir::Expr {
+            kind: rustc_hir::ExprKind::Closure(_, _, body_id, _, _),
+            ..
+        })) => tcx.hir().body(body_id).generator_kind(),
+        Some(_) => None,
+        _ => bug!("generator_kind applied to non-local def-id {:?}", def_id),
     }
 }
 

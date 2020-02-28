@@ -14,6 +14,8 @@ use rustc_parse::configure;
 use rustc_parse::parser::Parser;
 use rustc_parse::validate_attr;
 use rustc_parse::DirectoryOwnership;
+use rustc_session::lint::builtin::UNUSED_DOC_COMMENTS;
+use rustc_session::lint::BuiltinLintDiagnostics;
 use rustc_session::parse::{feature_err, ParseSess};
 use rustc_span::source_map::respan;
 use rustc_span::symbol::{sym, Symbol};
@@ -375,8 +377,8 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 self.cx.span_err(
                     span,
                     &format!(
-                        "expected crate top-level item to be a module after macro expansion, found a {}",
-                        kind.descriptive_variant()
+                        "expected crate top-level item to be a module after macro expansion, found {} {}",
+                        kind.article(), kind.descr()
                     ),
                 );
             }
@@ -667,12 +669,17 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 SyntaxExtensionKind::Attr(expander) => {
                     self.gate_proc_macro_input(&item);
                     self.gate_proc_macro_attr_item(span, &item);
+                    // `Annotatable` can be converted into tokens directly, but we are packing it
+                    // into a nonterminal as a piece of AST to make the produced token stream
+                    // look nicer in pretty-printed form. This may be no longer necessary.
                     let item_tok = TokenTree::token(
                         token::Interpolated(Lrc::new(match item {
                             Annotatable::Item(item) => token::NtItem(item),
-                            Annotatable::TraitItem(item) => token::NtTraitItem(item),
-                            Annotatable::ImplItem(item) => token::NtImplItem(item),
-                            Annotatable::ForeignItem(item) => token::NtForeignItem(item),
+                            Annotatable::TraitItem(item)
+                            | Annotatable::ImplItem(item)
+                            | Annotatable::ForeignItem(item) => {
+                                token::NtItem(P(item.and_then(ast::AssocItem::into_item)))
+                            }
                             Annotatable::Stmt(stmt) => token::NtStmt(stmt.into_inner()),
                             Annotatable::Expr(expr) => token::NtExpr(expr),
                             Annotatable::Arm(..)
@@ -862,22 +869,22 @@ pub fn parse_ast_fragment<'a>(
         }
         AstFragmentKind::TraitItems => {
             let mut items = SmallVec::new();
-            while this.token != token::Eof {
-                items.push(this.parse_trait_item(&mut false)?);
+            while let Some(item) = this.parse_trait_item()? {
+                items.extend(item);
             }
             AstFragment::TraitItems(items)
         }
         AstFragmentKind::ImplItems => {
             let mut items = SmallVec::new();
-            while this.token != token::Eof {
-                items.push(this.parse_impl_item(&mut false)?);
+            while let Some(item) = this.parse_impl_item()? {
+                items.extend(item);
             }
             AstFragment::ImplItems(items)
         }
         AstFragmentKind::ForeignItems => {
             let mut items = SmallVec::new();
-            while this.token != token::Eof {
-                items.push(this.parse_foreign_item(&mut false)?);
+            while let Some(item) = this.parse_foreign_item()? {
+                items.extend(item);
             }
             AstFragment::ForeignItems(items)
         }
@@ -1086,6 +1093,16 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
                     .struct_span_warn(attr.span, "`#[derive]` does nothing on macro invocations")
                     .note("this may become a hard error in a future release")
                     .emit();
+            }
+
+            if attr.doc_str().is_some() {
+                self.cx.parse_sess.buffer_lint_with_diagnostic(
+                    &UNUSED_DOC_COMMENTS,
+                    attr.span,
+                    ast::CRATE_NODE_ID,
+                    "unused doc comment",
+                    BuiltinLintDiagnostics::UnusedDocComment(attr.span),
+                );
             }
         }
     }

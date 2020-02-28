@@ -529,7 +529,7 @@ impl MetaItemKind {
                     TokenTree::Delimited(
                         DelimSpan::from_single(span),
                         token::Paren,
-                        TokenStream::new(tokens).into(),
+                        TokenStream::new(tokens),
                     )
                     .into(),
                 ]
@@ -722,6 +722,6 @@ macro_rules! derive_has_attrs {
 }
 
 derive_has_attrs! {
-    Item, Expr, Local, ast::ForeignItem, ast::StructField, ast::AssocItem, ast::Arm,
+    Item, Expr, Local, ast::ForeignItem, ast::StructField, ast::Arm,
     ast::Field, ast::FieldPat, ast::Variant, ast::Param, GenericParam
 }
