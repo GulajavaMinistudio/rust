@@ -19,7 +19,7 @@ use rustc_hir::HirId;
 use rustc_index::bit_set::BitSet;
 use rustc_span::Span;
 use smallvec::{smallvec, SmallVec};
-use syntax::ast::Name;
+use rustc_ast::ast::Name;
 
 // helper functions, broken out by category:
 mod simplify;
@@ -1438,7 +1438,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             let target_blocks: Vec<_> = target_candidates
                 .into_iter()
                 .map(|mut candidates| {
-                    if candidates.len() != 0 {
+                    if !candidates.is_empty() {
                         let candidate_start = this.cfg.start_new_block();
                         this.match_candidates(
                             span,

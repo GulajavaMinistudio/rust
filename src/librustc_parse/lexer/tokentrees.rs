@@ -1,15 +1,15 @@
 use super::{StringReader, UnmatchedBrace};
 
-use rustc_ast_pretty::pprust::token_to_string;
-use rustc_data_structures::fx::FxHashMap;
-use rustc_errors::PResult;
-use rustc_span::Span;
-use syntax::token::{self, Token};
-use syntax::tokenstream::{
+use rustc_ast::token::{self, Token};
+use rustc_ast::tokenstream::{
     DelimSpan,
     IsJoint::{self, *},
     TokenStream, TokenTree, TreeAndJoint,
 };
+use rustc_ast_pretty::pprust::token_to_string;
+use rustc_data_structures::fx::FxHashMap;
+use rustc_errors::PResult;
+use rustc_span::Span;
 
 impl<'a> StringReader<'a> {
     crate fn into_token_trees(self) -> (PResult<'a, TokenStream>, Vec<UnmatchedBrace>) {
@@ -141,7 +141,7 @@ impl<'a> TokenTreesReader<'a> {
                             self.last_delim_empty_block_spans.insert(delim, empty_block_span);
                         }
 
-                        if self.open_braces.len() == 0 {
+                        if self.open_braces.is_empty() {
                             // Clear up these spans to avoid suggesting them as we've found
                             // properly matched delimiters so far for an entire block.
                             self.matching_delim_spans.clear();

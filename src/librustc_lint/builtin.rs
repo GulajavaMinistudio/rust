@@ -25,6 +25,10 @@ use crate::{EarlyContext, EarlyLintPass, LateContext, LateLintPass, LintContext}
 use rustc::hir::map::Map;
 use rustc::lint::LintDiagnosticBuilder;
 use rustc::ty::{self, layout::VariantIdx, Ty, TyCtxt};
+use rustc_ast::ast::{self, Expr};
+use rustc_ast::attr::{self, HasAttrs};
+use rustc_ast::tokenstream::{TokenStream, TokenTree};
+use rustc_ast::visit::{FnCtxt, FnKind};
 use rustc_ast_pretty::pprust::{self, expr_to_string};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, DiagnosticBuilder};
@@ -41,10 +45,6 @@ use rustc_span::edition::Edition;
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{BytePos, Span};
-use syntax::ast::{self, Expr};
-use syntax::attr::{self, HasAttrs};
-use syntax::tokenstream::{TokenStream, TokenTree};
-use syntax::visit::{FnCtxt, FnKind};
 
 use crate::nonstandard_style::{method_context, MethodLateContext};
 
@@ -739,7 +739,7 @@ impl EarlyLintPass for DeprecatedAttr {
 }
 
 fn warn_if_doc(cx: &EarlyContext<'_>, node_span: Span, node_kind: &str, attrs: &[ast::Attribute]) {
-    let mut attrs = attrs.into_iter().peekable();
+    let mut attrs = attrs.iter().peekable();
 
     // Accumulate a single span for sugared doc comments.
     let mut sugared_span: Option<Span> = None;
@@ -1847,7 +1847,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidValue {
         /// Test if this constant is all-0.
         fn is_zero(expr: &hir::Expr<'_>) -> bool {
             use hir::ExprKind::*;
-            use syntax::ast::LitKind::*;
+            use rustc_ast::ast::LitKind::*;
             match &expr.kind {
                 Lit(lit) => {
                     if let Int(i, _) = lit.node {
@@ -1919,21 +1919,21 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidValue {
             use rustc::ty::TyKind::*;
             match ty.kind {
                 // Primitive types that don't like 0 as a value.
-                Ref(..) => Some((format!("references must be non-null"), None)),
-                Adt(..) if ty.is_box() => Some((format!("`Box` must be non-null"), None)),
-                FnPtr(..) => Some((format!("function pointers must be non-null"), None)),
-                Never => Some((format!("the `!` type has no valid value"), None)),
+                Ref(..) => Some(("references must be non-null".to_string(), None)),
+                Adt(..) if ty.is_box() => Some(("`Box` must be non-null".to_string(), None)),
+                FnPtr(..) => Some(("function pointers must be non-null".to_string(), None)),
+                Never => Some(("the `!` type has no valid value".to_string(), None)),
                 RawPtr(tm) if matches!(tm.ty.kind, Dynamic(..)) =>
                 // raw ptr to dyn Trait
                 {
-                    Some((format!("the vtable of a wide raw pointer must be non-null"), None))
+                    Some(("the vtable of a wide raw pointer must be non-null".to_string(), None))
                 }
                 // Primitive types with other constraints.
                 Bool if init == InitKind::Uninit => {
-                    Some((format!("booleans must be either `true` or `false`"), None))
+                    Some(("booleans must be either `true` or `false`".to_string(), None))
                 }
                 Char if init == InitKind::Uninit => {
-                    Some((format!("characters must be a valid Unicode codepoint"), None))
+                    Some(("characters must be a valid Unicode codepoint".to_string(), None))
                 }
                 // Recurse and checks for some compound types.
                 Adt(adt_def, substs) if !adt_def.is_union() => {
@@ -1961,7 +1961,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for InvalidValue {
                     }
                     // Now, recurse.
                     match adt_def.variants.len() {
-                        0 => Some((format!("enums with no variants have no valid value"), None)),
+                        0 => Some(("enums with no variants have no valid value".to_string(), None)),
                         1 => {
                             // Struct, or enum with exactly one variant.
                             // Proceed recursively, check all fields.

@@ -4,6 +4,8 @@ use log::debug;
 use rustc::bug;
 use rustc::session::Session;
 use rustc::ty::{self, DefIdTree};
+use rustc_ast::ast::{self, Ident, Path};
+use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder};
@@ -15,8 +17,6 @@ use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::SourceMap;
 use rustc_span::symbol::{kw, Symbol};
 use rustc_span::{BytePos, MultiSpan, Span};
-use syntax::ast::{self, Ident, Path};
-use syntax::util::lev_distance::find_best_match_for_name;
 
 use crate::imports::{ImportDirective, ImportDirectiveSubclass, ImportResolver};
 use crate::path_names_to_string;
@@ -98,7 +98,7 @@ impl<'a> Resolver<'a> {
                     E0401,
                     "can't use generic parameters from outer function",
                 );
-                err.span_label(span, format!("use of generic parameter from outer function"));
+                err.span_label(span, "use of generic parameter from outer function".to_string());
 
                 let sm = self.session.source_map();
                 match outer_res {
@@ -143,7 +143,7 @@ impl<'a> Resolver<'a> {
                 if has_generic_params == HasGenericParams::Yes {
                     // Try to retrieve the span of the function signature and generate a new
                     // message with a local type or const parameter.
-                    let sugg_msg = &format!("try using a local generic parameter instead");
+                    let sugg_msg = "try using a local generic parameter instead";
                     if let Some((sugg_span, snippet)) = sm.generate_local_type_param_snippet(span) {
                         // Suggest the modification to the user
                         err.span_suggestion(
@@ -155,10 +155,11 @@ impl<'a> Resolver<'a> {
                     } else if let Some(sp) = sm.generate_fn_name_span(span) {
                         err.span_label(
                             sp,
-                            format!("try adding a local generic parameter in this method instead"),
+                            "try adding a local generic parameter in this method instead"
+                                .to_string(),
                         );
                     } else {
-                        err.help(&format!("try using a local generic parameter instead"));
+                        err.help("try using a local generic parameter instead");
                     }
                 }
 
@@ -1425,7 +1426,7 @@ crate fn show_candidates(
     // we want consistent results across executions, but candidates are produced
     // by iterating through a hash map, so make sure they are ordered:
     let mut path_strings: Vec<_> =
-        candidates.into_iter().map(|c| path_names_to_string(&c.path)).collect();
+        candidates.iter().map(|c| path_names_to_string(&c.path)).collect();
     path_strings.sort();
     path_strings.dedup();
 

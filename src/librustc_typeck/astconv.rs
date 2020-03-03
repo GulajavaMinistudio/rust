@@ -16,6 +16,8 @@ use rustc::session::{parse::feature_err, Session};
 use rustc::ty::subst::{self, InternalSubsts, Subst, SubstsRef};
 use rustc::ty::{self, Const, DefIdTree, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness};
 use rustc::ty::{GenericParamDef, GenericParamDefKind};
+use rustc_ast::ast;
+use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticId};
 use rustc_hir as hir;
@@ -32,8 +34,6 @@ use rustc_span::symbol::sym;
 use rustc_span::{MultiSpan, Span, DUMMY_SP};
 use rustc_target::spec::abi;
 use smallvec::SmallVec;
-use syntax::ast;
-use syntax::util::lev_distance::find_best_match_for_name;
 
 use std::collections::BTreeSet;
 use std::iter;
@@ -514,7 +514,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         self_ty: Option<Ty<'tcx>>,
         arg_count_correct: bool,
         args_for_def_id: impl Fn(DefId) -> (Option<&'b GenericArgs<'b>>, bool),
-        provided_kind: impl Fn(&GenericParamDef, &GenericArg<'_>) -> subst::GenericArg<'tcx>,
+        mut provided_kind: impl FnMut(&GenericParamDef, &GenericArg<'_>) -> subst::GenericArg<'tcx>,
         mut inferred_kind: impl FnMut(
             Option<&[subst::GenericArg<'tcx>]>,
             &GenericParamDef,
@@ -751,6 +751,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         };
 
         let mut missing_type_params = vec![];
+        let mut inferred_params = vec![];
         let substs = Self::create_substs_for_generic_args(
             tcx,
             def_id,
@@ -773,7 +774,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     self.ast_region_to_region(&lt, Some(param)).into()
                 }
                 (GenericParamDefKind::Type { .. }, GenericArg::Type(ty)) => {
-                    self.ast_ty_to_ty(&ty).into()
+                    if let (hir::TyKind::Infer, false) = (&ty.kind, self.allow_ty_infer()) {
+                        inferred_params.push(ty.span);
+                        tcx.types.err.into()
+                    } else {
+                        self.ast_ty_to_ty(&ty).into()
+                    }
                 }
                 (GenericParamDefKind::Const, GenericArg::Const(ct)) => {
                     self.ast_const_to_const(&ct.value, tcx.type_of(param.def_id)).into()
@@ -832,6 +838,18 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 }
             },
         );
+        if !inferred_params.is_empty() {
+            // We always collect the spans for placeholder types when evaluating `fn`s, but we
+            // only want to emit an error complaining about them if infer types (`_`) are not
+            // allowed. `allow_ty_infer` gates this behavior.
+            crate::collect::placeholder_type_error(
+                tcx,
+                inferred_params[0],
+                &[],
+                inferred_params,
+                false,
+            );
+        }
 
         self.complain_about_missing_type_params(
             missing_type_params,
@@ -964,10 +982,10 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 ),
             );
         }
-        err.note(&format!(
+        err.note(
             "because of the default `Self` reference, type parameters must be \
-                            specified on object types"
-        ));
+                  specified on object types",
+        );
         err.emit();
     }
 
@@ -1743,7 +1761,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         potential_assoc_types: Vec<Span>,
         trait_bounds: &[hir::PolyTraitRef<'_>],
     ) {
-        if !associated_types.values().any(|v| v.len() > 0) {
+        if !associated_types.values().any(|v| !v.is_empty()) {
             return;
         }
         let tcx = self.tcx();
@@ -1858,7 +1876,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             {
                 let types: Vec<_> =
                     assoc_items.iter().map(|item| format!("{} = Type", item.ident)).collect();
-                let code = if snippet.ends_with(">") {
+                let code = if snippet.ends_with('>') {
                     // The user wrote `Trait<'a>` or similar and we don't have a type we can
                     // suggest, but at least we can clue them to the correct syntax
                     // `Trait<'a, Item = Type>` while accounting for the `<'a>` in the

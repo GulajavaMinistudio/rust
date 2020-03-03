@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 use std::mem;
 use std::rc::Rc;
 
+use rustc_ast::ast::Name;
 use rustc_span::{Span, DUMMY_SP};
-use syntax::ast::Name;
 
 use crate::dataflow;
 use crate::dataflow::generic::{Analysis, BorrowckFlowState as Flows, BorrowckResults};
@@ -365,7 +365,7 @@ fn do_mir_borrowck<'a, 'tcx>(
         // Skip over locals that begin with an underscore or have no name
         match mbcx.local_names[local] {
             Some(name) => {
-                if name.as_str().starts_with("_") {
+                if name.as_str().starts_with('_') {
                     continue;
                 }
             }

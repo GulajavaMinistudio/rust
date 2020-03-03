@@ -1,12 +1,12 @@
+use rustc_ast::token::{self, Token, TokenKind};
+use rustc_ast::util::comments;
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::{DiagnosticBuilder, FatalError};
+use rustc_errors::{error_code, DiagnosticBuilder, FatalError};
 use rustc_lexer::unescape;
 use rustc_lexer::Base;
 use rustc_session::parse::ParseSess;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::{BytePos, Pos, Span};
-use syntax::token::{self, Token, TokenKind};
-use syntax::util::comments;
 
 use log::debug;
 use std::char;
@@ -172,7 +172,7 @@ impl<'a> StringReader<'a> {
     }
 
     /// Turns simple `rustc_lexer::TokenKind` enum into a rich
-    /// `libsyntax::TokenKind`. This turns strings into interned
+    /// `librustc_ast::TokenKind`. This turns strings into interned
     /// symbols and runs additional validation.
     fn cook_lexer_token(&self, token: rustc_lexer::TokenKind, start: BytePos) -> TokenKind {
         match token {
@@ -495,7 +495,11 @@ impl<'a> StringReader<'a> {
     }
 
     fn report_unterminated_raw_string(&self, start: BytePos, n_hashes: usize) -> ! {
-        let mut err = self.struct_span_fatal(start, start, "unterminated raw string");
+        let mut err = self.sess.span_diagnostic.struct_span_fatal_with_code(
+            self.mk_sp(start, start),
+            "unterminated raw string",
+            error_code!(E0748),
+        );
         err.span_label(self.mk_sp(start, start), "unterminated raw string");
 
         if n_hashes > 0 {

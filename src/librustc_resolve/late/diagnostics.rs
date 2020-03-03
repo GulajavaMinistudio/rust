@@ -6,6 +6,8 @@ use crate::{CrateLint, Module, ModuleKind, ModuleOrUniformRoot};
 use crate::{PathResult, PathSource, Segment};
 
 use rustc::session::config::nightly_options;
+use rustc_ast::ast::{self, Expr, ExprKind, Ident, Item, ItemKind, NodeId, Path, Ty, TyKind};
+use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
@@ -16,8 +18,6 @@ use rustc_hir::PrimTy;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{kw, sym};
 use rustc_span::Span;
-use syntax::ast::{self, Expr, ExprKind, Ident, Item, ItemKind, NodeId, Path, Ty, TyKind};
-use syntax::util::lev_distance::find_best_match_for_name;
 
 use log::debug;
 
@@ -177,7 +177,7 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
             err.code(rustc_errors::error_code!(E0411));
             err.span_label(
                 span,
-                format!("`Self` is only available in impls, traits, and type definitions"),
+                "`Self` is only available in impls, traits, and type definitions".to_string(),
             );
             return (err, Vec::new());
         }
@@ -186,12 +186,10 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
 
             err.code(rustc_errors::error_code!(E0424));
             err.span_label(span, match source {
-                PathSource::Pat => format!(
-                    "`self` value is a keyword and may not be bound to variables or shadowed",
-                ),
-                _ => format!(
-                    "`self` value is a keyword only available in methods with a `self` parameter",
-                ),
+                PathSource::Pat => "`self` value is a keyword and may not be bound to variables or shadowed"
+                                   .to_string(),
+                _ => "`self` value is a keyword only available in methods with a `self` parameter"
+                     .to_string(),
             });
             if let Some(span) = &self.diagnostic_metadata.current_function {
                 err.span_label(*span, "this function doesn't have a `self` parameter");
@@ -354,7 +352,7 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
         let mut has_self_arg = None;
         if let PathSource::Expr(parent) = source {
             match &parent?.kind {
-                ExprKind::Call(_, args) if args.len() > 0 => {
+                ExprKind::Call(_, args) if !args.is_empty() => {
                     let mut expr_kind = &args[0].kind;
                     loop {
                         match expr_kind {
@@ -558,7 +556,7 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
                     if is_expected(ctor_def) && !accessible_ctor {
                         err.span_label(
                             span,
-                            format!("constructor is not visible here due to private fields"),
+                            "constructor is not visible here due to private fields".to_string(),
                         );
                     }
                 } else {
@@ -968,18 +966,14 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
         for missing in &self.missing_named_lifetime_spots {
             match missing {
                 MissingLifetimeSpot::Generics(generics) => {
-                    let (span, sugg) = if let Some(param) = generics
-                        .params
-                        .iter()
-                        .filter(|p| match p.kind {
+                    let (span, sugg) = if let Some(param) =
+                        generics.params.iter().find(|p| match p.kind {
                             hir::GenericParamKind::Type {
                                 synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
                                 ..
                             } => false,
                             _ => true,
-                        })
-                        .next()
-                    {
+                        }) {
                         (param.span.shrink_to_lo(), format!("{}, ", lifetime_ref))
                     } else {
                         (generics.span, format!("<{}>", lifetime_ref))
@@ -1053,25 +1047,24 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                     Applicability::MaybeIncorrect,
                 );
             };
-            let suggest_new =
-                |err: &mut DiagnosticBuilder<'_>, sugg: &str| {
-                    err.span_label(span, "expected named lifetime parameter");
+            let suggest_new = |err: &mut DiagnosticBuilder<'_>, sugg: &str| {
+                err.span_label(span, "expected named lifetime parameter");
 
-                    for missing in self.missing_named_lifetime_spots.iter().rev() {
-                        let mut introduce_suggestion = vec![];
-                        let msg;
-                        let should_break;
-                        introduce_suggestion.push(match missing {
+                for missing in self.missing_named_lifetime_spots.iter().rev() {
+                    let mut introduce_suggestion = vec![];
+                    let msg;
+                    let should_break;
+                    introduce_suggestion.push(match missing {
                         MissingLifetimeSpot::Generics(generics) => {
                             msg = "consider introducing a named lifetime parameter".to_string();
                             should_break = true;
-                            if let Some(param) = generics.params.iter().filter(|p| match p.kind {
+                            if let Some(param) = generics.params.iter().find(|p| match p.kind {
                                 hir::GenericParamKind::Type {
                                     synthetic: Some(hir::SyntheticTyParamKind::ImplTrait),
                                     ..
                                 } => false,
                                 _ => true,
-                            }).next() {
+                            }) {
                                 (param.span.shrink_to_lo(), "'a, ".to_string())
                             } else {
                                 (generics.span, "<'a>".to_string())
@@ -1090,30 +1083,29 @@ impl<'tcx> LifetimeContext<'_, 'tcx> {
                             (*span, span_type.suggestion("'a"))
                         }
                     });
-                        for param in params {
-                            if let Ok(snippet) =
-                                self.tcx.sess.source_map().span_to_snippet(param.span)
-                            {
-                                if snippet.starts_with("&") && !snippet.starts_with("&'") {
-                                    introduce_suggestion
-                                        .push((param.span, format!("&'a {}", &snippet[1..])));
-                                } else if snippet.starts_with("&'_ ") {
-                                    introduce_suggestion
-                                        .push((param.span, format!("&'a {}", &snippet[4..])));
-                                }
+                    for param in params {
+                        if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(param.span)
+                        {
+                            if snippet.starts_with("&") && !snippet.starts_with("&'") {
+                                introduce_suggestion
+                                    .push((param.span, format!("&'a {}", &snippet[1..])));
+                            } else if snippet.starts_with("&'_ ") {
+                                introduce_suggestion
+                                    .push((param.span, format!("&'a {}", &snippet[4..])));
                             }
                         }
-                        introduce_suggestion.push((span, sugg.to_string()));
-                        err.multipart_suggestion(
-                            &msg,
-                            introduce_suggestion,
-                            Applicability::MaybeIncorrect,
-                        );
-                        if should_break {
-                            break;
-                        }
                     }
-                };
+                    introduce_suggestion.push((span, sugg.to_string()));
+                    err.multipart_suggestion(
+                        &msg,
+                        introduce_suggestion,
+                        Applicability::MaybeIncorrect,
+                    );
+                    if should_break {
+                        break;
+                    }
+                }
+            };
 
             match (
                 lifetime_names.len(),

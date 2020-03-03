@@ -42,6 +42,9 @@ use crate::ty::{InferConst, ParamConst};
 use crate::ty::{List, TyKind, TyS};
 use crate::util::common::ErrorReported;
 use rustc::lint::LintDiagnosticBuilder;
+use rustc_ast::ast;
+use rustc_ast::expand::allocator::AllocatorKind;
+use rustc_ast::node_id::NodeMap;
 use rustc_attr as attr;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::profiling::SelfProfilerRef;
@@ -65,9 +68,6 @@ use rustc_span::source_map::MultiSpan;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::Span;
 use rustc_target::spec::abi;
-use syntax::ast;
-use syntax::expand::allocator::AllocatorKind;
-use syntax::node_id::NodeMap;
 
 use smallvec::SmallVec;
 use std::any::Any;
@@ -1720,7 +1720,7 @@ pub mod tls {
         set_tlv(context as *const _ as usize, || f(&context))
     }
 
-    /// Enters `GlobalCtxt` by setting up libsyntax callbacks and
+    /// Enters `GlobalCtxt` by setting up librustc_ast callbacks and
     /// creating a initial `TyCtxt` and `ImplicitCtxt`.
     /// This happens once per rustc session and `TyCtxt`s only exists
     /// inside the `f` function.
@@ -2291,13 +2291,13 @@ impl<'tcx> TyCtxt<'tcx> {
 
     #[inline]
     pub fn intern_tup(self, ts: &[Ty<'tcx>]) -> Ty<'tcx> {
-        let kinds: Vec<_> = ts.into_iter().map(|&t| GenericArg::from(t)).collect();
+        let kinds: Vec<_> = ts.iter().map(|&t| GenericArg::from(t)).collect();
         self.mk_ty(Tuple(self.intern_substs(&kinds)))
     }
 
     pub fn mk_tup<I: InternAs<[Ty<'tcx>], Ty<'tcx>>>(self, iter: I) -> I::Output {
         iter.intern_with(|ts| {
-            let kinds: Vec<_> = ts.into_iter().map(|&t| GenericArg::from(t)).collect();
+            let kinds: Vec<_> = ts.iter().map(|&t| GenericArg::from(t)).collect();
             self.mk_ty(Tuple(self.intern_substs(&kinds)))
         })
     }
@@ -2473,7 +2473,7 @@ impl<'tcx> TyCtxt<'tcx> {
         // FIXME consider asking the input slice to be sorted to avoid
         // re-interning permutations, in which case that would be asserted
         // here.
-        if preds.len() == 0 {
+        if preds.is_empty() {
             // The macro-generated method below asserts we don't intern an empty slice.
             List::empty()
         } else {
@@ -2482,31 +2482,31 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn intern_type_list(self, ts: &[Ty<'tcx>]) -> &'tcx List<Ty<'tcx>> {
-        if ts.len() == 0 { List::empty() } else { self._intern_type_list(ts) }
+        if ts.is_empty() { List::empty() } else { self._intern_type_list(ts) }
     }
 
     pub fn intern_substs(self, ts: &[GenericArg<'tcx>]) -> &'tcx List<GenericArg<'tcx>> {
-        if ts.len() == 0 { List::empty() } else { self._intern_substs(ts) }
+        if ts.is_empty() { List::empty() } else { self._intern_substs(ts) }
     }
 
     pub fn intern_projs(self, ps: &[ProjectionKind]) -> &'tcx List<ProjectionKind> {
-        if ps.len() == 0 { List::empty() } else { self._intern_projs(ps) }
+        if ps.is_empty() { List::empty() } else { self._intern_projs(ps) }
     }
 
     pub fn intern_place_elems(self, ts: &[PlaceElem<'tcx>]) -> &'tcx List<PlaceElem<'tcx>> {
-        if ts.len() == 0 { List::empty() } else { self._intern_place_elems(ts) }
+        if ts.is_empty() { List::empty() } else { self._intern_place_elems(ts) }
     }
 
     pub fn intern_canonical_var_infos(self, ts: &[CanonicalVarInfo]) -> CanonicalVarInfos<'tcx> {
-        if ts.len() == 0 { List::empty() } else { self._intern_canonical_var_infos(ts) }
+        if ts.is_empty() { List::empty() } else { self._intern_canonical_var_infos(ts) }
     }
 
     pub fn intern_clauses(self, ts: &[Clause<'tcx>]) -> Clauses<'tcx> {
-        if ts.len() == 0 { List::empty() } else { self._intern_clauses(ts) }
+        if ts.is_empty() { List::empty() } else { self._intern_clauses(ts) }
     }
 
     pub fn intern_goals(self, ts: &[Goal<'tcx>]) -> Goals<'tcx> {
-        if ts.len() == 0 { List::empty() } else { self._intern_goals(ts) }
+        if ts.is_empty() { List::empty() } else { self._intern_goals(ts) }
     }
 
     pub fn mk_fn_sig<I>(

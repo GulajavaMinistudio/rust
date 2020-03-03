@@ -17,11 +17,11 @@ use crate::infer::{InferCtxt, InferOk, LateBoundRegionConversionTime};
 use rustc::ty::fold::{TypeFoldable, TypeFolder};
 use rustc::ty::subst::{InternalSubsts, Subst};
 use rustc::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, WithConstness};
+use rustc_ast::ast::Ident;
 use rustc_data_structures::snapshot_map::{Snapshot, SnapshotMap};
 use rustc_hir::def_id::DefId;
 use rustc_span::symbol::sym;
 use rustc_span::DUMMY_SP;
-use syntax::ast::Ident;
 
 pub use rustc::traits::Reveal;
 
@@ -490,22 +490,14 @@ fn opt_normalize_projection_type<'a, 'b, 'tcx>(
     match cache_result {
         Ok(()) => {}
         Err(ProjectionCacheEntry::Ambiguous) => {
-            // If we found ambiguity the last time, that generally
-            // means we will continue to do so until some type in the
-            // key changes (and we know it hasn't, because we just
-            // fully resolved it). One exception though is closure
-            // types, which can transition from having a fixed kind to
-            // no kind with no visible change in the key.
-            //
-            // FIXME(#32286) refactor this so that closure type
-            // changes
+            // If we found ambiguity the last time, that means we will continue
+            // to do so until some type in the key changes (and we know it
+            // hasn't, because we just fully resolved it).
             debug!(
                 "opt_normalize_projection_type: \
                  found cache entry: ambiguous"
             );
-            if !projection_ty.has_closure_types() {
-                return None;
-            }
+            return None;
         }
         Err(ProjectionCacheEntry::InProgress) => {
             // If while normalized A::B, we are asked to normalize

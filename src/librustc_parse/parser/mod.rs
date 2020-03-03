@@ -16,19 +16,21 @@ use crate::lexer::UnmatchedBrace;
 use crate::{Directory, DirectoryOwnership};
 
 use log::debug;
+use rustc_ast::ast::DUMMY_NODE_ID;
+use rustc_ast::ast::{self, AttrStyle, AttrVec, Const, CrateSugar, Extern, Ident, Unsafe};
+use rustc_ast::ast::{
+    Async, MacArgs, MacDelimiter, Mutability, StrLit, Visibility, VisibilityKind,
+};
+use rustc_ast::ptr::P;
+use rustc_ast::token::{self, DelimToken, Token, TokenKind};
+use rustc_ast::tokenstream::{self, DelimSpan, TokenStream, TokenTree, TreeAndJoint};
+use rustc_ast::util::comments::{doc_comment_style, strip_doc_comment_decoration};
 use rustc_ast_pretty::pprust;
 use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder, FatalError, PResult};
 use rustc_session::parse::ParseSess;
 use rustc_span::source_map::respan;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{FileName, Span, DUMMY_SP};
-use syntax::ast::DUMMY_NODE_ID;
-use syntax::ast::{self, AttrStyle, AttrVec, Const, CrateSugar, Extern, Ident, Unsafe};
-use syntax::ast::{Async, MacArgs, MacDelimiter, Mutability, StrLit, Visibility, VisibilityKind};
-use syntax::ptr::P;
-use syntax::token::{self, DelimToken, Token, TokenKind};
-use syntax::tokenstream::{self, DelimSpan, TokenStream, TokenTree, TreeAndJoint};
-use syntax::util::comments::{doc_comment_style, strip_doc_comment_decoration};
 
 use std::path::PathBuf;
 use std::{cmp, mem, slice};
@@ -76,7 +78,7 @@ macro_rules! maybe_recover_from_interpolated_ty_qpath {
                 if let token::NtTy(ty) = &**nt {
                     let ty = ty.clone();
                     $self.bump();
-                    return $self.maybe_recover_from_bad_qpath_stage_2($self.prev_span, ty);
+                    return $self.maybe_recover_from_bad_qpath_stage_2($self.prev_token.span, ty);
                 }
             }
         }
@@ -86,24 +88,21 @@ macro_rules! maybe_recover_from_interpolated_ty_qpath {
 #[derive(Clone)]
 pub struct Parser<'a> {
     pub sess: &'a ParseSess,
+    /// The current non-normalized token.
+    pub token: Token,
     /// The current normalized token.
     /// "Normalized" means that some interpolated tokens
     /// (`$i: ident` and `$l: lifetime` meta-variables) are replaced
     /// with non-interpolated identifier and lifetime tokens they refer to.
-    /// Use span from this token if you need an isolated span.
-    pub token: Token,
-    /// The current non-normalized token if it's different from `token`.
-    /// Use span from this token if you need to concatenate it with some neighbouring spans.
-    unnormalized_token: Token,
+    /// Use this if you need to check for `token::Ident` or `token::Lifetime` specifically,
+    /// this also includes edition checks for edition-specific keyword identifiers.
+    pub normalized_token: Token,
+    /// The previous non-normalized token.
+    pub prev_token: Token,
     /// The previous normalized token.
-    /// Use span from this token if you need an isolated span.
-    prev_token: Token,
-    /// The previous non-normalized token if it's different from `prev_token`.
-    /// Use span from this token if you need to concatenate it with some neighbouring spans.
-    unnormalized_prev_token: Token,
-    /// Equivalent to `unnormalized_prev_token.span`.
-    /// FIXME: Remove in favor of `(unnormalized_)prev_token.span`.
-    pub prev_span: Span,
+    /// Use this if you need to check for `token::Ident` or `token::Lifetime` specifically,
+    /// this also includes edition checks for edition-specific keyword identifiers.
+    pub normalized_prev_token: Token,
     restrictions: Restrictions,
     /// Used to determine the path to externally loaded source files.
     pub(super) directory: Directory,
@@ -375,10 +374,9 @@ impl<'a> Parser<'a> {
         let mut parser = Parser {
             sess,
             token: Token::dummy(),
-            unnormalized_token: Token::dummy(),
+            normalized_token: Token::dummy(),
             prev_token: Token::dummy(),
-            unnormalized_prev_token: Token::dummy(),
-            prev_span: DUMMY_SP,
+            normalized_prev_token: Token::dummy(),
             restrictions: Restrictions::empty(),
             recurse_into_file_modules,
             directory: Directory {
@@ -482,7 +480,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_ident_common(&mut self, recover: bool) -> PResult<'a, ast::Ident> {
-        match self.token.kind {
+        match self.normalized_token.kind {
             token::Ident(name, _) => {
                 if self.token.is_reserved_ident() {
                     let mut err = self.expected_ident_found();
@@ -492,13 +490,12 @@ impl<'a> Parser<'a> {
                         return Err(err);
                     }
                 }
-                let span = self.token.span;
                 self.bump();
-                Ok(Ident::new(name, span))
+                Ok(Ident::new(name, self.normalized_prev_token.span))
             }
             _ => Err(match self.prev_token.kind {
                 TokenKind::DocComment(..) => {
-                    self.span_fatal_err(self.prev_span, Error::UselessDocComment)
+                    self.span_fatal_err(self.prev_token.span, Error::UselessDocComment)
                 }
                 _ => self.expected_ident_found(),
             }),
@@ -706,7 +703,7 @@ impl<'a> Parser<'a> {
                             break;
                         }
                         Err(mut expect_err) => {
-                            let sp = self.prev_span.shrink_to_hi();
+                            let sp = self.prev_token.span.shrink_to_hi();
                             let token_str = pprust::token_kind_to_string(t);
 
                             // Attempt to keep parsing if it was a similar separator.
@@ -824,16 +821,16 @@ impl<'a> Parser<'a> {
     // tokens are replaced with usual identifier and lifetime tokens,
     // so the former are never encountered during normal parsing.
     crate fn set_token(&mut self, token: Token) {
-        self.unnormalized_token = token;
-        self.token = match &self.unnormalized_token.kind {
+        self.token = token;
+        self.normalized_token = match &self.token.kind {
             token::Interpolated(nt) => match **nt {
                 token::NtIdent(ident, is_raw) => {
                     Token::new(token::Ident(ident.name, is_raw), ident.span)
                 }
                 token::NtLifetime(ident) => Token::new(token::Lifetime(ident.name), ident.span),
-                _ => self.unnormalized_token.clone(),
+                _ => self.token.clone(),
             },
-            _ => self.unnormalized_token.clone(),
+            _ => self.token.clone(),
         }
     }
 
@@ -847,11 +844,8 @@ impl<'a> Parser<'a> {
 
         // Update the current and previous tokens.
         self.prev_token = self.token.take();
-        self.unnormalized_prev_token = self.unnormalized_token.take();
+        self.normalized_prev_token = self.normalized_token.take();
         self.set_token(next_token);
-
-        // Update fields derived from the previous token.
-        self.prev_span = self.unnormalized_prev_token.span;
 
         // Diagnostics.
         self.expected_tokens.clear();
@@ -859,7 +853,7 @@ impl<'a> Parser<'a> {
 
     /// Advance the parser by one token.
     pub fn bump(&mut self) {
-        let next_token = self.next_tok(self.unnormalized_token.span);
+        let next_token = self.next_tok(self.token.span);
         self.bump_with(next_token);
     }
 
@@ -890,7 +884,7 @@ impl<'a> Parser<'a> {
     /// Parses asyncness: `async` or nothing.
     fn parse_asyncness(&mut self) -> Async {
         if self.eat_keyword(kw::Async) {
-            let span = self.prev_span;
+            let span = self.normalized_prev_token.span;
             Async::Yes { span, closure_id: DUMMY_NODE_ID, return_impl_trait_id: DUMMY_NODE_ID }
         } else {
             Async::No
@@ -899,12 +893,20 @@ impl<'a> Parser<'a> {
 
     /// Parses unsafety: `unsafe` or nothing.
     fn parse_unsafety(&mut self) -> Unsafe {
-        if self.eat_keyword(kw::Unsafe) { Unsafe::Yes(self.prev_span) } else { Unsafe::No }
+        if self.eat_keyword(kw::Unsafe) {
+            Unsafe::Yes(self.normalized_prev_token.span)
+        } else {
+            Unsafe::No
+        }
     }
 
     /// Parses constness: `const` or nothing.
     fn parse_constness(&mut self) -> Const {
-        if self.eat_keyword(kw::Const) { Const::Yes(self.prev_span) } else { Const::No }
+        if self.eat_keyword(kw::Const) {
+            Const::Yes(self.normalized_prev_token.span)
+        } else {
+            Const::No
+        }
     }
 
     /// Parses mutability (`mut` or nothing).
@@ -928,7 +930,7 @@ impl<'a> Parser<'a> {
         {
             self.expect_no_suffix(self.token.span, "a tuple index", suffix);
             self.bump();
-            Ok(Ident::new(symbol, self.prev_span))
+            Ok(Ident::new(symbol, self.prev_token.span))
         } else {
             self.parse_ident_common(false)
         }
@@ -958,7 +960,7 @@ impl<'a> Parser<'a> {
                 }
             } else if !delimited_only {
                 if self.eat(&token::Eq) {
-                    let eq_span = self.prev_span;
+                    let eq_span = self.prev_token.span;
                     let mut is_interpolated_expr = false;
                     if let token::Interpolated(nt) = &self.token.kind {
                         if let token::NtExpr(..) = **nt {
@@ -1061,8 +1063,8 @@ impl<'a> Parser<'a> {
         self.expected_tokens.push(TokenType::Keyword(kw::Crate));
         if self.is_crate_vis() {
             self.bump(); // `crate`
-            self.sess.gated_spans.gate(sym::crate_visibility_modifier, self.prev_span);
-            return Ok(respan(self.prev_span, VisibilityKind::Crate(CrateSugar::JustCrate)));
+            self.sess.gated_spans.gate(sym::crate_visibility_modifier, self.prev_token.span);
+            return Ok(respan(self.prev_token.span, VisibilityKind::Crate(CrateSugar::JustCrate)));
         }
 
         if !self.eat_keyword(kw::Pub) {
@@ -1071,7 +1073,7 @@ impl<'a> Parser<'a> {
             // beginning of the current token would seem to be the "Schelling span".
             return Ok(respan(self.token.span.shrink_to_lo(), VisibilityKind::Inherited));
         }
-        let lo = self.prev_span;
+        let lo = self.prev_token.span;
 
         if self.check(&token::OpenDelim(token::Paren)) {
             // We don't `self.bump()` the `(` yet because this might be a struct definition where
@@ -1086,7 +1088,7 @@ impl<'a> Parser<'a> {
                 self.bump(); // `crate`
                 self.expect(&token::CloseDelim(token::Paren))?; // `)`
                 let vis = VisibilityKind::Crate(CrateSugar::PubCrate);
-                return Ok(respan(lo.to(self.prev_span), vis));
+                return Ok(respan(lo.to(self.prev_token.span), vis));
             } else if self.is_keyword_ahead(1, &[kw::In]) {
                 // Parse `pub(in path)`.
                 self.bump(); // `(`
@@ -1094,7 +1096,7 @@ impl<'a> Parser<'a> {
                 let path = self.parse_path(PathStyle::Mod)?; // `path`
                 self.expect(&token::CloseDelim(token::Paren))?; // `)`
                 let vis = VisibilityKind::Restricted { path: P(path), id: ast::DUMMY_NODE_ID };
-                return Ok(respan(lo.to(self.prev_span), vis));
+                return Ok(respan(lo.to(self.prev_token.span), vis));
             } else if self.look_ahead(2, |t| t == &token::CloseDelim(token::Paren))
                 && self.is_keyword_ahead(1, &[kw::Super, kw::SelfLower])
             {
@@ -1103,7 +1105,7 @@ impl<'a> Parser<'a> {
                 let path = self.parse_path(PathStyle::Mod)?; // `super`/`self`
                 self.expect(&token::CloseDelim(token::Paren))?; // `)`
                 let vis = VisibilityKind::Restricted { path: P(path), id: ast::DUMMY_NODE_ID };
-                return Ok(respan(lo.to(self.prev_span), vis));
+                return Ok(respan(lo.to(self.prev_token.span), vis));
             } else if let FollowedByType::No = fbt {
                 // Provide this diagnostic if a type cannot follow;
                 // in particular, if this is not a tuple struct.

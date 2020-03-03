@@ -707,7 +707,7 @@ impl LangString {
                 x if x.starts_with("edition") => {
                     data.edition = x[7..].parse::<Edition>().ok();
                 }
-                x if allow_error_code_check && x.starts_with("E") && x.len() == 5 => {
+                x if allow_error_code_check && x.starts_with('E') && x.len() == 5 => {
                     if x[1..].parse::<u32>().is_ok() {
                         data.error_codes.push(x.to_owned());
                         seen_rust_tags = !seen_other_tags || seen_rust_tags;
@@ -738,7 +738,7 @@ impl Markdown<'_> {
             return String::new();
         }
         let replacer = |_: &str, s: &str| {
-            if let Some(&(_, ref replace)) = links.into_iter().find(|link| &*link.0 == s) {
+            if let Some(&(_, ref replace)) = links.iter().find(|link| &*link.0 == s) {
                 Some((replace.clone(), s.to_owned()))
             } else {
                 None
@@ -816,7 +816,7 @@ impl MarkdownSummaryLine<'_> {
         }
 
         let replacer = |_: &str, s: &str| {
-            if let Some(&(_, ref replace)) = links.into_iter().find(|link| &*link.0 == s) {
+            if let Some(&(_, ref replace)) = links.iter().find(|link| &*link.0 == s) {
                 Some((replace.clone(), s.to_owned()))
             } else {
                 None

@@ -106,6 +106,8 @@ use rustc::ty::{
     self, AdtKind, CanonicalUserType, Const, GenericParamDefKind, RegionKind, ToPolyTraitRef,
     ToPredicate, Ty, TyCtxt, UserType, WithConstness,
 };
+use rustc_ast::ast;
+use rustc_ast::util::parser::ExprPrecedence;
 use rustc_attr as attr;
 use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -130,8 +132,6 @@ use rustc_span::source_map::{original_sp, DUMMY_SP};
 use rustc_span::symbol::{kw, sym, Ident};
 use rustc_span::{self, BytePos, MultiSpan, Span};
 use rustc_target::spec::abi::Abi;
-use syntax::ast;
-use syntax::util::parser::ExprPrecedence;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::cmp;
@@ -1315,7 +1315,7 @@ fn check_fn<'a, 'tcx>(
         fcx.require_type_is_sized(yield_ty, span, traits::SizedYieldType);
 
         // Resume type defaults to `()` if the generator has no argument.
-        let resume_ty = fn_sig.inputs().get(0).map(|ty| *ty).unwrap_or_else(|| tcx.mk_unit());
+        let resume_ty = fn_sig.inputs().get(0).copied().unwrap_or_else(|| tcx.mk_unit());
 
         fcx.resume_yield_tys = Some((resume_ty, yield_ty));
     }
@@ -2900,14 +2900,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         debug!("resolve_vars_with_obligations(ty={:?})", ty);
 
         // No Infer()? Nothing needs doing.
-        if !ty.has_infer_types() && !ty.has_infer_consts() {
+        if !ty.has_infer_types_or_consts() {
             debug!("resolve_vars_with_obligations: ty={:?}", ty);
             return ty;
         }
 
         // If `ty` is a type variable, see whether we already know what it is.
         ty = self.resolve_vars_if_possible(&ty);
-        if !ty.has_infer_types() && !ty.has_infer_consts() {
+        if !ty.has_infer_types_or_consts() {
             debug!("resolve_vars_with_obligations: ty={:?}", ty);
             return ty;
         }
@@ -4996,7 +4996,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             let sugg = if receiver.ends_with(".clone()")
                                 && method_call_list.contains(&method_call.as_str())
                             {
-                                let max_len = receiver.rfind(".").unwrap();
+                                let max_len = receiver.rfind('.').unwrap();
                                 format!("{}{}", &receiver[..max_len], method_call)
                             } else {
                                 if expr.precedence().order() < ExprPrecedence::MethodCall.order() {
@@ -5447,9 +5447,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .unwrap_or(false);
 
         let (res, self_ctor_substs) = if let Res::SelfCtor(impl_def_id) = res {
-            let ty = self.impl_self_ty(span, impl_def_id).ty;
-            let adt_def = ty.ty_adt_def();
-
+            let ty = self.normalize_ty(span, tcx.at(span).type_of(impl_def_id));
             match ty.kind {
                 ty::Adt(adt_def, substs) if adt_def.has_ctor() => {
                     let variant = adt_def.non_enum_variant();
@@ -5464,7 +5462,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         span,
                         "the `Self` constructor can only be used with tuple or unit structs",
                     );
-                    if let Some(adt_def) = adt_def {
+                    if let Some(adt_def) = ty.ty_adt_def() {
                         match adt_def.adt_kind() {
                             AdtKind::Enum => {
                                 err.help("did you mean to use one of the enum's variants?");

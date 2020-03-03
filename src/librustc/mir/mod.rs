@@ -18,6 +18,8 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::{self, GeneratorKind};
 
 use polonius_engine::Atom;
+pub use rustc_ast::ast::Mutability;
+use rustc_ast::ast::Name;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::graph::dominators::Dominators;
 use rustc_data_structures::graph::{self, GraphSuccessors};
@@ -32,8 +34,6 @@ use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::Index;
 use std::slice;
 use std::{iter, mem, option, u32};
-pub use syntax::ast::Mutability;
-use syntax::ast::Name;
 
 pub use self::cache::{BodyAndCache, ReadOnlyBodyAndCache};
 pub use self::query::*;
@@ -2219,7 +2219,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                 });
                 let region = if print_region {
                     let mut region = region.to_string();
-                    if region.len() > 0 {
+                    if !region.is_empty() {
                         region.push(' ');
                     }
                     region

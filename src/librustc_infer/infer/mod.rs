@@ -25,6 +25,7 @@ use rustc::ty::subst::{GenericArg, InternalSubsts, SubstsRef};
 use rustc::ty::{self, GenericParamDefKind, InferConst, Ty, TyCtxt};
 use rustc::ty::{ConstVid, FloatVid, IntVid, TyVid};
 
+use rustc_ast::ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::unify as ut;
@@ -36,7 +37,6 @@ use rustc_span::Span;
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
-use syntax::ast;
 
 use self::combine::CombineFields;
 use self::lexical_region_resolve::LexicalRegionResolutions;
@@ -1482,12 +1482,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     ) -> bool {
         let ty = self.resolve_vars_if_possible(&ty);
 
-        // Even if the type may have no inference variables, during
-        // type-checking closure types are in local tables only.
-        if !self.in_progress_tables.is_some() || !ty.has_closure_types() {
-            if !(param_env, ty).has_local_value() {
-                return ty.is_copy_modulo_regions(self.tcx, param_env, span);
-            }
+        if !(param_env, ty).has_local_value() {
+            return ty.is_copy_modulo_regions(self.tcx, param_env, span);
         }
 
         let copy_def_id = self.tcx.require_lang_item(lang_items::CopyTraitLangItem, None);

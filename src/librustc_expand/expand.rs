@@ -5,6 +5,14 @@ use crate::mbe::macro_rules::annotate_err_with_kind;
 use crate::placeholders::{placeholder, PlaceholderExpander};
 use crate::proc_macro::collect_derives;
 
+use rustc_ast::ast::{self, AttrItem, Block, Ident, LitKind, NodeId, PatKind, Path};
+use rustc_ast::ast::{ItemKind, MacArgs, MacStmtStyle, StmtKind};
+use rustc_ast::mut_visit::*;
+use rustc_ast::ptr::P;
+use rustc_ast::token;
+use rustc_ast::tokenstream::{TokenStream, TokenTree};
+use rustc_ast::util::map_in_place::MapInPlace;
+use rustc_ast::visit::{self, AssocCtxt, Visitor};
 use rustc_ast_pretty::pprust;
 use rustc_attr::{self as attr, is_builtin_attr, HasAttrs};
 use rustc_data_structures::sync::Lrc;
@@ -20,14 +28,6 @@ use rustc_session::parse::{feature_err, ParseSess};
 use rustc_span::source_map::respan;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::{FileName, Span, DUMMY_SP};
-use syntax::ast::{self, AttrItem, Block, Ident, LitKind, NodeId, PatKind, Path};
-use syntax::ast::{ItemKind, MacArgs, MacStmtStyle, StmtKind};
-use syntax::mut_visit::*;
-use syntax::ptr::P;
-use syntax::token;
-use syntax::tokenstream::{TokenStream, TokenTree};
-use syntax::util::map_in_place::MapInPlace;
-use syntax::visit::{self, AssocCtxt, Visitor};
 
 use smallvec::{smallvec, SmallVec};
 use std::io::ErrorKind;
@@ -503,13 +503,12 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
     }
 
     fn error_derive_forbidden_on_non_adt(&self, derives: &[Path], item: &Annotatable) {
-        let attr =
-            attr::find_by_name(item.attrs(), sym::derive).expect("`derive` attribute should exist");
-        let span = attr.span;
+        let attr = attr::find_by_name(item.attrs(), sym::derive);
+        let span = attr.map_or(item.span(), |attr| attr.span);
         let mut err = self
             .cx
             .struct_span_err(span, "`derive` may only be applied to structs, enums and unions");
-        if let ast::AttrStyle::Inner = attr.style {
+        if let Some(ast::Attribute { style: ast::AttrStyle::Inner, .. }) = attr {
             let trait_list = derives.iter().map(|t| pprust::path_to_string(t)).collect::<Vec<_>>();
             let suggestion = format!("#[derive({})]", trait_list.join(", "));
             err.span_suggestion(
@@ -1669,10 +1668,9 @@ impl<'a, 'b> MutVisitor for InvocationCollector<'a, 'b> {
                         }
                     }
                 } else {
-                    let mut err = self.cx.struct_span_err(
-                        it.span(),
-                        &format!("expected path to external documentation"),
-                    );
+                    let mut err = self
+                        .cx
+                        .struct_span_err(it.span(), "expected path to external documentation");
 
                     // Check if the user erroneously used `doc(include(...))` syntax.
                     let literal = it.meta_item_list().and_then(|list| {

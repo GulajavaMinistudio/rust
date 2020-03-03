@@ -12,6 +12,11 @@ use crate::{Module, ModuleOrUniformRoot, NameBindingKind, ParentScope, PathResul
 use crate::{ResolutionError, Resolver, Segment, UseError};
 
 use rustc::{bug, lint, span_bug};
+use rustc_ast::ast::*;
+use rustc_ast::ptr::P;
+use rustc_ast::util::lev_distance::find_best_match_for_name;
+use rustc_ast::visit::{self, AssocCtxt, FnCtxt, FnKind, Visitor};
+use rustc_ast::{unwrap_or, walk_list};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::DiagnosticId;
 use rustc_hir::def::Namespace::{self, *};
@@ -21,11 +26,6 @@ use rustc_hir::TraitCandidate;
 use rustc_span::symbol::{kw, sym};
 use rustc_span::Span;
 use smallvec::{smallvec, SmallVec};
-use syntax::ast::*;
-use syntax::ptr::P;
-use syntax::util::lev_distance::find_best_match_for_name;
-use syntax::visit::{self, AssocCtxt, FnCtxt, FnKind, Visitor};
-use syntax::{unwrap_or, walk_list};
 
 use log::debug;
 use std::collections::BTreeSet;
@@ -456,8 +456,9 @@ impl<'a, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
     }
     fn visit_fn(&mut self, fn_kind: FnKind<'ast>, sp: Span, _: NodeId) {
         let rib_kind = match fn_kind {
-            FnKind::Fn(FnCtxt::Foreign, ..) => return visit::walk_fn(self, fn_kind, sp),
-            FnKind::Fn(FnCtxt::Free, ..) => FnItemRibKind,
+            // Bail if there's no body.
+            FnKind::Fn(.., None) => return visit::walk_fn(self, fn_kind, sp),
+            FnKind::Fn(FnCtxt::Free, ..) | FnKind::Fn(FnCtxt::Foreign, ..) => FnItemRibKind,
             FnKind::Fn(FnCtxt::Assoc(_), ..) | FnKind::Closure(..) => NormalRibKind,
         };
         let previous_value = replace(&mut self.diagnostic_metadata.current_function, Some(sp));
@@ -1016,7 +1017,7 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             trait_items
                 .iter()
                 .filter_map(|item| match &item.kind {
-                    AssocItemKind::TyAlias(_, _, bounds, _) if bounds.len() == 0 => {
+                    AssocItemKind::TyAlias(_, _, bounds, _) if bounds.is_empty() => {
                         Some(item.ident)
                     }
                     _ => None,
