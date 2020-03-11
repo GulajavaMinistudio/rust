@@ -151,8 +151,7 @@ impl<'l, 'tcx> SaveContext<'l, 'tcx> {
                     attributes: lower_attributes(item.attrs.clone(), self),
                 }))
             }
-            ast::ForeignItemKind::Const(_, ref ty, _)
-            | ast::ForeignItemKind::Static(ref ty, _, _) => {
+            ast::ForeignItemKind::Static(ref ty, _, _) => {
                 filter!(self.span_utils, item.ident.span);
 
                 let id = id_from_node_id(item.id, self);
@@ -335,7 +334,7 @@ impl<'l, 'tcx> SaveContext<'l, 'tcx> {
                                     Some(_) => ImplKind::Direct,
                                     None => ImplKind::Inherent,
                                 },
-                                span: span,
+                                span,
                                 value: String::new(),
                                 parent: None,
                                 children: items
@@ -533,13 +532,16 @@ impl<'l, 'tcx> SaveContext<'l, 'tcx> {
                 match self.tables.expr_ty_adjusted(&hir_node).kind {
                     ty::Adt(def, _) if !def.is_enum() => {
                         let variant = &def.non_enum_variant();
-                        let index = self.tcx.find_field_index(ident, variant).unwrap();
                         filter!(self.span_utils, ident.span);
                         let span = self.span_from_span(ident.span);
                         return Some(Data::RefData(Ref {
                             kind: RefKind::Variable,
                             span,
-                            ref_id: id_from_def_id(variant.fields[index].did),
+                            ref_id: self
+                                .tcx
+                                .find_field_index(ident, variant)
+                                .map(|index| id_from_def_id(variant.fields[index].did))
+                                .unwrap_or_else(|| null_id()),
                         }));
                     }
                     ty::Tuple(..) => None,

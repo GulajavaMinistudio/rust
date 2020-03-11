@@ -661,7 +661,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
     /// Given the type/lifetime/const arguments provided to some path (along with
     /// an implicit `Self`, if this is a trait reference), returns the complete
     /// set of substitutions. This may involve applying defaulted type parameters.
-    /// Also returns back constriants on associated types.
+    /// Also returns back constraints on associated types.
     ///
     /// Example:
     ///
@@ -1652,7 +1652,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         }
 
         for (projection_bound, _) in &bounds.projection_bounds {
-            for (_, def_ids) in &mut associated_types {
+            for def_ids in associated_types.values_mut() {
                 def_ids.remove(&projection_bound.projection_def_id());
             }
         }
@@ -2924,7 +2924,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         let tcx = self.tcx();
 
-        // We proactively collect all the infered type params to emit a single error per fn def.
+        // We proactively collect all the inferred type params to emit a single error per fn def.
         let mut visitor = PlaceholderHirTyCollector::default();
         for ty in decl.inputs {
             visitor.visit_ty(ty);

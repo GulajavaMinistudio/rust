@@ -338,9 +338,8 @@ impl<'hir> Map<'hir> {
             Node::Variant(_) => DefKind::Variant,
             Node::Ctor(variant_data) => {
                 // FIXME(eddyb) is this even possible, if we have a `Node::Ctor`?
-                if variant_data.ctor_hir_id().is_none() {
-                    return None;
-                }
+                variant_data.ctor_hir_id()?;
+
                 let ctor_of = match self.find(self.get_parent_node(hir_id)) {
                     Some(Node::Item(..)) => def::CtorOf::Struct,
                     Some(Node::Variant(..)) => def::CtorOf::Variant,
@@ -654,7 +653,7 @@ impl<'hir> Map<'hir> {
         }
     }
 
-    /// Wether `hir_id` corresponds to a `mod` or a crate.
+    /// Whether `hir_id` corresponds to a `mod` or a crate.
     pub fn is_hir_id_module(&self, hir_id: HirId) -> bool {
         match self.lookup(hir_id) {
             Some(Entry { node: Node::Item(Item { kind: ItemKind::Mod(_), .. }), .. })

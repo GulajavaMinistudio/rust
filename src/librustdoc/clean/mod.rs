@@ -50,7 +50,7 @@ pub use self::types::Type::*;
 pub use self::types::Visibility::{Inherited, Public};
 pub use self::types::*;
 
-const FN_OUTPUT_NAME: &'static str = "Output";
+const FN_OUTPUT_NAME: &str = "Output";
 
 pub trait Clean<T> {
     fn clean(&self, cx: &DocContext<'_>) -> T;
@@ -1013,7 +1013,6 @@ impl Clean<FnRetTy> for hir::FnRetTy<'_> {
 impl Clean<Item> for doctree::Trait<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
         let attrs = self.attrs.clean(cx);
-        let is_spotlight = attrs.has_doc_flag(sym::spotlight);
         Item {
             name: Some(self.name.clean(cx)),
             attrs,
@@ -1028,7 +1027,6 @@ impl Clean<Item> for doctree::Trait<'_> {
                 items: self.items.iter().map(|ti| ti.clean(cx)).collect(),
                 generics: self.generics.clean(cx),
                 bounds: self.bounds.clean(cx),
-                is_spotlight,
                 is_auto: self.is_auto.clean(cx),
             }),
         }

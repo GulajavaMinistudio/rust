@@ -90,7 +90,6 @@
 #![feature(custom_inner_attributes)]
 #![feature(decl_macro)]
 #![feature(doc_cfg)]
-#![feature(doc_spotlight)]
 #![feature(extern_types)]
 #![feature(fundamental)]
 #![feature(intrinsics)]
@@ -141,7 +140,6 @@
 #![feature(associated_type_bounds)]
 #![feature(const_type_id)]
 #![feature(const_caller_location)]
-#![feature(assoc_int_consts)]
 #![cfg_attr(not(bootstrap), feature(no_niche))] // rust-lang/rust#68303
 
 #[prelude_import]
@@ -158,10 +156,6 @@ mod internal_macros;
 #[path = "num/int_macros.rs"]
 #[macro_use]
 mod int_macros;
-
-#[path = "num/uint_macros.rs"]
-#[macro_use]
-mod uint_macros;
 
 #[path = "num/i128.rs"]
 pub mod i128;

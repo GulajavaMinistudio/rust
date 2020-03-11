@@ -444,7 +444,7 @@ impl<'a, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
                     visit::walk_foreign_item(this, foreign_item);
                 });
             }
-            ForeignItemKind::Const(..) | ForeignItemKind::Static(..) => {
+            ForeignItemKind::Static(..) => {
                 self.with_item_rib(HasGenericParams::No, |this| {
                     visit::walk_foreign_item(this, foreign_item);
                 });
@@ -553,7 +553,7 @@ impl<'a, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
         let prev = replace(&mut self.diagnostic_metadata.currently_processing_generics, true);
         match arg {
             GenericArg::Type(ref ty) => {
-                // We parse const arguments as path types as we cannot distiguish them during
+                // We parse const arguments as path types as we cannot distinguish them during
                 // parsing. We try to resolve that ambiguity by attempting resolution the type
                 // namespace first, and if that fails we try again in the value namespace. If
                 // resolution in the value namespace succeeds, we have an generic const argument on
@@ -838,8 +838,7 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                         for item in trait_items {
                             this.with_trait_items(trait_items, |this| {
                                 match &item.kind {
-                                    AssocItemKind::Static(ty, _, default)
-                                    | AssocItemKind::Const(_, ty, default) => {
+                                    AssocItemKind::Const(_, ty, default) => {
                                         this.visit_ty(ty);
                                         // Only impose the restrictions of `ConstRibKind` for an
                                         // actual constant expression in a provided default.
@@ -1114,7 +1113,7 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                                 for item in impl_items {
                                     use crate::ResolutionError::*;
                                     match &item.kind {
-                                        AssocItemKind::Static(..) | AssocItemKind::Const(..) => {
+                                        AssocItemKind::Const(..) => {
                                             debug!("resolve_implementation AssocItemKind::Const",);
                                             // If this is a trait impl, ensure the const
                                             // exists in trait
@@ -2103,7 +2102,7 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 .is_ok()
             {
                 let def_id = module.def_id().unwrap();
-                found_traits.push(TraitCandidate { def_id: def_id, import_ids: smallvec![] });
+                found_traits.push(TraitCandidate { def_id, import_ids: smallvec![] });
             }
         }
 
@@ -2190,10 +2189,10 @@ impl<'a, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         trait_name: Ident,
     ) -> SmallVec<[NodeId; 1]> {
         let mut import_ids = smallvec![];
-        while let NameBindingKind::Import { directive, binding, .. } = kind {
-            self.r.maybe_unused_trait_imports.insert(directive.id);
-            self.r.add_to_glob_map(&directive, trait_name);
-            import_ids.push(directive.id);
+        while let NameBindingKind::Import { import, binding, .. } = kind {
+            self.r.maybe_unused_trait_imports.insert(import.id);
+            self.r.add_to_glob_map(&import, trait_name);
+            import_ids.push(import.id);
             kind = &binding.kind;
         }
         import_ids

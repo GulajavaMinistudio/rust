@@ -198,7 +198,7 @@ impl<'a> Parser<'a> {
         })?;
 
         if ts.len() == 1 && !trailing {
-            let ty = ts.into_iter().nth(0).unwrap().into_inner();
+            let ty = ts.into_iter().next().unwrap().into_inner();
             let maybe_bounds = allow_plus == AllowPlus::Yes && self.token.is_like_plus();
             match ty.kind {
                 // `(TY_BOUND_NOPAREN) + BOUND + ...`.
@@ -323,7 +323,7 @@ impl<'a> Parser<'a> {
     /// Is a `dyn B0 + ... + Bn` type allowed here?
     fn is_explicit_dyn_type(&mut self) -> bool {
         self.check_keyword(kw::Dyn)
-            && (self.normalized_token.span.rust_2018()
+            && (self.token.uninterpolated_span().rust_2018()
                 || self.look_ahead(1, |t| {
                     t.can_begin_bound() && !can_continue_type_after_non_fn_ident(t)
                 }))

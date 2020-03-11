@@ -457,7 +457,7 @@ pub enum Diverges {
         /// where all arms diverge), we may be
         /// able to provide a more informative
         /// message to the user.
-        /// If this is `None`, a default messsage
+        /// If this is `None`, a default message
         /// will be generated, which is suitable
         /// for most cases.
         custom_note: Option<&'static str>,
@@ -737,8 +737,8 @@ impl ItemLikeVisitor<'tcx> for CheckItemTypesVisitor<'tcx> {
 }
 
 pub fn check_wf_new(tcx: TyCtxt<'_>) {
-    let mut visit = wfcheck::CheckTypeWellFormedVisitor::new(tcx);
-    tcx.hir().krate().par_visit_all_item_likes(&mut visit);
+    let visit = wfcheck::CheckTypeWellFormedVisitor::new(tcx);
+    tcx.hir().krate().par_visit_all_item_likes(&visit);
 }
 
 fn check_mod_item_types(tcx: TyCtxt<'_>, module_def_id: DefId) {
@@ -896,7 +896,7 @@ where
                 ty::Opaque(def_id, substs) => {
                     debug!("fixup_opaque_types: found type {:?}", ty);
                     // Here, we replace any inference variables that occur within
-                    // the substs of an opaque type. By definition, any type occuring
+                    // the substs of an opaque type. By definition, any type occurring
                     // in the substs has a corresponding generic parameter, which is what
                     // we replace it with.
                     // This replacement is only run on the function signature, so any
@@ -1937,7 +1937,7 @@ fn check_specialization_validity<'tcx>(
         }
     });
 
-    // If `opt_result` is `None`, we have only encoutered `default impl`s that don't contain the
+    // If `opt_result` is `None`, we have only encountered `default impl`s that don't contain the
     // item. This is allowed, the item isn't actually getting specialized here.
     let result = opt_result.unwrap_or(Ok(()));
 
@@ -3452,7 +3452,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 //  }
                 //  ```
                 //
-                // In the above snippet, the inference varaible created by
+                // In the above snippet, the inference variable created by
                 // instantiating `Option<Foo>` will be completely unconstrained.
                 // We treat this as a non-defining use by making the inference
                 // variable fall back to the opaque type itself.
@@ -4234,7 +4234,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let substs = self.fresh_substs_for_item(span, did);
         let substd_ty = self.instantiate_type_scheme(span, &substs, &ity);
 
-        TypeAndSubsts { substs: substs, ty: substd_ty }
+        TypeAndSubsts { substs, ty: substd_ty }
     }
 
     /// Unifies the output type with the expected type early, for more coercions
@@ -5244,7 +5244,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     .tcx
                     .associated_items(future_trait)
                     .in_definition_order()
-                    .nth(0)
+                    .next()
                     .unwrap()
                     .def_id;
                 let predicate =

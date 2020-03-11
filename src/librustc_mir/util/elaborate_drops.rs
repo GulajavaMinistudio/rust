@@ -549,7 +549,7 @@ where
         debug!("destructor_call_block({:?}, {:?})", self, succ);
         let tcx = self.tcx();
         let drop_trait = tcx.lang_items().drop_trait().unwrap();
-        let drop_fn = tcx.associated_items(drop_trait).in_definition_order().nth(0).unwrap();
+        let drop_fn = tcx.associated_items(drop_trait).in_definition_order().next().unwrap();
         let ty = self.place_ty(self.place);
         let substs = tcx.mk_substs_trait(ty, &[]);
 
@@ -731,7 +731,7 @@ where
         self.elaborator.patch().new_block(base_block)
     }
 
-    /// Ceates a pair of drop-loops of `place`, which drops its contents, even
+    /// Creates a pair of drop-loops of `place`, which drops its contents, even
     /// in the case of 1 panic. If `ptr_based`, creates a pointer loop,
     /// otherwise create an index loop.
     fn drop_loop_pair(
@@ -872,7 +872,7 @@ where
         debug!("drop_flag_reset_block({:?},{:?})", self, mode);
 
         let block = self.new_block(unwind, TerminatorKind::Goto { target: succ });
-        let block_start = Location { block: block, statement_index: 0 };
+        let block_start = Location { block, statement_index: 0 };
         self.elaborator.clear_drop_flag(block_start, self.path, mode);
         block
     }
@@ -921,7 +921,7 @@ where
 
         let call = TerminatorKind::Call {
             func: Operand::function_handle(tcx, free_func, substs, self.source_info.span),
-            args: args,
+            args,
             destination: Some((unit_temp, target)),
             cleanup: None,
             from_hir_call: false,

@@ -14,13 +14,13 @@ pub struct AddRetag;
 /// after the assignment, we can be sure to obtain the same place value.
 /// (Concurrent accesses by other threads are no problem as these are anyway non-atomic
 /// copies.  Data races are UB.)
-fn is_stable(place: PlaceRef<'_, '_>) -> bool {
+fn is_stable(place: PlaceRef<'_>) -> bool {
     place.projection.iter().all(|elem| {
         match elem {
             // Which place this evaluates to can change with any memory write,
             // so cannot assume this to be stable.
             ProjectionElem::Deref => false,
-            // Array indices are intersting, but MIR building generates a *fresh*
+            // Array indices are interesting, but MIR building generates a *fresh*
             // temporary for every array access, so the index cannot be changed as
             // a side-effect.
             ProjectionElem::Index { .. } |
@@ -75,8 +75,8 @@ impl<'tcx> MirPass<'tcx> for AddRetag {
         {
             let source_info = SourceInfo {
                 scope: OUTERMOST_SOURCE_SCOPE,
-                span: span, // FIXME: Consider using just the span covering the function
-                            // argument declaration.
+                span, // FIXME: Consider using just the span covering the function
+                      // argument declaration.
             };
             // Gather all arguments, skip return value.
             let places = local_decls

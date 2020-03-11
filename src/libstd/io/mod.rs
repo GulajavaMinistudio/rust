@@ -371,7 +371,7 @@ where
     F: FnMut(&R) -> usize,
 {
     let start_len = buf.len();
-    let mut g = Guard { len: buf.len(), buf: buf };
+    let mut g = Guard { len: buf.len(), buf };
     let ret;
     loop {
         if g.len == g.buf.len() {
@@ -497,7 +497,6 @@ where
 /// [`&str`]: ../../std/primitive.str.html
 /// [slice]: ../../std/primitive.slice.html
 #[stable(feature = "rust1", since = "1.0.0")]
-#[doc(spotlight)]
 pub trait Read {
     /// Pull some bytes from this source into the specified buffer, returning
     /// how many bytes were read.
@@ -939,7 +938,7 @@ pub trait Read {
     where
         Self: Sized,
     {
-        Take { inner: self, limit: limit }
+        Take { inner: self, limit }
     }
 }
 
@@ -1228,7 +1227,6 @@ impl Initializer {
 ///
 /// [`write_all`]: #method.write_all
 #[stable(feature = "rust1", since = "1.0.0")]
-#[doc(spotlight)]
 pub trait Write {
     /// Write a buffer into this writer, returning how many bytes were written.
     ///

@@ -92,7 +92,7 @@ struct AbsoluteBytePos(u32);
 
 impl AbsoluteBytePos {
     fn new(pos: usize) -> AbsoluteBytePos {
-        debug_assert!(pos <= ::std::u32::MAX as usize);
+        debug_assert!(pos <= u32::MAX as usize);
         AbsoluteBytePos(pos as u32)
     }
 
@@ -425,7 +425,7 @@ impl<'sess> OnDiskCache<'sess> {
 
 //- DECODING -------------------------------------------------------------------
 
-/// A decoder that can read fro the incr. comp. cache. It is similar to the one
+/// A decoder that can read from the incr. comp. cache. It is similar to the one
 /// we use for crate metadata decoding in that it can rebase spans and eventually
 /// will also handle things that contain `Ty` instances.
 struct CacheDecoder<'a, 'tcx> {

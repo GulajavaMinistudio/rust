@@ -29,11 +29,17 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
         let mut indirect_outputs = vec![];
         for (i, (out, &place)) in ia.outputs.iter().zip(&outputs).enumerate() {
             if out.is_rw {
-                inputs.push(self.load_operand(place).immediate());
+                let operand = self.load_operand(place);
+                if let OperandValue::Immediate(_) = operand.val {
+                    inputs.push(operand.immediate());
+                }
                 ext_constraints.push(i.to_string());
             }
             if out.is_indirect {
-                indirect_outputs.push(self.load_operand(place).immediate());
+                let operand = self.load_operand(place);
+                if let OperandValue::Immediate(_) = operand.val {
+                    indirect_outputs.push(operand.immediate());
+                }
             } else {
                 output_types.push(place.layout.llvm_type(self.cx()));
             }
@@ -60,7 +66,7 @@ impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
             .chain(ia.inputs.iter().map(|s| s.to_string()))
             .chain(ext_constraints)
             .chain(clobbers)
-            .chain(arch_clobbers.iter().map(|s| s.to_string()))
+            .chain(arch_clobbers.iter().map(|s| (*s).to_string()))
             .collect::<Vec<String>>()
             .join(",");
 

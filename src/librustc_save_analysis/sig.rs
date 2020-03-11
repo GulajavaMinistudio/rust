@@ -793,9 +793,8 @@ impl Sig for ast::ForeignItem {
                 text.push_str(&name);
                 text.push(';');
 
-                Ok(Signature { text: text, defs: defs, refs: vec![] })
+                Ok(Signature { text, defs, refs: vec![] })
             }
-            ast::ForeignItemKind::Const(..) => Err("foreign const"),
             ast::ForeignItemKind::Macro(..) => Err("macro"),
         }
     }

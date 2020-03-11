@@ -1193,7 +1193,7 @@ pub struct ParamTy {
 
 impl<'tcx> ParamTy {
     pub fn new(index: u32, name: Symbol) -> ParamTy {
-        ParamTy { index, name: name }
+        ParamTy { index, name }
     }
 
     pub fn for_self() -> ParamTy {
@@ -2571,7 +2571,7 @@ impl<'tcx> ConstKind<'tcx> {
 
     #[inline]
     pub fn try_to_bits(&self, size: ty::layout::Size) -> Option<u128> {
-        self.try_to_scalar()?.to_bits(size).ok()
+        if let ConstKind::Value(val) = self { val.try_to_bits(size) } else { None }
     }
 }
 

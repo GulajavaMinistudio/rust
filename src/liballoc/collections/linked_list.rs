@@ -841,10 +841,10 @@ impl<T> LinkedList<T> {
     /// d.push_front(2);
     /// d.push_front(3);
     ///
-    /// let mut splitted = d.split_off(2);
+    /// let mut split = d.split_off(2);
     ///
-    /// assert_eq!(splitted.pop_front(), Some(1));
-    /// assert_eq!(splitted.pop_front(), None);
+    /// assert_eq!(split.pop_front(), Some(1));
+    /// assert_eq!(split.pop_front(), None);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn split_off(&mut self, at: usize) -> LinkedList<T> {
@@ -959,7 +959,7 @@ impl<T> LinkedList<T> {
         let it = self.head;
         let old_len = self.len;
 
-        DrainFilter { list: self, it: it, pred: filter, idx: 0, old_len: old_len }
+        DrainFilter { list: self, it, pred: filter, idx: 0, old_len }
     }
 }
 

@@ -347,7 +347,7 @@ fn krate(tcx: TyCtxt<'_>) -> NamedRegionMap {
             lifetime_uses: &mut Default::default(),
             missing_named_lifetime_spots: vec![],
         };
-        for (_, item) in &krate.items {
+        for item in krate.items.values() {
             visitor.visit_item(item);
         }
     }
@@ -540,7 +540,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     LifetimeName::Implicit => {
                         // For types like `dyn Foo`, we should
                         // generate a special form of elided.
-                        span_bug!(ty.span, "object-lifetime-default expected, not implict",);
+                        span_bug!(ty.span, "object-lifetime-default expected, not implicit",);
                     }
                     LifetimeName::ImplicitObjectLifetimeDefault => {
                         // If the user does not write *anything*, we
@@ -1032,13 +1032,13 @@ struct Shadower {
 }
 
 fn original_label(span: Span) -> Original {
-    Original { kind: ShadowKind::Label, span: span }
+    Original { kind: ShadowKind::Label, span }
 }
 fn shadower_label(span: Span) -> Shadower {
-    Shadower { kind: ShadowKind::Label, span: span }
+    Shadower { kind: ShadowKind::Label, span }
 }
 fn original_lifetime(span: Span) -> Original {
-    Original { kind: ShadowKind::Lifetime, span: span }
+    Original { kind: ShadowKind::Lifetime, span }
 }
 fn shadower_lifetime(param: &hir::GenericParam<'_>) -> Shadower {
     Shadower { kind: ShadowKind::Lifetime, span: param.span }
@@ -1347,7 +1347,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         let missing_named_lifetime_spots = take(&mut self.missing_named_lifetime_spots);
         let mut this = LifetimeContext {
             tcx: *tcx,
-            map: map,
+            map,
             scope: &wrap_scope,
             trait_ref_hack: self.trait_ref_hack,
             is_in_fn_syntax: self.is_in_fn_syntax,

@@ -736,7 +736,7 @@ fn execute_work_item<B: ExtraBackendMethods>(
     }
 }
 
-// Actual LTO type we end up chosing based on multiple factors.
+// Actual LTO type we end up choosing based on multiple factors.
 enum ComputedLtoType {
     No,
     Thin,
@@ -1257,7 +1257,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
                 if main_thread_worker_state == MainThreadWorkerState::Idle {
                     if !queue_full_enough(work_items.len(), running, max_workers) {
                         // The queue is not full enough, codegen more items:
-                        if let Err(_) = codegen_worker_send.send(Message::CodegenItem) {
+                        if codegen_worker_send.send(Message::CodegenItem).is_err() {
                             panic!("Could not send Message::CodegenItem to main thread")
                         }
                         main_thread_worker_state = MainThreadWorkerState::Codegenning;

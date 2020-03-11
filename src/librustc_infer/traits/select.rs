@@ -1341,7 +1341,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         stack: &TraitObligationStack<'o, 'tcx>,
     ) -> Result<SelectionCandidateSet<'tcx>, SelectionError<'tcx>> {
         let TraitObligationStack { obligation, .. } = *stack;
-        let ref obligation = Obligation {
+        let obligation = &Obligation {
             param_env: obligation.param_env,
             cause: obligation.cause.clone(),
             recursion_depth: obligation.recursion_depth,
@@ -2923,7 +2923,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             ty::Predicate::ClosureKind(closure_def_id, substs, kind),
         ));
 
-        Ok(VtableClosureData { closure_def_id, substs: substs, nested: obligations })
+        Ok(VtableClosureData { closure_def_id, substs, nested: obligations })
     }
 
     /// In the case of closure types and fn pointers,

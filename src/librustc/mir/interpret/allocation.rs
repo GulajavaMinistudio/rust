@@ -610,7 +610,7 @@ impl<Tag, Extra> Allocation<Tag, Extra> {
         // a naive undef mask copying algorithm would repeatedly have to read the undef mask from
         // the source and write it to the destination. Even if we optimized the memory accesses,
         // we'd be doing all of this `repeat` times.
-        // Therefor we precompute a compressed version of the undef mask of the source value and
+        // Therefore we precompute a compressed version of the undef mask of the source value and
         // then write it back `repeat` times without computing any more information from the source.
 
         // A precomputed cache for ranges of defined/undefined bits
@@ -818,9 +818,9 @@ impl UndefMask {
             // First set all bits except the first `bita`,
             // then unset the last `64 - bitb` bits.
             let range = if bitb == 0 {
-                u64::max_value() << bita
+                u64::MAX << bita
             } else {
-                (u64::max_value() << bita) & (u64::max_value() >> (64 - bitb))
+                (u64::MAX << bita) & (u64::MAX >> (64 - bitb))
             };
             if new_state {
                 self.blocks[blocka] |= range;
@@ -832,21 +832,21 @@ impl UndefMask {
         // across block boundaries
         if new_state {
             // Set `bita..64` to `1`.
-            self.blocks[blocka] |= u64::max_value() << bita;
+            self.blocks[blocka] |= u64::MAX << bita;
             // Set `0..bitb` to `1`.
             if bitb != 0 {
-                self.blocks[blockb] |= u64::max_value() >> (64 - bitb);
+                self.blocks[blockb] |= u64::MAX >> (64 - bitb);
             }
             // Fill in all the other blocks (much faster than one bit at a time).
             for block in (blocka + 1)..blockb {
-                self.blocks[block] = u64::max_value();
+                self.blocks[block] = u64::MAX;
             }
         } else {
             // Set `bita..64` to `0`.
-            self.blocks[blocka] &= !(u64::max_value() << bita);
+            self.blocks[blocka] &= !(u64::MAX << bita);
             // Set `0..bitb` to `0`.
             if bitb != 0 {
-                self.blocks[blockb] &= !(u64::max_value() >> (64 - bitb));
+                self.blocks[blockb] &= !(u64::MAX >> (64 - bitb));
             }
             // Fill in all the other blocks (much faster than one bit at a time).
             for block in (blocka + 1)..blockb {

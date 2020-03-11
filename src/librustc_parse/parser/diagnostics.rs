@@ -19,7 +19,7 @@ use rustc_span::{MultiSpan, Span, SpanSnippetError, DUMMY_SP};
 use log::{debug, trace};
 use std::mem;
 
-const TURBOFISH: &'static str = "use `::<...>` instead of `<...>` to specify type arguments";
+const TURBOFISH: &str = "use `::<...>` instead of `<...>` to specify type arguments";
 
 /// Creates a placeholder argument.
 pub(super) fn dummy_arg(ident: Ident) -> Param {
@@ -192,17 +192,19 @@ impl<'a> Parser<'a> {
             TokenKind::CloseDelim(token::DelimToken::Brace),
             TokenKind::CloseDelim(token::DelimToken::Paren),
         ];
-        if let token::Ident(name, false) = self.normalized_token.kind {
-            if Ident::new(name, self.normalized_token.span).is_raw_guess()
-                && self.look_ahead(1, |t| valid_follow.contains(&t.kind))
+        match self.token.ident() {
+            Some((ident, false))
+                if ident.is_raw_guess()
+                    && self.look_ahead(1, |t| valid_follow.contains(&t.kind)) =>
             {
                 err.span_suggestion(
-                    self.normalized_token.span,
+                    ident.span,
                     "you can escape reserved keywords to use them as identifiers",
-                    format!("r#{}", name),
+                    format!("r#{}", ident.name),
                     Applicability::MaybeIncorrect,
                 );
             }
+            _ => {}
         }
         if let Some(token_descr) = super::token_descr_opt(&self.token) {
             err.span_label(self.token.span, format!("expected identifier, found {}", token_descr));
@@ -895,7 +897,7 @@ impl<'a> Parser<'a> {
         let msg = format!("expected `;`, found `{}`", super::token_descr(&self.token));
         let appl = Applicability::MachineApplicable;
         if self.token.span == DUMMY_SP || self.prev_token.span == DUMMY_SP {
-            // Likely inside a macro, can't provide meaninful suggestions.
+            // Likely inside a macro, can't provide meaningful suggestions.
             return self.expect(&token::Semi).map(drop);
         } else if !sm.is_multiline(self.prev_token.span.until(self.token.span)) {
             // The current token is in the same line as the prior token, not recoverable.

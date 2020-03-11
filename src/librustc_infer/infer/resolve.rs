@@ -160,7 +160,7 @@ pub fn fully_resolve<'a, 'tcx, T>(infcx: &InferCtxt<'a, 'tcx>, value: &T) -> Fix
 where
     T: TypeFoldable<'tcx>,
 {
-    let mut full_resolver = FullTypeResolver { infcx: infcx, err: None };
+    let mut full_resolver = FullTypeResolver { infcx, err: None };
     let result = value.fold_with(&mut full_resolver);
     match full_resolver.err {
         None => Ok(result),
@@ -169,7 +169,7 @@ where
 }
 
 // N.B. This type is not public because the protocol around checking the
-// `err` field is not enforcable otherwise.
+// `err` field is not enforceable otherwise.
 struct FullTypeResolver<'a, 'tcx> {
     infcx: &'a InferCtxt<'a, 'tcx>,
     err: Option<FixupError<'tcx>>,

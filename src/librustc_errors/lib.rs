@@ -163,7 +163,7 @@ impl CodeSuggestion {
                         None => buf.push_str(&line[lo..]),
                     }
                 }
-                if let None = hi_opt {
+                if hi_opt.is_none() {
                     buf.push('\n');
                 }
             }
@@ -195,6 +195,11 @@ impl CodeSuggestion {
                 // The different spans might belong to different contexts, if so ignore suggestion.
                 let lines = sm.span_to_lines(bounding_span).ok()?;
                 assert!(!lines.lines.is_empty());
+
+                // We can't splice anything if the source is unavailable.
+                if !sm.ensure_source_file_source_present(lines.file.clone()) {
+                    return None;
+                }
 
                 // To build up the result, we do this for each span:
                 // - push the line segment trailing the previous span

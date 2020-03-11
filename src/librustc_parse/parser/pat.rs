@@ -151,7 +151,7 @@ impl<'a> Parser<'a> {
     /// Note that there are more tokens such as `@` for which we know that the `|`
     /// is an illegal parse. However, the user's intent is less clear in that case.
     fn recover_trailing_vert(&mut self, lo: Option<Span>) -> bool {
-        let is_end_ahead = self.look_ahead(1, |token| match &token.kind {
+        let is_end_ahead = self.look_ahead(1, |token| match &token.uninterpolate().kind {
             token::FatArrow // e.g. `a | => 0,`.
             | token::Ident(kw::If, false) // e.g. `a | if expr`.
             | token::Eq // e.g. `let a | = 0`.
@@ -479,7 +479,7 @@ impl<'a> Parser<'a> {
         // Here, `(pat,)` is a tuple pattern.
         // For backward compatibility, `(..)` is a tuple pattern as well.
         Ok(if fields.len() == 1 && !(trailing_comma || fields[0].is_rest()) {
-            PatKind::Paren(fields.into_iter().nth(0).unwrap())
+            PatKind::Paren(fields.into_iter().next().unwrap())
         } else {
             PatKind::Tuple(fields)
         })

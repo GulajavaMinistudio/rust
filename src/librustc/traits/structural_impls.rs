@@ -234,7 +234,7 @@ impl BoundNamesCollector {
             start = false;
             write!(fmt, "{}", r)?;
         }
-        for (_, t) in &self.types {
+        for t in self.types.values() {
             if !start {
                 write!(fmt, ", ")?;
             }
@@ -415,9 +415,9 @@ impl<'a, 'tcx> Lift<'tcx> for traits::ObligationCauseCode<'a> {
             super::ReferenceOutlivesReferent(ty) => {
                 tcx.lift(&ty).map(super::ReferenceOutlivesReferent)
             }
-            super::ObjectTypeBound(ty, r) => tcx
-                .lift(&ty)
-                .and_then(|ty| tcx.lift(&r).and_then(|r| Some(super::ObjectTypeBound(ty, r)))),
+            super::ObjectTypeBound(ty, r) => {
+                tcx.lift(&ty).and_then(|ty| tcx.lift(&r).map(|r| super::ObjectTypeBound(ty, r)))
+            }
             super::ObjectCastObligation(ty) => tcx.lift(&ty).map(super::ObjectCastObligation),
             super::Coercion { source, target } => {
                 Some(super::Coercion { source: tcx.lift(&source)?, target: tcx.lift(&target)? })
@@ -532,9 +532,9 @@ impl<'a, 'tcx> Lift<'tcx> for traits::Vtable<'a, ()> {
                 nested,
             }) => tcx.lift(&substs).map(|substs| {
                 traits::VtableGenerator(traits::VtableGeneratorData {
-                    generator_def_id: generator_def_id,
-                    substs: substs,
-                    nested: nested,
+                    generator_def_id,
+                    substs,
+                    nested,
                 })
             }),
             traits::VtableClosure(traits::VtableClosureData { closure_def_id, substs, nested }) => {

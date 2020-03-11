@@ -24,6 +24,7 @@ use rustc_span::source_map::{self, Span};
 use rustc_span::symbol::{kw, sym, Symbol};
 
 use log::debug;
+use std::convert::TryFrom;
 use std::mem;
 
 pub(super) type ItemInfo = (Ident, ItemKind);
@@ -573,7 +574,7 @@ impl<'a> Parser<'a> {
             && self.look_ahead(1, |t| t.is_non_raw_ident_where(|i| i.name != kw::As))
         {
             self.bump(); // `default`
-            Defaultness::Default(self.normalized_prev_token.span)
+            Defaultness::Default(self.prev_token.uninterpolated_span())
         } else {
             Defaultness::Final
         }
@@ -650,16 +651,16 @@ impl<'a> Parser<'a> {
     /// Parses associated items.
     fn parse_assoc_item(&mut self, req_name: ReqName) -> PResult<'a, Option<Option<P<AssocItem>>>> {
         Ok(self.parse_item_(req_name)?.map(|Item { attrs, id, span, vis, ident, kind, tokens }| {
-            let kind = match kind {
-                ItemKind::Mac(a) => AssocItemKind::Macro(a),
-                ItemKind::Fn(a, b, c, d) => AssocItemKind::Fn(a, b, c, d),
-                ItemKind::TyAlias(a, b, c, d) => AssocItemKind::TyAlias(a, b, c, d),
-                ItemKind::Const(a, b, c) => AssocItemKind::Const(a, b, c),
-                ItemKind::Static(a, _, b) => {
-                    self.struct_span_err(span, "associated `static` items are not allowed").emit();
-                    AssocItemKind::Const(Defaultness::Final, a, b)
-                }
-                _ => return self.error_bad_item_kind(span, &kind, "`trait`s or `impl`s"),
+            let kind = match AssocItemKind::try_from(kind) {
+                Ok(kind) => kind,
+                Err(kind) => match kind {
+                    ItemKind::Static(a, _, b) => {
+                        self.struct_span_err(span, "associated `static` items are not allowed")
+                            .emit();
+                        AssocItemKind::Const(Defaultness::Final, a, b)
+                    }
+                    _ => return self.error_bad_item_kind(span, &kind, "`trait`s or `impl`s"),
+                },
             };
             Some(P(Item { attrs, id, span, vis, ident, kind, tokens }))
         }))
@@ -749,10 +750,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_ident_or_underscore(&mut self) -> PResult<'a, ast::Ident> {
-        match self.normalized_token.kind {
-            token::Ident(name @ kw::Underscore, false) => {
+        match self.token.ident() {
+            Some((ident @ Ident { name: kw::Underscore, .. }, false)) => {
                 self.bump();
-                Ok(Ident::new(name, self.normalized_prev_token.span))
+                Ok(ident)
             }
             _ => self.parse_ident(),
         }
@@ -836,16 +837,15 @@ impl<'a> Parser<'a> {
     /// Parses a foreign item (one in an `extern { ... }` block).
     pub fn parse_foreign_item(&mut self) -> PResult<'a, Option<Option<P<ForeignItem>>>> {
         Ok(self.parse_item_(|_| true)?.map(|Item { attrs, id, span, vis, ident, kind, tokens }| {
-            let kind = match kind {
-                ItemKind::Mac(a) => ForeignItemKind::Macro(a),
-                ItemKind::Fn(a, b, c, d) => ForeignItemKind::Fn(a, b, c, d),
-                ItemKind::TyAlias(a, b, c, d) => ForeignItemKind::TyAlias(a, b, c, d),
-                ItemKind::Static(a, b, c) => ForeignItemKind::Static(a, b, c),
-                ItemKind::Const(_, a, b) => {
-                    self.error_on_foreign_const(span, ident);
-                    ForeignItemKind::Static(a, Mutability::Not, b)
-                }
-                _ => return self.error_bad_item_kind(span, &kind, "`extern` blocks"),
+            let kind = match ForeignItemKind::try_from(kind) {
+                Ok(kind) => kind,
+                Err(kind) => match kind {
+                    ItemKind::Const(_, a, b) => {
+                        self.error_on_foreign_const(span, ident);
+                        ForeignItemKind::Static(a, Mutability::Not, b)
+                    }
+                    _ => return self.error_bad_item_kind(span, &kind, "`extern` blocks"),
+                },
             };
             Some(P(Item { attrs, id, span, vis, ident, kind, tokens }))
         }))
@@ -1544,7 +1544,9 @@ impl<'a> Parser<'a> {
 
         let is_name_required = match self.token.kind {
             token::DotDotDot => false,
-            _ => req_name(self.normalized_token.span.edition()),
+            // FIXME: Consider using interpolated token for this edition check,
+            // it should match the intent of edition hygiene better.
+            _ => req_name(self.token.uninterpolate().span.edition()),
         };
         let (pat, ty) = if is_name_required || self.is_named_param() {
             debug!("parse_param_general parse_pat (is_name_required:{})", is_name_required);
@@ -1609,15 +1611,12 @@ impl<'a> Parser<'a> {
     /// Returns the parsed optional self parameter and whether a self shortcut was used.
     fn parse_self_param(&mut self) -> PResult<'a, Option<Param>> {
         // Extract an identifier *after* having confirmed that the token is one.
-        let expect_self_ident = |this: &mut Self| {
-            match this.normalized_token.kind {
-                // Preserve hygienic context.
-                token::Ident(name, _) => {
-                    this.bump();
-                    Ident::new(name, this.normalized_prev_token.span)
-                }
-                _ => unreachable!(),
+        let expect_self_ident = |this: &mut Self| match this.token.ident() {
+            Some((ident, false)) => {
+                this.bump();
+                ident
             }
+            _ => unreachable!(),
         };
         // Is `self` `n` tokens ahead?
         let is_isolated_self = |this: &Self, n| {
@@ -1651,7 +1650,7 @@ impl<'a> Parser<'a> {
         // Only a limited set of initial token sequences is considered `self` parameters; anything
         // else is parsed as a normal function parameter list, so some lookahead is required.
         let eself_lo = self.token.span;
-        let (eself, eself_ident, eself_hi) = match self.normalized_token.kind {
+        let (eself, eself_ident, eself_hi) = match self.token.uninterpolate().kind {
             token::BinOp(token::And) => {
                 let eself = if is_isolated_self(self, 1) {
                     // `&self`

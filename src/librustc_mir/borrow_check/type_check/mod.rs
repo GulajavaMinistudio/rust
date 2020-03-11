@@ -579,7 +579,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
             | ConstraintCategory::UseAsConst
             | ConstraintCategory::UseAsStatic = constraint.category
             {
-                // "Returning" from a promoted is an assigment to a
+                // "Returning" from a promoted is an assignment to a
                 // temporary from the user's point of view.
                 constraint.category = ConstraintCategory::Boring;
             }
@@ -1905,7 +1905,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             // expressions evaluate through `as_temp` or `into` a return
             // slot or local, so to find all unsized rvalues it is enough
             // to check all temps, return slots and locals.
-            if let None = self.reported_errors.replace((ty, span)) {
+            if self.reported_errors.replace((ty, span)).is_none() {
                 let mut diag = struct_span_err!(
                     self.tcx().sess,
                     span,

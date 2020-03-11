@@ -317,7 +317,7 @@ impl<T> Vec<T> {
     /// let mut vec: Vec<i32> = Vec::new();
     /// ```
     #[inline]
-    #[rustc_const_stable(feature = "const_vec_new", since = "1.32.0")]
+    #[rustc_const_stable(feature = "const_vec_new", since = "1.39.0")]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub const fn new() -> Vec<T> {
         Vec { buf: RawVec::NEW, len: 0 }
@@ -1659,7 +1659,7 @@ struct SetLenOnDrop<'a> {
 impl<'a> SetLenOnDrop<'a> {
     #[inline]
     fn new(len: &'a mut usize) -> Self {
-        SetLenOnDrop { local_len: *len, len: len }
+        SetLenOnDrop { local_len: *len, len }
     }
 
     #[inline]
@@ -2894,7 +2894,7 @@ where
     /// The filter test predicate.
     pred: F,
     /// A flag that indicates a panic has occurred in the filter test prodicate.
-    /// This is used as a hint in the drop implmentation to prevent consumption
+    /// This is used as a hint in the drop implementation to prevent consumption
     /// of the remainder of the `DrainFilter`. Any unprocessed items will be
     /// backshifted in the `vec`, but no further items will be dropped or
     /// tested by the filter predicate.

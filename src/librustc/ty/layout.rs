@@ -7,7 +7,6 @@ use rustc_span::DUMMY_SP;
 
 use std::cmp;
 use std::fmt;
-use std::i128;
 use std::iter;
 use std::mem;
 use std::ops::Bound;
@@ -1001,7 +1000,7 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
                     }
                 }
 
-                let (mut min, mut max) = (i128::max_value(), i128::min_value());
+                let (mut min, mut max) = (i128::MAX, i128::MIN);
                 let discr_type = def.repr.discr_type();
                 let bits = Integer::from_attr(self, discr_type).size().bits();
                 for (i, discr) in def.discriminants(tcx) {
@@ -1021,7 +1020,7 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
                     }
                 }
                 // We might have no inhabited variants, so pretend there's at least one.
-                if (min, max) == (i128::max_value(), i128::min_value()) {
+                if (min, max) == (i128::MAX, i128::MIN) {
                     min = 0;
                     max = 0;
                 }
@@ -1382,10 +1381,8 @@ impl<'tcx> LayoutCx<'tcx, TyCtxt<'tcx>> {
 
         // Write down the order of our locals that will be promoted to the prefix.
         {
-            let mut idx = 0u32;
-            for local in ineligible_locals.iter() {
-                assignments[local] = Ineligible(Some(idx));
-                idx += 1;
+            for (idx, local) in ineligible_locals.iter().enumerate() {
+                assignments[local] = Ineligible(Some(idx as u32));
             }
         }
         debug!("generator saved local assignments: {:?}", assignments);
@@ -2582,7 +2579,7 @@ where
                 if let Some(kind) = pointee.safe {
                     attrs.pointee_align = Some(pointee.align);
 
-                    // `Box` (`UniqueBorrowed`) are not necessarily dereferencable
+                    // `Box` (`UniqueBorrowed`) are not necessarily dereferenceable
                     // for the entire duration of the function as they can be deallocated
                     // any time. Set their valid size to 0.
                     attrs.pointee_size = match kind {

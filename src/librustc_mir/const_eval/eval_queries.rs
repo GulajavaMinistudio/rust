@@ -89,7 +89,7 @@ pub(super) fn mk_eval_cx<'mir, 'tcx>(
     InterpCx::new(
         tcx.at(span),
         param_env,
-        CompileTimeInterpreter::new(),
+        CompileTimeInterpreter::new(*tcx.sess.const_eval_limit.get()),
         MemoryExtra { can_access_statics },
     )
 }
@@ -186,7 +186,12 @@ fn validate_and_turn_into_const<'tcx>(
         if cid.promoted.is_none() {
             let mut ref_tracking = RefTracking::new(mplace);
             while let Some((mplace, path)) = ref_tracking.todo.pop() {
-                ecx.validate_operand(mplace.into(), path, Some(&mut ref_tracking))?;
+                ecx.const_validate_operand(
+                    mplace.into(),
+                    path,
+                    &mut ref_tracking,
+                    /*may_ref_to_static*/ is_static,
+                )?;
             }
         }
         // Now that we validated, turn this into a proper constant.
@@ -226,7 +231,7 @@ pub fn const_eval_validated_provider<'tcx>(
         match tcx.const_eval_validated(key) {
             // try again with reveal all as requested
             Err(ErrorHandled::TooGeneric) => {}
-            // dedupliate calls
+            // deduplicate calls
             other => return other,
         }
     }
@@ -267,7 +272,7 @@ pub fn const_eval_raw_provider<'tcx>(
         match tcx.const_eval_raw(key) {
             // try again with reveal all as requested
             Err(ErrorHandled::TooGeneric) => {}
-            // dedupliate calls
+            // deduplicate calls
             other => return other,
         }
     }
@@ -297,7 +302,7 @@ pub fn const_eval_raw_provider<'tcx>(
     let mut ecx = InterpCx::new(
         tcx.at(span),
         key.param_env,
-        CompileTimeInterpreter::new(),
+        CompileTimeInterpreter::new(*tcx.sess.const_eval_limit.get()),
         MemoryExtra { can_access_statics: is_static },
     );
 

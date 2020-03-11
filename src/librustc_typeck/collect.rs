@@ -151,7 +151,7 @@ crate fn placeholder_type_error(
         .unwrap_or(&"ParamName");
 
     let mut sugg: Vec<_> =
-        placeholder_types.iter().map(|sp| (*sp, type_name.to_string())).collect();
+        placeholder_types.iter().map(|sp| (*sp, (*type_name).to_string())).collect();
     if generics.is_empty() {
         sugg.push((span, format!("<{}>", type_name)));
     } else if let Some(arg) = generics.iter().find(|arg| match arg.name {
@@ -160,7 +160,7 @@ crate fn placeholder_type_error(
     }) {
         // Account for `_` already present in cases like `struct S<_>(_);` and suggest
         // `struct S<T>(T);` instead of `struct S<_, T>(T);`.
-        sugg.push((arg.span, type_name.to_string()));
+        sugg.push((arg.span, (*type_name).to_string()));
     } else {
         sugg.push((
             generics.iter().last().unwrap().span.shrink_to_hi(),
@@ -1395,7 +1395,7 @@ fn are_suggestable_generic_args(generic_args: &[hir::GenericArg<'_>]) -> bool {
         .any(is_suggestable_infer_ty)
 }
 
-/// Whether `ty` is a type with `_` placeholders that can be infered. Used in diagnostics only to
+/// Whether `ty` is a type with `_` placeholders that can be inferred. Used in diagnostics only to
 /// use inference to provide suggestions for the appropriate type if possible.
 fn is_suggestable_infer_ty(ty: &hir::Ty<'_>) -> bool {
     use hir::TyKind::*;
@@ -2341,8 +2341,6 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::NO_MANGLE;
         } else if attr.check_name(sym::rustc_std_internal_symbol) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::RUSTC_STD_INTERNAL_SYMBOL;
-        } else if attr.check_name(sym::no_debug) {
-            codegen_fn_attrs.flags |= CodegenFnAttrFlags::NO_DEBUG;
         } else if attr.check_name(sym::used) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::USED;
         } else if attr.check_name(sym::thread_local) {
