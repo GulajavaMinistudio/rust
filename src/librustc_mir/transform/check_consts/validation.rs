@@ -9,9 +9,10 @@ use rustc_errors::struct_span_err;
 use rustc_hir::{def_id::DefId, HirId};
 use rustc_index::bit_set::BitSet;
 use rustc_infer::infer::TyCtxtInferExt;
-use rustc_infer::traits::{self, TraitEngine};
 use rustc_span::symbol::sym;
 use rustc_span::Span;
+use rustc_trait_selection::traits::error_reporting::InferCtxtExt;
+use rustc_trait_selection::traits::{self, TraitEngine};
 
 use std::borrow::Cow;
 use std::ops::Deref;
@@ -212,7 +213,7 @@ impl Validator<'a, 'mir, 'tcx> {
 
         // If an operation is supported in miri (and is not already controlled by a feature gate) it
         // can be turned on with `-Zunleash-the-miri-inside-of-you`.
-        let is_unleashable = O::IS_SUPPORTED_IN_MIRI && O::feature_gate(self.tcx).is_none();
+        let is_unleashable = O::IS_SUPPORTED_IN_MIRI && O::feature_gate().is_none();
 
         if is_unleashable && self.tcx.sess.opts.debugging_opts.unleash_the_miri_inside_of_you {
             self.tcx.sess.span_warn(span, "skipping const checks");
@@ -343,7 +344,7 @@ impl Visitor<'tcx> for Validator<'_, 'mir, 'tcx> {
             Rvalue::Ref(_, BorrowKind::Shared, ref place)
             | Rvalue::Ref(_, BorrowKind::Shallow, ref place)
             | Rvalue::AddressOf(Mutability::Not, ref place) => {
-                let borrowed_place_has_mut_interior = HasMutInterior::in_place(
+                let borrowed_place_has_mut_interior = qualifs::in_place::<HasMutInterior, _>(
                     &self.item,
                     &mut |local| self.qualifs.has_mut_interior(local, location),
                     place.as_ref(),

@@ -25,8 +25,8 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def::DefKind;
 use rustc_hir::HirId;
 use rustc_index::vec::IndexVec;
-use rustc_infer::traits;
 use rustc_span::Span;
+use rustc_trait_selection::traits;
 
 use crate::const_eval::error_to_const_error;
 use crate::interpret::{
@@ -197,7 +197,6 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
 
     fn assert_panic(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        _span: Span,
         _msg: &rustc::mir::AssertMessage<'tcx>,
         _unwind: Option<rustc::mir::BasicBlock>,
     ) -> InterpResult<'tcx> {

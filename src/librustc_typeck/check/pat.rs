@@ -11,9 +11,9 @@ use rustc_hir::pat_util::EnumerateAndAdjustIterator;
 use rustc_hir::{HirId, Pat, PatKind};
 use rustc_infer::infer;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
-use rustc_infer::traits::{ObligationCause, Pattern};
 use rustc_span::hygiene::DesugaringKind;
 use rustc_span::source_map::{Span, Spanned};
+use rustc_trait_selection::traits::{ObligationCause, Pattern};
 
 use std::cmp;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -707,7 +707,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 self.set_tainted_by_errors();
                 return tcx.types.err;
             }
-            Res::Def(DefKind::Method, _)
+            Res::Def(DefKind::AssocFn, _)
             | Res::Def(DefKind::Ctor(_, CtorKind::Fictive), _)
             | Res::Def(DefKind::Ctor(_, CtorKind::Fn), _) => {
                 report_unexpected_variant_res(tcx, res, pat.span, qpath);
@@ -716,7 +716,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             Res::Def(DefKind::Ctor(_, CtorKind::Const), _)
             | Res::SelfCtor(..)
             | Res::Def(DefKind::Const, _)
-            | Res::Def(DefKind::AssocConst, _) => {} // OK
+            | Res::Def(DefKind::AssocConst, _)
+            | Res::Def(DefKind::ConstParam, _) => {} // OK
             _ => bug!("unexpected pattern resolution: {:?}", res),
         }
 
@@ -793,7 +794,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             );
             let mut err = struct_span_err!(tcx.sess, pat.span, E0164, "{}", msg);
             match (res, &pat.kind) {
-                (Res::Def(DefKind::Fn, _), _) | (Res::Def(DefKind::Method, _), _) => {
+                (Res::Def(DefKind::Fn, _), _) | (Res::Def(DefKind::AssocFn, _), _) => {
                     err.span_label(pat.span, "`fn` calls are not allowed in patterns");
                     err.help(
                         "for more information, visit \
@@ -830,7 +831,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 on_error();
                 return tcx.types.err;
             }
-            Res::Def(DefKind::AssocConst, _) | Res::Def(DefKind::Method, _) => {
+            Res::Def(DefKind::AssocConst, _) | Res::Def(DefKind::AssocFn, _) => {
                 report_unexpected_res(res);
                 return tcx.types.err;
             }
@@ -1022,7 +1023,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .fields
             .iter()
             .enumerate()
-            .map(|(i, field)| (field.ident.modern(), (i, field)))
+            .map(|(i, field)| (field.ident.normalize_to_macros_2_0(), (i, field)))
             .collect::<FxHashMap<_, _>>();
 
         // Keep track of which fields have already appeared in the pattern.
@@ -1063,7 +1064,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut unmentioned_fields = variant
             .fields
             .iter()
-            .map(|field| field.ident.modern())
+            .map(|field| field.ident.normalize_to_macros_2_0())
             .filter(|ident| !used_fields.contains_key(&ident))
             .collect::<Vec<_>>();
 

@@ -2,6 +2,7 @@
 
 #![feature(bool_to_option)]
 #![feature(crate_visibility_modifier)]
+#![feature(bindings_after_at)]
 
 use rustc_ast::ast;
 use rustc_ast::token::{self, Nonterminal};
@@ -270,11 +271,11 @@ pub fn stream_to_parser<'a>(
 /// The main usage of this function is outside of rustc, for those who uses
 /// librustc_ast as a library. Please do not remove this function while refactoring
 /// just because it is not used in rustc codebase!
-pub fn stream_to_parser_with_base_dir<'a>(
-    sess: &'a ParseSess,
+pub fn stream_to_parser_with_base_dir(
+    sess: &ParseSess,
     stream: TokenStream,
     base_dir: Directory,
-) -> Parser<'a> {
+) -> Parser<'_> {
     Parser::new(sess, stream, Some(base_dir), true, false, None)
 }
 

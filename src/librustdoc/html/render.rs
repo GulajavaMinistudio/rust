@@ -44,7 +44,6 @@ use std::sync::Arc;
 
 use rustc::middle::privacy::AccessLevels;
 use rustc::middle::stability;
-use rustc_ast::ast;
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::flock;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -60,7 +59,7 @@ use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 
 use crate::clean::{self, AttributesExt, Deprecation, GetDefId, SelfTy};
-use crate::config::RenderOptions;
+use crate::config::{OutputFormat, RenderOptions};
 use crate::docfs::{DocFS, ErrorStorage, PathError};
 use crate::doctree;
 use crate::html::escape::Escape;
@@ -270,6 +269,7 @@ pub struct RenderInfo {
     pub deref_trait_did: Option<DefId>,
     pub deref_mut_trait_did: Option<DefId>,
     pub owned_box_did: Option<DefId>,
+    pub output_format: Option<OutputFormat>,
 }
 
 // Helper structs for rendering items/sidebars and carrying along contextual
@@ -1542,7 +1542,7 @@ impl Context {
         }
 
         if self.shared.sort_modules_alphabetically {
-            for (_, items) in &mut map {
+            for items in map.values_mut() {
                 items.sort();
             }
         }
@@ -3125,25 +3125,6 @@ fn item_enum(w: &mut Buffer, cx: &Context, it: &clean::Item, e: &clean::Enum) {
     render_assoc_items(w, cx, it, it.def_id, AssocItemRender::All)
 }
 
-fn render_attribute(attr: &ast::MetaItem) -> Option<String> {
-    let path = pprust::path_to_string(&attr.path);
-
-    if attr.is_word() {
-        Some(path)
-    } else if let Some(v) = attr.value_str() {
-        Some(format!("{} = {:?}", path, v))
-    } else if let Some(values) = attr.meta_item_list() {
-        let display: Vec<_> = values
-            .iter()
-            .filter_map(|attr| attr.meta_item().and_then(|mi| render_attribute(mi)))
-            .collect();
-
-        if !display.is_empty() { Some(format!("{}({})", path, display.join(", "))) } else { None }
-    } else {
-        None
-    }
-}
-
 const ATTRIBUTE_WHITELIST: &[Symbol] = &[
     sym::export_name,
     sym::lang,
@@ -3169,9 +3150,9 @@ fn render_attributes(w: &mut Buffer, it: &clean::Item, top: bool) {
         if !ATTRIBUTE_WHITELIST.contains(&attr.name_or_empty()) {
             continue;
         }
-        if let Some(s) = render_attribute(&attr.meta().unwrap()) {
-            attrs.push_str(&format!("#[{}]\n", s));
-        }
+
+        // FIXME: this currently renders too many spaces as in: `#[repr(C, align (8))]`.
+        attrs.push_str(&pprust::attribute_to_string(&attr));
     }
     if !attrs.is_empty() {
         write!(
@@ -3395,10 +3376,8 @@ fn render_assoc_items(
         let deref_impl =
             traits.iter().find(|t| t.inner_impl().trait_.def_id() == c.deref_trait_did);
         if let Some(impl_) = deref_impl {
-            let has_deref_mut = traits
-                .iter()
-                .find(|t| t.inner_impl().trait_.def_id() == c.deref_mut_trait_did)
-                .is_some();
+            let has_deref_mut =
+                traits.iter().any(|t| t.inner_impl().trait_.def_id() == c.deref_mut_trait_did);
             render_deref_methods(w, cx, impl_, containing_item, has_deref_mut);
         }
 
@@ -3739,7 +3718,7 @@ fn render_impl(
     ) {
         for trait_item in &t.items {
             let n = trait_item.name.clone();
-            if i.items.iter().find(|m| m.name == n).is_some() {
+            if i.items.iter().any(|m| m.name == n) {
                 continue;
             }
             let did = i.trait_.as_ref().unwrap().def_id().unwrap();

@@ -10,8 +10,7 @@ use rustc::mir;
 use rustc::session::config::SymbolManglingVersion;
 use rustc::session::CrateDisambiguator;
 use rustc::ty::{self, ReprOptions, Ty};
-use rustc_ast::ast;
-use rustc_ast::tokenstream::TokenStream;
+use rustc_ast::ast::{self, MacroDef};
 use rustc_attr as attr;
 use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::MetadataRef;
@@ -306,7 +305,7 @@ enum EntryKind {
     Generator(hir::GeneratorKind),
     Trait(Lazy<TraitData>),
     Impl(Lazy<ImplData>),
-    Method(Lazy<MethodData>),
+    AssocFn(Lazy<AssocFnData>),
     AssocType(AssocContainer),
     AssocOpaqueTy(AssocContainer),
     AssocConst(AssocContainer, mir::ConstQualifs, Lazy<RenderedConst>),
@@ -321,12 +320,6 @@ struct RenderedConst(String);
 #[derive(RustcEncodable, RustcDecodable)]
 struct ModData {
     reexports: Lazy<[Export<hir::HirId>]>,
-}
-
-#[derive(RustcEncodable, RustcDecodable)]
-struct MacroDef {
-    body: TokenStream,
-    legacy: bool,
 }
 
 #[derive(RustcEncodable, RustcDecodable)]
@@ -350,6 +343,7 @@ struct TraitData {
     paren_sugar: bool,
     has_auto_impl: bool,
     is_marker: bool,
+    specialization_kind: ty::trait_def::TraitSpecializationKind,
 }
 
 #[derive(RustcEncodable, RustcDecodable)]
@@ -399,7 +393,7 @@ impl AssocContainer {
 }
 
 #[derive(RustcEncodable, RustcDecodable)]
-struct MethodData {
+struct AssocFnData {
     fn_data: FnData,
     container: AssocContainer,
     has_self: bool,

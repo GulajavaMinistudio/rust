@@ -1,6 +1,6 @@
-//! Method lookup: the secret sauce of Rust. See the [rustc guide] for more information.
+//! Method lookup: the secret sauce of Rust. See the [rustc dev guide] for more information.
 //!
-//! [rustc guide]: https://rust-lang.github.io/rustc-guide/method-lookup.html
+//! [rustc dev guide]: https://rustc-dev-guide.rust-lang.org/method-lookup.html
 
 mod confirm;
 pub mod probe;
@@ -22,8 +22,9 @@ use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Namespace};
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::{self, InferOk};
-use rustc_infer::traits;
 use rustc_span::Span;
+use rustc_trait_selection::traits;
+use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 
 use self::probe::{IsSuggestion, ProbeScope};
 
