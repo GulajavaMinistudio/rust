@@ -39,7 +39,7 @@ pub fn astconv_object_safety_violations(
     let violations = traits::supertrait_def_ids(tcx, trait_def_id)
         .map(|def_id| predicates_reference_self(tcx, def_id, true))
         .filter(|spans| !spans.is_empty())
-        .map(|spans| ObjectSafetyViolation::SupertraitSelf(spans))
+        .map(ObjectSafetyViolation::SupertraitSelf)
         .collect();
 
     debug!("astconv_object_safety_violations(trait_def_id={:?}) = {:?}", trait_def_id, violations);
@@ -185,7 +185,7 @@ fn get_sized_bounds(tcx: TyCtxt<'_>, trait_def_id: DefId) -> SmallVec<[Span; 1]>
                     .filter_map(|pred| {
                         match pred {
                             hir::WherePredicate::BoundPredicate(pred)
-                                if pred.bounded_ty.hir_id.owner_def_id() == trait_def_id =>
+                                if pred.bounded_ty.hir_id.owner.to_def_id() == trait_def_id =>
                             {
                                 // Fetch spans for trait bounds that are Sized:
                                 // `trait T where Self: Pred`

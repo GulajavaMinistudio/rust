@@ -333,7 +333,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             ty::Closure(def_id, closure_substs)
                 if def_id == self.mir_def_id && upvar_field.is_some() =>
             {
-                let closure_kind_ty = closure_substs.as_closure().kind_ty(def_id, self.infcx.tcx);
+                let closure_kind_ty = closure_substs.as_closure().kind_ty();
                 let closure_kind = closure_kind_ty.to_opt_closure_kind();
                 let capture_description = match closure_kind {
                     Some(ty::ClosureKind::Fn) => "captured variable in an `Fn` closure",
@@ -490,17 +490,13 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 {
                     if pat_snippet.starts_with('&') {
                         let pat_snippet = pat_snippet[1..].trim_start();
-                        let suggestion;
-                        let to_remove;
-                        if pat_snippet.starts_with("mut")
+                        let (suggestion, to_remove) = if pat_snippet.starts_with("mut")
                             && pat_snippet["mut".len()..].starts_with(rustc_lexer::is_whitespace)
                         {
-                            suggestion = pat_snippet["mut".len()..].trim_start();
-                            to_remove = "&mut";
+                            (pat_snippet["mut".len()..].trim_start(), "&mut")
                         } else {
-                            suggestion = pat_snippet;
-                            to_remove = "&";
-                        }
+                            (pat_snippet, "&")
+                        };
                         suggestions.push((pat_span, to_remove, suggestion.to_owned()));
                     }
                 }

@@ -450,7 +450,6 @@ impl Clean<Option<Lifetime>> for ty::RegionKind {
             | ty::ReVar(..)
             | ty::RePlaceholder(..)
             | ty::ReEmpty(_)
-            | ty::ReClosureBound(_)
             | ty::ReErased => {
                 debug!("cannot clean region {:?}", self);
                 None
@@ -1074,6 +1073,26 @@ impl Clean<PolyTrait> for hir::PolyTraitRef<'_> {
         PolyTrait {
             trait_: self.trait_ref.clean(cx),
             generic_params: self.bound_generic_params.clean(cx),
+        }
+    }
+}
+
+impl Clean<TypeKind> for hir::def::DefKind {
+    fn clean(&self, _: &DocContext<'_>) -> TypeKind {
+        match *self {
+            hir::def::DefKind::Mod => TypeKind::Module,
+            hir::def::DefKind::Struct => TypeKind::Struct,
+            hir::def::DefKind::Union => TypeKind::Union,
+            hir::def::DefKind::Enum => TypeKind::Enum,
+            hir::def::DefKind::Trait => TypeKind::Trait,
+            hir::def::DefKind::TyAlias => TypeKind::Typedef,
+            hir::def::DefKind::ForeignTy => TypeKind::Foreign,
+            hir::def::DefKind::TraitAlias => TypeKind::TraitAlias,
+            hir::def::DefKind::Fn => TypeKind::Function,
+            hir::def::DefKind::Const => TypeKind::Const,
+            hir::def::DefKind::Static => TypeKind::Static,
+            hir::def::DefKind::Macro(_) => TypeKind::Macro,
+            _ => TypeKind::Foreign,
         }
     }
 }

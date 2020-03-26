@@ -1,18 +1,17 @@
-use crate::hir::map::{DefPathData, DisambiguatedDefPathData};
 use crate::middle::cstore::{ExternCrate, ExternCrateSource};
 use crate::middle::region;
 use crate::mir::interpret::{sign_extend, truncate, AllocId, ConstValue, Pointer, Scalar};
 use crate::ty::layout::{Integer, IntegerExt, Size};
 use crate::ty::subst::{GenericArg, GenericArgKind, Subst};
 use crate::ty::{self, DefIdTree, ParamConst, Ty, TyCtxt, TypeFoldable};
-use rustc_hir as hir;
-use rustc_hir::def::{DefKind, Namespace};
-use rustc_hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
-
 use rustc_apfloat::ieee::{Double, Single};
 use rustc_apfloat::Float;
 use rustc_ast::ast;
 use rustc_attr::{SignedInt, UnsignedInt};
+use rustc_hir as hir;
+use rustc_hir::def::{DefKind, Namespace};
+use rustc_hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::definitions::{DefPathData, DisambiguatedDefPathData};
 use rustc_span::symbol::{kw, Symbol};
 use rustc_target::spec::abi::Abi;
 
@@ -617,8 +616,6 @@ pub trait PrettyPrinter<'tcx>:
             }
             ty::Str => p!(write("str")),
             ty::Generator(did, substs, movability) => {
-                let upvar_tys = substs.as_generator().upvar_tys(did, self.tcx());
-                let witness = substs.as_generator().witness(did, self.tcx());
                 match movability {
                     hir::Movability::Movable => p!(write("[generator")),
                     hir::Movability::Static => p!(write("[static generator")),
@@ -627,31 +624,47 @@ pub trait PrettyPrinter<'tcx>:
                 // FIXME(eddyb) should use `def_span`.
                 if let Some(hir_id) = self.tcx().hir().as_local_hir_id(did) {
                     p!(write("@{:?}", self.tcx().hir().span(hir_id)));
-                    let mut sep = " ";
-                    for (&var_id, upvar_ty) in
-                        self.tcx().upvars(did).as_ref().iter().flat_map(|v| v.keys()).zip(upvar_tys)
-                    {
-                        p!(write("{}{}:", sep, self.tcx().hir().name(var_id)), print(upvar_ty));
-                        sep = ", ";
+
+                    if substs.as_generator().is_valid() {
+                        let upvar_tys = substs.as_generator().upvar_tys();
+                        let mut sep = " ";
+                        for (&var_id, upvar_ty) in self
+                            .tcx()
+                            .upvars(did)
+                            .as_ref()
+                            .iter()
+                            .flat_map(|v| v.keys())
+                            .zip(upvar_tys)
+                        {
+                            p!(write("{}{}:", sep, self.tcx().hir().name(var_id)), print(upvar_ty));
+                            sep = ", ";
+                        }
                     }
                 } else {
                     // Cross-crate closure types should only be
                     // visible in codegen bug reports, I imagine.
                     p!(write("@{:?}", did));
-                    let mut sep = " ";
-                    for (index, upvar_ty) in upvar_tys.enumerate() {
-                        p!(write("{}{}:", sep, index), print(upvar_ty));
-                        sep = ", ";
+
+                    if substs.as_generator().is_valid() {
+                        let upvar_tys = substs.as_generator().upvar_tys();
+                        let mut sep = " ";
+                        for (index, upvar_ty) in upvar_tys.enumerate() {
+                            p!(write("{}{}:", sep, index), print(upvar_ty));
+                            sep = ", ";
+                        }
                     }
                 }
 
-                p!(write(" "), print(witness), write("]"))
+                if substs.as_generator().is_valid() {
+                    p!(write(" "), print(substs.as_generator().witness()));
+                }
+
+                p!(write("]"))
             }
             ty::GeneratorWitness(types) => {
                 p!(in_binder(&types));
             }
             ty::Closure(did, substs) => {
-                let upvar_tys = substs.as_closure().upvar_tys(did, self.tcx());
                 p!(write("[closure"));
 
                 // FIXME(eddyb) should use `def_span`.
@@ -661,30 +674,43 @@ pub trait PrettyPrinter<'tcx>:
                     } else {
                         p!(write("@{:?}", self.tcx().hir().span(hir_id)));
                     }
-                    let mut sep = " ";
-                    for (&var_id, upvar_ty) in
-                        self.tcx().upvars(did).as_ref().iter().flat_map(|v| v.keys()).zip(upvar_tys)
-                    {
-                        p!(write("{}{}:", sep, self.tcx().hir().name(var_id)), print(upvar_ty));
-                        sep = ", ";
+
+                    if substs.as_closure().is_valid() {
+                        let upvar_tys = substs.as_closure().upvar_tys();
+                        let mut sep = " ";
+                        for (&var_id, upvar_ty) in self
+                            .tcx()
+                            .upvars(did)
+                            .as_ref()
+                            .iter()
+                            .flat_map(|v| v.keys())
+                            .zip(upvar_tys)
+                        {
+                            p!(write("{}{}:", sep, self.tcx().hir().name(var_id)), print(upvar_ty));
+                            sep = ", ";
+                        }
                     }
                 } else {
                     // Cross-crate closure types should only be
                     // visible in codegen bug reports, I imagine.
                     p!(write("@{:?}", did));
-                    let mut sep = " ";
-                    for (index, upvar_ty) in upvar_tys.enumerate() {
-                        p!(write("{}{}:", sep, index), print(upvar_ty));
-                        sep = ", ";
+
+                    if substs.as_closure().is_valid() {
+                        let upvar_tys = substs.as_closure().upvar_tys();
+                        let mut sep = " ";
+                        for (index, upvar_ty) in upvar_tys.enumerate() {
+                            p!(write("{}{}:", sep, index), print(upvar_ty));
+                            sep = ", ";
+                        }
                     }
                 }
 
-                if self.tcx().sess.verbose() {
-                    p!(write(
-                        " closure_kind_ty={:?} closure_sig_ty={:?}",
-                        substs.as_closure().kind_ty(did, self.tcx()),
-                        substs.as_closure().sig_ty(did, self.tcx())
-                    ));
+                if self.tcx().sess.verbose() && substs.as_closure().is_valid() {
+                    p!(write(" closure_kind_ty="), print(substs.as_closure().kind_ty()));
+                    p!(
+                        write(" closure_sig_as_fn_ptr_ty="),
+                        print(substs.as_closure().sig_as_fn_ptr_ty())
+                    );
                 }
 
                 p!(write("]"))
@@ -955,7 +981,7 @@ pub trait PrettyPrinter<'tcx>:
                     .alloc_map
                     .lock()
                     .unwrap_memory(ptr.alloc_id)
-                    .get_bytes(&self.tcx(), ptr, Size::from_bytes(*data as u64))
+                    .get_bytes(&self.tcx(), ptr, Size::from_bytes(*data))
                     .unwrap();
                 p!(pretty_print_byte_str(byte_str));
             }
@@ -1143,7 +1169,7 @@ pub trait PrettyPrinter<'tcx>:
             (ConstValue::ByRef { alloc, offset }, ty::Array(t, n)) if *t == u8_type => {
                 let n = n.val.try_to_bits(self.tcx().data_layout.pointer_size).unwrap();
                 // cast is ok because we already checked for pointer size (32 or 64 bit) above
-                let n = Size::from_bytes(n as u64);
+                let n = Size::from_bytes(n);
                 let ptr = Pointer::new(AllocId(0), offset);
 
                 let byte_str = alloc.get_bytes(&self.tcx(), ptr, n).unwrap();
@@ -1547,7 +1573,7 @@ impl<F: fmt::Write> PrettyPrinter<'tcx> for FmtPrinter<'_, 'tcx, F> {
 
             ty::ReVar(_) | ty::ReScope(_) | ty::ReErased => false,
 
-            ty::ReStatic | ty::ReEmpty(_) | ty::ReClosureBound(_) => true,
+            ty::ReStatic | ty::ReEmpty(_) => true,
         }
     }
 
@@ -1657,12 +1683,6 @@ impl<F: fmt::Write> FmtPrinter<'_, '_, F> {
             }
             ty::ReEmpty(ui) => {
                 p!(write("'<empty:{:?}>", ui));
-                return Ok(self);
-            }
-
-            // The user should never encounter these in unsubstituted form.
-            ty::ReClosureBound(vid) => {
-                p!(write("{:?}", vid));
                 return Ok(self);
             }
         }

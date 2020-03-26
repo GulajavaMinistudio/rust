@@ -5,7 +5,6 @@ use crate::util;
 use log::{info, log_enabled, warn};
 use rustc::arena::Arena;
 use rustc::dep_graph::DepGraph;
-use rustc::hir::map::Definitions;
 use rustc::middle;
 use rustc::middle::cstore::{CrateStore, MetadataLoader, MetadataLoaderDyn};
 use rustc::ty::steal::Steal;
@@ -14,13 +13,13 @@ use rustc::util::common::ErrorReported;
 use rustc_ast::mut_visit::MutVisitor;
 use rustc_ast::{self, ast, visit};
 use rustc_codegen_ssa::back::link::emit_metadata;
-use rustc_codegen_utils::codegen_backend::CodegenBackend;
-use rustc_codegen_utils::link::filename_for_metadata;
+use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_data_structures::sync::{par_iter, Lrc, Once, ParallelIterator, WorkerLocal};
 use rustc_data_structures::{box_region_allow_access, declare_box_region_type, parallel};
 use rustc_errors::PResult;
 use rustc_expand::base::ExtCtxt;
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
+use rustc_hir::definitions::Definitions;
 use rustc_hir::Crate;
 use rustc_lint::LintStore;
 use rustc_mir as mir;
@@ -29,9 +28,11 @@ use rustc_parse::{parse_crate_from_file, parse_crate_from_source_str};
 use rustc_passes::{self, hir_stats, layout_test};
 use rustc_plugin_impl as plugin;
 use rustc_resolve::{Resolver, ResolverArenas};
-use rustc_session::config::{self, CrateType, Input, OutputFilenames, OutputType};
-use rustc_session::config::{PpMode, PpSourceMode};
+use rustc_session::config::{
+    self, CrateType, Input, OutputFilenames, OutputType, PpMode, PpSourceMode,
+};
 use rustc_session::lint;
+use rustc_session::output::{filename_for_input, filename_for_metadata};
 use rustc_session::search_paths::PathKind;
 use rustc_session::Session;
 use rustc_span::symbol::Symbol;
@@ -311,6 +312,8 @@ fn configure_and_expand_inner<'a>(
             ecx.parse_sess.missing_fragment_specifiers.borrow().iter().cloned().collect();
         missing_fragment_specifiers.sort();
 
+        let recursion_limit_hit = ecx.reduced_recursion_limit.is_some();
+
         for span in missing_fragment_specifiers {
             let lint = lint::builtin::MISSING_FRAGMENT_SPECIFIER;
             let msg = "missing fragment specifier";
@@ -319,8 +322,15 @@ fn configure_and_expand_inner<'a>(
         if cfg!(windows) {
             env::set_var("PATH", &old_path);
         }
-        krate
-    });
+
+        if recursion_limit_hit {
+            // If we hit a recursion limit, exit early to avoid later passes getting overwhelmed
+            // with a large AST
+            Err(ErrorReported)
+        } else {
+            Ok(krate)
+        }
+    })?;
 
     sess.time("maybe_building_test_harness", || {
         rustc_builtin_macros::test_harness::inject(
@@ -427,12 +437,16 @@ pub fn lower_to_hir<'res, 'tcx>(
     resolver: &'res mut Resolver<'_>,
     dep_graph: &'res DepGraph,
     krate: &'res ast::Crate,
-    arena: &'tcx Arena<'tcx>,
+    arena: &'tcx rustc_ast_lowering::Arena<'tcx>,
 ) -> Crate<'tcx> {
+    // We're constructing the HIR here; we don't care what we will
+    // read, since we haven't even constructed the *input* to
+    // incr. comp. yet.
+    dep_graph.assert_ignored();
+
     // Lower AST to HIR.
     let hir_crate = rustc_ast_lowering::lower_crate(
         sess,
-        &dep_graph,
         &krate,
         resolver,
         rustc_parse::nt_to_tokenstream,
@@ -477,12 +491,7 @@ fn generated_output_paths(
             // by appending `.rlib`, `.exe`, etc., so we can skip this transformation.
             OutputType::Exe if !exact_name => {
                 for crate_type in sess.crate_types.borrow().iter() {
-                    let p = ::rustc_codegen_utils::link::filename_for_input(
-                        sess,
-                        *crate_type,
-                        crate_name,
-                        outputs,
-                    );
+                    let p = filename_for_input(sess, *crate_type, crate_name, outputs);
                     out_filenames.push(p);
                 }
             }
@@ -682,7 +691,7 @@ pub fn default_provide(providers: &mut ty::query::Providers<'_>) {
     rustc_ty::provide(providers);
     rustc_metadata::provide(providers);
     rustc_lint::provide(providers);
-    rustc_codegen_utils::provide(providers);
+    rustc_symbol_mangling::provide(providers);
     rustc_codegen_ssa::provide(providers);
 }
 
@@ -698,7 +707,7 @@ impl<'tcx> QueryContext<'tcx> {
     where
         F: FnOnce(TyCtxt<'tcx>) -> R,
     {
-        ty::tls::enter_global(self.0, |tcx| f(tcx))
+        ty::tls::enter_global(self.0, f)
     }
 
     pub fn print_stats(&mut self) {
@@ -767,7 +776,7 @@ pub fn create_global_ctxt<'tcx>(
 fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
     assert_eq!(cnum, LOCAL_CRATE);
 
-    rustc::hir::map::check_crate(tcx);
+    rustc_passes::hir_id_validator::check_crate(tcx);
 
     let sess = tcx.sess;
     let mut entry_point = None;

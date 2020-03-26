@@ -31,11 +31,9 @@ pub fn save_dep_graph(tcx: TyCtxt<'_>) {
 
         join(
             move || {
-                if tcx.sess.opts.debugging_opts.incremental_queries {
-                    sess.time("incr_comp_persist_result_cache", || {
-                        save_in(sess, query_cache_path, |e| encode_query_cache(tcx, e));
-                    });
-                }
+                sess.time("incr_comp_persist_result_cache", || {
+                    save_in(sess, query_cache_path, |e| encode_query_cache(tcx, e));
+                });
             },
             || {
                 sess.time("incr_comp_persist_dep_graph", || {
@@ -132,7 +130,6 @@ where
         }
         Err(err) => {
             sess.err(&format!("failed to write dep-graph to `{}`: {}", path_buf.display(), err));
-            return;
         }
     }
 }

@@ -1,6 +1,5 @@
 //! Miscellaneous type-system utilities that are too small to deserve their own modules.
 
-use crate::hir::map::DefPathData;
 use crate::ich::NodeIdHashingMode;
 use crate::mir::interpret::{sign_extend, truncate};
 use crate::ty::layout::{Integer, IntegerExt, Size};
@@ -17,6 +16,7 @@ use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
+use rustc_hir::definitions::DefPathData;
 use rustc_macros::HashStable;
 use rustc_span::Span;
 use rustc_target::abi::TargetDataLayout;
@@ -502,7 +502,7 @@ impl<'tcx> TyCtxt<'tcx> {
     ) -> Option<ty::Binder<Ty<'tcx>>> {
         let closure_ty = self.mk_closure(closure_def_id, closure_substs);
         let env_region = ty::ReLateBound(ty::INNERMOST, ty::BrEnv);
-        let closure_kind_ty = closure_substs.as_closure().kind_ty(closure_def_id, self);
+        let closure_kind_ty = closure_substs.as_closure().kind_ty();
         let closure_kind = closure_kind_ty.to_opt_closure_kind()?;
         let env_ty = match closure_kind {
             ty::ClosureKind::Fn => self.mk_imm_ref(self.mk_region(env_region), closure_ty),

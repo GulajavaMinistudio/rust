@@ -750,14 +750,16 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                 // If this is a tuple or unit struct, define a name
                 // in the value namespace as well.
                 if let Some(ctor_node_id) = vdata.ctor_id() {
-                    let mut ctor_vis = vis;
                     // If the structure is marked as non_exhaustive then lower the visibility
                     // to within the crate.
-                    if vis == ty::Visibility::Public
+                    let mut ctor_vis = if vis == ty::Visibility::Public
                         && attr::contains_name(&item.attrs, sym::non_exhaustive)
                     {
-                        ctor_vis = ty::Visibility::Restricted(DefId::local(CRATE_DEF_INDEX));
-                    }
+                        ty::Visibility::Restricted(DefId::local(CRATE_DEF_INDEX))
+                    } else {
+                        vis
+                    };
+
                     for field in vdata.fields() {
                         // NOTE: The field may be an expansion placeholder, but expansion sets
                         // correct visibilities for unnamed field placeholders specifically, so the
@@ -902,7 +904,10 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                 self.insert_field_names(def_id, field_names);
             }
             Res::Def(DefKind::AssocFn, def_id) => {
-                if cstore.associated_item_cloned_untracked(def_id).method_has_self_argument {
+                if cstore
+                    .associated_item_cloned_untracked(def_id, self.r.session)
+                    .method_has_self_argument
+                {
                     self.r.has_self.insert(def_id);
                 }
             }
@@ -1147,7 +1152,14 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
             }))
         } else {
             let module = parent_scope.module;
-            let vis = self.resolve_visibility(&item.vis);
+            let vis = match item.kind {
+                // Visibilities must not be resolved non-speculatively twice
+                // and we already resolved this one as a `fn` item visibility.
+                ItemKind::Fn(..) => self
+                    .resolve_visibility_speculative(&item.vis, true)
+                    .unwrap_or(ty::Visibility::Public),
+                _ => self.resolve_visibility(&item.vis),
+            };
             if vis != ty::Visibility::Public {
                 self.insert_unused_macro(ident, item.id, span);
             }
@@ -1166,7 +1178,7 @@ macro_rules! method {
                 visit::$walk(self, node);
             }
         }
-    }
+    };
 }
 
 impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {

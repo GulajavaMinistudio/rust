@@ -351,7 +351,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             // Different to previous arm because one is `&hir::Local` and the other
             // is `P<hir::Local>`.
             Some(hir::Node::Local(local)) => get_name(err, &local.pat.kind),
-            _ => return None,
+            _ => None,
         }
     }
 
@@ -367,9 +367,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     ) {
         let self_ty = trait_ref.self_ty();
         let (def_id, output_ty, callable) = match self_ty.kind {
-            ty::Closure(def_id, substs) => {
-                (def_id, self.closure_sig(def_id, substs).output(), "closure")
-            }
+            ty::Closure(def_id, substs) => (def_id, substs.as_closure().sig().output(), "closure"),
             ty::FnDef(def_id, _) => (def_id, self_ty.fn_sig(self.tcx).output(), "function"),
             _ => return,
         };
@@ -390,7 +388,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         }
         let hir = self.tcx.hir();
         // Get the name of the callable and the arguments to be used in the suggestion.
-        let snippet = match hir.get_if_local(def_id) {
+        let (snippet, sugg) = match hir.get_if_local(def_id) {
             Some(hir::Node::Expr(hir::Expr {
                 kind: hir::ExprKind::Closure(_, decl, _, span, ..),
                 ..
@@ -401,7 +399,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     None => return,
                 };
                 let args = decl.inputs.iter().map(|_| "_").collect::<Vec<_>>().join(", ");
-                format!("{}({})", name, args)
+                let sugg = format!("({})", args);
+                (format!("{}{}", name, sugg), sugg)
             }
             Some(hir::Node::Item(hir::Item {
                 ident,
@@ -422,7 +421,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}({})", ident, args)
+                let sugg = format!("({})", args);
+                (format!("{}{}", ident, sugg), sugg)
             }
             _ => return,
         };
@@ -431,10 +431,10 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             // an argument, the `obligation.cause.span` points at the expression
             // of the argument, so we can provide a suggestion. This is signaled
             // by `points_at_arg`. Otherwise, we give a more general note.
-            err.span_suggestion(
-                obligation.cause.span,
+            err.span_suggestion_verbose(
+                obligation.cause.span.shrink_to_hi(),
                 &msg,
-                snippet,
+                sugg,
                 Applicability::HasPlaceholders,
             );
         } else {
@@ -619,7 +619,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         .source_map()
                         .span_take_while(span, |c| c.is_whitespace() || *c == '&');
                     if points_at_arg && mutability == hir::Mutability::Not && refs_number > 0 {
-                        err.span_suggestion(
+                        err.span_suggestion_verbose(
                             sp,
                             "consider changing this borrow's mutability",
                             "&mut ".to_string(),
@@ -1105,15 +1105,15 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let generator_did_root = self.tcx.closure_base_def_id(generator_did);
         debug!(
             "maybe_note_obligation_cause_for_async_await: generator_did={:?} \
-             generator_did_root={:?} in_progress_tables.local_id_root={:?} span={:?}",
+             generator_did_root={:?} in_progress_tables.hir_owner={:?} span={:?}",
             generator_did,
             generator_did_root,
-            in_progress_tables.as_ref().map(|t| t.local_id_root),
+            in_progress_tables.as_ref().map(|t| t.hir_owner),
             span
         );
         let query_tables;
         let tables: &TypeckTables<'tcx> = match &in_progress_tables {
-            Some(t) if t.local_id_root == Some(generator_did_root) => t,
+            Some(t) if t.hir_owner.map(|owner| owner.to_def_id()) == Some(generator_did_root) => t,
             _ => {
                 query_tables = self.tcx.typeck_tables_of(generator_did);
                 &query_tables
@@ -1287,7 +1287,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             let parent = hir.get_parent_node(expr_id);
             if let Some(hir::Node::Expr(e)) = hir.find(parent) {
                 let parent_span = hir.span(parent);
-                let parent_did = parent.owner_def_id();
+                let parent_did = parent.owner.to_def_id();
                 // ```rust
                 // impl T {
                 //     fn foo(&self) -> i32 {}

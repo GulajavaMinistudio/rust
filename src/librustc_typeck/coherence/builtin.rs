@@ -178,10 +178,7 @@ fn visit_implementation_of_dispatch_from_dyn(tcx: TyCtxt<'_>, impl_did: DefId) {
             use ty::TyKind::*;
             match (&source.kind, &target.kind) {
                 (&Ref(r_a, _, mutbl_a), Ref(r_b, _, mutbl_b))
-                    if infcx.at(&cause, param_env).eq(r_a, r_b).is_ok() && mutbl_a == *mutbl_b =>
-                {
-                    ()
-                }
+                    if infcx.at(&cause, param_env).eq(r_a, r_b).is_ok() && mutbl_a == *mutbl_b => {}
                 (&RawPtr(tm_a), &RawPtr(tm_b)) if tm_a.mutbl == tm_b.mutbl => (),
                 (&Adt(def_a, substs_a), &Adt(def_b, substs_b))
                     if def_a.is_struct() && def_b.is_struct() =>
@@ -218,7 +215,7 @@ fn visit_implementation_of_dispatch_from_dyn(tcx: TyCtxt<'_>, impl_did: DefId) {
                             let ty_b = field.ty(tcx, substs_b);
 
                             if let Ok(layout) = tcx.layout_of(param_env.and(ty_a)) {
-                                if layout.is_zst() && layout.details.align.abi.bytes() == 1 {
+                                if layout.is_zst() && layout.align.abi.bytes() == 1 {
                                     // ignore ZST fields with alignment of 1 byte
                                     return None;
                                 }

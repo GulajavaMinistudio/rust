@@ -128,6 +128,14 @@ impl<'tcx> GenericArg<'tcx> {
             _ => bug!("expected a type, but found another kind"),
         }
     }
+
+    /// Unpack the `GenericArg` as a const when it is known certainly to be a const.
+    pub fn expect_const(self) -> &'tcx ty::Const<'tcx> {
+        match self.unpack() {
+            GenericArgKind::Const(c) => c,
+            _ => bug!("expected a const, but found another kind"),
+        }
+    }
 }
 
 impl<'a, 'tcx> Lift<'tcx> for GenericArg<'a> {
@@ -524,7 +532,7 @@ impl<'a, 'tcx> TypeFolder<'tcx> for SubstFolder<'a, 'tcx> {
             self.root_ty = None;
         }
 
-        return t1;
+        t1
     }
 
     fn fold_const(&mut self, c: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {

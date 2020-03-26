@@ -47,8 +47,16 @@ macro_rules! err_exhaust {
 }
 
 #[macro_export]
+macro_rules! err_machine_stop {
+    ($($tt:tt)*) => {
+        $crate::mir::interpret::InterpError::MachineStop(Box::new($($tt)*))
+    };
+}
+
+// In the `throw_*` macros, avoid `return` to make them work with `try {}`.
+#[macro_export]
 macro_rules! throw_unsup {
-    ($($tt:tt)*) => { return Err(err_unsup!($($tt)*).into()) };
+    ($($tt:tt)*) => { Err::<!, _>(err_unsup!($($tt)*))? };
 }
 
 #[macro_export]
@@ -58,12 +66,12 @@ macro_rules! throw_unsup_format {
 
 #[macro_export]
 macro_rules! throw_inval {
-    ($($tt:tt)*) => { return Err(err_inval!($($tt)*).into()) };
+    ($($tt:tt)*) => { Err::<!, _>(err_inval!($($tt)*))? };
 }
 
 #[macro_export]
 macro_rules! throw_ub {
-    ($($tt:tt)*) => { return Err(err_ub!($($tt)*).into()) };
+    ($($tt:tt)*) => { Err::<!, _>(err_ub!($($tt)*))? };
 }
 
 #[macro_export]
@@ -73,14 +81,12 @@ macro_rules! throw_ub_format {
 
 #[macro_export]
 macro_rules! throw_exhaust {
-    ($($tt:tt)*) => { return Err(err_exhaust!($($tt)*).into()) };
+    ($($tt:tt)*) => { Err::<!, _>(err_exhaust!($($tt)*))? };
 }
 
 #[macro_export]
 macro_rules! throw_machine_stop {
-    ($($tt:tt)*) => {
-        return Err($crate::mir::interpret::InterpError::MachineStop(Box::new($($tt)*)).into())
-    };
+    ($($tt:tt)*) => { Err::<!, _>(err_machine_stop!($($tt)*))? };
 }
 
 mod allocation;
@@ -89,23 +95,12 @@ mod pointer;
 mod queries;
 mod value;
 
-pub use self::error::{
-    struct_error, ConstEvalErr, ConstEvalRawResult, ConstEvalResult, ErrorHandled, FrameInfo,
-    InterpError, InterpErrorInfo, InterpResult, InvalidProgramInfo, ResourceExhaustionInfo,
-    UndefinedBehaviorInfo, UnsupportedOpInfo,
-};
+use std::convert::TryFrom;
+use std::fmt;
+use std::io;
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-pub use self::value::{get_slice_bytes, ConstValue, RawConst, Scalar, ScalarMaybeUndef};
-
-pub use self::allocation::{Allocation, AllocationExtra, Relocations, UndefMask};
-
-pub use self::pointer::{CheckInAllocMsg, Pointer, PointerArithmetic};
-
-use crate::mir;
-use crate::ty::codec::TyDecoder;
-use crate::ty::layout::{self, Size};
-use crate::ty::subst::GenericArgKind;
-use crate::ty::{self, Instance, Ty, TyCtxt};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 use rustc_ast::ast::LitKind;
 use rustc_data_structures::fx::FxHashMap;
@@ -114,10 +109,24 @@ use rustc_data_structures::tiny_list::TinyList;
 use rustc_hir::def_id::DefId;
 use rustc_macros::HashStable;
 use rustc_serialize::{Decodable, Encodable, Encoder};
-use std::fmt;
-use std::io;
-use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+
+use crate::mir;
+use crate::ty::codec::TyDecoder;
+use crate::ty::layout::{self, Size};
+use crate::ty::subst::GenericArgKind;
+use crate::ty::{self, Instance, Ty, TyCtxt};
+
+pub use self::error::{
+    struct_error, ConstEvalErr, ConstEvalRawResult, ConstEvalResult, ErrorHandled, FrameInfo,
+    InterpError, InterpErrorInfo, InterpResult, InvalidProgramInfo, MachineStopType,
+    ResourceExhaustionInfo, UndefinedBehaviorInfo, UnsupportedOpInfo,
+};
+
+pub use self::value::{get_slice_bytes, ConstValue, RawConst, Scalar, ScalarMaybeUndef};
+
+pub use self::allocation::{Allocation, AllocationExtra, Relocations, UndefMask};
+
+pub use self::pointer::{CheckInAllocMsg, Pointer, PointerArithmetic};
 
 /// Uniquely identifies one of the following:
 /// - A constant
@@ -150,7 +159,7 @@ pub struct LitToConstInput<'tcx> {
 pub enum LitToConstError {
     /// The literal's inferred type did not match the expected `ty` in the input.
     /// This is used for graceful error handling (`delay_span_bug`) in
-    /// type checking (`AstConv::ast_const_to_const`).
+    /// type checking (`Const::from_anon_const`).
     TypeError,
     UnparseableFloat,
     Reported,
@@ -258,8 +267,8 @@ impl<'s> AllocDecodingSession<'s> {
         D: TyDecoder<'tcx>,
     {
         // Read the index of the allocation.
-        let idx = decoder.read_u32()? as usize;
-        let pos = self.state.data_offsets[idx] as usize;
+        let idx = usize::try_from(decoder.read_u32()?).unwrap();
+        let pos = usize::try_from(self.state.data_offsets[idx]).unwrap();
 
         // Decode the `AllocDiscriminant` now so that we know if we have to reserve an
         // `AllocId`.

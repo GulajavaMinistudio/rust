@@ -59,8 +59,7 @@ crate struct ImportSuggestion {
 /// `source_map` functions and this function to something more robust.
 fn reduce_impl_span_to_impl_keyword(sm: &SourceMap, impl_span: Span) -> Span {
     let impl_span = sm.span_until_char(impl_span, '<');
-    let impl_span = sm.span_until_whitespace(impl_span);
-    impl_span
+    sm.span_until_whitespace(impl_span)
 }
 
 impl<'a> Resolver<'a> {
@@ -797,7 +796,7 @@ impl<'a> Resolver<'a> {
             });
             if let Some(span) = def_span {
                 err.span_label(
-                    span,
+                    self.session.source_map().def_span(span),
                     &format!(
                         "similarly named {} `{}` defined here",
                         suggestion.res.descr(),
@@ -952,7 +951,7 @@ impl<'a> Resolver<'a> {
         let descr = get_descr(binding);
         let mut err =
             struct_span_err!(self.session, ident.span, E0603, "{} `{}` is private", descr, ident);
-        err.span_label(ident.span, &format!("this {} is private", descr));
+        err.span_label(ident.span, &format!("private {}", descr));
         if let Some(span) = ctor_fields_span {
             err.span_label(span, "a constructor is private if any of the fields is private");
         }

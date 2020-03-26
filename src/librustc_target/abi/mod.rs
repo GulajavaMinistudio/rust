@@ -3,6 +3,7 @@ pub use Primitive::*;
 
 use crate::spec::Target;
 
+use std::convert::{TryFrom, TryInto};
 use std::ops::{Add, AddAssign, Deref, Mul, Range, RangeInclusive, Sub};
 
 use rustc_index::vec::{Idx, IndexVec};
@@ -240,17 +241,18 @@ pub struct Size {
 }
 
 impl Size {
-    pub const ZERO: Size = Self::from_bytes(0);
+    pub const ZERO: Size = Size { raw: 0 };
 
     #[inline]
-    pub fn from_bits(bits: u64) -> Size {
+    pub fn from_bits(bits: impl TryInto<u64>) -> Size {
+        let bits = bits.try_into().ok().unwrap();
         // Avoid potential overflow from `bits + 7`.
         Size::from_bytes(bits / 8 + ((bits % 8) + 7) / 8)
     }
 
     #[inline]
-    pub const fn from_bytes(bytes: u64) -> Size {
-        Size { raw: bytes }
+    pub fn from_bytes(bytes: impl TryInto<u64>) -> Size {
+        Size { raw: bytes.try_into().ok().unwrap() }
     }
 
     #[inline]
@@ -259,10 +261,20 @@ impl Size {
     }
 
     #[inline]
+    pub fn bytes_usize(self) -> usize {
+        self.bytes().try_into().unwrap()
+    }
+
+    #[inline]
     pub fn bits(self) -> u64 {
         self.bytes().checked_mul(8).unwrap_or_else(|| {
             panic!("Size::bits: {} bytes in bits doesn't fit in u64", self.bytes())
         })
+    }
+
+    #[inline]
+    pub fn bits_usize(self) -> usize {
+        self.bits().try_into().unwrap()
     }
 
     #[inline]
@@ -660,9 +672,12 @@ impl FieldPlacement {
 
     pub fn offset(&self, i: usize) -> Size {
         match *self {
-            FieldPlacement::Union(_) => Size::ZERO,
+            FieldPlacement::Union(count) => {
+                assert!(i < count, "tried to access field {} of union with {} fields", i, count);
+                Size::ZERO
+            }
             FieldPlacement::Array { stride, count } => {
-                let i = i as u64;
+                let i = u64::try_from(i).unwrap();
                 assert!(i < count);
                 stride * i
             }
@@ -748,7 +763,7 @@ impl Abi {
                 Primitive::Int(_, signed) => signed,
                 _ => false,
             },
-            _ => false,
+            _ => panic!("`is_signed` on non-scalar ABI {:?}", self),
         }
     }
 
@@ -787,7 +802,7 @@ pub enum Variants {
         discr: Scalar,
         discr_kind: DiscriminantKind,
         discr_index: usize,
-        variants: IndexVec<VariantIdx, LayoutDetails>,
+        variants: IndexVec<VariantIdx, Layout>,
     },
 }
 
@@ -870,7 +885,7 @@ impl Niche {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, HashStable_Generic)]
-pub struct LayoutDetails {
+pub struct Layout {
     /// Says where the fields are located within the layout.
     /// Primitives and uninhabited enums appear as unions without fields.
     pub fields: FieldPlacement,
@@ -901,12 +916,12 @@ pub struct LayoutDetails {
     pub size: Size,
 }
 
-impl LayoutDetails {
+impl Layout {
     pub fn scalar<C: HasDataLayout>(cx: &C, scalar: Scalar) -> Self {
         let largest_niche = Niche::from_scalar(cx, Size::ZERO, scalar.clone());
         let size = scalar.value.size(cx);
         let align = scalar.value.align(cx);
-        LayoutDetails {
+        Layout {
             variants: Variants::Single { index: VariantIdx::new(0) },
             fields: FieldPlacement::Union(0),
             abi: Abi::Scalar(scalar),
@@ -917,23 +932,24 @@ impl LayoutDetails {
     }
 }
 
-/// The details of the layout of a type, alongside the type itself.
+/// The layout of a type, alongside the type itself.
 /// Provides various type traversal APIs (e.g., recursing into fields).
 ///
-/// Note that the details are NOT guaranteed to always be identical
-/// to those obtained from `layout_of(ty)`, as we need to produce
+/// Note that the layout is NOT guaranteed to always be identical
+/// to that obtained from `layout_of(ty)`, as we need to produce
 /// layouts for which Rust types do not exist, such as enum variants
 /// or synthetic fields of enums (i.e., discriminants) and fat pointers.
+// FIXME: rename to TyAndLayout.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TyLayout<'a, Ty> {
     pub ty: Ty,
-    pub details: &'a LayoutDetails,
+    pub layout: &'a Layout,
 }
 
 impl<'a, Ty> Deref for TyLayout<'a, Ty> {
-    type Target = &'a LayoutDetails;
-    fn deref(&self) -> &&'a LayoutDetails {
-        &self.details
+    type Target = &'a Layout;
+    fn deref(&self) -> &&'a Layout {
+        &self.layout
     }
 }
 
@@ -1094,7 +1110,7 @@ impl<'a, Ty> TyLayout<'a, Ty> {
         };
         if !valid {
             // This is definitely not okay.
-            trace!("might_permit_raw_init({:?}, zero={}): not valid", self.details, zero);
+            trace!("might_permit_raw_init({:?}, zero={}): not valid", self.layout, zero);
             return Ok(false);
         }
 

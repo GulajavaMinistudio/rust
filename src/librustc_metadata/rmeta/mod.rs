@@ -2,7 +2,6 @@ use decoder::Metadata;
 use table::{Table, TableBuilder};
 
 use rustc::hir::exports::Export;
-use rustc::hir::map;
 use rustc::middle::cstore::{DepKind, ForeignModule, LinkagePreference, NativeLibrary};
 use rustc::middle::exported_symbols::{ExportedSymbol, SymbolExportLevel};
 use rustc::middle::lang_items;
@@ -194,15 +193,16 @@ crate struct CrateRoot<'tcx> {
     native_libraries: Lazy<[NativeLibrary]>,
     foreign_modules: Lazy<[ForeignModule]>,
     source_map: Lazy<[rustc_span::SourceFile]>,
-    def_path_table: Lazy<map::definitions::DefPathTable>,
+    def_path_table: Lazy<rustc_hir::definitions::DefPathTable>,
     impls: Lazy<[TraitImpls]>,
-    exported_symbols: Lazy!([(ExportedSymbol<'tcx>, SymbolExportLevel)]),
     interpret_alloc_index: Lazy<[u32]>,
 
     per_def: LazyPerDefTables<'tcx>,
 
     /// The DefIndex's of any proc macros declared by this crate.
     proc_macro_data: Option<Lazy<[DefIndex]>>,
+
+    exported_symbols: Lazy!([(ExportedSymbol<'tcx>, SymbolExportLevel)]),
 
     compiler_builtins: bool,
     needs_allocator: bool,
@@ -255,6 +255,7 @@ define_per_def_tables! {
     kind: Table<DefIndex, Lazy<EntryKind>>,
     visibility: Table<DefIndex, Lazy<ty::Visibility>>,
     span: Table<DefIndex, Lazy<Span>>,
+    ident_span: Table<DefIndex, Lazy<Span>>,
     attributes: Table<DefIndex, Lazy<[ast::Attribute]>>,
     children: Table<DefIndex, Lazy<[DefIndex]>>,
     stability: Table<DefIndex, Lazy<attr::Stability>>,
@@ -405,5 +406,6 @@ struct GeneratorData<'tcx> {
 }
 
 // Tags used for encoding Spans:
-const TAG_VALID_SPAN: u8 = 0;
-const TAG_INVALID_SPAN: u8 = 1;
+const TAG_VALID_SPAN_LOCAL: u8 = 0;
+const TAG_VALID_SPAN_FOREIGN: u8 = 1;
+const TAG_INVALID_SPAN: u8 = 2;

@@ -118,6 +118,7 @@ E0220: include_str!("./error_codes/E0220.md"),
 E0221: include_str!("./error_codes/E0221.md"),
 E0222: include_str!("./error_codes/E0222.md"),
 E0223: include_str!("./error_codes/E0223.md"),
+E0224: include_str!("./error_codes/E0224.md"),
 E0225: include_str!("./error_codes/E0225.md"),
 E0229: include_str!("./error_codes/E0229.md"),
 E0230: include_str!("./error_codes/E0230.md"),
@@ -392,6 +393,7 @@ E0701: include_str!("./error_codes/E0701.md"),
 E0704: include_str!("./error_codes/E0704.md"),
 E0705: include_str!("./error_codes/E0705.md"),
 E0706: include_str!("./error_codes/E0706.md"),
+E0710: include_str!("./error_codes/E0710.md"),
 E0712: include_str!("./error_codes/E0712.md"),
 E0713: include_str!("./error_codes/E0713.md"),
 E0714: include_str!("./error_codes/E0714.md"),
@@ -469,7 +471,6 @@ E0748: include_str!("./error_codes/E0748.md"),
 //  E0217, // ambiguous associated type, defined in multiple supertraits
 //  E0218, // no associated type defined
 //  E0219, // associated type defined in higher-ranked supertrait
-    E0224, // at least one non-builtin train is required for an object type
     E0226, // only a single explicit lifetime bound is permitted
     E0227, // ambiguous lifetime bound, explicit lifetime bound required
     E0228, // explicit lifetime bound required
@@ -604,7 +605,6 @@ E0748: include_str!("./error_codes/E0748.md"),
     E0708, // `async` non-`move` closures with parameters are not currently
            // supported
 //  E0709, // multiple different lifetimes used in arguments of `async fn`
-    E0710, // an unknown tool name found in scoped lint
     E0711, // a feature has been declared with conflicting stability attributes
     E0717, // rustc_promotable without stability attribute
 //  E0721, // `await` keyword

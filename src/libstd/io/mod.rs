@@ -502,7 +502,7 @@ pub trait Read {
     /// how many bytes were read.
     ///
     /// This function does not provide any guarantees about whether it blocks
-    /// waiting for data, but if an object needs to block for a read but cannot
+    /// waiting for data, but if an object needs to block for a read and cannot,
     /// it will typically signal this via an [`Err`] return value.
     ///
     /// If the return value of this method is [`Ok(n)`], then it must be
@@ -951,6 +951,12 @@ pub trait Read {
 #[repr(transparent)]
 pub struct IoSliceMut<'a>(sys::io::IoSliceMut<'a>);
 
+#[stable(feature = "iovec-send-sync", since = "1.44.0")]
+unsafe impl<'a> Send for IoSliceMut<'a> {}
+
+#[stable(feature = "iovec-send-sync", since = "1.44.0")]
+unsafe impl<'a> Sync for IoSliceMut<'a> {}
+
 #[stable(feature = "iovec", since = "1.36.0")]
 impl<'a> fmt::Debug for IoSliceMut<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1053,6 +1059,12 @@ impl<'a> DerefMut for IoSliceMut<'a> {
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct IoSlice<'a>(sys::io::IoSlice<'a>);
+
+#[stable(feature = "iovec-send-sync", since = "1.44.0")]
+unsafe impl<'a> Send for IoSlice<'a> {}
+
+#[stable(feature = "iovec-send-sync", since = "1.44.0")]
+unsafe impl<'a> Sync for IoSlice<'a> {}
 
 #[stable(feature = "iovec", since = "1.36.0")]
 impl<'a> fmt::Debug for IoSlice<'a> {

@@ -925,8 +925,17 @@ impl<'a> Parser<'a> {
             self.parse_closure_expr(attrs)
         } else if self.eat_keyword(kw::If) {
             self.parse_if_expr(attrs)
-        } else if self.eat_keyword(kw::For) {
-            self.parse_for_expr(None, self.prev_token.span, attrs)
+        } else if self.check_keyword(kw::For) {
+            if self.choose_generics_over_qpath(1) {
+                // NOTE(Centril, eddyb): DO NOT REMOVE! Beyond providing parser recovery,
+                // this is an insurance policy in case we allow qpaths in (tuple-)struct patterns.
+                // When `for <Foo as Bar>::Proj in $expr $block` is wanted,
+                // you can disambiguate in favor of a pattern with `(...)`.
+                self.recover_quantified_closure_expr(attrs)
+            } else {
+                assert!(self.eat_keyword(kw::For));
+                self.parse_for_expr(None, self.prev_token.span, attrs)
+            }
         } else if self.eat_keyword(kw::While) {
             self.parse_while_expr(None, self.prev_token.span, attrs)
         } else if let Some(label) = self.eat_label() {
@@ -996,7 +1005,7 @@ impl<'a> Parser<'a> {
                 let expr = self.mk_expr(lo.to(self.prev_token.span), ExprKind::Lit(literal), attrs);
                 self.maybe_recover_from_bad_qpath(expr, true)
             }
-            None => return Err(self.expected_expression_found()),
+            None => Err(self.expected_expression_found()),
         }
     }
 
@@ -1374,6 +1383,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Matches `'-' lit | lit` (cf. `ast_validation::AstValidator::check_expr_within_pat`).
+    /// Keep this in sync with `Token::can_begin_literal_maybe_minus`.
     pub fn parse_literal_maybe_minus(&mut self) -> PResult<'a, P<Expr>> {
         maybe_whole_expr!(self);
 
@@ -1414,6 +1424,26 @@ impl<'a> Parser<'a> {
         let (inner_attrs, blk) = self.parse_block_common(lo, blk_mode)?;
         attrs.extend(inner_attrs);
         Ok(self.mk_expr(blk.span, ExprKind::Block(blk, opt_label), attrs))
+    }
+
+    /// Recover on an explicitly quantified closure expression, e.g., `for<'a> |x: &'a u8| *x + 1`.
+    fn recover_quantified_closure_expr(&mut self, attrs: AttrVec) -> PResult<'a, P<Expr>> {
+        let lo = self.token.span;
+        let _ = self.parse_late_bound_lifetime_defs()?;
+        let span_for = lo.to(self.prev_token.span);
+        let closure = self.parse_closure_expr(attrs)?;
+
+        self.struct_span_err(span_for, "cannot introduce explicit parameters for a closure")
+            .span_label(closure.span, "the parameters are attached to this closure")
+            .span_suggestion(
+                span_for,
+                "remove the parameters",
+                String::new(),
+                Applicability::MachineApplicable,
+            )
+            .emit();
+
+        Ok(self.mk_expr_err(lo.to(closure.span)))
     }
 
     /// Parses a closure expression (e.g., `move |args| expr`).
@@ -1713,7 +1743,7 @@ impl<'a> Parser<'a> {
         }
         let hi = self.token.span;
         self.bump();
-        return Ok(self.mk_expr(lo.to(hi), ExprKind::Match(scrutinee, arms), attrs));
+        Ok(self.mk_expr(lo.to(hi), ExprKind::Match(scrutinee, arms), attrs))
     }
 
     pub(super) fn parse_arm(&mut self) -> PResult<'a, Arm> {

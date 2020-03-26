@@ -1140,7 +1140,7 @@ pub fn parse_error_format(
         _ => {}
     }
 
-    return error_format;
+    error_format
 }
 
 fn parse_crate_edition(matches: &getopts::Matches) -> Edition {
@@ -1284,33 +1284,6 @@ fn check_thread_count(debugging_opts: &DebuggingOptions, error_format: ErrorOutp
     if debugging_opts.threads > 1 && debugging_opts.fuel.is_some() {
         early_error(error_format, "optimization fuel is incompatible with multiple threads");
     }
-}
-
-fn select_incremental_path(
-    debugging_opts: &DebuggingOptions,
-    cg: &CodegenOptions,
-    error_format: ErrorOutputType,
-) -> Option<PathBuf> {
-    match (&debugging_opts.incremental, &cg.incremental) {
-        (Some(path1), Some(path2)) => {
-            if path1 != path2 {
-                early_error(
-                    error_format,
-                    &format!(
-                        "conflicting paths for `-Z incremental` and \
-                         `-C incremental` specified: {} versus {}",
-                        path1, path2
-                    ),
-                );
-            } else {
-                Some(path1)
-            }
-        }
-        (Some(path), None) => Some(path),
-        (None, Some(path)) => Some(path),
-        (None, None) => None,
-    }
-    .map(|m| PathBuf::from(m))
 }
 
 fn collect_print_requests(
@@ -1677,7 +1650,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
 
     check_thread_count(&debugging_opts, error_format);
 
-    let incremental = select_incremental_path(&debugging_opts, &cg, error_format);
+    let incremental = cg.incremental.as_ref().map(|m| PathBuf::from(m));
 
     if debugging_opts.profile && incremental.is_some() {
         early_error(

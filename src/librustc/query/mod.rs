@@ -9,9 +9,9 @@ use crate::traits::query::{
 };
 use crate::ty::query::queries;
 use crate::ty::query::QueryDescription;
-use crate::ty::subst::SubstsRef;
+use crate::ty::subst::{GenericArg, SubstsRef};
 use crate::ty::{self, ParamEnvAnd, Ty, TyCtxt};
-use rustc_hir::def_id::{CrateNum, DefId, DefIndex};
+use rustc_hir::def_id::{CrateNum, DefId, LocalDefId};
 
 use rustc_span::symbol::Symbol;
 use std::borrow::Cow;
@@ -64,26 +64,30 @@ rustc_queries! {
         }
 
         // The items in a module.
+        //
         // This can be conveniently accessed by `tcx.hir().visit_item_likes_in_module`.
         // Avoid calling this query directly.
-        query hir_module_items(key: DefId) -> &'tcx hir::ModuleItems {
+        query hir_module_items(key: LocalDefId) -> &'tcx hir::ModuleItems {
             eval_always
+            desc { |tcx| "HIR module items in `{}`", tcx.def_path_str(key.to_def_id()) }
         }
 
-        // An HIR item with a `DefId` that can own other HIR items which do not themselves have
-        // a `DefId`.
+        // Gives access to the HIR node for the HIR owner `key`.
+        //
         // This can be conveniently accessed by methods on `tcx.hir()`.
         // Avoid calling this query directly.
-        query hir_owner(key: DefId) -> &'tcx HirOwner<'tcx> {
+        query hir_owner(key: LocalDefId) -> Option<&'tcx crate::hir::Owner<'tcx>> {
             eval_always
+            desc { |tcx| "HIR owner of `{}`", tcx.def_path_str(key.to_def_id()) }
         }
 
-        // The HIR items which do not themselves have a `DefId` and are owned by another HIR item
-        // with a `DefId`.
+        // Gives access to the HIR nodes and bodies inside the HIR owner `key`.
+        //
         // This can be conveniently accessed by methods on `tcx.hir()`.
         // Avoid calling this query directly.
-        query hir_owner_items(key: DefId) -> &'tcx HirOwnerItems<'tcx> {
+        query hir_owner_nodes(key: LocalDefId) -> Option<&'tcx crate::hir::OwnerNodes<'tcx>> {
             eval_always
+            desc { |tcx| "HIR owner items in `{}`", tcx.def_path_str(key.to_def_id()) }
         }
 
         /// Records the type of every item.
@@ -135,8 +139,9 @@ rustc_queries! {
             desc { "computing the lint levels for items in this crate" }
         }
 
-        query parent_module_from_def_id(_: DefId) -> DefId {
+        query parent_module_from_def_id(key: LocalDefId) -> LocalDefId {
             eval_always
+            desc { |tcx| "parent module of `{}`", tcx.def_path_str(key.to_def_id()) }
         }
     }
 
@@ -733,7 +738,7 @@ rustc_queries! {
 
         query layout_raw(
             env: ty::ParamEnvAnd<'tcx, Ty<'tcx>>
-        ) -> Result<&'tcx ty::layout::LayoutDetails, ty::layout::LayoutError<'tcx>> {
+        ) -> Result<&'tcx ty::layout::Layout, ty::layout::LayoutError<'tcx>> {
             desc { "computing layout of `{}`", env.value }
         }
     }
@@ -791,7 +796,7 @@ rustc_queries! {
         query specializes(_: (DefId, DefId)) -> bool {
             desc { "computing whether impls specialize one another" }
         }
-        query in_scope_traits_map(_: DefIndex)
+        query in_scope_traits_map(_: LocalDefId)
             -> Option<&'tcx FxHashMap<ItemLocalId, StableVec<TraitCandidate>>> {
             eval_always
             desc { "traits in scope at a block" }
@@ -948,15 +953,15 @@ rustc_queries! {
         query resolve_lifetimes(_: CrateNum) -> &'tcx ResolveLifetimes {
             desc { "resolving lifetimes" }
         }
-        query named_region_map(_: DefIndex) ->
+        query named_region_map(_: LocalDefId) ->
             Option<&'tcx FxHashMap<ItemLocalId, Region>> {
             desc { "looking up a named region" }
         }
-        query is_late_bound_map(_: DefIndex) ->
+        query is_late_bound_map(_: LocalDefId) ->
             Option<&'tcx FxHashSet<ItemLocalId>> {
             desc { "testing if a region is late bound" }
         }
-        query object_lifetime_defaults_map(_: DefIndex)
+        query object_lifetime_defaults_map(_: LocalDefId)
             -> Option<&'tcx FxHashMap<ItemLocalId, Vec<ObjectLifetimeDefault>>> {
             desc { "looking up lifetime defaults for a region" }
         }
@@ -1109,10 +1114,10 @@ rustc_queries! {
         }
 
         /// Do not call this query directly: invoke `normalize_erasing_regions` instead.
-        query normalize_ty_after_erasing_regions(
-            goal: ParamEnvAnd<'tcx, Ty<'tcx>>
-        ) -> Ty<'tcx> {
-            desc { "normalizing `{:?}`", goal }
+        query normalize_generic_arg_after_erasing_regions(
+            goal: ParamEnvAnd<'tcx, GenericArg<'tcx>>
+        ) -> GenericArg<'tcx> {
+            desc { "normalizing `{}`", goal.value }
         }
 
         query implied_outlives_bounds(

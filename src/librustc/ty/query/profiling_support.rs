@@ -1,11 +1,11 @@
-use crate::hir::map::definitions::DefPathData;
 use crate::ty::context::TyCtxt;
-use crate::ty::query::config::QueryAccessors;
+use crate::ty::query::caches::QueryCache;
 use crate::ty::query::plumbing::QueryState;
 use measureme::{StringComponent, StringId};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::profiling::SelfProfiler;
 use rustc_hir::def_id::{CrateNum, DefId, DefIndex, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::definitions::DefPathData;
 use std::fmt::Debug;
 use std::io::Write;
 
@@ -157,13 +157,14 @@ where
 /// Allocate the self-profiling query strings for a single query cache. This
 /// method is called from `alloc_self_profile_query_strings` which knows all
 /// the queries via macro magic.
-pub(super) fn alloc_self_profile_query_strings_for_query_cache<'tcx, Q>(
+pub(super) fn alloc_self_profile_query_strings_for_query_cache<'tcx, C>(
     tcx: TyCtxt<'tcx>,
     query_name: &'static str,
-    query_state: &QueryState<'tcx, Q>,
+    query_state: &QueryState<'tcx, C>,
     string_cache: &mut QueryKeyStringCache,
 ) where
-    Q: QueryAccessors<'tcx>,
+    C: QueryCache,
+    C::Key: Debug + Clone,
 {
     tcx.prof.with_profiler(|profiler| {
         let event_id_builder = profiler.event_id_builder();

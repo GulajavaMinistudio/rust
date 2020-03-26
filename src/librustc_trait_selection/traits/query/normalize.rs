@@ -169,12 +169,12 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
                                 debug!("QueryNormalizer: result = {:#?}", result);
                                 debug!("QueryNormalizer: obligations = {:#?}", obligations);
                                 self.obligations.extend(obligations);
-                                return result.normalized_ty;
+                                result.normalized_ty
                             }
 
                             Err(_) => {
                                 self.error = true;
-                                return ty;
+                                ty
                             }
                         }
                     }
@@ -191,6 +191,7 @@ impl<'cx, 'tcx> TypeFolder<'tcx> for QueryNormalizer<'cx, 'tcx> {
     }
 
     fn fold_const(&mut self, constant: &'tcx ty::Const<'tcx>) -> &'tcx ty::Const<'tcx> {
+        let constant = constant.super_fold_with(self);
         constant.eval(self.infcx.tcx, self.param_env)
     }
 }

@@ -1,7 +1,6 @@
 use crate::dep_graph::{self, DepConstructor, DepNode, DepNodeParams};
 use crate::hir::exports::Export;
 use crate::hir::map;
-use crate::hir::{HirOwner, HirOwnerItems};
 use crate::infer::canonical::{self, Canonical};
 use crate::lint::LintLevelMap;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
@@ -32,7 +31,7 @@ use crate::traits::specialization_graph;
 use crate::traits::Clauses;
 use crate::traits::{self, Vtable};
 use crate::ty::steal::Steal;
-use crate::ty::subst::SubstsRef;
+use crate::ty::subst::{GenericArg, SubstsRef};
 use crate::ty::util::AlwaysRequiresDrop;
 use crate::ty::{self, AdtSizedConstraint, CrateInherentImpls, ParamEnvAnd, Ty, TyCtxt};
 use crate::util::common::ErrorReported;
@@ -44,7 +43,7 @@ use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::Lrc;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, DefIndex};
+use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LocalDefId};
 use rustc_hir::{Crate, HirIdSet, ItemLocalId, TraitCandidate};
 use rustc_index::vec::IndexVec;
 use rustc_session::config::{EntryFnType, OptLevel, OutputFilenames, SymbolManglingVersion};
@@ -57,13 +56,12 @@ use rustc_span::symbol::Symbol;
 use rustc_span::{Span, DUMMY_SP};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::convert::TryFrom;
 use std::ops::Deref;
 use std::sync::Arc;
 
 #[macro_use]
 mod plumbing;
-pub use self::plumbing::CycleError;
+pub(crate) use self::plumbing::CycleError;
 use self::plumbing::*;
 
 mod stats;
@@ -147,13 +145,11 @@ rustc_query_append! { [define_queries!][<'tcx>] }
 ///
 /// When you implement a new query, it will likely have a corresponding new
 /// `DepKind`, and you'll have to support it here in `force_from_dep_node()`. As
-/// a rule of thumb, if your query takes a `DefId` or `DefIndex` as sole parameter,
+/// a rule of thumb, if your query takes a `DefId` or `LocalDefId` as sole parameter,
 /// then `force_from_dep_node()` should not fail for it. Otherwise, you can just
 /// add it to the "We don't have enough information to reconstruct..." group in
 /// the match below.
 pub fn force_from_dep_node<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> bool {
-    use crate::dep_graph::DepKind;
-
     // We must avoid ever having to call `force_from_dep_node()` for a
     // `DepNode::codegen_unit`:
     // Since we cannot reconstruct the query key of a `DepNode::codegen_unit`, we
@@ -168,7 +164,7 @@ pub fn force_from_dep_node<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> bool 
     // hit the cache instead of having to go through `force_from_dep_node`.
     // This assertion makes sure, we actually keep applying the solution above.
     debug_assert!(
-        dep_node.kind != DepKind::codegen_unit,
+        dep_node.kind != crate::dep_graph::DepKind::codegen_unit,
         "calling force_from_dep_node() on DepKind::codegen_unit"
     );
 
@@ -179,14 +175,14 @@ pub fn force_from_dep_node<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> bool 
     rustc_dep_node_force!([dep_node, tcx]
         // These are inputs that are expected to be pre-allocated and that
         // should therefore always be red or green already.
-        DepKind::CrateMetadata |
+        crate::dep_graph::DepKind::CrateMetadata |
 
         // These are anonymous nodes.
-        DepKind::TraitSelect |
+        crate::dep_graph::DepKind::TraitSelect |
 
         // We don't have enough information to reconstruct the query key of
         // these.
-        DepKind::CompileCodegenUnit => {
+        crate::dep_graph::DepKind::CompileCodegenUnit => {
             bug!("force_from_dep_node: encountered {:?}", dep_node)
         }
     );
@@ -194,15 +190,6 @@ pub fn force_from_dep_node<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> bool 
     false
 }
 
-impl DepNode {
-    /// Check whether the query invocation corresponding to the given
-    /// DepNode is eligible for on-disk-caching. If so, this is method
-    /// will execute the query corresponding to the given DepNode.
-    /// Also, as a sanity check, it expects that the corresponding query
-    /// invocation has been marked as green already.
-    pub fn try_load_from_on_disk_cache<'tcx>(&self, tcx: TyCtxt<'tcx>) {
-        use crate::dep_graph::DepKind;
-
-        rustc_dep_node_try_load_from_on_disk_cache!(self, tcx)
-    }
+pub(crate) fn try_load_from_on_disk_cache<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &DepNode) {
+    rustc_dep_node_try_load_from_on_disk_cache!(dep_node, tcx)
 }

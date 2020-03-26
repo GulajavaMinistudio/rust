@@ -31,7 +31,6 @@ use crate::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::thin_vec::ThinVec;
-use rustc_index::vec::Idx;
 use rustc_macros::HashStable_Generic;
 use rustc_serialize::{self, Decoder, Encoder};
 use rustc_span::source_map::{respan, Spanned};
@@ -251,7 +250,7 @@ impl ParenthesizedArgs {
     pub fn as_angle_bracketed_args(&self) -> AngleBracketedArgs {
         AngleBracketedArgs {
             span: self.span,
-            args: self.inputs.iter().cloned().map(|input| GenericArg::Type(input)).collect(),
+            args: self.inputs.iter().cloned().map(GenericArg::Type).collect(),
             constraints: vec![],
         }
     }
@@ -685,19 +684,8 @@ pub enum PatKind {
     MacCall(MacCall),
 }
 
-#[derive(
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    RustcEncodable,
-    RustcDecodable,
-    Debug,
-    Copy,
-    HashStable_Generic
-)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable, Debug, Copy)]
+#[derive(HashStable_Generic)]
 pub enum Mutability {
     Mut,
     Not,
@@ -1322,19 +1310,8 @@ pub enum CaptureBy {
 
 /// The movability of a generator / closure literal:
 /// whether a generator contains self-references, causing it to be `!Unpin`.
-#[derive(
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    RustcEncodable,
-    RustcDecodable,
-    Debug,
-    Copy,
-    HashStable_Generic
-)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable, Debug, Copy)]
+#[derive(HashStable_Generic)]
 pub enum Movability {
     /// May contain self-references, `!Unpin`.
     Static,
@@ -1615,19 +1592,8 @@ pub struct FnSig {
     pub decl: P<FnDecl>,
 }
 
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    HashStable_Generic,
-    RustcEncodable,
-    RustcDecodable,
-    Debug
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable, Debug)]
+#[derive(HashStable_Generic)]
 pub enum FloatTy {
     F32,
     F64,
@@ -1648,7 +1614,7 @@ impl FloatTy {
         }
     }
 
-    pub fn bit_width(self) -> usize {
+    pub fn bit_width(self) -> u64 {
         match self {
             FloatTy::F32 => 32,
             FloatTy::F64 => 64,
@@ -1656,19 +1622,8 @@ impl FloatTy {
     }
 }
 
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    HashStable_Generic,
-    RustcEncodable,
-    RustcDecodable,
-    Debug
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable, Debug)]
+#[derive(HashStable_Generic)]
 pub enum IntTy {
     Isize,
     I8,
@@ -1708,7 +1663,7 @@ impl IntTy {
         format!("{}{}", val as u128, self.name_str())
     }
 
-    pub fn bit_width(&self) -> Option<usize> {
+    pub fn bit_width(&self) -> Option<u64> {
         Some(match *self {
             IntTy::Isize => return None,
             IntTy::I8 => 8,
@@ -1732,19 +1687,8 @@ impl IntTy {
     }
 }
 
-#[derive(
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    HashStable_Generic,
-    RustcEncodable,
-    RustcDecodable,
-    Copy,
-    Debug
-)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable, Copy, Debug)]
+#[derive(HashStable_Generic)]
 pub enum UintTy {
     Usize,
     U8,
@@ -1781,7 +1725,7 @@ impl UintTy {
         format!("{}{}", val, self.name_str())
     }
 
-    pub fn bit_width(&self) -> Option<usize> {
+    pub fn bit_width(&self) -> Option<u64> {
         Some(match *self {
             UintTy::Usize => return None,
             UintTy::U8 => 8,
@@ -2251,27 +2195,22 @@ pub enum AttrStyle {
     Inner,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Copy)]
-pub struct AttrId(pub usize);
-
-impl Idx for AttrId {
-    fn new(idx: usize) -> Self {
-        AttrId(idx)
-    }
-    fn index(self) -> usize {
-        self.0
+rustc_index::newtype_index! {
+    pub struct AttrId {
+        ENCODABLE = custom
+        DEBUG_FORMAT = "AttrId({})"
     }
 }
 
 impl rustc_serialize::Encodable for AttrId {
-    fn encode<S: Encoder>(&self, s: &mut S) -> Result<(), S::Error> {
-        s.emit_unit()
+    fn encode<S: Encoder>(&self, _: &mut S) -> Result<(), S::Error> {
+        Ok(())
     }
 }
 
 impl rustc_serialize::Decodable for AttrId {
-    fn decode<D: Decoder>(d: &mut D) -> Result<AttrId, D::Error> {
-        d.read_nil().map(|_| crate::attr::mk_attr_id())
+    fn decode<D: Decoder>(_: &mut D) -> Result<AttrId, D::Error> {
+        Ok(crate::attr::mk_attr_id())
     }
 }
 

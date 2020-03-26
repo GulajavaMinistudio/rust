@@ -489,7 +489,6 @@ impl<'a> TraitDef<'a> {
                 // set earlier; see
                 // librustc_expand/expand.rs:MacroExpander::fully_expand_fragment()
                 // librustc_expand/base.rs:Annotatable::derive_allowed()
-                return;
             }
         }
     }
@@ -1057,8 +1056,9 @@ impl<'a> MethodDef<'a> {
                     self_: field,
                     other: other_fields
                         .iter_mut()
-                        .map(|l| match l.next().unwrap() {
-                            (.., ex, _) => ex,
+                        .map(|l| {
+                            let (.., ex, _) = l.next().unwrap();
+                            ex
                         })
                         .collect(),
                     attrs,

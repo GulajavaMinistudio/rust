@@ -1,10 +1,11 @@
 //! This module contains `HashStable` implementations for various data types
 //! from rustc::ty in no particular order.
 
-use crate::ich::{Fingerprint, NodeIdHashingMode, StableHashingContext};
+use crate::ich::{NodeIdHashingMode, StableHashingContext};
 use crate::middle::region;
 use crate::mir;
 use crate::ty;
+use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher, ToStableHashKey};
 use std::cell::RefCell;
@@ -91,9 +92,6 @@ impl<'a> HashStable<StableHashingContext<'a>> for ty::RegionKind {
             }
             ty::ReFree(ref free_region) => {
                 free_region.hash_stable(hcx, hasher);
-            }
-            ty::ReClosureBound(vid) => {
-                vid.hash_stable(hcx, hasher);
             }
             ty::ReVar(..) | ty::RePlaceholder(..) => {
                 bug!("StableHasher: unexpected region {:?}", *self)

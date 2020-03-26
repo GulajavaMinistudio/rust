@@ -357,18 +357,11 @@ impl MutVisitor<'tcx> for TransformVisitor<'tcx> {
     }
 }
 
-fn make_generator_state_argument_indirect<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: DefId,
-    body: &mut BodyAndCache<'tcx>,
-) {
+fn make_generator_state_argument_indirect<'tcx>(tcx: TyCtxt<'tcx>, body: &mut BodyAndCache<'tcx>) {
     let gen_ty = body.local_decls.raw[1].ty;
 
-    let region = ty::ReFree(ty::FreeRegion { scope: def_id, bound_region: ty::BoundRegion::BrEnv });
-
-    let region = tcx.mk_region(region);
-
-    let ref_gen_ty = tcx.mk_ref(region, ty::TypeAndMut { ty: gen_ty, mutbl: hir::Mutability::Mut });
+    let ref_gen_ty =
+        tcx.mk_ref(tcx.lifetimes.re_erased, ty::TypeAndMut { ty: gen_ty, mutbl: Mutability::Mut });
 
     // Replace the by value generator argument
     body.local_decls.raw[1].ty = ref_gen_ty;
@@ -874,7 +867,6 @@ fn elaborate_generator_drops<'tcx>(
 fn create_generator_drop_shim<'tcx>(
     tcx: TyCtxt<'tcx>,
     transform: &TransformVisitor<'tcx>,
-    def_id: DefId,
     source: MirSource<'tcx>,
     gen_ty: Ty<'tcx>,
     body: &mut BodyAndCache<'tcx>,
@@ -912,7 +904,7 @@ fn create_generator_drop_shim<'tcx>(
         local_info: LocalInfo::Other,
     };
 
-    make_generator_state_argument_indirect(tcx, def_id, &mut body);
+    make_generator_state_argument_indirect(tcx, &mut body);
 
     // Change the generator argument from &mut to *mut
     body.local_decls[SELF_ARG] = LocalDecl {
@@ -988,18 +980,100 @@ fn insert_panic_block<'tcx>(
     assert_block
 }
 
+fn can_return<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
+    // Returning from a function with an uninhabited return type is undefined behavior.
+    if body.return_ty().conservative_is_privately_uninhabited(tcx) {
+        return false;
+    }
+
+    // If there's a return terminator the function may return.
+    for block in body.basic_blocks() {
+        if let TerminatorKind::Return = block.terminator().kind {
+            return true;
+        }
+    }
+
+    // Otherwise the function can't return.
+    false
+}
+
+fn can_unwind<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
+    // Nothing can unwind when landing pads are off.
+    if tcx.sess.no_landing_pads() {
+        return false;
+    }
+
+    // Unwinds can only start at certain terminators.
+    for block in body.basic_blocks() {
+        match block.terminator().kind {
+            // These never unwind.
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Abort
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable
+            | TerminatorKind::GeneratorDrop
+            | TerminatorKind::FalseEdges { .. }
+            | TerminatorKind::FalseUnwind { .. } => {}
+
+            // Resume will *continue* unwinding, but if there's no other unwinding terminator it
+            // will never be reached.
+            TerminatorKind::Resume => {}
+
+            TerminatorKind::Yield { .. } => {
+                unreachable!("`can_unwind` called before generator transform")
+            }
+
+            // These may unwind.
+            TerminatorKind::Drop { .. }
+            | TerminatorKind::DropAndReplace { .. }
+            | TerminatorKind::Call { .. }
+            | TerminatorKind::Assert { .. } => return true,
+        }
+    }
+
+    // If we didn't find an unwinding terminator, the function cannot unwind.
+    false
+}
+
 fn create_generator_resume_function<'tcx>(
     tcx: TyCtxt<'tcx>,
     transform: TransformVisitor<'tcx>,
-    def_id: DefId,
     source: MirSource<'tcx>,
     body: &mut BodyAndCache<'tcx>,
+    can_return: bool,
 ) {
+    let can_unwind = can_unwind(tcx, body);
+
     // Poison the generator when it unwinds
-    for block in body.basic_blocks_mut() {
-        let source_info = block.terminator().source_info;
-        if let &TerminatorKind::Resume = &block.terminator().kind {
-            block.statements.push(transform.set_discr(VariantIdx::new(POISONED), source_info));
+    if can_unwind {
+        let poison_block = BasicBlock::new(body.basic_blocks().len());
+        let source_info = source_info(body);
+        body.basic_blocks_mut().push(BasicBlockData {
+            statements: vec![transform.set_discr(VariantIdx::new(POISONED), source_info)],
+            terminator: Some(Terminator { source_info, kind: TerminatorKind::Resume }),
+            is_cleanup: true,
+        });
+
+        for (idx, block) in body.basic_blocks_mut().iter_enumerated_mut() {
+            let source_info = block.terminator().source_info;
+
+            if let TerminatorKind::Resume = block.terminator().kind {
+                // An existing `Resume` terminator is redirected to jump to our dedicated
+                // "poisoning block" above.
+                if idx != poison_block {
+                    *block.terminator_mut() = Terminator {
+                        source_info,
+                        kind: TerminatorKind::Goto { target: poison_block },
+                    };
+                }
+            } else if !block.is_cleanup {
+                // Any terminators that *can* unwind but don't have an unwind target set are also
+                // pointed at our poisoning block (unless they're part of the cleanup path).
+                if let Some(unwind @ None) = block.terminator_mut().unwind_mut() {
+                    *unwind = Some(poison_block);
+                }
+            }
         }
     }
 
@@ -1012,12 +1086,24 @@ fn create_generator_resume_function<'tcx>(
 
     // Panic when resumed on the returned or poisoned state
     let generator_kind = body.generator_kind.unwrap();
-    cases.insert(1, (RETURNED, insert_panic_block(tcx, body, ResumedAfterReturn(generator_kind))));
-    cases.insert(2, (POISONED, insert_panic_block(tcx, body, ResumedAfterPanic(generator_kind))));
+
+    if can_unwind {
+        cases.insert(
+            1,
+            (POISONED, insert_panic_block(tcx, body, ResumedAfterPanic(generator_kind))),
+        );
+    }
+
+    if can_return {
+        cases.insert(
+            1,
+            (RETURNED, insert_panic_block(tcx, body, ResumedAfterReturn(generator_kind))),
+        );
+    }
 
     insert_switch(body, cases, &transform, TerminatorKind::Unreachable);
 
-    make_generator_state_argument_indirect(tcx, def_id, body);
+    make_generator_state_argument_indirect(tcx, body);
     make_generator_state_argument_pinned(tcx, body);
 
     no_landing_pads(tcx, body);
@@ -1150,8 +1236,8 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
             ty::Generator(_, substs, movability) => {
                 let substs = substs.as_generator();
                 (
-                    substs.upvar_tys(def_id, tcx).collect(),
-                    substs.witness(def_id, tcx),
+                    substs.upvar_tys().collect(),
+                    substs.witness(),
                     substs.discr_ty(tcx),
                     movability == hir::Movability::Movable,
                 )
@@ -1197,6 +1283,8 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         let (remap, layout, storage_liveness) =
             compute_layout(tcx, source, &upvars, interior, movable, body);
 
+        let can_return = can_return(tcx, body);
+
         // Run the transformation which converts Places from Local to generator struct
         // accesses for locals in `remap`.
         // It also rewrites `return x` and `yield y` as writing a new generator state and returning
@@ -1235,11 +1323,11 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
 
         // Create a copy of our MIR and use it to create the drop shim for the generator
         let drop_shim =
-            create_generator_drop_shim(tcx, &transform, def_id, source, gen_ty, body, drop_clean);
+            create_generator_drop_shim(tcx, &transform, source, gen_ty, body, drop_clean);
 
         body.generator_drop = Some(box drop_shim);
 
         // Create the Generator::resume function
-        create_generator_resume_function(tcx, transform, def_id, source, body);
+        create_generator_resume_function(tcx, transform, source, body, can_return);
     }
 }

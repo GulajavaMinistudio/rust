@@ -4,6 +4,7 @@
 //! That's useful because it means other passes (e.g. promotion) can rely on `const`s
 //! to be const-safe.
 
+use std::convert::TryFrom;
 use std::fmt::Write;
 use std::ops::RangeInclusive;
 
@@ -746,7 +747,7 @@ impl<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
                 }
                 // This is the element type size.
                 let layout = self.ecx.layout_of(tys)?;
-                // This is the size in bytes of the whole array.
+                // This is the size in bytes of the whole array. (This checks for overflow.)
                 let size = layout.size * len;
                 // Size is not 0, get a pointer.
                 let ptr = self.ecx.force_ptr(mplace.ptr)?;
@@ -777,7 +778,8 @@ impl<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
                                 // Some byte was undefined, determine which
                                 // element that byte belongs to so we can
                                 // provide an index.
-                                let i = (ptr.offset.bytes() / layout.size.bytes()) as usize;
+                                let i = usize::try_from(ptr.offset.bytes() / layout.size.bytes())
+                                    .unwrap();
                                 self.path.push(PathElem::ArrayElem(i));
 
                                 throw_validation_failure!("undefined bytes", self.path)
@@ -825,11 +827,10 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // Run it.
         match visitor.visit_value(op) {
             Ok(()) => Ok(()),
+            // We should only get validation errors here. Avoid other errors as
+            // those do not show *where* in the value the issue lies.
             Err(err) if matches!(err.kind, err_ub!(ValidationFailure { .. })) => Err(err),
-            Err(err) if cfg!(debug_assertions) => {
-                bug!("Unexpected error during validation: {}", err)
-            }
-            Err(err) => Err(err),
+            Err(err) => bug!("Unexpected error during validation: {}", err),
         }
     }
 

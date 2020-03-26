@@ -80,6 +80,7 @@
 #![feature(box_into_raw_non_null)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
+#![feature(cfg_sanitize)]
 #![feature(cfg_target_has_atomic)]
 #![feature(coerce_unsized)]
 #![feature(const_generic_impls_guard)]
@@ -160,6 +161,8 @@ pub mod str;
 pub mod string;
 #[cfg(target_has_atomic = "ptr")]
 pub mod sync;
+#[cfg(target_has_atomic = "ptr")]
+pub mod task;
 #[cfg(test)]
 mod tests;
 pub mod vec;

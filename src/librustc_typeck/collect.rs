@@ -162,8 +162,10 @@ crate fn placeholder_type_error(
         // `struct S<T>(T);` instead of `struct S<_, T>(T);`.
         sugg.push((arg.span, (*type_name).to_string()));
     } else {
+        let last = generics.iter().last().unwrap();
         sugg.push((
-            generics.iter().last().unwrap().span.shrink_to_hi(),
+            // Account for bounds, we want `fn foo<T: E, K>(_: K)` not `fn foo<T, K: E>(_: K)`.
+            last.bounds_span().unwrap_or(last.span).shrink_to_hi(),
             format!(", {}", type_name),
         ));
     }
@@ -1306,47 +1308,67 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::Generics {
     // Now create the real type and const parameters.
     let type_start = own_start - has_self as u32 + params.len() as u32;
     let mut i = 0;
-    params.extend(ast_generics.params.iter().filter_map(|param| {
-        let kind = match param.kind {
-            GenericParamKind::Type { ref default, synthetic, .. } => {
-                if !allow_defaults && default.is_some() {
-                    if !tcx.features().default_type_parameter_fallback {
-                        tcx.struct_span_lint_hir(
-                            lint::builtin::INVALID_TYPE_PARAM_DEFAULT,
-                            param.hir_id,
-                            param.span,
-                            |lint| {
-                                lint.build(
-                                    "defaults for type parameters are only allowed in \
-                                            `struct`, `enum`, `type`, or `trait` definitions.",
-                                )
-                                .emit();
-                            },
-                        );
-                    }
-                }
 
-                ty::GenericParamDefKind::Type {
-                    has_default: default.is_some(),
-                    object_lifetime_default: object_lifetime_defaults
-                        .as_ref()
-                        .map_or(rl::Set1::Empty, |o| o[i]),
-                    synthetic,
+    // FIXME(const_generics): a few places in the compiler expect generic params
+    // to be in the order lifetimes, then type params, then const params.
+    //
+    // To prevent internal errors in case const parameters are supplied before
+    // type parameters we first add all type params, then all const params.
+    params.extend(ast_generics.params.iter().filter_map(|param| {
+        if let GenericParamKind::Type { ref default, synthetic, .. } = param.kind {
+            if !allow_defaults && default.is_some() {
+                if !tcx.features().default_type_parameter_fallback {
+                    tcx.struct_span_lint_hir(
+                        lint::builtin::INVALID_TYPE_PARAM_DEFAULT,
+                        param.hir_id,
+                        param.span,
+                        |lint| {
+                            lint.build(
+                                "defaults for type parameters are only allowed in \
+                                        `struct`, `enum`, `type`, or `trait` definitions.",
+                            )
+                            .emit();
+                        },
+                    );
                 }
             }
-            GenericParamKind::Const { .. } => ty::GenericParamDefKind::Const,
-            _ => return None,
-        };
 
-        let param_def = ty::GenericParamDef {
-            index: type_start + i as u32,
-            name: param.name.ident().name,
-            def_id: tcx.hir().local_def_id(param.hir_id),
-            pure_wrt_drop: param.pure_wrt_drop,
-            kind,
-        };
-        i += 1;
-        Some(param_def)
+            let kind = ty::GenericParamDefKind::Type {
+                has_default: default.is_some(),
+                object_lifetime_default: object_lifetime_defaults
+                    .as_ref()
+                    .map_or(rl::Set1::Empty, |o| o[i]),
+                synthetic,
+            };
+
+            let param_def = ty::GenericParamDef {
+                index: type_start + i as u32,
+                name: param.name.ident().name,
+                def_id: tcx.hir().local_def_id(param.hir_id),
+                pure_wrt_drop: param.pure_wrt_drop,
+                kind,
+            };
+            i += 1;
+            Some(param_def)
+        } else {
+            None
+        }
+    }));
+
+    params.extend(ast_generics.params.iter().filter_map(|param| {
+        if let GenericParamKind::Const { .. } = param.kind {
+            let param_def = ty::GenericParamDef {
+                index: type_start + i as u32,
+                name: param.name.ident().name,
+                def_id: tcx.hir().local_def_id(param.hir_id),
+                pure_wrt_drop: param.pure_wrt_drop,
+                kind: ty::GenericParamDefKind::Const,
+            };
+            i += 1;
+            Some(param_def)
+        } else {
+            None
+        }
     }));
 
     // provide junk type parameter defs - the only place that
@@ -1354,9 +1376,9 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::Generics {
     // and we don't do that for closures.
     if let Node::Expr(&hir::Expr { kind: hir::ExprKind::Closure(.., gen), .. }) = node {
         let dummy_args = if gen.is_some() {
-            &["<resume_ty>", "<yield_ty>", "<return_ty>", "<witness>"][..]
+            &["<resume_ty>", "<yield_ty>", "<return_ty>", "<witness>", "<upvars>"][..]
         } else {
-            &["<closure_kind>", "<closure_signature>"][..]
+            &["<closure_kind>", "<closure_signature>", "<upvars>"][..]
         };
 
         params.extend(dummy_args.iter().enumerate().map(|(i, &arg)| ty::GenericParamDef {
@@ -1370,22 +1392,6 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::Generics {
                 synthetic: None,
             },
         }));
-
-        if let Some(upvars) = tcx.upvars(def_id) {
-            params.extend(upvars.iter().zip((dummy_args.len() as u32)..).map(|(_, i)| {
-                ty::GenericParamDef {
-                    index: type_start + i,
-                    name: Symbol::intern("<upvar>"),
-                    def_id,
-                    pure_wrt_drop: false,
-                    kind: ty::GenericParamDefKind::Type {
-                        has_default: false,
-                        object_lifetime_default: rl::Set1::Empty,
-                        synthetic: None,
-                    },
-                }
-            }));
-        }
     }
 
     let param_def_id_to_index = params.iter().map(|param| (param.def_id, param.index)).collect();
@@ -1482,7 +1488,7 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
                     sig.header.unsafety,
                     sig.header.abi,
                     &sig.decl,
-                    &generics.params[..],
+                    &generics,
                     Some(ident.span),
                 ),
             }
@@ -1493,18 +1499,17 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
             ident,
             generics,
             ..
-        }) => AstConv::ty_of_fn(
-            &icx,
-            header.unsafety,
-            header.abi,
-            decl,
-            &generics.params[..],
-            Some(ident.span),
-        ),
+        }) => {
+            AstConv::ty_of_fn(&icx, header.unsafety, header.abi, decl, &generics, Some(ident.span))
+        }
 
-        ForeignItem(&hir::ForeignItem { kind: ForeignItemKind::Fn(ref fn_decl, _, _), .. }) => {
+        ForeignItem(&hir::ForeignItem {
+            kind: ForeignItemKind::Fn(ref fn_decl, _, _),
+            ident,
+            ..
+        }) => {
             let abi = tcx.hir().get_foreign_abi(hir_id);
-            compute_sig_of_foreign_fn_decl(tcx, def_id, fn_decl, abi)
+            compute_sig_of_foreign_fn_decl(tcx, def_id, fn_decl, abi, ident)
         }
 
         Ctor(data) | Variant(hir::Variant { data, .. }) if data.ctor_hir_id().is_some() => {
@@ -1527,16 +1532,13 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
             // argument. In any case they are embedded within the
             // closure type as part of the `ClosureSubsts`.
             //
-            // To get
-            // the signature of a closure, you should use the
-            // `closure_sig` method on the `ClosureSubsts`:
+            // To get the signature of a closure, you should use the
+            // `sig` method on the `ClosureSubsts`:
             //
-            //    closure_substs.sig(def_id, tcx)
-            //
-            // or, inside of an inference context, you can use
-            //
-            //    infcx.closure_sig(def_id, closure_substs)
-            bug!("to get the signature of a closure, use `closure_sig()` not `fn_sig()`");
+            //    substs.as_closure().sig(def_id, tcx)
+            bug!(
+                "to get the signature of a closure, use `substs.as_closure().sig()` not `fn_sig()`",
+            );
         }
 
         x => {
@@ -1563,9 +1565,10 @@ fn impl_polarity(tcx: TyCtxt<'_>, def_id: DefId) -> ty::ImplPolarity {
     let is_rustc_reservation = tcx.has_attr(def_id, sym::rustc_reservation_impl);
     let item = tcx.hir().expect_item(hir_id);
     match &item.kind {
-        hir::ItemKind::Impl { polarity: hir::ImplPolarity::Negative(_), .. } => {
+        hir::ItemKind::Impl { polarity: hir::ImplPolarity::Negative(span), of_trait, .. } => {
             if is_rustc_reservation {
-                tcx.sess.span_err(item.span, "reservation impls can't be negative");
+                let span = span.to(of_trait.as_ref().map(|t| t.path.span).unwrap_or(*span));
+                tcx.sess.span_err(span, "reservation impls can't be negative");
             }
             ty::ImplPolarity::Negative
         }
@@ -2119,13 +2122,21 @@ fn compute_sig_of_foreign_fn_decl<'tcx>(
     def_id: DefId,
     decl: &'tcx hir::FnDecl<'tcx>,
     abi: abi::Abi,
+    ident: Ident,
 ) -> ty::PolyFnSig<'tcx> {
     let unsafety = if abi == abi::Abi::RustIntrinsic {
         intrinsic_operation_unsafety(&tcx.item_name(def_id).as_str())
     } else {
         hir::Unsafety::Unsafe
     };
-    let fty = AstConv::ty_of_fn(&ItemCtxt::new(tcx, def_id), unsafety, abi, decl, &[], None);
+    let fty = AstConv::ty_of_fn(
+        &ItemCtxt::new(tcx, def_id),
+        unsafety,
+        abi,
+        decl,
+        &hir::Generics::empty(),
+        Some(ident.span),
+    );
 
     // Feature gate SIMD types in FFI, since I am not sure that the
     // ABIs are handled at all correctly. -huonw
@@ -2322,6 +2333,9 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
     let attrs = tcx.get_attrs(id);
 
     let mut codegen_fn_attrs = CodegenFnAttrs::new();
+    if should_inherit_track_caller(tcx, id) {
+        codegen_fn_attrs.flags |= CodegenFnAttrFlags::TRACK_CALLER;
+    }
 
     let whitelist = tcx.target_features_whitelist(LOCAL_CRATE);
 
@@ -2564,6 +2578,32 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
     }
 
     codegen_fn_attrs
+}
+
+/// Checks if the provided DefId is a method in a trait impl for a trait which has track_caller
+/// applied to the method prototype.
+fn should_inherit_track_caller(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    if let Some(impl_item) = tcx.opt_associated_item(def_id) {
+        if let ty::AssocItemContainer::ImplContainer(impl_def_id) = impl_item.container {
+            if let Some(trait_def_id) = tcx.trait_id_of_impl(impl_def_id) {
+                if let Some(trait_item) = tcx
+                    .associated_items(trait_def_id)
+                    .filter_by_name_unhygienic(impl_item.ident.name)
+                    .find(move |trait_item| {
+                        trait_item.kind == ty::AssocKind::Method
+                            && tcx.hygienic_eq(impl_item.ident, trait_item.ident, trait_def_id)
+                    })
+                {
+                    return tcx
+                        .codegen_fn_attrs(trait_item.def_id)
+                        .flags
+                        .intersects(CodegenFnAttrFlags::TRACK_CALLER);
+                }
+            }
+        }
+    }
+
+    false
 }
 
 fn check_link_ordinal(tcx: TyCtxt<'_>, attr: &ast::Attribute) -> Option<usize> {

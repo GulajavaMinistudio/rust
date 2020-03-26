@@ -18,7 +18,6 @@ use crate::type_error_struct;
 use crate::util::common::ErrorReported;
 
 use rustc::middle::lang_items;
-use rustc::mir::interpret::ErrorHandled;
 use rustc::ty;
 use rustc::ty::adjustment::{Adjust, Adjustment, AllowTwoPhase, AutoBorrow, AutoBorrowMutability};
 use rustc::ty::Ty;
@@ -1008,13 +1007,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         _expr: &'tcx hir::Expr<'tcx>,
     ) -> Ty<'tcx> {
         let tcx = self.tcx;
-        let count_def_id = tcx.hir().local_def_id(count.hir_id);
-        let count = if self.const_param_def_id(count).is_some() {
-            Ok(self.to_const(count, tcx.type_of(count_def_id)))
-        } else {
-            tcx.const_eval_poly(count_def_id)
-                .map(|val| ty::Const::from_value(tcx, val, tcx.type_of(count_def_id)))
-        };
+        let count = self.to_const(count);
 
         let uty = match expected {
             ExpectHasType(uty) => match uty.kind {
@@ -1042,17 +1035,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if element_ty.references_error() {
             return tcx.types.err;
         }
-        match count {
-            Ok(count) => tcx.mk_ty(ty::Array(t, count)),
-            Err(ErrorHandled::TooGeneric) => {
-                self.tcx.sess.span_err(
-                    tcx.def_span(count_def_id),
-                    "array lengths can't depend on generic parameters",
-                );
-                tcx.types.err
-            }
-            Err(ErrorHandled::Reported) => tcx.types.err,
-        }
+
+        tcx.mk_ty(ty::Array(t, count))
     }
 
     fn check_expr_tuple(
@@ -1069,16 +1053,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
         });
 
-        let elt_ts_iter = elts.iter().enumerate().map(|(i, e)| {
-            let t = match flds {
-                Some(ref fs) if i < fs.len() => {
-                    let ety = fs[i].expect_ty();
-                    self.check_expr_coercable_to_type(&e, ety);
-                    ety
-                }
-                _ => self.check_expr_with_expectation(&e, NoExpectation),
-            };
-            t
+        let elt_ts_iter = elts.iter().enumerate().map(|(i, e)| match flds {
+            Some(ref fs) if i < fs.len() => {
+                let ety = fs[i].expect_ty();
+                self.check_expr_coercable_to_type(&e, ety);
+                ety
+            }
+            _ => self.check_expr_with_expectation(&e, NoExpectation),
         });
         let tuple = self.tcx.mk_tup(elt_ts_iter);
         if tuple.references_error() {
@@ -1583,13 +1564,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
         let mut err = struct_span_err!(
             self.tcx().sess,
-            expr.span,
+            field.span,
             E0616,
             "field `{}` of {} `{}` is private",
             field,
             kind_name,
             struct_path
         );
+        err.span_label(field.span, "private field");
         // Also check if an accessible method exists, which is often what is meant.
         if self.method_exists(field, expr_t, expr.hir_id, false) && !self.expr_in_place(expr.hir_id)
         {
@@ -1614,7 +1596,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             field,
             expr_t
         );
-
+        err.span_label(field.span, "method, not a field");
         if !self.expr_in_place(expr.hir_id) {
             self.suggest_method_call(
                 &mut err,
@@ -1631,7 +1613,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn point_at_param_definition(&self, err: &mut DiagnosticBuilder<'_>, param: ty::ParamTy) {
-        let generics = self.tcx.generics_of(self.body_id.owner_def_id());
+        let generics = self.tcx.generics_of(self.body_id.owner.to_def_id());
         let generic_param = generics.type_param(&param, self.tcx);
         if let ty::GenericParamDefKind::Type { synthetic: Some(..), .. } = generic_param.kind {
             return;

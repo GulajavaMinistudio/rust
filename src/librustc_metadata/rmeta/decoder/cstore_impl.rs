@@ -5,8 +5,6 @@ use crate::native_libs;
 use crate::rmeta::{self, encoder};
 
 use rustc::hir::exports::Export;
-use rustc::hir::map::definitions::DefPathTable;
-use rustc::hir::map::{DefKey, DefPath, DefPathHash};
 use rustc::middle::cstore::{CrateSource, CrateStore, EncodedMetadata, NativeLibraryKind};
 use rustc::middle::exported_symbols::ExportedSymbol;
 use rustc::middle::stability::DeprecationEntry;
@@ -19,6 +17,8 @@ use rustc_ast::expand::allocator::AllocatorKind;
 use rustc_data_structures::svh::Svh;
 use rustc_hir as hir;
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::definitions::DefPathTable;
+use rustc_hir::definitions::{DefKey, DefPath, DefPathHash};
 use rustc_session::{CrateDisambiguator, Session};
 use rustc_span::source_map::{self, Span, Spanned};
 use rustc_span::symbol::Symbol;
@@ -110,7 +110,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
           |child| result.push(child.res.def_id()), tcx.sess);
         tcx.arena.alloc_slice(&result)
     }
-    associated_item => { cdata.get_associated_item(def_id.index) }
+    associated_item => { cdata.get_associated_item(def_id.index, tcx.sess) }
     impl_trait_ref => { cdata.get_impl_trait(def_id.index, tcx) }
     impl_polarity => { cdata.get_impl_polarity(def_id.index) }
     coerce_unsized_info => {
@@ -140,7 +140,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
         cdata.get_deprecation(def_id.index).map(DeprecationEntry::external)
     }
     item_attrs => { cdata.get_item_attrs(def_id.index, tcx.sess) }
-    // FIXME(#38501) We've skipped a `read` on the `hir_owner_items` of
+    // FIXME(#38501) We've skipped a `read` on the `hir_owner_nodes` of
     // a `fn` when encoding, so the dep-tracking wouldn't work.
     // This is only used by rustdoc anyway, which shouldn't have
     // incremental recompilation ever enabled.
@@ -170,7 +170,7 @@ provide! { <'tcx> tcx, def_id, other, cdata,
             .iter()
             .filter_map(|&(exported_symbol, export_level)| {
                 if let ExportedSymbol::NonGeneric(def_id) = exported_symbol {
-                    return Some((def_id, export_level))
+                    Some((def_id, export_level))
                 } else {
                     None
                 }
@@ -442,8 +442,8 @@ impl CStore {
         )
     }
 
-    pub fn associated_item_cloned_untracked(&self, def: DefId) -> ty::AssocItem {
-        self.get_crate_data(def.krate).get_associated_item(def.index)
+    pub fn associated_item_cloned_untracked(&self, def: DefId, sess: &Session) -> ty::AssocItem {
+        self.get_crate_data(def.krate).get_associated_item(def.index, sess)
     }
 
     pub fn crate_source_untracked(&self, cnum: CrateNum) -> CrateSource {

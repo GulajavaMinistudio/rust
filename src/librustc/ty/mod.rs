@@ -8,8 +8,6 @@ pub use self::Variance::*;
 
 use crate::arena::Arena;
 use crate::hir::exports::ExportMap;
-use crate::hir::map as hir_map;
-use crate::ich::Fingerprint;
 use crate::ich::StableHashingContext;
 use crate::infer::canonical::Canonical;
 use crate::middle::cstore::CrateStoreDyn;
@@ -28,6 +26,7 @@ use rustc_ast::ast::{self, Ident, Name};
 use rustc_ast::node_id::{NodeId, NodeMap, NodeSet};
 use rustc_attr as attr;
 use rustc_data_structures::captures::Captures;
+use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::sorted_map::SortedIndexMultiMap;
@@ -35,7 +34,7 @@ use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::{self, par_iter, Lrc, ParallelIterator};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Namespace, Res};
-use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX, LOCAL_CRATE};
+use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX};
 use rustc_hir::{Constness, GlobMap, Node, TraitMap};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
@@ -124,7 +123,7 @@ mod sty;
 // Data types
 
 pub struct ResolverOutputs {
-    pub definitions: hir_map::Definitions,
+    pub definitions: rustc_hir::definitions::Definitions,
     pub cstore: Box<CrateStoreDyn>,
     pub extern_crate_map: NodeMap<CrateNum>,
     pub trait_map: TraitMap<NodeId>,
@@ -384,7 +383,9 @@ impl Visibility {
                 Res::Err => Visibility::Public,
                 def => Visibility::Restricted(def.def_id()),
             },
-            hir::VisibilityKind::Inherited => Visibility::Restricted(tcx.parent_module(id)),
+            hir::VisibilityKind::Inherited => {
+                Visibility::Restricted(tcx.parent_module(id).to_def_id())
+            }
         }
     }
 
@@ -2640,19 +2641,8 @@ impl<'tcx> FieldDef {
 ///
 /// You can get the environment type of a closure using
 /// `tcx.closure_env_ty()`.
-#[derive(
-    Clone,
-    Copy,
-    PartialOrd,
-    Ord,
-    PartialEq,
-    Eq,
-    Hash,
-    Debug,
-    RustcEncodable,
-    RustcDecodable,
-    HashStable
-)]
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug, RustcEncodable, RustcDecodable)]
+#[derive(HashStable)]
 pub enum ClosureKind {
     // Warning: Ordering is significant here! The ordering is chosen
     // because the trait Fn is a subtrait of FnMut and so in turn, and
@@ -2873,8 +2863,8 @@ impl<'tcx> TyCtxt<'tcx> {
                 _ => false,
             }
         } else {
-            match self.def_kind(def_id).expect("no def for `DefId`") {
-                DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy => true,
+            match self.def_kind(def_id) {
+                Some(DefKind::AssocConst | DefKind::AssocFn | DefKind::AssocTy) => true,
                 _ => false,
             }
         };
@@ -2995,7 +2985,7 @@ impl<'tcx> TyCtxt<'tcx> {
             let def_key = self.def_key(id);
             match def_key.disambiguated_data.data {
                 // The name of a constructor is that of its parent.
-                hir_map::DefPathData::Ctor => {
+                rustc_hir::definitions::DefPathData::Ctor => {
                     self.item_name(DefId { krate: id.krate, index: def_key.parent.unwrap() })
                 }
                 _ => def_key.disambiguated_data.data.get_opt_name().unwrap_or_else(|| {
@@ -3052,17 +3042,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// If the given defid describes a method belonging to an impl, returns the
     /// `DefId` of the impl that the method belongs to; otherwise, returns `None`.
     pub fn impl_of_method(self, def_id: DefId) -> Option<DefId> {
-        let item = if def_id.krate != LOCAL_CRATE {
-            if let Some(DefKind::AssocFn) = self.def_kind(def_id) {
-                Some(self.associated_item(def_id))
-            } else {
-                None
-            }
-        } else {
-            self.opt_associated_item(def_id)
-        };
-
-        item.and_then(|trait_item| match trait_item.container {
+        self.opt_associated_item(def_id).and_then(|trait_item| match trait_item.container {
             TraitContainer(_) => None,
             ImplContainer(def_id) => Some(def_id),
         })
@@ -3094,9 +3074,9 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     fn expansion_that_defined(self, scope: DefId) -> ExpnId {
-        match scope.krate {
-            LOCAL_CRATE => self.hir().definitions().expansion_that_defined(scope.index),
-            _ => ExpnId::root(),
+        match scope.as_local() {
+            Some(scope) => self.hir().definitions().expansion_that_defined(scope),
+            None => ExpnId::root(),
         }
     }
 
@@ -3117,7 +3097,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 Some(actual_expansion) => {
                     self.hir().definitions().parent_module_of_macro_def(actual_expansion)
                 }
-                None => self.parent_module(block),
+                None => self.parent_module(block).to_def_id(),
             };
         (ident, scope)
     }
@@ -3146,6 +3126,7 @@ pub fn provide(providers: &mut ty::query::Providers<'_>) {
     context::provide(providers);
     erase_regions::provide(providers);
     layout::provide(providers);
+    super::util::bug::provide(providers);
     *providers = ty::query::Providers {
         trait_impls_of: trait_def::trait_impls_of_provider,
         all_local_trait_impls: trait_def::all_local_trait_impls,

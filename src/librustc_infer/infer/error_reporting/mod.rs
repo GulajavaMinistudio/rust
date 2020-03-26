@@ -55,7 +55,6 @@ use crate::traits::{
     IfExpressionCause, MatchExpressionArmCause, ObligationCause, ObligationCauseCode,
 };
 
-use rustc::hir::map;
 use rustc::middle::region;
 use rustc::ty::error::TypeError;
 use rustc::ty::{
@@ -151,11 +150,6 @@ pub(super) fn note_and_explain_region(
         // and ReLateBound though.
         ty::ReVar(_) | ty::ReLateBound(..) | ty::ReErased => {
             (format!("lifetime {:?}", region), None)
-        }
-
-        // We shouldn't encounter an error message with ReClosureBound.
-        ty::ReClosureBound(..) => {
-            bug!("encountered unexpected ReClosureBound: {:?}", region,);
         }
     };
 
@@ -554,7 +548,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         terr: &TypeError<'tcx>,
     ) {
         use hir::def_id::CrateNum;
-        use map::DisambiguatedDefPathData;
+        use rustc_hir::definitions::DisambiguatedDefPathData;
         use ty::print::Printer;
         use ty::subst::GenericArg;
 
@@ -1784,11 +1778,11 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         // suggest adding an explicit lifetime bound to it.
         let type_param_span = match (self.in_progress_tables, bound_kind) {
             (Some(ref table), GenericKind::Param(ref param)) => {
-                let table = table.borrow();
-                table.local_id_root.and_then(|did| {
-                    let generics = self.tcx.generics_of(did);
-                    // Account for the case where `did` corresponds to `Self`, which doesn't have
-                    // the expected type argument.
+                let table_owner = table.borrow().hir_owner;
+                table_owner.and_then(|table_owner| {
+                    let generics = self.tcx.generics_of(table_owner.to_def_id());
+                    // Account for the case where `param` corresponds to `Self`,
+                    // which doesn't have the expected type argument.
                     if !(generics.has_self && param.index == 0) {
                         let type_param = generics.type_param(param, self.tcx);
                         let hir = &self.tcx.hir();

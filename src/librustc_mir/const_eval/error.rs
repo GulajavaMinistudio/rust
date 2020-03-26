@@ -5,13 +5,14 @@ use rustc::mir::AssertKind;
 use rustc_span::Symbol;
 
 use super::InterpCx;
-use crate::interpret::{ConstEvalErr, InterpError, InterpErrorInfo, Machine};
+use crate::interpret::{ConstEvalErr, InterpErrorInfo, Machine};
 
 /// The CTFE machine has some custom error kinds.
 #[derive(Clone, Debug)]
 pub enum ConstEvalErrKind {
     NeedsRfc(String),
     ConstAccessesStatic,
+    ModifiedGlobal,
     AssertFailure(AssertKind<u64>),
     Panic { msg: Symbol, line: u32, col: u32, file: Symbol },
 }
@@ -21,7 +22,7 @@ pub enum ConstEvalErrKind {
 // handle these.
 impl<'tcx> Into<InterpErrorInfo<'tcx>> for ConstEvalErrKind {
     fn into(self) -> InterpErrorInfo<'tcx> {
-        InterpError::MachineStop(Box::new(self.to_string())).into()
+        err_machine_stop!(self.to_string()).into()
     }
 }
 
@@ -33,6 +34,9 @@ impl fmt::Display for ConstEvalErrKind {
                 write!(f, "\"{}\" needs an rfc before being allowed inside constants", msg)
             }
             ConstAccessesStatic => write!(f, "constant accesses static"),
+            ModifiedGlobal => {
+                write!(f, "modifying a static's initial value from another static's initializer")
+            }
             AssertFailure(ref msg) => write!(f, "{:?}", msg),
             Panic { msg, line, col, file } => {
                 write!(f, "the evaluated program panicked at '{}', {}:{}:{}", msg, file, line, col)

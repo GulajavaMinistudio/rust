@@ -505,7 +505,7 @@ impl<'tcx> RegionConstraintCollector<'tcx> {
             self.undo_log.push(AddVar(vid));
         }
         debug!("created new region variable {:?} in {:?} with origin {:?}", vid, universe, origin);
-        return vid;
+        vid
     }
 
     /// Returns the universe for the given variable.
@@ -798,7 +798,7 @@ impl<'tcx> RegionConstraintCollector<'tcx> {
             | ty::ReEarlyBound(..) => ty::UniverseIndex::ROOT,
             ty::ReEmpty(ui) => ui,
             ty::RePlaceholder(placeholder) => placeholder.universe,
-            ty::ReClosureBound(vid) | ty::ReVar(vid) => self.var_universe(vid),
+            ty::ReVar(vid) => self.var_universe(vid),
             ty::ReLateBound(..) => bug!("universe(): encountered bound region {:?}", region),
         }
     }

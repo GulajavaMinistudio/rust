@@ -17,7 +17,7 @@ use rustc_ast::util::map_in_place::MapInPlace;
 use rustc_ast::visit::{self, AssocCtxt, Visitor};
 use rustc_ast_pretty::pprust;
 use rustc_attr::{self as attr, is_builtin_attr, HasAttrs};
-use rustc_errors::{Applicability, FatalError, PResult};
+use rustc_errors::{Applicability, PResult};
 use rustc_feature::Features;
 use rustc_parse::parser::Parser;
 use rustc_parse::validate_attr;
@@ -204,7 +204,7 @@ ast_fragments! {
 }
 
 impl AstFragmentKind {
-    fn dummy(self, span: Span) -> AstFragment {
+    crate fn dummy(self, span: Span) -> AstFragment {
         self.make_from(DummyResult::any(span)).expect("couldn't create a dummy AST fragment")
     }
 
@@ -645,7 +645,6 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
             ))
             .emit();
         self.cx.trace_macros_diag();
-        FatalError.raise();
     }
 
     /// A macro's expansion does not fit in this fragment kind.
@@ -665,8 +664,17 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         invoc: Invocation,
         ext: &SyntaxExtensionKind,
     ) -> ExpandResult<AstFragment, Invocation> {
-        if self.cx.current_expansion.depth > self.cx.ecfg.recursion_limit {
-            self.error_recursion_limit_reached();
+        let recursion_limit =
+            self.cx.reduced_recursion_limit.unwrap_or(self.cx.ecfg.recursion_limit);
+        if self.cx.current_expansion.depth > recursion_limit {
+            if self.cx.reduced_recursion_limit.is_none() {
+                self.error_recursion_limit_reached();
+            }
+
+            // Reduce the recursion limit by half each time it triggers.
+            self.cx.reduced_recursion_limit = Some(recursion_limit / 2);
+
+            return ExpandResult::Ready(invoc.fragment_kind.dummy(invoc.span()));
         }
 
         let (fragment_kind, span) = (invoc.fragment_kind, invoc.span());
@@ -674,7 +682,10 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
             InvocationKind::Bang { mac, .. } => match ext {
                 SyntaxExtensionKind::Bang(expander) => {
                     self.gate_proc_macro_expansion_kind(span, fragment_kind);
-                    let tok_result = expander.expand(self.cx, span, mac.args.inner_tokens());
+                    let tok_result = match expander.expand(self.cx, span, mac.args.inner_tokens()) {
+                        Err(_) => return ExpandResult::Ready(fragment_kind.dummy(span)),
+                        Ok(ts) => ts,
+                    };
                     self.parse_ast_fragment(tok_result, fragment_kind, &mac.path, span)
                 }
                 SyntaxExtensionKind::LegacyBang(expander) => {
@@ -701,8 +712,11 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                     if let MacArgs::Eq(..) = attr_item.args {
                         self.cx.span_err(span, "key-value macro attributes are not supported");
                     }
-                    let tok_result =
-                        expander.expand(self.cx, span, attr_item.args.inner_tokens(), tokens);
+                    let inner_tokens = attr_item.args.inner_tokens();
+                    let tok_result = match expander.expand(self.cx, span, inner_tokens, tokens) {
+                        Err(_) => return ExpandResult::Ready(fragment_kind.dummy(span)),
+                        Ok(ts) => ts,
+                    };
                     self.parse_ast_fragment(tok_result, fragment_kind, &attr_item.path, span)
                 }
                 SyntaxExtensionKind::LegacyAttr(expander) => {
@@ -1131,6 +1145,8 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
             // macros are expanded before any lint passes so this warning has to be hardcoded
             if attr.has_name(sym::derive) {
                 self.cx
+                    .parse_sess()
+                    .span_diagnostic
                     .struct_span_warn(attr.span, "`#[derive]` does nothing on macro invocations")
                     .note("this may become a hard error in a future release")
                     .emit();

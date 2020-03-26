@@ -20,7 +20,6 @@ use rustc_feature::is_builtin_attr_name;
 use rustc_hir::def::{self, DefKind, NonMacroAttrKind};
 use rustc_hir::def_id;
 use rustc_session::lint::builtin::UNUSED_MACROS;
-use rustc_session::parse::feature_err;
 use rustc_session::Session;
 use rustc_span::edition::Edition;
 use rustc_span::hygiene::{self, ExpnData, ExpnId, ExpnKind};
@@ -83,7 +82,7 @@ fn sub_namespace_match(candidate: Option<MacroKind>, requirement: Option<MacroKi
 // line-breaks and is slow.
 fn fast_print_path(path: &ast::Path) -> Symbol {
     if path.segments.len() == 1 {
-        return path.segments[0].ident.name;
+        path.segments[0].ident.name
     } else {
         let mut path_str = String::with_capacity(64);
         for (i, segment) in path.segments.iter().enumerate() {
@@ -397,20 +396,16 @@ impl<'a> Resolver<'a> {
             Err(Determinacy::Undetermined) => return Err(Indeterminate),
         };
 
-        // Report errors and enforce feature gates for the resolved macro.
-        let features = self.session.features_untracked();
+        // Report errors for the resolved macro.
         for segment in &path.segments {
             if let Some(args) = &segment.args {
                 self.session.span_err(args.span(), "generic arguments in macro path");
             }
-            if kind == MacroKind::Attr
-                && !features.rustc_attrs
-                && segment.ident.as_str().starts_with("rustc")
-            {
-                let msg =
-                    "attributes starting with `rustc` are reserved for use by the `rustc` compiler";
-                feature_err(&self.session.parse_sess, sym::rustc_attrs, segment.ident.span, msg)
-                    .emit();
+            if kind == MacroKind::Attr && segment.ident.as_str().starts_with("rustc") {
+                self.session.span_err(
+                    segment.ident.span,
+                    "attributes starting with `rustc` are reserved for use by the `rustc` compiler",
+                );
             }
         }
 

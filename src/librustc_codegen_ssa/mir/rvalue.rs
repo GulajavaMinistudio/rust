@@ -106,6 +106,9 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                     }
                 }
 
+                let count =
+                    self.monomorphize(&count).eval_usize(bx.cx().tcx(), ty::ParamEnv::reveal_all());
+
                 bx.write_operand_repeatedly(cg_elem, count, dest)
             }
 
@@ -293,7 +296,12 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
                                 if let Some(discr) =
                                     operand.layout.ty.discriminant_for_variant(bx.tcx(), index)
                                 {
-                                    let discr_val = bx.cx().const_uint_big(ll_t_out, discr.val);
+                                    let discr_layout = bx.cx().layout_of(discr.ty);
+                                    let discr_t = bx.cx().immediate_backend_type(discr_layout);
+                                    let discr_val = bx.cx().const_uint_big(discr_t, discr.val);
+                                    let discr_val =
+                                        bx.intcast(discr_val, ll_t_out, discr.ty.is_signed());
+
                                     return (
                                         bx,
                                         OperandRef {

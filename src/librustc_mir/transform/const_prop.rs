@@ -25,7 +25,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::HirId;
 use rustc_index::vec::IndexVec;
 use rustc_session::lint;
-use rustc_span::Span;
+use rustc_span::{def_id::DefId, Span};
 use rustc_trait_selection::traits;
 
 use crate::const_eval::error_to_const_error;
@@ -38,6 +38,24 @@ use crate::transform::{MirPass, MirSource};
 
 /// The maximum number of bytes that we'll allocate space for a return value.
 const MAX_ALLOC_LIMIT: u64 = 1024;
+
+/// Macro for machine-specific `InterpError` without allocation.
+/// (These will never be shown to the user, but they help diagnose ICEs.)
+macro_rules! throw_machine_stop_str {
+    ($($tt:tt)*) => {{
+        // We make a new local type for it. The type itself does not carry any information,
+        // but its vtable (for the `MachineStopType` trait) does.
+        struct Zst;
+        // Debug-printing this type shows the desired string.
+        impl std::fmt::Debug for Zst {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, $($tt)*)
+            }
+        }
+        impl rustc::mir::interpret::MachineStopType for Zst {}
+        throw_machine_stop!(Zst)
+    }};
+}
 
 pub struct ConstProp;
 
@@ -144,7 +162,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
 struct ConstPropMachine;
 
 impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
-    type MemoryKinds = !;
+    type MemoryKind = !;
     type PointerTag = ();
     type ExtraFnVal = !;
 
@@ -154,7 +172,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
 
     type MemoryMap = FxHashMap<AllocId, (MemoryKind<!>, Allocation)>;
 
-    const STATIC_KIND: Option<!> = None;
+    const GLOBAL_KIND: Option<!> = None;
 
     const CHECK_ALIGN: bool = false;
 
@@ -192,7 +210,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
         _ret: Option<(PlaceTy<'tcx>, BasicBlock)>,
         _unwind: Option<BasicBlock>,
     ) -> InterpResult<'tcx> {
-        throw_unsup!(ConstPropUnsupported("calling intrinsics isn't supported in ConstProp"));
+        throw_machine_stop_str!("calling intrinsics isn't supported in ConstProp")
     }
 
     fn assert_panic(
@@ -200,11 +218,11 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
         _msg: &rustc::mir::AssertMessage<'tcx>,
         _unwind: Option<rustc::mir::BasicBlock>,
     ) -> InterpResult<'tcx> {
-        bug!("panics terminators are not evaluated in ConstProp");
+        bug!("panics terminators are not evaluated in ConstProp")
     }
 
     fn ptr_to_int(_mem: &Memory<'mir, 'tcx, Self>, _ptr: Pointer) -> InterpResult<'tcx, u64> {
-        throw_unsup!(ConstPropUnsupported("ptr-to-int casts aren't supported in ConstProp"));
+        throw_unsup!(ReadPointerAsBytes)
     }
 
     fn binary_ptr_op(
@@ -214,10 +232,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
         _right: ImmTy<'tcx>,
     ) -> InterpResult<'tcx, (Scalar, bool, Ty<'tcx>)> {
         // We can't do this because aliasing of memory can differ between const eval and llvm
-        throw_unsup!(ConstPropUnsupported(
-            "pointer arithmetic or comparisons aren't supported \
-            in ConstProp"
-        ));
+        throw_machine_stop_str!("pointer arithmetic or comparisons aren't supported in ConstProp")
     }
 
     #[inline(always)]
@@ -232,15 +247,13 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
     }
 
     #[inline(always)]
-    fn tag_static_base_pointer(_memory_extra: &(), _id: AllocId) -> Self::PointerTag {
-        ()
-    }
+    fn tag_global_base_pointer(_memory_extra: &(), _id: AllocId) -> Self::PointerTag {}
 
     fn box_alloc(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         _dest: PlaceTy<'tcx>,
     ) -> InterpResult<'tcx> {
-        throw_unsup!(ConstPropUnsupported("can't const prop `box` keyword"));
+        throw_machine_stop_str!("can't const prop heap allocations")
     }
 
     fn access_local(
@@ -251,20 +264,29 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
         let l = &frame.locals[local];
 
         if l.value == LocalValue::Uninitialized {
-            throw_unsup!(ConstPropUnsupported("tried to access an uninitialized local"));
+            throw_machine_stop_str!("tried to access an uninitialized local")
         }
 
         l.access()
     }
 
-    fn before_access_static(
+    fn before_access_global(
         _memory_extra: &(),
+        _alloc_id: AllocId,
         allocation: &Allocation<Self::PointerTag, Self::AllocExtra>,
+        def_id: Option<DefId>,
+        is_write: bool,
     ) -> InterpResult<'tcx> {
-        // if the static allocation is mutable or if it has relocations (it may be legal to mutate
-        // the memory behind that in the future), then we can't const prop it
-        if allocation.mutability == Mutability::Mut || allocation.relocations().len() > 0 {
-            throw_unsup!(ConstPropUnsupported("can't eval mutable statics in ConstProp"));
+        if is_write {
+            throw_machine_stop_str!("can't write to global");
+        }
+        // If the static allocation is mutable or if it has relocations (it may be legal to mutate
+        // the memory behind that in the future), then we can't const prop it.
+        if allocation.mutability == Mutability::Mut {
+            throw_machine_stop_str!("can't eval mutable globals in ConstProp");
+        }
+        if def_id.is_some() && allocation.relocations().len() > 0 {
+            throw_machine_stop_str!("can't eval statics with pointers in ConstProp");
         }
 
         Ok(())
@@ -324,14 +346,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
     ) -> ConstPropagator<'mir, 'tcx> {
         let def_id = source.def_id();
         let substs = &InternalSubsts::identity_for_item(tcx, def_id);
-        let mut param_env = tcx.param_env(def_id);
-
-        // If we're evaluating inside a monomorphic function, then use `Reveal::All` because
-        // we want to see the same instances that codegen will see. This allows us to `resolve()`
-        // specializations.
-        if !substs.needs_subst() {
-            param_env = param_env.with_reveal_all();
-        }
+        let param_env = tcx.param_env(def_id).with_reveal_all();
 
         let span = tcx.def_span(def_id);
         let mut ecx = InterpCx::new(tcx.at(span), param_env, ConstPropMachine, ());
@@ -400,22 +415,20 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
     where
         F: FnOnce(&mut Self) -> InterpResult<'tcx, T>,
     {
-        let r = match f(self) {
+        match f(self) {
             Ok(val) => Some(val),
             Err(error) => {
                 // Some errors shouldn't come up because creating them causes
                 // an allocation, which we should avoid. When that happens,
                 // dedicated error variants should be introduced instead.
-                // Only test this in debug builds though to avoid disruptions.
-                debug_assert!(
+                assert!(
                     !error.kind.allocates(),
                     "const-prop encountered allocating error: {}",
                     error
                 );
                 None
             }
-        };
-        r
+        }
     }
 
     fn eval_constant(&mut self, c: &Constant<'tcx>, source_info: SourceInfo) -> Option<OpTy<'tcx>> {
@@ -483,7 +496,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             err.span_label(source_info.span, format!("{:?}", panic));
             err.emit()
         });
-        return None;
+        None
     }
 
     fn check_unary_op(
@@ -675,7 +688,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
                                 let ty1 = substs[0].expect_ty();
                                 let ty2 = substs[1].expect_ty();
                                 let ty_is_scalar = |ty| {
-                                    this.ecx.layout_of(ty).ok().map(|ty| ty.details.abi.is_scalar())
+                                    this.ecx.layout_of(ty).ok().map(|layout| layout.abi.is_scalar())
                                         == Some(true)
                                 };
                                 if ty_is_scalar(ty1) && ty_is_scalar(ty2) {

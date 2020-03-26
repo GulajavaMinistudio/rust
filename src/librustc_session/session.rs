@@ -1,41 +1,30 @@
+use crate::cgu_reuse_tracker::CguReuseTracker;
 use crate::code_stats::CodeStats;
 pub use crate::code_stats::{DataTypeKind, FieldInfo, SizeKind, VariantInfo};
-
-use crate::cgu_reuse_tracker::CguReuseTracker;
-use rustc_data_structures::fingerprint::Fingerprint;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-
 use crate::config::{self, OutputType, PrintRequest, Sanitizer, SwitchWithOptPath};
 use crate::filesearch;
 use crate::lint;
+use crate::parse::ParseSess;
 use crate::search_paths::{PathKind, SearchPath};
-use rustc_data_structures::profiling::duration_to_secs_str;
-use rustc_errors::ErrorReported;
 
-use rustc_data_structures::base_n;
-use rustc_data_structures::impl_stable_hash_via_hash;
+pub use rustc_ast::crate_disambiguator::CrateDisambiguator;
+use rustc_data_structures::flock;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::jobserver::{self, Client};
+use rustc_data_structures::profiling::{duration_to_secs_str, SelfProfiler, SelfProfilerRef};
 use rustc_data_structures::sync::{
     self, AtomicU64, AtomicUsize, Lock, Lrc, Once, OneThread, Ordering, Ordering::SeqCst,
 };
-
-use crate::parse::ParseSess;
 use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitterWriter;
-use rustc_errors::emitter::HumanReadableErrorType;
-use rustc_errors::emitter::{Emitter, EmitterWriter};
+use rustc_errors::emitter::{Emitter, EmitterWriter, HumanReadableErrorType};
 use rustc_errors::json::JsonEmitter;
-use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticId};
+use rustc_errors::{Applicability, DiagnosticBuilder, DiagnosticId, ErrorReported};
 use rustc_span::edition::Edition;
-use rustc_span::source_map;
-use rustc_span::{MultiSpan, Span};
-
-use rustc_data_structures::flock;
-use rustc_data_structures::jobserver::{self, Client};
-use rustc_data_structures::profiling::{SelfProfiler, SelfProfilerRef};
+use rustc_span::source_map::{self, MultiSpan, Span};
 use rustc_target::spec::{PanicStrategy, RelroLevel, Target, TargetTriple};
 
 use std::cell::{self, RefCell};
 use std::env;
-use std::fmt;
 use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -161,7 +150,7 @@ pub struct PerfStats {
     /// Total number of values canonicalized queries constructed.
     pub queries_canonicalized: AtomicUsize,
     /// Number of times this query is invoked.
-    pub normalize_ty_after_erasing_regions: AtomicUsize,
+    pub normalize_generic_arg_after_erasing_regions: AtomicUsize,
     /// Number of times this query is invoked.
     pub normalize_projection_ty: AtomicUsize,
 }
@@ -718,8 +707,8 @@ impl Session {
             self.perf_stats.queries_canonicalized.load(Ordering::Relaxed)
         );
         println!(
-            "normalize_ty_after_erasing_regions:            {}",
-            self.perf_stats.normalize_ty_after_erasing_regions.load(Ordering::Relaxed)
+            "normalize_generic_arg_after_erasing_regions:   {}",
+            self.perf_stats.normalize_generic_arg_after_erasing_regions.load(Ordering::Relaxed)
         );
         println!(
             "normalize_projection_ty:                       {}",
@@ -1091,7 +1080,7 @@ fn build_session_(
             symbol_hash_time: Lock::new(Duration::from_secs(0)),
             decode_def_path_tables_time: Lock::new(Duration::from_secs(0)),
             queries_canonicalized: AtomicUsize::new(0),
-            normalize_ty_after_erasing_regions: AtomicUsize::new(0),
+            normalize_generic_arg_after_erasing_regions: AtomicUsize::new(0),
             normalize_projection_ty: AtomicUsize::new(0),
         },
         code_stats: Default::default(),
@@ -1192,34 +1181,6 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         }
     }
 }
-
-/// Hash value constructed out of all the `-C metadata` arguments passed to the
-/// compiler. Together with the crate-name forms a unique global identifier for
-/// the crate.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Clone, Copy, RustcEncodable, RustcDecodable)]
-pub struct CrateDisambiguator(Fingerprint);
-
-impl CrateDisambiguator {
-    pub fn to_fingerprint(self) -> Fingerprint {
-        self.0
-    }
-}
-
-impl fmt::Display for CrateDisambiguator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        let (a, b) = self.0.as_value();
-        let as_u128 = a as u128 | ((b as u128) << 64);
-        f.write_str(&base_n::encode(as_u128, base_n::CASE_INSENSITIVE))
-    }
-}
-
-impl From<Fingerprint> for CrateDisambiguator {
-    fn from(fingerprint: Fingerprint) -> CrateDisambiguator {
-        CrateDisambiguator(fingerprint)
-    }
-}
-
-impl_stable_hash_via_hash!(CrateDisambiguator);
 
 /// Holds data on the current incremental compilation session, if there is one.
 #[derive(Debug)]

@@ -126,7 +126,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnusedResults {
         ) -> bool {
             if ty.is_unit()
                 || cx.tcx.is_ty_uninhabited_from(
-                    cx.tcx.parent_module(expr.hir_id),
+                    cx.tcx.parent_module(expr.hir_id).to_def_id(),
                     ty,
                     cx.param_env,
                 )
@@ -543,7 +543,7 @@ impl EarlyLintPass for UnusedParens {
             // Do not lint on `(..)` as that will result in the other arms being useless.
             Paren(_)
             // The other cases do not contain sub-patterns.
-            | Wild | Rest | Lit(..) | MacCall(..) | Range(..) | Ident(.., None) | Path(..) => return,
+            | Wild | Rest | Lit(..) | MacCall(..) | Range(..) | Ident(.., None) | Path(..) => {},
             // These are list-like patterns; parens can always be removed.
             TupleStruct(_, ps) | Tuple(ps) | Slice(ps) | Or(ps) => for p in ps {
                 self.check_unused_parens_pat(cx, p, false, false);

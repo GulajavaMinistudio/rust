@@ -3,14 +3,13 @@ use crate::hair::cx::to_ref::ToRef;
 use crate::hair::cx::Cx;
 use crate::hair::util::UserAnnotatedTyHelpers;
 use crate::hair::*;
-use rustc::mir::interpret::{ErrorHandled, Scalar};
+use rustc::mir::interpret::Scalar;
 use rustc::mir::BorrowKind;
 use rustc::ty::adjustment::{Adjust, Adjustment, AutoBorrow, AutoBorrowMutability, PointerCast};
 use rustc::ty::subst::{InternalSubsts, SubstsRef};
 use rustc::ty::{self, AdtKind, Ty};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
-use rustc_hir::def_id::LocalDefId;
 use rustc_index::vec::Idx;
 use rustc_span::Span;
 
@@ -388,7 +387,7 @@ fn make_mirror_unadjusted<'a, 'tcx>(
                 .upvars(def_id)
                 .iter()
                 .flat_map(|upvars| upvars.iter())
-                .zip(substs.upvar_tys(def_id, cx.tcx))
+                .zip(substs.upvar_tys())
                 .map(|((&var_hir_id, _), ty)| capture_upvar(cx, expr, var_hir_id, ty))
                 .collect();
             ExprKind::Closure { closure_id: def_id, substs, upvars, movability }
@@ -407,34 +406,8 @@ fn make_mirror_unadjusted<'a, 'tcx>(
 
         // Now comes the rote stuff:
         hir::ExprKind::Repeat(ref v, ref count) => {
-            let def_id = cx.tcx.hir().local_def_id(count.hir_id);
-            let substs = InternalSubsts::identity_for_item(cx.tcx, def_id);
-            let span = cx.tcx.def_span(def_id);
-            let count = match cx.tcx.const_eval_resolve(
-                ty::ParamEnv::reveal_all(),
-                def_id,
-                substs,
-                None,
-                Some(span),
-            ) {
-                Ok(cv) => {
-                    if let Some(count) = cv.try_to_bits_for_ty(
-                        cx.tcx,
-                        ty::ParamEnv::reveal_all(),
-                        cx.tcx.types.usize,
-                    ) {
-                        count as u64
-                    } else {
-                        bug!("repeat count constant value can't be converted to usize");
-                    }
-                }
-                Err(ErrorHandled::Reported) => 0,
-                Err(ErrorHandled::TooGeneric) => {
-                    let span = cx.tcx.def_span(def_id);
-                    cx.tcx.sess.span_err(span, "array lengths can't depend on generic parameters");
-                    0
-                }
-            };
+            let count_def_id = cx.tcx.hir().local_def_id(count.hir_id).expect_local();
+            let count = ty::Const::from_anon_const(cx.tcx, count_def_id);
 
             ExprKind::Repeat { value: v.to_ref(), count }
         }
@@ -812,7 +785,7 @@ fn convert_var<'tcx>(
             let closure_def_id = cx.body_owner;
             let upvar_id = ty::UpvarId {
                 var_path: ty::UpvarPath { hir_id: var_hir_id },
-                closure_expr_id: LocalDefId::from_def_id(closure_def_id),
+                closure_expr_id: closure_def_id.expect_local(),
             };
             let var_ty = cx.tables().node_type(var_hir_id);
 
@@ -831,7 +804,7 @@ fn convert_var<'tcx>(
             let region = cx.tcx.mk_region(region);
 
             let self_expr = if let ty::Closure(_, closure_substs) = closure_ty.kind {
-                match cx.infcx.closure_kind(closure_def_id, closure_substs).unwrap() {
+                match cx.infcx.closure_kind(closure_substs).unwrap() {
                     ty::ClosureKind::Fn => {
                         let ref_closure_ty = cx.tcx.mk_ref(
                             region,
@@ -987,7 +960,7 @@ fn capture_upvar<'tcx>(
 ) -> ExprRef<'tcx> {
     let upvar_id = ty::UpvarId {
         var_path: ty::UpvarPath { hir_id: var_hir_id },
-        closure_expr_id: cx.tcx.hir().local_def_id(closure_expr.hir_id).to_local(),
+        closure_expr_id: cx.tcx.hir().local_def_id(closure_expr.hir_id).expect_local(),
     };
     let upvar_capture = cx.tables().upvar_capture(upvar_id);
     let temp_lifetime = cx.region_scope_tree.temporary_scope(closure_expr.hir_id.local_id);

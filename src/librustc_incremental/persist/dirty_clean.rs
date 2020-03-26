@@ -13,7 +13,7 @@
 //! Errors are reported if we are in the suitable configuration but
 //! the required condition is not met.
 
-use rustc::dep_graph::{label_strs, DepNode};
+use rustc::dep_graph::{label_strs, DepNode, DepNodeExt};
 use rustc::hir::map::Map;
 use rustc::ty::TyCtxt;
 use rustc_ast::ast::{self, Attribute, NestedMetaItem};
@@ -53,9 +53,9 @@ const BASE_FN: &[&str] = &[
 
 /// DepNodes for Hir, which is pretty much everything
 const BASE_HIR: &[&str] = &[
-    // hir_owner and hir_owner_items should be computed for all nodes
+    // hir_owner and hir_owner_nodes should be computed for all nodes
     label_strs::hir_owner,
-    label_strs::hir_owner_items,
+    label_strs::hir_owner_nodes,
 ];
 
 /// `impl` implementation of struct/trait

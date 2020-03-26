@@ -427,7 +427,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         });
 
                     if let Some((field, field_ty)) = field_receiver {
-                        let scope = self.tcx.parent_module(self.body_id);
+                        let scope = self.tcx.parent_module(self.body_id).to_def_id();
                         let is_accessible = field.vis.is_accessible_from(scope, self.tcx);
 
                         if is_accessible {
@@ -758,25 +758,27 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             MethodError::Ambiguity(sources) => {
                 let mut err = struct_span_err!(
                     self.sess(),
-                    span,
+                    item_name.span,
                     E0034,
                     "multiple applicable items in scope"
                 );
-                err.span_label(span, format!("multiple `{}` found", item_name));
+                err.span_label(item_name.span, format!("multiple `{}` found", item_name));
 
                 report_candidates(span, &mut err, sources, sugg_span);
                 err.emit();
             }
 
             MethodError::PrivateMatch(kind, def_id, out_of_scope_traits) => {
+                let kind = kind.descr(def_id);
                 let mut err = struct_span_err!(
                     self.tcx.sess,
-                    span,
+                    item_name.span,
                     E0624,
                     "{} `{}` is private",
-                    kind.descr(def_id),
+                    kind,
                     item_name
                 );
+                err.span_label(item_name.span, &format!("private {}", kind));
                 self.suggest_valid_traits(&mut err, out_of_scope_traits);
                 err.emit();
             }
@@ -828,7 +830,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         candidates: Vec<DefId>,
     ) {
         let module_did = self.tcx.parent_module(self.body_id);
-        let module_id = self.tcx.hir().as_local_hir_id(module_did).unwrap();
+        let module_id = self.tcx.hir().as_local_hir_id(module_did.to_def_id()).unwrap();
         let krate = self.tcx.hir().krate();
         let (span, found_use) = UsePlacementFinder::check(self.tcx, krate, module_id);
         if let Some(span) = span {
@@ -1018,9 +1020,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // Obtain the span for `param` and use it for a structured suggestion.
             let mut suggested = false;
             if let (Some(ref param), Some(ref table)) = (param_type, self.in_progress_tables) {
-                let table = table.borrow();
-                if let Some(did) = table.local_id_root {
-                    let generics = self.tcx.generics_of(did);
+                let table_owner = table.borrow().hir_owner;
+                if let Some(table_owner) = table_owner {
+                    let generics = self.tcx.generics_of(table_owner.to_def_id());
                     let type_param = generics.type_param(param, self.tcx);
                     let hir = &self.tcx.hir();
                     if let Some(id) = hir.as_local_hir_id(type_param.def_id) {

@@ -253,8 +253,8 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// This represents a *direct* access to that memory, as opposed to access
     /// through a pointer that was created by the program.
     #[inline(always)]
-    pub fn tag_static_base_pointer(&self, ptr: Pointer) -> Pointer<M::PointerTag> {
-        self.memory.tag_static_base_pointer(ptr)
+    pub fn tag_global_base_pointer(&self, ptr: Pointer) -> Pointer<M::PointerTag> {
+        self.memory.tag_global_base_pointer(ptr)
     }
 
     #[inline(always)]
@@ -335,15 +335,25 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
     /// Call this on things you got out of the MIR (so it is as generic as the current
     /// stack frame), to bring it into the proper environment for this interpreter.
-    pub(super) fn subst_from_frame_and_normalize_erasing_regions<T: TypeFoldable<'tcx>>(
+    pub(super) fn subst_from_current_frame_and_normalize_erasing_regions<T: TypeFoldable<'tcx>>(
         &self,
         value: T,
     ) -> T {
-        self.tcx.subst_and_normalize_erasing_regions(
-            self.frame().instance.substs,
-            self.param_env,
-            &value,
-        )
+        self.subst_from_frame_and_normalize_erasing_regions(self.frame(), value)
+    }
+
+    /// Call this on things you got out of the MIR (so it is as generic as the provided
+    /// stack frame), to bring it into the proper environment for this interpreter.
+    pub(super) fn subst_from_frame_and_normalize_erasing_regions<T: TypeFoldable<'tcx>>(
+        &self,
+        frame: &Frame<'mir, 'tcx, M::PointerTag, M::FrameExtra>,
+        value: T,
+    ) -> T {
+        if let Some(substs) = frame.instance.substs_for_mir_body() {
+            self.tcx.subst_and_normalize_erasing_regions(substs, self.param_env, &value)
+        } else {
+            self.tcx.normalize_erasing_regions(self.param_env, value)
+        }
     }
 
     /// The `substs` are assumed to already be in our interpreter "universe" (param_env).
@@ -371,11 +381,8 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             None => {
                 let layout = crate::interpret::operand::from_known_layout(layout, || {
                     let local_ty = frame.body.local_decls[local].ty;
-                    let local_ty = self.tcx.subst_and_normalize_erasing_regions(
-                        frame.instance.substs,
-                        self.param_env,
-                        &local_ty,
-                    );
+                    let local_ty =
+                        self.subst_from_frame_and_normalize_erasing_regions(frame, local_ty);
                     self.layout_of(local_ty)
                 })?;
                 if let Some(state) = frame.locals.get(local) {
@@ -406,6 +413,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 // and it also rounds up to alignment, which we want to avoid,
                 // as the unsized field's alignment could be smaller.
                 assert!(!layout.ty.is_simd());
+                assert!(layout.fields.count() > 0);
                 trace!("DST layout: {:?}", layout);
 
                 let sized_size = layout.fields.offset(layout.fields.count() - 1);
@@ -445,7 +453,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 // here. But this is where the add would go.)
 
                 // Return the sum of sizes and max of aligns.
-                let size = sized_size + unsized_size;
+                let size = sized_size + unsized_size; // `Size` addition
 
                 // Choose max of two known alignments (combined value must
                 // be aligned according to more restrictive of the two).
@@ -574,7 +582,8 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// If `target` is `None`, that indicates the function cannot return, so we raise UB.
     pub fn return_to_block(&mut self, target: Option<mir::BasicBlock>) -> InterpResult<'tcx> {
         if let Some(target) = target {
-            Ok(self.go_to_block(target))
+            self.go_to_block(target);
+            Ok(())
         } else {
             throw_ub!(Unreachable)
         }
