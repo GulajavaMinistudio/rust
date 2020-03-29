@@ -796,31 +796,10 @@ impl<'a> PrintState<'a> for State<'a> {
         match *args {
             ast::GenericArgs::AngleBracketed(ref data) => {
                 self.s.word("<");
-
-                self.commasep(Inconsistent, &data.args, |s, generic_arg| {
-                    s.print_generic_arg(generic_arg)
+                self.commasep(Inconsistent, &data.args, |s, arg| match arg {
+                    ast::AngleBracketedArg::Arg(a) => s.print_generic_arg(a),
+                    ast::AngleBracketedArg::Constraint(c) => s.print_assoc_constraint(c),
                 });
-
-                let mut comma = !data.args.is_empty();
-
-                for constraint in data.constraints.iter() {
-                    if comma {
-                        self.word_space(",")
-                    }
-                    self.print_ident(constraint.ident);
-                    self.s.space();
-                    match constraint.kind {
-                        ast::AssocTyConstraintKind::Equality { ref ty } => {
-                            self.word_space("=");
-                            self.print_type(ty);
-                        }
-                        ast::AssocTyConstraintKind::Bound { ref bounds } => {
-                            self.print_type_bounds(":", &*bounds);
-                        }
-                    }
-                    comma = true;
-                }
-
                 self.s.word(">")
             }
 
@@ -888,6 +867,20 @@ impl<'a> State<'a> {
         if let Some(lt) = *lifetime {
             self.print_lifetime(lt);
             self.nbsp();
+        }
+    }
+
+    fn print_assoc_constraint(&mut self, constraint: &ast::AssocTyConstraint) {
+        self.print_ident(constraint.ident);
+        self.s.space();
+        match &constraint.kind {
+            ast::AssocTyConstraintKind::Equality { ty } => {
+                self.word_space("=");
+                self.print_type(ty);
+            }
+            ast::AssocTyConstraintKind::Bound { bounds } => {
+                self.print_type_bounds(":", &*bounds);
+            }
         }
     }
 
@@ -2024,8 +2017,8 @@ impl<'a> State<'a> {
                     self.print_expr_maybe_paren(expr, parser::PREC_JUMP);
                 }
             }
-            ast::ExprKind::InlineAsm(ref a) => {
-                self.s.word("asm!");
+            ast::ExprKind::LlvmInlineAsm(ref a) => {
+                self.s.word("llvm_asm!");
                 self.popen();
                 self.print_string(&a.asm.as_str(), a.asm_str_style);
                 self.word_space(":");
@@ -2066,7 +2059,7 @@ impl<'a> State<'a> {
                 if a.alignstack {
                     options.push("alignstack");
                 }
-                if a.dialect == ast::AsmDialect::Intel {
+                if a.dialect == ast::LlvmAsmDialect::Intel {
                     options.push("intel");
                 }
 

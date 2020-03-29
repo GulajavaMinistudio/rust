@@ -39,9 +39,9 @@ use rustc_trait_selection::traits::query::type_op::custom::CustomTypeOp;
 use rustc_trait_selection::traits::query::{Fallible, NoSolution};
 use rustc_trait_selection::traits::{self, ObligationCause, PredicateObligations};
 
-use crate::dataflow::generic::ResultsCursor;
 use crate::dataflow::move_paths::MoveData;
 use crate::dataflow::MaybeInitializedPlaces;
+use crate::dataflow::ResultsCursor;
 use crate::transform::promote_consts::should_suggest_const_in_array_repeat_expressions_attribute;
 
 use crate::borrow_check::{
@@ -1529,7 +1529,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             StatementKind::FakeRead(..)
             | StatementKind::StorageLive(..)
             | StatementKind::StorageDead(..)
-            | StatementKind::InlineAsm { .. }
+            | StatementKind::LlvmInlineAsm { .. }
             | StatementKind::Retag { .. }
             | StatementKind::Nop => {}
         }

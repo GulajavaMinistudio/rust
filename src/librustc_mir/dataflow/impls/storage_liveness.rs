@@ -1,7 +1,7 @@
 pub use super::*;
 
-use crate::dataflow::generic::{self as dataflow, GenKill, Results, ResultsRefCursor};
 use crate::dataflow::BottomValue;
+use crate::dataflow::{self, GenKill, Results, ResultsRefCursor};
 use rustc::mir::visit::{NonMutatingUseContext, PlaceContext, Visitor};
 use rustc::mir::*;
 use std::cell::RefCell;
@@ -124,7 +124,7 @@ impl<'mir, 'tcx> dataflow::GenKillAnalysis<'tcx> for MaybeRequiresStorage<'mir, 
             | StatementKind::SetDiscriminant { box place, .. } => {
                 trans.gen(place.local);
             }
-            StatementKind::InlineAsm(asm) => {
+            StatementKind::LlvmInlineAsm(asm) => {
                 for place in &*asm.outputs {
                     trans.gen(place.local);
                 }

@@ -245,11 +245,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             {
                 // check that the `if` expr without `else` is the fn body's expr
                 if expr.span == span {
-                    return self.get_fn_decl(hir_id).map(|(fn_decl, _)| {
-                        (
-                            fn_decl.output.span(),
-                            format!("expected `{}` because of this return type", fn_decl.output),
-                        )
+                    return self.get_fn_decl(hir_id).and_then(|(fn_decl, _)| {
+                        let span = fn_decl.output.span();
+                        let snippet = self.tcx.sess.source_map().span_to_snippet(span).ok()?;
+                        Some((span, format!("expected `{}` because of this return type", snippet)))
                     });
                 }
             }
@@ -332,7 +331,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 //   | |_____^ expected integer, found `()`
                 // ```
                 if outer_sp.is_some() {
-                    outer_sp = Some(self.tcx.sess.source_map().def_span(span));
+                    outer_sp = Some(self.tcx.sess.source_map().guess_head_span(span));
                 }
                 else_expr.span
             }

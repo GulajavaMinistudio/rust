@@ -106,7 +106,7 @@ impl<'a, 'tcx> Visitor<'tcx> for UnsafetyChecker<'a, 'tcx> {
                 // safe (at least as emitted during MIR construction)
             }
 
-            StatementKind::InlineAsm { .. } => self.require_unsafe(
+            StatementKind::LlvmInlineAsm { .. } => self.require_unsafe(
                 "use of inline assembly",
                 "inline assembly is entirely unchecked and can cause undefined behavior",
                 UnsafetyViolationKind::General,
@@ -565,14 +565,14 @@ fn is_enclosed(
 }
 
 fn report_unused_unsafe(tcx: TyCtxt<'_>, used_unsafe: &FxHashSet<hir::HirId>, id: hir::HirId) {
-    let span = tcx.sess.source_map().def_span(tcx.hir().span(id));
+    let span = tcx.sess.source_map().guess_head_span(tcx.hir().span(id));
     tcx.struct_span_lint_hir(UNUSED_UNSAFE, id, span, |lint| {
         let msg = "unnecessary `unsafe` block";
         let mut db = lint.build(msg);
         db.span_label(span, msg);
         if let Some((kind, id)) = is_enclosed(tcx, used_unsafe, id) {
             db.span_label(
-                tcx.sess.source_map().def_span(tcx.hir().span(id)),
+                tcx.sess.source_map().guess_head_span(tcx.hir().span(id)),
                 format!("because it's nested under this `unsafe` {}", kind),
             );
         }
@@ -644,7 +644,7 @@ pub fn check_unsafety(tcx: TyCtxt<'_>, def_id: DefId) {
     }
 
     let mut unsafe_blocks: Vec<_> = unsafe_blocks.iter().collect();
-    unsafe_blocks.sort_by_cached_key(|(hir_id, _)| tcx.hir().hir_to_node_id(*hir_id));
+    unsafe_blocks.sort_by_cached_key(|(hir_id, _)| tcx.hir().hir_id_to_node_id(*hir_id));
     let used_unsafe: FxHashSet<_> =
         unsafe_blocks.iter().flat_map(|&&(id, used)| used.then_some(id)).collect();
     for &(block_id, is_used) in unsafe_blocks {

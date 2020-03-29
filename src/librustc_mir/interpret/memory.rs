@@ -649,58 +649,15 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> Memory<'mir, 'tcx, M> {
         &self,
         allocs_seen: &mut FxHashSet<AllocId>,
         allocs_to_print: &mut VecDeque<AllocId>,
-        mut msg: String,
         alloc: &Allocation<Tag, Extra>,
-        extra: String,
     ) {
-        use std::fmt::Write;
-
-        let prefix_len = msg.len();
-        let mut relocations = vec![];
-
-        for i in 0..alloc.size.bytes() {
-            let i = Size::from_bytes(i);
-            if let Some(&(_, target_id)) = alloc.relocations().get(&i) {
-                if allocs_seen.insert(target_id) {
-                    allocs_to_print.push_back(target_id);
-                }
-                relocations.push((i, target_id));
-            }
-            if alloc.undef_mask().is_range_defined(i, i + Size::from_bytes(1)).is_ok() {
-                // this `as usize` is fine, since `i` came from a `usize`
-                let i = i.bytes_usize();
-
-                // Checked definedness (and thus range) and relocations. This access also doesn't
-                // influence interpreter execution but is only for debugging.
-                let bytes = alloc.inspect_with_undef_and_ptr_outside_interpreter(i..i + 1);
-                write!(msg, "{:02x} ", bytes[0]).unwrap();
-            } else {
-                msg.push_str("__ ");
+        for &(_, (_, target_id)) in alloc.relocations().iter() {
+            if allocs_seen.insert(target_id) {
+                allocs_to_print.push_back(target_id);
             }
         }
-
-        eprintln!(
-            "{}({} bytes, alignment {}){}",
-            msg,
-            alloc.size.bytes(),
-            alloc.align.bytes(),
-            extra
-        );
-
-        if !relocations.is_empty() {
-            msg.clear();
-            write!(msg, "{:1$}", "", prefix_len).unwrap(); // Print spaces.
-            let mut pos = Size::ZERO;
-            let relocation_width = (self.pointer_size().bytes() - 1) * 3;
-            for (i, target_id) in relocations {
-                write!(msg, "{:1$}", "", ((i - pos) * 3).bytes_usize()).unwrap();
-                let target = format!("({})", target_id);
-                // this `as usize` is fine, since we can't print more chars than `usize::MAX`
-                write!(msg, "└{0:─^1$}┘ ", target, relocation_width as usize).unwrap();
-                pos = i + self.pointer_size();
-            }
-            eprintln!("{}", msg);
-        }
+        crate::util::pretty::write_allocation(self.tcx.tcx, alloc, &mut std::io::stderr(), "")
+            .unwrap();
     }
 
     /// Print a list of allocations and all allocations they point to, recursively.
@@ -713,45 +670,42 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> Memory<'mir, 'tcx, M> {
         let mut allocs_seen = FxHashSet::default();
 
         while let Some(id) = allocs_to_print.pop_front() {
-            let msg = format!("Alloc {:<5} ", format!("{}:", id));
+            eprint!("Alloc {:<5}: ", id);
+            fn msg<Tag, Extra>(alloc: &Allocation<Tag, Extra>, extra: &str) {
+                eprintln!(
+                    "({} bytes, alignment {}){}",
+                    alloc.size.bytes(),
+                    alloc.align.bytes(),
+                    extra
+                )
+            };
 
             // normal alloc?
             match self.alloc_map.get_or(id, || Err(())) {
                 Ok((kind, alloc)) => {
-                    let extra = match kind {
-                        MemoryKind::Stack => " (stack)".to_owned(),
-                        MemoryKind::Vtable => " (vtable)".to_owned(),
-                        MemoryKind::CallerLocation => " (caller_location)".to_owned(),
-                        MemoryKind::Machine(m) => format!(" ({:?})", m),
+                    match kind {
+                        MemoryKind::Stack => msg(alloc, " (stack)"),
+                        MemoryKind::Vtable => msg(alloc, " (vtable)"),
+                        MemoryKind::CallerLocation => msg(alloc, " (caller_location)"),
+                        MemoryKind::Machine(m) => msg(alloc, &format!(" ({:?})", m)),
                     };
-                    self.dump_alloc_helper(
-                        &mut allocs_seen,
-                        &mut allocs_to_print,
-                        msg,
-                        alloc,
-                        extra,
-                    );
+                    self.dump_alloc_helper(&mut allocs_seen, &mut allocs_to_print, alloc);
                 }
                 Err(()) => {
                     // global alloc?
                     match self.tcx.alloc_map.lock().get(id) {
                         Some(GlobalAlloc::Memory(alloc)) => {
-                            self.dump_alloc_helper(
-                                &mut allocs_seen,
-                                &mut allocs_to_print,
-                                msg,
-                                alloc,
-                                " (immutable)".to_owned(),
-                            );
+                            msg(alloc, " (immutable)");
+                            self.dump_alloc_helper(&mut allocs_seen, &mut allocs_to_print, alloc);
                         }
                         Some(GlobalAlloc::Function(func)) => {
-                            eprintln!("{} {}", msg, func);
+                            eprintln!("{}", func);
                         }
                         Some(GlobalAlloc::Static(did)) => {
-                            eprintln!("{} {:?}", msg, did);
+                            eprintln!("{:?}", did);
                         }
                         None => {
-                            eprintln!("{} (deallocated)", msg);
+                            eprintln!("(deallocated)");
                         }
                     }
                 }
@@ -833,15 +787,55 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> Memory<'mir, 'tcx, M> {
         ptr: Scalar<M::PointerTag>,
         src: impl IntoIterator<Item = u8>,
     ) -> InterpResult<'tcx> {
-        let src = src.into_iter();
+        let mut src = src.into_iter();
         let size = Size::from_bytes(src.size_hint().0);
         // `write_bytes` checks that this lower bound `size` matches the upper bound and reality.
         let ptr = match self.check_ptr_access(ptr, size, Align::from_bytes(1).unwrap())? {
             Some(ptr) => ptr,
-            None => return Ok(()), // zero-sized access
+            None => {
+                // zero-sized access
+                src.next().expect_none("iterator said it was empty but returned an element");
+                return Ok(());
+            }
         };
         let tcx = self.tcx.tcx;
         self.get_raw_mut(ptr.alloc_id)?.write_bytes(&tcx, ptr, src)
+    }
+
+    /// Writes the given stream of u16s into memory.
+    ///
+    /// Performs appropriate bounds checks.
+    pub fn write_u16s(
+        &mut self,
+        ptr: Scalar<M::PointerTag>,
+        src: impl IntoIterator<Item = u16>,
+    ) -> InterpResult<'tcx> {
+        let mut src = src.into_iter();
+        let (lower, upper) = src.size_hint();
+        let len = upper.expect("can only write bounded iterators");
+        assert_eq!(lower, len, "can only write iterators with a precise length");
+
+        let size = Size::from_bytes(lower);
+        let ptr = match self.check_ptr_access(ptr, size, Align::from_bytes(2).unwrap())? {
+            Some(ptr) => ptr,
+            None => {
+                // zero-sized access
+                src.next().expect_none("iterator said it was empty but returned an element");
+                return Ok(());
+            }
+        };
+        let tcx = self.tcx.tcx;
+        let allocation = self.get_raw_mut(ptr.alloc_id)?;
+
+        for idx in 0..len {
+            let val = Scalar::from_u16(
+                src.next().expect("iterator was shorter than it said it would be"),
+            );
+            let offset_ptr = ptr.offset(Size::from_bytes(idx) * 2, &tcx)?; // `Size` multiplication
+            allocation.write_scalar(&tcx, offset_ptr, val.into(), Size::from_bytes(2))?;
+        }
+        src.next().expect_none("iterator was longer than it said it would be");
+        Ok(())
     }
 
     /// Expects the caller to have checked bounds and alignment.

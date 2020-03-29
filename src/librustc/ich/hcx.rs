@@ -137,7 +137,7 @@ impl<'a> StableHashingContext<'a> {
 
     #[inline]
     pub fn node_to_hir_id(&self, node_id: ast::NodeId) -> hir::HirId {
-        self.definitions.node_to_hir_id(node_id)
+        self.definitions.node_id_to_hir_id(node_id)
     }
 
     #[inline]
@@ -193,8 +193,6 @@ impl<'a> StableHashingContextProvider<'a> for StableHashingContext<'a> {
         self.clone()
     }
 }
-
-impl<'a> crate::dep_graph::DepGraphSafe for StableHashingContext<'a> {}
 
 impl<'a> HashStable<StableHashingContext<'a>> for ast::NodeId {
     fn hash_stable(&self, _: &mut StableHashingContext<'a>, _: &mut StableHasher) {
