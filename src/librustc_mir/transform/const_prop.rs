@@ -4,26 +4,26 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 
-use rustc::mir::interpret::{InterpResult, Scalar};
-use rustc::mir::visit::{
-    MutVisitor, MutatingUseContext, NonMutatingUseContext, PlaceContext, Visitor,
-};
-use rustc::mir::{
-    read_only, AggregateKind, AssertKind, BasicBlock, BinOp, Body, BodyAndCache, ClearCrossCrate,
-    Constant, Local, LocalDecl, LocalKind, Location, Operand, Place, ReadOnlyBodyAndCache, Rvalue,
-    SourceInfo, SourceScope, SourceScopeData, Statement, StatementKind, Terminator, TerminatorKind,
-    UnOp, RETURN_PLACE,
-};
-use rustc::ty::layout::{
-    HasDataLayout, HasTyCtxt, LayoutError, LayoutOf, Size, TargetDataLayout, TyLayout,
-};
-use rustc::ty::subst::{InternalSubsts, Subst};
-use rustc::ty::{self, ConstKind, Instance, ParamEnv, Ty, TyCtxt, TypeFoldable};
 use rustc_ast::ast::Mutability;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def::DefKind;
 use rustc_hir::HirId;
 use rustc_index::vec::IndexVec;
+use rustc_middle::mir::interpret::{InterpResult, Scalar};
+use rustc_middle::mir::visit::{
+    MutVisitor, MutatingUseContext, NonMutatingUseContext, PlaceContext, Visitor,
+};
+use rustc_middle::mir::{
+    read_only, AggregateKind, AssertKind, BasicBlock, BinOp, Body, BodyAndCache, ClearCrossCrate,
+    Constant, Local, LocalDecl, LocalKind, Location, Operand, Place, ReadOnlyBodyAndCache, Rvalue,
+    SourceInfo, SourceScope, SourceScopeData, Statement, StatementKind, Terminator, TerminatorKind,
+    UnOp, RETURN_PLACE,
+};
+use rustc_middle::ty::layout::{
+    HasDataLayout, HasTyCtxt, LayoutError, LayoutOf, Size, TargetDataLayout, TyAndLayout,
+};
+use rustc_middle::ty::subst::{InternalSubsts, Subst};
+use rustc_middle::ty::{self, ConstKind, Instance, ParamEnv, Ty, TyCtxt, TypeFoldable};
 use rustc_session::lint;
 use rustc_span::{def_id::DefId, Span};
 use rustc_trait_selection::traits;
@@ -52,7 +52,7 @@ macro_rules! throw_machine_stop_str {
                 write!(f, $($tt)*)
             }
         }
-        impl rustc::mir::interpret::MachineStopType for Zst {}
+        impl rustc_middle::mir::interpret::MachineStopType for Zst {}
         throw_machine_stop!(Zst)
     }};
 }
@@ -66,7 +66,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
             return;
         }
 
-        use rustc::hir::map::blocks::FnLikeNode;
+        use rustc_middle::hir::map::blocks::FnLikeNode;
         let hir_id = tcx
             .hir()
             .as_local_hir_id(source.def_id())
@@ -215,8 +215,8 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for ConstPropMachine {
 
     fn assert_panic(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        _msg: &rustc::mir::AssertMessage<'tcx>,
-        _unwind: Option<rustc::mir::BasicBlock>,
+        _msg: &rustc_middle::mir::AssertMessage<'tcx>,
+        _unwind: Option<rustc_middle::mir::BasicBlock>,
     ) -> InterpResult<'tcx> {
         bug!("panics terminators are not evaluated in ConstProp")
     }
@@ -316,9 +316,9 @@ struct ConstPropagator<'mir, 'tcx> {
 
 impl<'mir, 'tcx> LayoutOf for ConstPropagator<'mir, 'tcx> {
     type Ty = Ty<'tcx>;
-    type TyLayout = Result<TyLayout<'tcx>, LayoutError<'tcx>>;
+    type TyAndLayout = Result<TyAndLayout<'tcx>, LayoutError<'tcx>>;
 
-    fn layout_of(&self, ty: Ty<'tcx>) -> Self::TyLayout {
+    fn layout_of(&self, ty: Ty<'tcx>) -> Self::TyAndLayout {
         self.tcx.layout_of(self.param_env.and(ty))
     }
 }
@@ -573,7 +573,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
     fn const_prop(
         &mut self,
         rvalue: &Rvalue<'tcx>,
-        place_layout: TyLayout<'tcx>,
+        place_layout: TyAndLayout<'tcx>,
         source_info: SourceInfo,
         place: &Place<'tcx>,
     ) -> Option<()> {
@@ -778,14 +778,14 @@ impl CanConstProp {
                 trace!("local {:?} can't be const propagated because it's not a temporary", local);
             }
         }
-        cpv.visit_body(body);
+        cpv.visit_body(&body);
         cpv.can_const_prop
     }
 }
 
 impl<'tcx> Visitor<'tcx> for CanConstProp {
     fn visit_local(&mut self, &local: &Local, context: PlaceContext, _: Location) {
-        use rustc::mir::visit::PlaceContext::*;
+        use rustc_middle::mir::visit::PlaceContext::*;
         match context {
             // Constants must have at most one write
             // FIXME(oli-obk): we could be more powerful here, if the multiple writes

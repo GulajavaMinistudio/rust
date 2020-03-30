@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 use std::convert::TryFrom;
 
-use rustc::ty::layout::{self, LayoutOf, TyLayout};
-use rustc::ty::Instance;
-use rustc::{mir, ty};
+use rustc_middle::ty::layout::{self, LayoutOf, TyAndLayout};
+use rustc_middle::ty::Instance;
+use rustc_middle::{mir, ty};
 use rustc_span::source_map::Span;
 use rustc_target::spec::abi::Abi;
 
@@ -16,7 +16,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         &mut self,
         terminator: &mir::Terminator<'tcx>,
     ) -> InterpResult<'tcx> {
-        use rustc::mir::TerminatorKind::*;
+        use rustc_middle::mir::TerminatorKind::*;
         match terminator.kind {
             Return => {
                 self.frame().return_place.map(|r| self.dump_place(*r));
@@ -134,8 +134,8 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
     fn check_argument_compat(
         rust_abi: bool,
-        caller: TyLayout<'tcx>,
-        callee: TyLayout<'tcx>,
+        caller: TyAndLayout<'tcx>,
+        callee: TyAndLayout<'tcx>,
     ) -> bool {
         if caller.ty == callee.ty {
             // No question

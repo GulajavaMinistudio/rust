@@ -2,16 +2,18 @@
 //! looking at their MIR. Intrinsics/functions supported here are shared by CTFE
 //! and miri.
 
-use rustc::mir::{
+use std::convert::TryFrom;
+
+use rustc_hir::def_id::DefId;
+use rustc_middle::mir::{
     self,
     interpret::{ConstValue, GlobalId, InterpResult, Scalar},
     BinOp,
 };
-use rustc::ty;
-use rustc::ty::layout::{LayoutOf, Primitive, Size};
-use rustc::ty::subst::SubstsRef;
-use rustc::ty::TyCtxt;
-use rustc_hir::def_id::DefId;
+use rustc_middle::ty;
+use rustc_middle::ty::layout::{LayoutOf, Primitive, Size};
+use rustc_middle::ty::subst::SubstsRef;
+use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::Span;
 
@@ -96,7 +98,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         };
 
         // Keep the patterns in this match ordered the same as the list in
-        // `src/librustc/ty/constness.rs`
+        // `src/librustc_middle/ty/constness.rs`
         match intrinsic_name {
             sym::caller_location => {
                 let span = self.find_closest_untracked_caller_location().unwrap_or(span);
@@ -220,7 +222,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             sym::discriminant_value => {
                 let place = self.deref_operand(args[0])?;
                 let discr_val = self.read_discriminant(place.into())?.0;
-                self.write_scalar(Scalar::from_uint(discr_val, dest.layout.size), dest)?;
+                self.write_scalar(Scalar::from_u64(u64::try_from(discr_val).unwrap()), dest)?;
             }
             sym::unchecked_shl
             | sym::unchecked_shr
@@ -275,7 +277,6 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             }
 
             sym::ptr_offset_from => {
-                let isize_layout = self.layout_of(self.tcx.types.isize)?;
                 let a = self.read_immediate(args[0])?.to_scalar()?;
                 let b = self.read_immediate(args[1])?.to_scalar()?;
 
@@ -292,7 +293,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     let a = a.to_machine_usize(self)?;
                     let b = b.to_machine_usize(self)?;
                     if a == b && a != 0 {
-                        self.write_scalar(Scalar::from_int(0, isize_layout.size), dest)?;
+                        self.write_scalar(Scalar::from_machine_isize(0, self), dest)?;
                         true
                     } else {
                         false
@@ -312,6 +313,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                         );
                     }
                     let usize_layout = self.layout_of(self.tcx.types.usize)?;
+                    let isize_layout = self.layout_of(self.tcx.types.isize)?;
                     let a_offset = ImmTy::from_uint(a.offset.bytes(), usize_layout);
                     let b_offset = ImmTy::from_uint(b.offset.bytes(), usize_layout);
                     let (val, _overflowed, _ty) =

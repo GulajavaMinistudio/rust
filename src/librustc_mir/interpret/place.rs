@@ -5,13 +5,13 @@
 use std::convert::TryFrom;
 use std::hash::Hash;
 
-use rustc::mir;
-use rustc::mir::interpret::truncate;
-use rustc::ty::layout::{
-    self, Align, HasDataLayout, LayoutOf, PrimitiveExt, Size, TyLayout, VariantIdx,
-};
-use rustc::ty::{self, Ty};
 use rustc_macros::HashStable;
+use rustc_middle::mir;
+use rustc_middle::mir::interpret::truncate;
+use rustc_middle::ty::layout::{
+    self, Align, HasDataLayout, LayoutOf, PrimitiveExt, Size, TyAndLayout, VariantIdx,
+};
+use rustc_middle::ty::{self, Ty};
 
 use super::{
     AllocId, AllocMap, Allocation, AllocationExtra, ImmTy, Immediate, InterpCx, InterpResult,
@@ -86,7 +86,7 @@ pub enum Place<Tag = (), Id = AllocId> {
 #[derive(Copy, Clone, Debug)]
 pub struct PlaceTy<'tcx, Tag = ()> {
     place: Place<Tag>, // Keep this private; it helps enforce invariants.
-    pub layout: TyLayout<'tcx>,
+    pub layout: TyAndLayout<'tcx>,
 }
 
 impl<'tcx, Tag> ::std::ops::Deref for PlaceTy<'tcx, Tag> {
@@ -101,7 +101,7 @@ impl<'tcx, Tag> ::std::ops::Deref for PlaceTy<'tcx, Tag> {
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct MPlaceTy<'tcx, Tag = ()> {
     mplace: MemPlace<Tag>,
-    pub layout: TyLayout<'tcx>,
+    pub layout: TyAndLayout<'tcx>,
 }
 
 impl<'tcx, Tag> ::std::ops::Deref for MPlaceTy<'tcx, Tag> {
@@ -139,7 +139,7 @@ impl<Tag> MemPlace<Tag> {
     /// Produces a Place that will error if attempted to be read from or written to
     #[inline(always)]
     fn null(cx: &impl HasDataLayout) -> Self {
-        Self::from_scalar_ptr(Scalar::ptr_null(cx), Align::from_bytes(1).unwrap())
+        Self::from_scalar_ptr(Scalar::null_ptr(cx), Align::from_bytes(1).unwrap())
     }
 
     #[inline(always)]
@@ -178,9 +178,9 @@ impl<Tag> MemPlace<Tag> {
 impl<'tcx, Tag> MPlaceTy<'tcx, Tag> {
     /// Produces a MemPlace that works for ZST but nothing else
     #[inline]
-    pub fn dangling(layout: TyLayout<'tcx>, cx: &impl HasDataLayout) -> Self {
+    pub fn dangling(layout: TyAndLayout<'tcx>, cx: &impl HasDataLayout) -> Self {
         let align = layout.align.abi;
-        let ptr = Scalar::from_uint(align.bytes(), cx.pointer_size());
+        let ptr = Scalar::from_machine_usize(align.bytes(), cx);
         // `Poison` this to make sure that the pointer value `ptr` is never observable by the program.
         MPlaceTy { mplace: MemPlace { ptr, align, meta: MemPlaceMeta::Poison }, layout }
     }
@@ -196,14 +196,14 @@ impl<'tcx, Tag> MPlaceTy<'tcx, Tag> {
         self,
         offset: Size,
         meta: MemPlaceMeta<Tag>,
-        layout: TyLayout<'tcx>,
+        layout: TyAndLayout<'tcx>,
         cx: &impl HasDataLayout,
     ) -> InterpResult<'tcx, Self> {
         Ok(MPlaceTy { mplace: self.mplace.offset(offset, meta, cx)?, layout })
     }
 
     #[inline]
-    fn from_aligned_ptr(ptr: Pointer<Tag>, layout: TyLayout<'tcx>) -> Self {
+    fn from_aligned_ptr(ptr: Pointer<Tag>, layout: TyAndLayout<'tcx>) -> Self {
         MPlaceTy { mplace: MemPlace::from_ptr(ptr, layout.align.abi), layout }
     }
 
@@ -504,7 +504,7 @@ where
             // implement this.
             ty::Array(inner, _) => (MemPlaceMeta::None, self.tcx.mk_array(inner, inner_len)),
             ty::Slice(..) => {
-                let len = Scalar::from_uint(inner_len, self.pointer_size());
+                let len = Scalar::from_machine_usize(inner_len, self);
                 (MemPlaceMeta::Meta(len), base.layout.ty)
             }
             _ => bug!("cannot subslice non-array type: `{:?}`", base.layout.ty),
@@ -529,7 +529,7 @@ where
         base: MPlaceTy<'tcx, M::PointerTag>,
         proj_elem: &mir::PlaceElem<'tcx>,
     ) -> InterpResult<'tcx, MPlaceTy<'tcx, M::PointerTag>> {
-        use rustc::mir::ProjectionElem::*;
+        use rustc_middle::mir::ProjectionElem::*;
         Ok(match *proj_elem {
             Field(field, _) => self.mplace_field(base, field.index())?,
             Downcast(_, variant) => self.mplace_downcast(base, variant)?,
@@ -617,7 +617,7 @@ where
         base: PlaceTy<'tcx, M::PointerTag>,
         proj_elem: &mir::ProjectionElem<mir::Local, Ty<'tcx>>,
     ) -> InterpResult<'tcx, PlaceTy<'tcx, M::PointerTag>> {
-        use rustc::mir::ProjectionElem::*;
+        use rustc_middle::mir::ProjectionElem::*;
         Ok(match *proj_elem {
             Field(field, _) => self.place_field(base, field.index())?,
             Downcast(_, variant) => self.place_downcast(base, variant)?,
@@ -1030,7 +1030,7 @@ where
 
     pub fn allocate(
         &mut self,
-        layout: TyLayout<'tcx>,
+        layout: TyAndLayout<'tcx>,
         kind: MemoryKind<M::MemoryKind>,
     ) -> MPlaceTy<'tcx, M::PointerTag> {
         let ptr = self.memory.allocate(layout.size, layout.align.abi, kind);
@@ -1044,7 +1044,7 @@ where
         kind: MemoryKind<M::MemoryKind>,
     ) -> MPlaceTy<'tcx, M::PointerTag> {
         let ptr = self.memory.allocate_bytes(str.as_bytes(), kind);
-        let meta = Scalar::from_uint(u128::try_from(str.len()).unwrap(), self.pointer_size());
+        let meta = Scalar::from_machine_usize(u64::try_from(str.len()).unwrap(), self);
         let mplace = MemPlace {
             ptr: ptr.into(),
             align: Align::from_bytes(1).unwrap(),
@@ -1077,7 +1077,7 @@ where
                 ..
             } => {
                 // No need to validate that the discriminant here because the
-                // `TyLayout::for_variant()` call earlier already checks the variant is valid.
+                // `TyAndLayout::for_variant()` call earlier already checks the variant is valid.
 
                 let discr_val =
                     dest.layout.ty.discriminant_for_variant(*self.tcx, variant_index).unwrap().val;
@@ -1099,7 +1099,7 @@ where
                 ..
             } => {
                 // No need to validate that the discriminant here because the
-                // `TyLayout::for_variant()` call earlier already checks the variant is valid.
+                // `TyAndLayout::for_variant()` call earlier already checks the variant is valid.
 
                 if variant_index != dataful_variant {
                     let variants_start = niche_variants.start().as_u32();

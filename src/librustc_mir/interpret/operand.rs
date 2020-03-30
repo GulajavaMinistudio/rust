@@ -4,18 +4,18 @@
 use std::convert::TryFrom;
 
 use super::{InterpCx, MPlaceTy, Machine, MemPlace, Place, PlaceTy};
-pub use rustc::mir::interpret::ScalarMaybeUndef;
-use rustc::mir::interpret::{
-    sign_extend, truncate, AllocId, ConstValue, GlobalId, InterpResult, Pointer, Scalar,
-};
-use rustc::ty::layout::{
-    self, HasDataLayout, IntegerExt, LayoutOf, PrimitiveExt, Size, TyLayout, VariantIdx,
-};
-use rustc::ty::print::{FmtPrinter, PrettyPrinter, Printer};
-use rustc::ty::Ty;
-use rustc::{mir, ty};
 use rustc_hir::def::Namespace;
 use rustc_macros::HashStable;
+pub use rustc_middle::mir::interpret::ScalarMaybeUndef;
+use rustc_middle::mir::interpret::{
+    sign_extend, truncate, AllocId, ConstValue, GlobalId, InterpResult, Pointer, Scalar,
+};
+use rustc_middle::ty::layout::{
+    self, HasDataLayout, IntegerExt, LayoutOf, PrimitiveExt, Size, TyAndLayout, VariantIdx,
+};
+use rustc_middle::ty::print::{FmtPrinter, PrettyPrinter, Printer};
+use rustc_middle::ty::Ty;
+use rustc_middle::{mir, ty};
 use std::fmt::Write;
 
 /// An `Immediate` represents a single immediate self-contained Rust value.
@@ -54,10 +54,7 @@ impl<Tag> From<Pointer<Tag>> for Immediate<Tag> {
 
 impl<'tcx, Tag> Immediate<Tag> {
     pub fn new_slice(val: Scalar<Tag>, len: u64, cx: &impl HasDataLayout) -> Self {
-        Immediate::ScalarPair(
-            val.into(),
-            Scalar::from_uint(len, cx.data_layout().pointer_size).into(),
-        )
+        Immediate::ScalarPair(val.into(), Scalar::from_machine_usize(len, cx).into())
     }
 
     pub fn new_dyn_trait(val: Scalar<Tag>, vtable: Pointer<Tag>) -> Self {
@@ -91,7 +88,7 @@ impl<'tcx, Tag> Immediate<Tag> {
 #[derive(Copy, Clone, Debug)]
 pub struct ImmTy<'tcx, Tag = ()> {
     pub(crate) imm: Immediate<Tag>,
-    pub layout: TyLayout<'tcx>,
+    pub layout: TyAndLayout<'tcx>,
 }
 
 impl<Tag: Copy> std::fmt::Display for ImmTy<'tcx, Tag> {
@@ -155,7 +152,7 @@ pub enum Operand<Tag = (), Id = AllocId> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct OpTy<'tcx, Tag = ()> {
     op: Operand<Tag>, // Keep this private; it helps enforce invariants.
-    pub layout: TyLayout<'tcx>,
+    pub layout: TyAndLayout<'tcx>,
 }
 
 impl<'tcx, Tag> ::std::ops::Deref for OpTy<'tcx, Tag> {
@@ -182,26 +179,26 @@ impl<'tcx, Tag> From<ImmTy<'tcx, Tag>> for OpTy<'tcx, Tag> {
 
 impl<'tcx, Tag: Copy> ImmTy<'tcx, Tag> {
     #[inline]
-    pub fn from_scalar(val: Scalar<Tag>, layout: TyLayout<'tcx>) -> Self {
+    pub fn from_scalar(val: Scalar<Tag>, layout: TyAndLayout<'tcx>) -> Self {
         ImmTy { imm: val.into(), layout }
     }
 
     #[inline]
-    pub fn try_from_uint(i: impl Into<u128>, layout: TyLayout<'tcx>) -> Option<Self> {
+    pub fn try_from_uint(i: impl Into<u128>, layout: TyAndLayout<'tcx>) -> Option<Self> {
         Some(Self::from_scalar(Scalar::try_from_uint(i, layout.size)?, layout))
     }
     #[inline]
-    pub fn from_uint(i: impl Into<u128>, layout: TyLayout<'tcx>) -> Self {
+    pub fn from_uint(i: impl Into<u128>, layout: TyAndLayout<'tcx>) -> Self {
         Self::from_scalar(Scalar::from_uint(i, layout.size), layout)
     }
 
     #[inline]
-    pub fn try_from_int(i: impl Into<i128>, layout: TyLayout<'tcx>) -> Option<Self> {
+    pub fn try_from_int(i: impl Into<i128>, layout: TyAndLayout<'tcx>) -> Option<Self> {
         Some(Self::from_scalar(Scalar::try_from_int(i, layout.size)?, layout))
     }
 
     #[inline]
-    pub fn from_int(i: impl Into<i128>, layout: TyLayout<'tcx>) -> Self {
+    pub fn from_int(i: impl Into<i128>, layout: TyAndLayout<'tcx>) -> Self {
         Self::from_scalar(Scalar::from_int(i, layout.size), layout)
     }
 }
@@ -210,9 +207,9 @@ impl<'tcx, Tag: Copy> ImmTy<'tcx, Tag> {
 // or compute the layout.
 #[inline(always)]
 pub(super) fn from_known_layout<'tcx>(
-    layout: Option<TyLayout<'tcx>>,
-    compute: impl FnOnce() -> InterpResult<'tcx, TyLayout<'tcx>>,
-) -> InterpResult<'tcx, TyLayout<'tcx>> {
+    layout: Option<TyAndLayout<'tcx>>,
+    compute: impl FnOnce() -> InterpResult<'tcx, TyAndLayout<'tcx>>,
+) -> InterpResult<'tcx, TyAndLayout<'tcx>> {
     match layout {
         None => compute(),
         Some(layout) => {
@@ -418,7 +415,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         base: OpTy<'tcx, M::PointerTag>,
         proj_elem: &mir::PlaceElem<'tcx>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
-        use rustc::mir::ProjectionElem::*;
+        use rustc_middle::mir::ProjectionElem::*;
         Ok(match *proj_elem {
             Field(field, _) => self.operand_field(base, field.index())?,
             Downcast(_, variant) => self.operand_downcast(base, variant)?,
@@ -437,7 +434,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         &self,
         frame: &super::Frame<'mir, 'tcx, M::PointerTag, M::FrameExtra>,
         local: mir::Local,
-        layout: Option<TyLayout<'tcx>>,
+        layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
         assert_ne!(local, mir::RETURN_PLACE);
         let layout = self.layout_of_local(frame, local, layout)?;
@@ -468,7 +465,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     pub fn eval_place_to_op(
         &self,
         place: &mir::Place<'tcx>,
-        layout: Option<TyLayout<'tcx>>,
+        layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
         let base_op = match place.local {
             mir::RETURN_PLACE => throw_ub!(ReadFromReturnPlace),
@@ -496,9 +493,9 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     pub fn eval_operand(
         &self,
         mir_op: &mir::Operand<'tcx>,
-        layout: Option<TyLayout<'tcx>>,
+        layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
-        use rustc::mir::Operand::*;
+        use rustc_middle::mir::Operand::*;
         let op = match *mir_op {
             // FIXME: do some more logic on `move` to invalidate the old location
             Copy(ref place) | Move(ref place) => self.eval_place_to_op(place, layout)?,
@@ -528,7 +525,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     crate fn eval_const_to_op(
         &self,
         val: &ty::Const<'tcx>,
-        layout: Option<TyLayout<'tcx>>,
+        layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::PointerTag>> {
         let tag_scalar = |scalar| match scalar {
             Scalar::Ptr(ptr) => Scalar::Ptr(self.tag_global_base_pointer(ptr)),
@@ -621,7 +618,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 let real_discr = if discr_val.layout.abi.is_signed() {
                     // going from layout tag type to typeck discriminant type
                     // requires first sign extending with the discriminant layout
-                    let sexted = sign_extend(bits_discr, discr_val.layout.size) as i128;
+                    let sexted = sign_extend(bits_discr, discr_val.layout.size);
                     // and then zeroing with the typeck discriminant type
                     let discr_ty = rval
                         .layout
@@ -631,8 +628,7 @@ impl<'mir, 'tcx, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                         .repr
                         .discr_type();
                     let size = layout::Integer::from_attr(self, discr_ty).size();
-                    let truncatee = sexted as u128;
-                    truncate(truncatee, size)
+                    truncate(sexted, size)
                 } else {
                     bits_discr
                 };

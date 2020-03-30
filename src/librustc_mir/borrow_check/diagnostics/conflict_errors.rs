@@ -1,15 +1,15 @@
-use rustc::mir::{
-    self, AggregateKind, BindingForm, BorrowKind, ClearCrossCrate, ConstraintCategory,
-    FakeReadCause, Local, LocalDecl, LocalInfo, LocalKind, Location, Operand, Place, PlaceRef,
-    ProjectionElem, Rvalue, Statement, StatementKind, TerminatorKind, VarBindingForm,
-};
-use rustc::ty::{self, Ty};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind};
 use rustc_index::vec::Idx;
+use rustc_middle::mir::{
+    self, AggregateKind, BindingForm, BorrowKind, ClearCrossCrate, ConstraintCategory,
+    FakeReadCause, Local, LocalDecl, LocalInfo, LocalKind, Location, Operand, Place, PlaceRef,
+    ProjectionElem, Rvalue, Statement, StatementKind, TerminatorKind, VarBindingForm,
+};
+use rustc_middle::ty::{self, Ty};
 use rustc_span::source_map::DesugaringKind;
 use rustc_span::Span;
 use rustc_trait_selection::traits::error_reporting::suggest_constraining_type_param;
@@ -222,8 +222,6 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                             &mut err,
                             &param.name.as_str(),
                             "Copy",
-                            tcx.sess.source_map(),
-                            span,
                             None,
                         );
                     }
@@ -1543,7 +1541,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
     /// Describe the reason for the fake borrow that was assigned to `place`.
     fn classify_immutable_section(&self, place: &Place<'tcx>) -> Option<&'static str> {
-        use rustc::mir::visit::Visitor;
+        use rustc_middle::mir::visit::Visitor;
         struct FakeReadCauseFinder<'a, 'tcx> {
             place: &'a Place<'tcx>,
             cause: Option<FakeReadCause>,
@@ -1561,7 +1559,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             }
         }
         let mut visitor = FakeReadCauseFinder { place, cause: None };
-        visitor.visit_body(self.body);
+        visitor.visit_body(&self.body);
         match visitor.cause {
             Some(FakeReadCause::ForMatchGuard) => Some("match guard"),
             Some(FakeReadCause::ForIndex) => Some("indexing expression"),
@@ -1823,7 +1821,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 for (index, argument) in sig.inputs().skip_binder().iter().enumerate() {
                     if let ty::Ref(argument_region, _, _) = argument.kind {
                         if argument_region == return_region {
-                            // Need to use the `rustc::ty` types to compare against the
+                            // Need to use the `rustc_middle::ty` types to compare against the
                             // `return_region`. Then use the `rustc_hir` type to get only
                             // the lifetime span.
                             if let hir::TyKind::Rptr(lifetime, _) = &fn_decl.inputs[index].kind {

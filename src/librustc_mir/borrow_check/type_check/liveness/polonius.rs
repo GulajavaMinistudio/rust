@@ -2,9 +2,9 @@ use crate::borrow_check::location::{LocationIndex, LocationTable};
 use crate::dataflow::indexes::MovePathIndex;
 use crate::dataflow::move_paths::{LookupResult, MoveData};
 use crate::util::liveness::{categorize, DefUse};
-use rustc::mir::visit::{MutatingUseContext, PlaceContext, Visitor};
-use rustc::mir::{Local, Location, Place, ReadOnlyBodyAndCache};
-use rustc::ty::subst::GenericArg;
+use rustc_middle::mir::visit::{MutatingUseContext, PlaceContext, Visitor};
+use rustc_middle::mir::{Local, Location, Place, ReadOnlyBodyAndCache};
+use rustc_middle::ty::subst::GenericArg;
 
 use super::TypeChecker;
 
@@ -101,7 +101,7 @@ pub(super) fn populate_access_facts(
             location_table,
             move_data,
         };
-        extractor.visit_body(body);
+        extractor.visit_body(&body);
 
         facts.var_dropped_at.extend(
             dropped_at.iter().map(|&(local, location)| (local, location_table.mid_index(location))),
