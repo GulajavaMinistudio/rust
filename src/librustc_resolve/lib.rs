@@ -10,6 +10,7 @@
 #![feature(bool_to_option)]
 #![feature(crate_visibility_modifier)]
 #![feature(nll)]
+#![feature(or_patterns)]
 #![recursion_limit = "256"]
 
 pub use rustc_hir::def::{Namespace, PerNS};
@@ -2807,7 +2808,7 @@ impl<'a> Resolver<'a> {
             ast::Path {
                 span,
                 segments: iter::once(Ident::with_dummy_span(kw::PathRoot))
-                    .chain({ path_str.split("::").skip(1).map(Ident::from_str) })
+                    .chain(path_str.split("::").skip(1).map(Ident::from_str))
                     .map(|i| self.new_ast_path_segment(i))
                     .collect(),
             }
