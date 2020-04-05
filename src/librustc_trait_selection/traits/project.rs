@@ -1010,7 +1010,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                 // type.
                 //
                 // NOTE: This should be kept in sync with the similar code in
-                // `rustc_middle::ty::instance::resolve_associated_item()`.
+                // `rustc_ty::instance::resolve_associated_item()`.
                 let node_item =
                     assoc_ty_def(selcx, impl_data.impl_def_id, obligation.predicate.item_def_id)
                         .map_err(|ErrorReported| ())?;
@@ -1028,7 +1028,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                         // assume `poly_trait_ref` isn't monomorphic, if it contains any.
                         let poly_trait_ref =
                             selcx.infcx().resolve_vars_if_possible(&poly_trait_ref);
-                        !poly_trait_ref.needs_infer() && !poly_trait_ref.needs_subst()
+                        !poly_trait_ref.still_further_specializable()
                     } else {
                         debug!(
                             "assemble_candidates_from_impls: not eligible due to default: \
