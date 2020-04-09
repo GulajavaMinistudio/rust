@@ -4,7 +4,7 @@ use crate::traits::{self, AssocTypeBoundData};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_hir::lang_items;
-use rustc_middle::ty::subst::SubstsRef;
+use rustc_middle::ty::subst::{GenericArgKind, SubstsRef};
 use rustc_middle::ty::{self, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness};
 use rustc_span::symbol::{kw, Ident};
 use rustc_span::Span;
@@ -134,6 +134,152 @@ enum Elaborate {
     None,
 }
 
+fn extend_cause_with_original_assoc_item_obligation<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    trait_ref: &ty::TraitRef<'tcx>,
+    item: Option<&hir::Item<'tcx>>,
+    cause: &mut traits::ObligationCause<'tcx>,
+    pred: &ty::Predicate<'_>,
+    mut trait_assoc_items: impl Iterator<Item = ty::AssocItem>,
+) {
+    let trait_item =
+        tcx.hir().as_local_hir_id(trait_ref.def_id).and_then(|trait_id| tcx.hir().find(trait_id));
+    let (trait_name, trait_generics) = match trait_item {
+        Some(hir::Node::Item(hir::Item {
+            ident,
+            kind: hir::ItemKind::Trait(.., generics, _, _),
+            ..
+        }))
+        | Some(hir::Node::Item(hir::Item {
+            ident,
+            kind: hir::ItemKind::TraitAlias(generics, _),
+            ..
+        })) => (Some(ident), Some(generics)),
+        _ => (None, None),
+    };
+
+    let item_span = item.map(|i| tcx.sess.source_map().guess_head_span(i.span));
+    match pred {
+        ty::Predicate::Projection(proj) => {
+            // The obligation comes not from the current `impl` nor the `trait` being
+            // implemented, but rather from a "second order" obligation, like in
+            // `src/test/ui/associated-types/point-at-type-on-obligation-failure.rs`:
+            //
+            //   error[E0271]: type mismatch resolving `<Foo2 as Bar2>::Ok == ()`
+            //     --> $DIR/point-at-type-on-obligation-failure.rs:13:5
+            //      |
+            //   LL |     type Ok;
+            //      |          -- associated type defined here
+            //   ...
+            //   LL | impl Bar for Foo {
+            //      | ---------------- in this `impl` item
+            //   LL |     type Ok = ();
+            //      |     ^^^^^^^^^^^^^ expected `u32`, found `()`
+            //      |
+            //      = note: expected type `u32`
+            //                 found type `()`
+            //
+            // FIXME: we would want to point a span to all places that contributed to this
+            // obligation. In the case above, it should be closer to:
+            //
+            //   error[E0271]: type mismatch resolving `<Foo2 as Bar2>::Ok == ()`
+            //     --> $DIR/point-at-type-on-obligation-failure.rs:13:5
+            //      |
+            //   LL |     type Ok;
+            //      |          -- associated type defined here
+            //   LL |     type Sibling: Bar2<Ok=Self::Ok>;
+            //      |     -------------------------------- obligation set here
+            //   ...
+            //   LL | impl Bar for Foo {
+            //      | ---------------- in this `impl` item
+            //   LL |     type Ok = ();
+            //      |     ^^^^^^^^^^^^^ expected `u32`, found `()`
+            //   ...
+            //   LL | impl Bar2 for Foo2 {
+            //      | ---------------- in this `impl` item
+            //   LL |     type Ok = u32;
+            //      |     -------------- obligation set here
+            //      |
+            //      = note: expected type `u32`
+            //                 found type `()`
+            if let Some(hir::ItemKind::Impl { items, .. }) = item.map(|i| &i.kind) {
+                let trait_assoc_item = tcx.associated_item(proj.projection_def_id());
+                if let Some(impl_item) =
+                    items.iter().find(|item| item.ident == trait_assoc_item.ident)
+                {
+                    cause.span = impl_item.span;
+                    cause.code = traits::AssocTypeBound(Box::new(AssocTypeBoundData {
+                        impl_span: item_span,
+                        original: trait_assoc_item.ident.span,
+                        bounds: vec![],
+                    }));
+                }
+            }
+        }
+        ty::Predicate::Trait(proj, _) => {
+            // An associated item obligation born out of the `trait` failed to be met.
+            // Point at the `impl` that failed the obligation, the associated item that
+            // needed to meet the obligation, and the definition of that associated item,
+            // which should hold the obligation in most cases. An example can be seen in
+            // `src/test/ui/associated-types/point-at-type-on-obligation-failure-2.rs`:
+            //
+            //   error[E0277]: the trait bound `bool: Bar` is not satisfied
+            //     --> $DIR/point-at-type-on-obligation-failure-2.rs:8:5
+            //      |
+            //   LL |     type Assoc: Bar;
+            //      |          ----- associated type defined here
+            //   ...
+            //   LL | impl Foo for () {
+            //      | --------------- in this `impl` item
+            //   LL |     type Assoc = bool;
+            //      |     ^^^^^^^^^^^^^^^^^^ the trait `Bar` is not implemented for `bool`
+            //
+            // If the obligation comes from the where clause in the `trait`, we point at it:
+            //
+            //   error[E0277]: the trait bound `bool: Bar` is not satisfied
+            //     --> $DIR/point-at-type-on-obligation-failure-2.rs:8:5
+            //      |
+            //      | trait Foo where <Self as Foo>>::Assoc: Bar {
+            //      |                 -------------------------- restricted in this bound
+            //   LL |     type Assoc;
+            //      |          ----- associated type defined here
+            //   ...
+            //   LL | impl Foo for () {
+            //      | --------------- in this `impl` item
+            //   LL |     type Assoc = bool;
+            //      |     ^^^^^^^^^^^^^^^^^^ the trait `Bar` is not implemented for `bool`
+            if let (
+                ty::Projection(ty::ProjectionTy { item_def_id, .. }),
+                Some(hir::ItemKind::Impl { items, .. }),
+            ) = (&proj.skip_binder().self_ty().kind, item.map(|i| &i.kind))
+            {
+                if let Some((impl_item, trait_assoc_item)) = trait_assoc_items
+                    .find(|i| i.def_id == *item_def_id)
+                    .and_then(|trait_assoc_item| {
+                        items
+                            .iter()
+                            .find(|i| i.ident == trait_assoc_item.ident)
+                            .map(|impl_item| (impl_item, trait_assoc_item))
+                    })
+                {
+                    let bounds = trait_generics
+                        .map(|generics| {
+                            get_generic_bound_spans(&generics, trait_name, trait_assoc_item.ident)
+                        })
+                        .unwrap_or_else(Vec::new);
+                    cause.span = impl_item.span;
+                    cause.code = traits::AssocTypeBound(Box::new(AssocTypeBoundData {
+                        impl_span: item_span,
+                        original: trait_assoc_item.ident.span,
+                        bounds,
+                    }));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
     fn cause(&mut self, code: traits::ObligationCauseCode<'tcx>) -> traits::ObligationCause<'tcx> {
         traits::ObligationCause::new(self.span, self.body_id, code)
@@ -163,170 +309,20 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
         let cause = self.cause(traits::MiscObligation);
         let param_env = self.param_env;
 
-        let item = &self.item;
-        let extend_cause_with_original_assoc_item_obligation =
-            |cause: &mut traits::ObligationCause<'_>,
-             pred: &ty::Predicate<'_>,
-             trait_assoc_items: &[ty::AssocItem]| {
-                let trait_item = tcx
-                    .hir()
-                    .as_local_hir_id(trait_ref.def_id)
-                    .and_then(|trait_id| tcx.hir().find(trait_id));
-                let (trait_name, trait_generics) = match trait_item {
-                    Some(hir::Node::Item(hir::Item {
-                        ident,
-                        kind: hir::ItemKind::Trait(.., generics, _, _),
-                        ..
-                    }))
-                    | Some(hir::Node::Item(hir::Item {
-                        ident,
-                        kind: hir::ItemKind::TraitAlias(generics, _),
-                        ..
-                    })) => (Some(ident), Some(generics)),
-                    _ => (None, None),
-                };
-
-                let item_span = item.map(|i| tcx.sess.source_map().guess_head_span(i.span));
-                match pred {
-                    ty::Predicate::Projection(proj) => {
-                        // The obligation comes not from the current `impl` nor the `trait` being
-                        // implemented, but rather from a "second order" obligation, like in
-                        // `src/test/ui/associated-types/point-at-type-on-obligation-failure.rs`:
-                        //
-                        //   error[E0271]: type mismatch resolving `<Foo2 as Bar2>::Ok == ()`
-                        //     --> $DIR/point-at-type-on-obligation-failure.rs:13:5
-                        //      |
-                        //   LL |     type Ok;
-                        //      |          -- associated type defined here
-                        //   ...
-                        //   LL | impl Bar for Foo {
-                        //      | ---------------- in this `impl` item
-                        //   LL |     type Ok = ();
-                        //      |     ^^^^^^^^^^^^^ expected `u32`, found `()`
-                        //      |
-                        //      = note: expected type `u32`
-                        //                 found type `()`
-                        //
-                        // FIXME: we would want to point a span to all places that contributed to this
-                        // obligation. In the case above, it should be closer to:
-                        //
-                        //   error[E0271]: type mismatch resolving `<Foo2 as Bar2>::Ok == ()`
-                        //     --> $DIR/point-at-type-on-obligation-failure.rs:13:5
-                        //      |
-                        //   LL |     type Ok;
-                        //      |          -- associated type defined here
-                        //   LL |     type Sibling: Bar2<Ok=Self::Ok>;
-                        //      |     -------------------------------- obligation set here
-                        //   ...
-                        //   LL | impl Bar for Foo {
-                        //      | ---------------- in this `impl` item
-                        //   LL |     type Ok = ();
-                        //      |     ^^^^^^^^^^^^^ expected `u32`, found `()`
-                        //   ...
-                        //   LL | impl Bar2 for Foo2 {
-                        //      | ---------------- in this `impl` item
-                        //   LL |     type Ok = u32;
-                        //      |     -------------- obligation set here
-                        //      |
-                        //      = note: expected type `u32`
-                        //                 found type `()`
-                        if let Some(hir::ItemKind::Impl { items, .. }) = item.map(|i| &i.kind) {
-                            let trait_assoc_item = tcx.associated_item(proj.projection_def_id());
-                            if let Some(impl_item) =
-                                items.iter().find(|item| item.ident == trait_assoc_item.ident)
-                            {
-                                cause.span = impl_item.span;
-                                cause.code = traits::AssocTypeBound(Box::new(AssocTypeBoundData {
-                                    impl_span: item_span,
-                                    original: trait_assoc_item.ident.span,
-                                    bounds: vec![],
-                                }));
-                            }
-                        }
-                    }
-                    ty::Predicate::Trait(proj, _) => {
-                        // An associated item obligation born out of the `trait` failed to be met.
-                        // Point at the `impl` that failed the obligation, the associated item that
-                        // needed to meet the obligation, and the definition of that associated item,
-                        // which should hold the obligation in most cases. An example can be seen in
-                        // `src/test/ui/associated-types/point-at-type-on-obligation-failure-2.rs`:
-                        //
-                        //   error[E0277]: the trait bound `bool: Bar` is not satisfied
-                        //     --> $DIR/point-at-type-on-obligation-failure-2.rs:8:5
-                        //      |
-                        //   LL |     type Assoc: Bar;
-                        //      |          ----- associated type defined here
-                        //   ...
-                        //   LL | impl Foo for () {
-                        //      | --------------- in this `impl` item
-                        //   LL |     type Assoc = bool;
-                        //      |     ^^^^^^^^^^^^^^^^^^ the trait `Bar` is not implemented for `bool`
-                        //
-                        // If the obligation comes from the where clause in the `trait`, we point at it:
-                        //
-                        //   error[E0277]: the trait bound `bool: Bar` is not satisfied
-                        //     --> $DIR/point-at-type-on-obligation-failure-2.rs:8:5
-                        //      |
-                        //      | trait Foo where <Self as Foo>>::Assoc: Bar {
-                        //      |                 -------------------------- restricted in this bound
-                        //   LL |     type Assoc;
-                        //      |          ----- associated type defined here
-                        //   ...
-                        //   LL | impl Foo for () {
-                        //      | --------------- in this `impl` item
-                        //   LL |     type Assoc = bool;
-                        //      |     ^^^^^^^^^^^^^^^^^^ the trait `Bar` is not implemented for `bool`
-                        if let (
-                            ty::Projection(ty::ProjectionTy { item_def_id, .. }),
-                            Some(hir::ItemKind::Impl { items, .. }),
-                        ) = (&proj.skip_binder().self_ty().kind, item.map(|i| &i.kind))
-                        {
-                            if let Some((impl_item, trait_assoc_item)) = trait_assoc_items
-                                .iter()
-                                .find(|i| i.def_id == *item_def_id)
-                                .and_then(|trait_assoc_item| {
-                                    items
-                                        .iter()
-                                        .find(|i| i.ident == trait_assoc_item.ident)
-                                        .map(|impl_item| (impl_item, trait_assoc_item))
-                                })
-                            {
-                                let bounds = trait_generics
-                                    .map(|generics| {
-                                        get_generic_bound_spans(
-                                            &generics,
-                                            trait_name,
-                                            trait_assoc_item.ident,
-                                        )
-                                    })
-                                    .unwrap_or_else(Vec::new);
-                                cause.span = impl_item.span;
-                                cause.code = traits::AssocTypeBound(Box::new(AssocTypeBoundData {
-                                    impl_span: item_span,
-                                    original: trait_assoc_item.ident.span,
-                                    bounds,
-                                }));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            };
+        let item = self.item;
 
         if let Elaborate::All = elaborate {
-            // FIXME: Make `extend_cause_with_original_assoc_item_obligation` take an iterator
-            // instead of a slice.
-            let trait_assoc_items: Vec<_> =
-                tcx.associated_items(trait_ref.def_id).in_definition_order().copied().collect();
-
             let predicates = obligations.iter().map(|obligation| obligation.predicate).collect();
             let implied_obligations = traits::elaborate_predicates(tcx, predicates);
             let implied_obligations = implied_obligations.map(|pred| {
                 let mut cause = cause.clone();
                 extend_cause_with_original_assoc_item_obligation(
+                    tcx,
+                    trait_ref,
+                    item,
                     &mut cause,
                     &pred,
-                    &*trait_assoc_items,
+                    tcx.associated_items(trait_ref.def_id).in_definition_order().copied(),
                 );
                 traits::Obligation::new(cause, param_env, pred)
             });
@@ -391,9 +387,21 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
     /// is WF. Returns false if `ty0` is an unresolved type variable,
     /// in which case we are not able to simplify at all.
     fn compute(&mut self, ty0: Ty<'tcx>) -> bool {
-        let mut subtys = ty0.walk();
+        let mut walker = ty0.walk();
         let param_env = self.param_env;
-        while let Some(ty) = subtys.next() {
+        while let Some(arg) = walker.next() {
+            let ty = match arg.unpack() {
+                GenericArgKind::Type(ty) => ty,
+
+                // No WF constraints for lifetimes being present, any outlives
+                // obligations are handled by the parent (e.g. `ty::Ref`).
+                GenericArgKind::Lifetime(_) => continue,
+
+                // FIXME(eddyb) this is wrong and needs to be replaced
+                // (see https://github.com/rust-lang/rust/pull/70107).
+                GenericArgKind::Const(_) => continue,
+            };
+
             match ty.kind {
                 ty::Bool
                 | ty::Char
@@ -417,6 +425,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
 
                 ty::Array(subty, len) => {
                     self.require_sized(subty, traits::SliceOrArrayElem);
+                    // FIXME(eddyb) handle `GenericArgKind::Const` above instead.
                     self.compute_array_len(*len);
                 }
 
@@ -433,7 +442,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                 }
 
                 ty::Projection(data) => {
-                    subtys.skip_current_subtree(); // subtree handled by compute_projection
+                    walker.skip_current_subtree(); // subtree handled by compute_projection
                     self.compute_projection(data);
                 }
 
@@ -504,7 +513,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                     // are not directly inspecting closure types
                     // anyway, except via auto trait matching (which
                     // only inspects the upvar types).
-                    subtys.skip_current_subtree(); // subtree handled by compute_projection
+                    walker.skip_current_subtree(); // subtree handled by compute_projection
                     for upvar_ty in substs.as_closure().upvar_tys() {
                         self.compute(upvar_ty);
                     }

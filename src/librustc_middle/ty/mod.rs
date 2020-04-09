@@ -19,7 +19,6 @@ use crate::traits::{self, Reveal};
 use crate::ty;
 use crate::ty::subst::{InternalSubsts, Subst, SubstsRef};
 use crate::ty::util::{Discr, IntTypeExt};
-use crate::ty::walk::TypeWalker;
 use rustc_ast::ast::{self, Ident, Name};
 use rustc_ast::node_id::{NodeId, NodeMap, NodeSet};
 use rustc_attr as attr;
@@ -72,7 +71,7 @@ pub use crate::ty::diagnostics::*;
 pub use self::binding::BindingMode;
 pub use self::binding::BindingMode::*;
 
-pub use self::context::{keep_local, tls, FreeRegionInfo, TyCtxt};
+pub use self::context::{tls, FreeRegionInfo, TyCtxt};
 pub use self::context::{
     CanonicalUserType, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations, ResolvedOpaqueTy,
     UserType, UserTypeAnnotationIndex,
@@ -81,7 +80,6 @@ pub use self::context::{
     CtxtInterners, GeneratorInteriorTypeCause, GlobalCtxt, Lift, TypeckTables,
 };
 
-pub use self::instance::RESOLVE_INSTANCE;
 pub use self::instance::{Instance, InstanceDef};
 
 pub use self::trait_def::TraitDef;
@@ -579,50 +577,23 @@ bitflags! {
                                           | TypeFlags::HAS_TY_OPAQUE.bits
                                           | TypeFlags::HAS_CT_PROJECTION.bits;
 
-        /// Present if the type belongs in a local type context.
-        /// Set for placeholders and inference variables that are not "Fresh".
-        const KEEP_IN_LOCAL_TCX           = 1 << 13;
-
         /// Is an error type reachable?
-        const HAS_TY_ERR                  = 1 << 14;
+        const HAS_TY_ERR                  = 1 << 13;
 
         /// Does this have any region that "appears free" in the type?
         /// Basically anything but [ReLateBound] and [ReErased].
-        const HAS_FREE_REGIONS            = 1 << 15;
+        const HAS_FREE_REGIONS            = 1 << 14;
 
         /// Does this have any [ReLateBound] regions? Used to check
         /// if a global bound is safe to evaluate.
-        const HAS_RE_LATE_BOUND           = 1 << 16;
+        const HAS_RE_LATE_BOUND           = 1 << 15;
 
         /// Does this have any [ReErased] regions?
-        const HAS_RE_ERASED               = 1 << 17;
+        const HAS_RE_ERASED               = 1 << 16;
 
         /// Does this value have parameters/placeholders/inference variables which could be
         /// replaced later, in a way that would change the results of `impl` specialization?
-        const STILL_FURTHER_SPECIALIZABLE = 1 << 18;
-
-        /// Flags representing the nominal content of a type,
-        /// computed by FlagsComputation. If you add a new nominal
-        /// flag, it should be added here too.
-        const NOMINAL_FLAGS               = TypeFlags::HAS_TY_PARAM.bits
-                                          | TypeFlags::HAS_RE_PARAM.bits
-                                          | TypeFlags::HAS_CT_PARAM.bits
-                                          | TypeFlags::HAS_TY_INFER.bits
-                                          | TypeFlags::HAS_RE_INFER.bits
-                                          | TypeFlags::HAS_CT_INFER.bits
-                                          | TypeFlags::HAS_TY_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_RE_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_CT_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_FREE_LOCAL_REGIONS.bits
-                                          | TypeFlags::HAS_TY_PROJECTION.bits
-                                          | TypeFlags::HAS_TY_OPAQUE.bits
-                                          | TypeFlags::HAS_CT_PROJECTION.bits
-                                          | TypeFlags::KEEP_IN_LOCAL_TCX.bits
-                                          | TypeFlags::HAS_TY_ERR.bits
-                                          | TypeFlags::HAS_FREE_REGIONS.bits
-                                          | TypeFlags::HAS_RE_LATE_BOUND.bits
-                                          | TypeFlags::HAS_RE_ERASED.bits
-                                          | TypeFlags::STILL_FURTHER_SPECIALIZABLE.bits;
+        const STILL_FURTHER_SPECIALIZABLE = 1 << 17;
     }
 }
 
@@ -1367,10 +1338,6 @@ impl<'tcx> TraitPredicate<'tcx> {
         self.trait_ref.def_id
     }
 
-    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> + 'a {
-        self.trait_ref.input_types()
-    }
-
     pub fn self_ty(&self) -> Ty<'tcx> {
         self.trait_ref.self_ty()
     }
@@ -1520,77 +1487,7 @@ impl<'tcx> ToPredicate<'tcx> for PolyProjectionPredicate<'tcx> {
     }
 }
 
-// A custom iterator used by `Predicate::walk_tys`.
-enum WalkTysIter<'tcx, I, J, K>
-where
-    I: Iterator<Item = Ty<'tcx>>,
-    J: Iterator<Item = Ty<'tcx>>,
-    K: Iterator<Item = Ty<'tcx>>,
-{
-    None,
-    One(Ty<'tcx>),
-    Two(Ty<'tcx>, Ty<'tcx>),
-    Types(I),
-    InputTypes(J),
-    ProjectionTypes(K),
-}
-
-impl<'tcx, I, J, K> Iterator for WalkTysIter<'tcx, I, J, K>
-where
-    I: Iterator<Item = Ty<'tcx>>,
-    J: Iterator<Item = Ty<'tcx>>,
-    K: Iterator<Item = Ty<'tcx>>,
-{
-    type Item = Ty<'tcx>;
-
-    fn next(&mut self) -> Option<Ty<'tcx>> {
-        match *self {
-            WalkTysIter::None => None,
-            WalkTysIter::One(item) => {
-                *self = WalkTysIter::None;
-                Some(item)
-            }
-            WalkTysIter::Two(item1, item2) => {
-                *self = WalkTysIter::One(item2);
-                Some(item1)
-            }
-            WalkTysIter::Types(ref mut iter) => iter.next(),
-            WalkTysIter::InputTypes(ref mut iter) => iter.next(),
-            WalkTysIter::ProjectionTypes(ref mut iter) => iter.next(),
-        }
-    }
-}
-
 impl<'tcx> Predicate<'tcx> {
-    /// Iterates over the types in this predicate. Note that in all
-    /// cases this is skipping over a binder, so late-bound regions
-    /// with depth 0 are bound by the predicate.
-    pub fn walk_tys(&'a self) -> impl Iterator<Item = Ty<'tcx>> + 'a {
-        match *self {
-            ty::Predicate::Trait(ref data, _) => {
-                WalkTysIter::InputTypes(data.skip_binder().input_types())
-            }
-            ty::Predicate::Subtype(binder) => {
-                let SubtypePredicate { a, b, a_is_expected: _ } = binder.skip_binder();
-                WalkTysIter::Two(a, b)
-            }
-            ty::Predicate::TypeOutlives(binder) => WalkTysIter::One(binder.skip_binder().0),
-            ty::Predicate::RegionOutlives(..) => WalkTysIter::None,
-            ty::Predicate::Projection(ref data) => {
-                let inner = data.skip_binder();
-                WalkTysIter::ProjectionTypes(
-                    inner.projection_ty.substs.types().chain(Some(inner.ty)),
-                )
-            }
-            ty::Predicate::WellFormed(data) => WalkTysIter::One(data),
-            ty::Predicate::ObjectSafe(_trait_def_id) => WalkTysIter::None,
-            ty::Predicate::ClosureKind(_closure_def_id, closure_substs, _kind) => {
-                WalkTysIter::Types(closure_substs.types())
-            }
-            ty::Predicate::ConstEvaluatable(_, substs) => WalkTysIter::Types(substs.types()),
-        }
-    }
-
     pub fn to_opt_poly_trait_ref(&self) -> Option<PolyTraitRef<'tcx>> {
         match *self {
             Predicate::Trait(ref t, _) => Some(t.to_poly_trait_ref()),
@@ -2683,46 +2580,6 @@ impl<'tcx> ClosureKind {
             ty::ClosureKind::Fn => tcx.types.i8,
             ty::ClosureKind::FnMut => tcx.types.i16,
             ty::ClosureKind::FnOnce => tcx.types.i32,
-        }
-    }
-}
-
-impl<'tcx> TyS<'tcx> {
-    /// Iterator that walks `self` and any types reachable from
-    /// `self`, in depth-first order. Note that just walks the types
-    /// that appear in `self`, it does not descend into the fields of
-    /// structs or variants. For example:
-    ///
-    /// ```notrust
-    /// isize => { isize }
-    /// Foo<Bar<isize>> => { Foo<Bar<isize>>, Bar<isize>, isize }
-    /// [isize] => { [isize], isize }
-    /// ```
-    pub fn walk(&'tcx self) -> TypeWalker<'tcx> {
-        TypeWalker::new(self)
-    }
-
-    /// Iterator that walks the immediate children of `self`. Hence
-    /// `Foo<Bar<i32>, u32>` yields the sequence `[Bar<i32>, u32]`
-    /// (but not `i32`, like `walk`).
-    pub fn walk_shallow(&'tcx self) -> smallvec::IntoIter<walk::TypeWalkerArray<'tcx>> {
-        walk::walk_shallow(self)
-    }
-
-    /// Walks `ty` and any types appearing within `ty`, invoking the
-    /// callback `f` on each type. If the callback returns `false`, then the
-    /// children of the current type are ignored.
-    ///
-    /// Note: prefer `ty.walk()` where possible.
-    pub fn maybe_walk<F>(&'tcx self, mut f: F)
-    where
-        F: FnMut(Ty<'tcx>) -> bool,
-    {
-        let mut walker = self.walk();
-        while let Some(ty) = walker.next() {
-            if !f(ty) {
-                walker.skip_current_subtree();
-            }
         }
     }
 }

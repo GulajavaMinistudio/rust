@@ -25,7 +25,6 @@ use rustc_macros::HashStable;
 use rustc_span::symbol::{kw, Symbol};
 use rustc_target::abi::{Size, VariantIdx};
 use rustc_target::spec::abi;
-use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -755,14 +754,6 @@ impl<'tcx> TraitRef<'tcx> {
         self.substs.type_at(0)
     }
 
-    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> + 'a {
-        // Select only the "input types" from a trait-reference. For
-        // now this is all the types that appear in the
-        // trait-reference, but it should eventually exclude
-        // associated types.
-        self.substs.types()
-    }
-
     pub fn from_method(
         tcx: TyCtxt<'tcx>,
         trait_id: DefId,
@@ -806,14 +797,6 @@ pub struct ExistentialTraitRef<'tcx> {
 }
 
 impl<'tcx> ExistentialTraitRef<'tcx> {
-    pub fn input_types<'b>(&'b self) -> impl DoubleEndedIterator<Item = Ty<'tcx>> + 'b {
-        // Select only the "input types" from a trait-reference. For
-        // now this is all the types that appear in the
-        // trait-reference, but it should eventually exclude
-        // associated types.
-        self.substs.types()
-    }
-
     pub fn erase_self_ty(
         tcx: TyCtxt<'tcx>,
         trait_ref: ty::TraitRef<'tcx>,
@@ -1622,7 +1605,6 @@ impl RegionKind {
                 flags = flags | TypeFlags::HAS_FREE_REGIONS;
                 flags = flags | TypeFlags::HAS_FREE_LOCAL_REGIONS;
                 flags = flags | TypeFlags::HAS_RE_INFER;
-                flags = flags | TypeFlags::KEEP_IN_LOCAL_TCX;
                 flags = flags | TypeFlags::STILL_FURTHER_SPECIALIZABLE;
             }
             ty::RePlaceholder(..) => {
@@ -2152,31 +2134,6 @@ impl<'tcx> TyS<'tcx> {
         }
     }
 
-    /// Pushes onto `out` the regions directly referenced from this type (but not
-    /// types reachable from this type via `walk_tys`). This ignores late-bound
-    /// regions binders.
-    pub fn push_regions(&self, out: &mut SmallVec<[ty::Region<'tcx>; 4]>) {
-        match self.kind {
-            Ref(region, _, _) => {
-                out.push(region);
-            }
-            Dynamic(ref obj, region) => {
-                out.push(region);
-                if let Some(principal) = obj.principal() {
-                    out.extend(principal.skip_binder().substs.regions());
-                }
-            }
-            Adt(_, substs) | Opaque(_, substs) => out.extend(substs.regions()),
-            Closure(_, ref substs) | Generator(_, ref substs, _) => out.extend(substs.regions()),
-            Projection(ref data) | UnnormalizedProjection(ref data) => {
-                out.extend(data.substs.regions())
-            }
-            FnDef(..) | FnPtr(_) | GeneratorWitness(..) | Bool | Char | Int(_) | Uint(_)
-            | Float(_) | Str | Array(..) | Slice(_) | RawPtr(_) | Never | Tuple(..)
-            | Foreign(..) | Param(_) | Bound(..) | Placeholder(..) | Infer(_) | Error => {}
-        }
-    }
-
     /// When we create a closure, we record its kind (i.e., what trait
     /// it implements) into its `ClosureSubsts` using a type
     /// parameter. This is kind of a phantom type, except that the
@@ -2403,8 +2360,8 @@ impl<'tcx> Const<'tcx> {
         let try_const_eval = |did, param_env: ParamEnv<'tcx>, substs, promoted| {
             let param_env_and_substs = param_env.with_reveal_all().and(substs);
 
-            // Avoid querying `tcx.const_eval(...)` with any e.g. inference vars.
-            if param_env_and_substs.has_local_value() {
+            // Avoid querying `tcx.const_eval(...)` with any inference vars.
+            if param_env_and_substs.needs_infer() {
                 return None;
             }
 
@@ -2419,12 +2376,12 @@ impl<'tcx> Const<'tcx> {
 
         match self.val {
             ConstKind::Unevaluated(did, substs, promoted) => {
-                // HACK(eddyb) when substs contain e.g. inference variables,
+                // HACK(eddyb) when substs contain inference variables,
                 // attempt using identity substs instead, that will succeed
                 // when the expression doesn't depend on any parameters.
                 // FIXME(eddyb, skinny121) pass `InferCtxt` into here when it's available, so that
                 // we can call `infcx.const_eval_resolve` which handles inference variables.
-                if substs.has_local_value() {
+                if substs.needs_infer() {
                     let identity_substs = InternalSubsts::identity_for_item(tcx, did);
                     // The `ParamEnv` needs to match the `identity_substs`.
                     let identity_param_env = tcx.param_env(did);

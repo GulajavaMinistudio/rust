@@ -4,9 +4,10 @@ use core::fmt::Debug;
 use core::hash::{Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator, Peekable};
 use core::marker::PhantomData;
+use core::mem::{self, ManuallyDrop};
 use core::ops::Bound::{Excluded, Included, Unbounded};
 use core::ops::{Index, RangeBounds};
-use core::{fmt, mem, ptr};
+use core::{fmt, ptr};
 
 use super::node::{self, marker, ForceResult::*, Handle, InsertResult::*, NodeRef};
 use super::search::{self, SearchResult::*};
@@ -190,9 +191,9 @@ impl<K: Clone, V: Clone> Clone for BTreeMap<K, V> {
                             // We can't destructure subtree directly
                             // because BTreeMap implements Drop
                             let (subroot, sublength) = unsafe {
+                                let subtree = ManuallyDrop::new(subtree);
                                 let root = ptr::read(&subtree.root);
                                 let length = subtree.length;
-                                mem::forget(subtree);
                                 (root, length)
                             };
 
@@ -652,11 +653,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// assert_eq!(map.first_key_value(), Some((&1, &"b")));
     /// ```
     #[unstable(feature = "map_first_last", issue = "62924")]
-    pub fn first_key_value<T: ?Sized>(&self) -> Option<(&K, &V)>
-    where
-        T: Ord,
-        K: Borrow<T>,
-    {
+    pub fn first_key_value(&self) -> Option<(&K, &V)> {
         let front = self.root.as_ref()?.as_ref().first_leaf_edge();
         front.right_kv().ok().map(Handle::into_kv)
     }
@@ -666,7 +663,38 @@ impl<K: Ord, V> BTreeMap<K, V> {
     ///
     /// # Examples
     ///
-    /// Contrived way to `clear` a map:
+    /// ```
+    /// #![feature(map_first_last)]
+    /// use std::collections::BTreeMap;
+    ///
+    /// let mut map = BTreeMap::new();
+    /// map.insert(1, "a");
+    /// map.insert(2, "b");
+    /// if let Some(mut entry) = map.first_entry() {
+    ///     if *entry.key() > 0 {
+    ///         entry.insert("first");
+    ///     }
+    /// }
+    /// assert_eq!(*map.get(&1).unwrap(), "first");
+    /// assert_eq!(*map.get(&2).unwrap(), "b");
+    /// ```
+    #[unstable(feature = "map_first_last", issue = "62924")]
+    pub fn first_entry(&mut self) -> Option<OccupiedEntry<'_, K, V>> {
+        let front = self.root.as_mut()?.as_mut().first_leaf_edge();
+        let kv = front.right_kv().ok()?;
+        Some(OccupiedEntry {
+            handle: kv.forget_node_type(),
+            length: &mut self.length,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Removes and returns the first element in the map.
+    /// The key of this element is the minimum key that was in the map.
+    ///
+    /// # Examples
+    ///
+    /// Draining elements in ascending order, while keeping a usable map each iteration.
     ///
     /// ```
     /// #![feature(map_first_last)]
@@ -675,27 +703,14 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// let mut map = BTreeMap::new();
     /// map.insert(1, "a");
     /// map.insert(2, "b");
-    /// while let Some(entry) = map.first_entry() {
-    ///     let (key, val) = entry.remove_entry();
-    ///     assert!(!map.contains_key(&key));
+    /// while let Some((key, _val)) = map.pop_first() {
+    ///     assert!(map.iter().all(|(k, _v)| *k > key));
     /// }
+    /// assert!(map.is_empty());
     /// ```
     #[unstable(feature = "map_first_last", issue = "62924")]
-    pub fn first_entry<T: ?Sized>(&mut self) -> Option<OccupiedEntry<'_, K, V>>
-    where
-        T: Ord,
-        K: Borrow<T>,
-    {
-        let front = self.root.as_mut()?.as_mut().first_leaf_edge();
-        if let Ok(kv) = front.right_kv() {
-            Some(OccupiedEntry {
-                handle: kv.forget_node_type(),
-                length: &mut self.length,
-                _marker: PhantomData,
-            })
-        } else {
-            None
-        }
+    pub fn pop_first(&mut self) -> Option<(K, V)> {
+        self.first_entry().map(|entry| entry.remove_entry())
     }
 
     /// Returns the last key-value pair in the map.
@@ -715,11 +730,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// assert_eq!(map.last_key_value(), Some((&2, &"a")));
     /// ```
     #[unstable(feature = "map_first_last", issue = "62924")]
-    pub fn last_key_value<T: ?Sized>(&self) -> Option<(&K, &V)>
-    where
-        T: Ord,
-        K: Borrow<T>,
-    {
+    pub fn last_key_value(&self) -> Option<(&K, &V)> {
         let back = self.root.as_ref()?.as_ref().last_leaf_edge();
         back.left_kv().ok().map(Handle::into_kv)
     }
@@ -729,7 +740,38 @@ impl<K: Ord, V> BTreeMap<K, V> {
     ///
     /// # Examples
     ///
-    /// Contrived way to `clear` a map:
+    /// ```
+    /// #![feature(map_first_last)]
+    /// use std::collections::BTreeMap;
+    ///
+    /// let mut map = BTreeMap::new();
+    /// map.insert(1, "a");
+    /// map.insert(2, "b");
+    /// if let Some(mut entry) = map.last_entry() {
+    ///     if *entry.key() > 0 {
+    ///         entry.insert("last");
+    ///     }
+    /// }
+    /// assert_eq!(*map.get(&1).unwrap(), "a");
+    /// assert_eq!(*map.get(&2).unwrap(), "last");
+    /// ```
+    #[unstable(feature = "map_first_last", issue = "62924")]
+    pub fn last_entry(&mut self) -> Option<OccupiedEntry<'_, K, V>> {
+        let back = self.root.as_mut()?.as_mut().last_leaf_edge();
+        let kv = back.left_kv().ok()?;
+        Some(OccupiedEntry {
+            handle: kv.forget_node_type(),
+            length: &mut self.length,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Removes and returns the last element in the map.
+    /// The key of this element is the maximum key that was in the map.
+    ///
+    /// # Examples
+    ///
+    /// Draining elements in descending order, while keeping a usable map each iteration.
     ///
     /// ```
     /// #![feature(map_first_last)]
@@ -738,27 +780,14 @@ impl<K: Ord, V> BTreeMap<K, V> {
     /// let mut map = BTreeMap::new();
     /// map.insert(1, "a");
     /// map.insert(2, "b");
-    /// while let Some(entry) = map.last_entry() {
-    ///     let (key, val) = entry.remove_entry();
-    ///     assert!(!map.contains_key(&key));
+    /// while let Some((key, _val)) = map.pop_last() {
+    ///     assert!(map.iter().all(|(k, _v)| *k < key));
     /// }
+    /// assert!(map.is_empty());
     /// ```
     #[unstable(feature = "map_first_last", issue = "62924")]
-    pub fn last_entry<T: ?Sized>(&mut self) -> Option<OccupiedEntry<'_, K, V>>
-    where
-        T: Ord,
-        K: Borrow<T>,
-    {
-        let back = self.root.as_mut()?.as_mut().last_leaf_edge();
-        if let Ok(kv) = back.left_kv() {
-            Some(OccupiedEntry {
-                handle: kv.forget_node_type(),
-                length: &mut self.length,
-                _marker: PhantomData,
-            })
-        } else {
-            None
-        }
+    pub fn pop_last(&mut self) -> Option<(K, V)> {
+        self.last_entry().map(|entry| entry.remove_entry())
     }
 
     /// Returns `true` if the map contains a value for the specified key.
@@ -1515,15 +1544,14 @@ impl<K, V> IntoIterator for BTreeMap<K, V> {
     type IntoIter = IntoIter<K, V>;
 
     fn into_iter(self) -> IntoIter<K, V> {
-        if self.root.is_none() {
-            mem::forget(self);
+        let me = ManuallyDrop::new(self);
+        if me.root.is_none() {
             return IntoIter { front: None, back: None, length: 0 };
         }
 
-        let root1 = unsafe { unwrap_unchecked(ptr::read(&self.root)).into_ref() };
-        let root2 = unsafe { unwrap_unchecked(ptr::read(&self.root)).into_ref() };
-        let len = self.length;
-        mem::forget(self);
+        let root1 = unsafe { unwrap_unchecked(ptr::read(&me.root)).into_ref() };
+        let root2 = unsafe { unwrap_unchecked(ptr::read(&me.root)).into_ref() };
+        let len = me.length;
 
         IntoIter {
             front: Some(root1.first_leaf_edge()),
@@ -1780,18 +1808,12 @@ where
     where
         F: FnMut(&K, &mut V) -> bool,
     {
-        while let Some(kv) = unsafe { self.next_kv() } {
-            let (k, v) = unsafe { ptr::read(&kv) }.into_kv_mut();
+        while let Some(mut kv) = unsafe { self.next_kv() } {
+            let (k, v) = kv.kv_mut();
             if pred(k, v) {
                 *self.length -= 1;
                 let (k, v, leaf_edge_location) = kv.remove_kv_tracking();
-                // `remove_kv_tracking` has either preserved or invalidated `self.cur_leaf_edge`
-                if let Some(node) = leaf_edge_location {
-                    match search::search_tree(node, &k) {
-                        search::SearchResult::Found(_) => unreachable!(),
-                        search::SearchResult::GoDown(leaf) => self.cur_leaf_edge = Some(leaf),
-                    }
-                };
+                self.cur_leaf_edge = Some(leaf_edge_location);
                 return Some((k, v));
             }
             self.cur_leaf_edge = Some(kv.next_leaf_edge());
@@ -2698,28 +2720,26 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
 
 impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV> {
     /// Removes a key/value-pair from the map, and returns that pair, as well as
-    /// the whereabouts of the leaf edge corresponding to that former pair:
-    /// if None is returned, the leaf edge is still the left leaf edge of the KV handle;
-    /// if a node is returned, it heads the subtree where the leaf edge may be found.
+    /// the leaf edge corresponding to that former pair.
     fn remove_kv_tracking(
         self,
-    ) -> (K, V, Option<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>>) {
-        let mut levels_down_handled: isize;
-        let (small_leaf, old_key, old_val) = match self.force() {
+    ) -> (K, V, Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>) {
+        let (mut pos, old_key, old_val, was_internal) = match self.force() {
             Leaf(leaf) => {
-                levels_down_handled = 1; // handled at same level, but affects only the right side
                 let (hole, old_key, old_val) = leaf.remove();
-                (hole.into_node(), old_key, old_val)
+                (hole, old_key, old_val, false)
             }
             Internal(mut internal) => {
                 // Replace the location freed in the internal node with the next KV,
                 // and remove that next KV from its leaf.
-                levels_down_handled = unsafe { ptr::read(&internal).into_node().height() } as isize;
 
                 let key_loc = internal.kv_mut().0 as *mut K;
                 let val_loc = internal.kv_mut().1 as *mut V;
 
-                let to_remove = internal.right_edge().descend().first_leaf_edge().right_kv().ok();
+                // Deleting from the left side is typically faster since we can
+                // just pop an element from the end of the KV array without
+                // needing to shift the other values.
+                let to_remove = internal.left_edge().descend().last_leaf_edge().left_kv().ok();
                 let to_remove = unsafe { unwrap_unchecked(to_remove) };
 
                 let (hole, key, val) = to_remove.remove();
@@ -2727,50 +2747,69 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInter
                 let old_key = unsafe { mem::replace(&mut *key_loc, key) };
                 let old_val = unsafe { mem::replace(&mut *val_loc, val) };
 
-                (hole.into_node(), old_key, old_val)
+                (hole, old_key, old_val, true)
             }
         };
 
         // Handle underflow
-        let mut cur_node = small_leaf.forget_type();
+        let mut cur_node = unsafe { ptr::read(&pos).into_node().forget_type() };
+        let mut at_leaf = true;
         while cur_node.len() < node::MIN_LEN {
             match handle_underfull_node(cur_node) {
-                AtRoot(root) => {
-                    cur_node = root;
-                    break;
-                }
-                EmptyParent(_) => unreachable!(),
-                Merged(parent) => {
-                    levels_down_handled -= 1;
+                AtRoot => break,
+                Merged(edge, merged_with_left, offset) => {
+                    // If we merged with our right sibling then our tracked
+                    // position has not changed. However if we merged with our
+                    // left sibling then our tracked position is now dangling.
+                    if at_leaf && merged_with_left {
+                        let idx = pos.idx() + offset;
+                        let node = match unsafe { ptr::read(&edge).descend().force() } {
+                            Leaf(leaf) => leaf,
+                            Internal(_) => unreachable!(),
+                        };
+                        pos = unsafe { Handle::new_edge(node, idx) };
+                    }
+
+                    let parent = edge.into_node();
                     if parent.len() == 0 {
                         // We must be at the root
-                        let root = parent.into_root_mut();
-                        root.pop_level();
-                        cur_node = root.as_mut();
+                        parent.into_root_mut().pop_level();
                         break;
                     } else {
                         cur_node = parent.forget_type();
+                        at_leaf = false;
                     }
                 }
-                Stole(internal_node) => {
-                    levels_down_handled -= 1;
-                    cur_node = internal_node.forget_type();
+                Stole(stole_from_left) => {
+                    // Adjust the tracked position if we stole from a left sibling
+                    if stole_from_left && at_leaf {
+                        // SAFETY: This is safe since we just added an element to our node.
+                        unsafe {
+                            pos.next_unchecked();
+                        }
+                    }
+
                     // This internal node might be underfull, but only if it's the root.
                     break;
                 }
             }
         }
 
-        let leaf_edge_location = if levels_down_handled > 0 { None } else { Some(cur_node) };
-        (old_key, old_val, leaf_edge_location)
+        // If we deleted from an internal node then we need to compensate for
+        // the earlier swap and adjust the tracked position to point to the
+        // next element.
+        if was_internal {
+            pos = unsafe { unwrap_unchecked(pos.next_kv().ok()).next_leaf_edge() };
+        }
+
+        (old_key, old_val, pos)
     }
 }
 
 enum UnderflowResult<'a, K, V> {
-    AtRoot(NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>),
-    EmptyParent(NodeRef<marker::Mut<'a>, K, V, marker::Internal>),
-    Merged(NodeRef<marker::Mut<'a>, K, V, marker::Internal>),
-    Stole(NodeRef<marker::Mut<'a>, K, V, marker::Internal>),
+    AtRoot,
+    Merged(Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::Edge>, bool, usize),
+    Stole(bool),
 }
 
 fn handle_underfull_node<K, V>(
@@ -2778,28 +2817,27 @@ fn handle_underfull_node<K, V>(
 ) -> UnderflowResult<'_, K, V> {
     let parent = match node.ascend() {
         Ok(parent) => parent,
-        Err(root) => return AtRoot(root),
+        Err(_) => return AtRoot,
     };
 
     let (is_left, mut handle) = match parent.left_kv() {
         Ok(left) => (true, left),
-        Err(parent) => match parent.right_kv() {
-            Ok(right) => (false, right),
-            Err(parent) => {
-                return EmptyParent(parent.into_node());
-            }
-        },
+        Err(parent) => {
+            let right = unsafe { unwrap_unchecked(parent.right_kv().ok()) };
+            (false, right)
+        }
     };
 
     if handle.can_merge() {
-        Merged(handle.merge().into_node())
+        let offset = if is_left { handle.reborrow().left_edge().descend().len() + 1 } else { 0 };
+        Merged(handle.merge(), is_left, offset)
     } else {
         if is_left {
             handle.steal_left();
         } else {
             handle.steal_right();
         }
-        Stole(handle.into_node())
+        Stole(is_left)
     }
 }
 
