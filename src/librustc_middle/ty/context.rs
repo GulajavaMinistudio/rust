@@ -1162,17 +1162,17 @@ impl<'tcx> TyCtxt<'tcx> {
             maybe_unused_trait_imports: resolutions
                 .maybe_unused_trait_imports
                 .into_iter()
-                .map(|id| definitions.local_def_id(id))
+                .map(|id| definitions.local_def_id(id).to_def_id())
                 .collect(),
             maybe_unused_extern_crates: resolutions
                 .maybe_unused_extern_crates
                 .into_iter()
-                .map(|(id, sp)| (definitions.local_def_id(id), sp))
+                .map(|(id, sp)| (definitions.local_def_id(id).to_def_id(), sp))
                 .collect(),
             glob_map: resolutions
                 .glob_map
                 .into_iter()
-                .map(|(id, names)| (definitions.local_def_id(id), names))
+                .map(|(id, names)| (definitions.local_def_id(id).to_def_id(), names))
                 .collect(),
             extern_prelude: resolutions.extern_prelude,
             untracked_crate: krate,
@@ -2206,6 +2206,12 @@ impl<'tcx> TyCtxt<'tcx> {
     #[inline]
     pub fn mk_lang_item(self, ty: Ty<'tcx>, item: lang_items::LangItem) -> Option<Ty<'tcx>> {
         let def_id = self.lang_items().require(item).ok()?;
+        Some(self.mk_generic_adt(def_id, ty))
+    }
+
+    #[inline]
+    pub fn mk_diagnostic_item(self, ty: Ty<'tcx>, name: Symbol) -> Option<Ty<'tcx>> {
+        let def_id = self.get_diagnostic_item(name)?;
         Some(self.mk_generic_adt(def_id, ty))
     }
 

@@ -1513,7 +1513,7 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
         }
 
         Ctor(data) | Variant(hir::Variant { data, .. }) if data.ctor_hir_id().is_some() => {
-            let ty = tcx.type_of(tcx.hir().get_parent_did(hir_id));
+            let ty = tcx.type_of(tcx.hir().get_parent_did(hir_id).to_def_id());
             let inputs =
                 data.fields().iter().map(|f| tcx.type_of(tcx.hir().local_def_id(f.hir_id)));
             ty::Binder::bind(tcx.mk_fn_sig(
@@ -1650,7 +1650,7 @@ fn predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
         // prove that the trait applies to the types that were
         // used, and adding the predicate into this list ensures
         // that this is done.
-        let span = tcx.def_span(def_id);
+        let span = tcx.sess.source_map().guess_head_span(tcx.def_span(def_id));
         result.predicates =
             tcx.arena.alloc_from_iter(result.predicates.iter().copied().chain(std::iter::once((
                 ty::TraitRef::identity(tcx, def_id).without_const().to_predicate(),

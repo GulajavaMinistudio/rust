@@ -1601,12 +1601,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         for (base_trait_ref, span, constness) in regular_traits_refs_spans {
             assert_eq!(constness, Constness::NotConst);
 
-            for trait_ref in traits::elaborate_trait_ref(tcx, base_trait_ref) {
+            for obligation in traits::elaborate_trait_ref(tcx, base_trait_ref) {
                 debug!(
                     "conv_object_ty_poly_trait_ref: observing object predicate `{:?}`",
-                    trait_ref
+                    obligation.predicate
                 );
-                match trait_ref {
+                match obligation.predicate {
                     ty::Predicate::Trait(pred, _) => {
                         associated_types.entry(span).or_default().extend(
                             tcx.associated_items(pred.def_id())
@@ -2371,7 +2371,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
             let parent_def_id = def_id
                 .and_then(|def_id| tcx.hir().as_local_hir_id(def_id))
-                .map(|hir_id| tcx.hir().get_parent_did(hir_id));
+                .map(|hir_id| tcx.hir().get_parent_did(hir_id).to_def_id());
 
             debug!("qpath_to_ty: parent_def_id={:?}", parent_def_id);
 
