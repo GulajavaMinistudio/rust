@@ -57,9 +57,9 @@ pub fn opts() -> TargetOptions {
             // binaries to be redistributed without the libgcc_s-dw2-1.dll
             // dependency, but unfortunately break unwinding across DLL
             // boundaries when unwinding across FFI boundaries.
-            "-lgcc".to_string(),
             "-lgcc_eh".to_string(),
-            "-lpthread".to_string(),
+            "-l:libpthread.a".to_string(),
+            "-lgcc".to_string(),
             // libpthread depends on libmsvcrt, so we need to link it *again*.
             "-lmsvcrt".to_string(),
             "-lkernel32".to_string(),
@@ -75,8 +75,8 @@ pub fn opts() -> TargetOptions {
         dll_prefix: String::new(),
         dll_suffix: ".dll".to_string(),
         exe_suffix: ".exe".to_string(),
-        staticlib_prefix: String::new(),
-        staticlib_suffix: ".lib".to_string(),
+        staticlib_prefix: "lib".to_string(),
+        staticlib_suffix: ".a".to_string(),
         target_family: Some("windows".to_string()),
         is_like_windows: true,
         allows_weak_linkage: false,

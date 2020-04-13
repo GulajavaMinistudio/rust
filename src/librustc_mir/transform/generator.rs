@@ -89,13 +89,6 @@ impl<'tcx> MutVisitor<'tcx> for RenameLocalVisitor<'tcx> {
             *local = self.to;
         }
     }
-
-    fn process_projection_elem(&mut self, elem: &PlaceElem<'tcx>) -> Option<PlaceElem<'tcx>> {
-        match elem {
-            PlaceElem::Index(local) if *local == self.from => Some(PlaceElem::Index(self.to)),
-            _ => None,
-        }
-    }
 }
 
 struct DerefArgVisitor<'tcx> {
@@ -721,15 +714,18 @@ fn compute_layout<'tcx>(
         _ => bug!(),
     };
 
+    let param_env = tcx.param_env(source.def_id());
+
     for (local, decl) in body.local_decls.iter_enumerated() {
         // Ignore locals which are internal or not live
         if !live_locals.contains(local) || decl.internal {
             continue;
         }
+        let decl_ty = tcx.normalize_erasing_regions(param_env, decl.ty);
 
         // Sanity check that typeck knows about the type of locals which are
         // live across a suspension point
-        if !allowed.contains(&decl.ty) && !allowed_upvars.contains(&decl.ty) {
+        if !allowed.contains(&decl_ty) && !allowed_upvars.contains(&decl_ty) {
             span_bug!(
                 body.span,
                 "Broken MIR: generator contains type {} in MIR, \
