@@ -1170,14 +1170,28 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::Generics {
         }
         // FIXME(#43408) enable this always when we get lazy normalization.
         Node::AnonConst(_) => {
+            let parent_id = tcx.hir().get_parent_item(hir_id);
+            let parent_def_id = tcx.hir().local_def_id(parent_id);
+
             // HACK(eddyb) this provides the correct generics when
             // `feature(const_generics)` is enabled, so that const expressions
             // used with const generics, e.g. `Foo<{N+1}>`, can work at all.
             if tcx.features().const_generics {
-                let parent_id = tcx.hir().get_parent_item(hir_id);
-                Some(tcx.hir().local_def_id(parent_id))
+                Some(parent_def_id)
             } else {
-                None
+                let parent_node = tcx.hir().get(tcx.hir().get_parent_node(hir_id));
+                match parent_node {
+                    // HACK(eddyb) this provides the correct generics for repeat
+                    // expressions' count (i.e. `N` in `[x; N]`), as they shouldn't
+                    // be able to cause query cycle errors.
+                    Node::Expr(&Expr { kind: ExprKind::Repeat(_, ref constant), .. })
+                        if constant.hir_id == hir_id =>
+                    {
+                        Some(parent_def_id)
+                    }
+
+                    _ => None,
+                }
             }
         }
         Node::Expr(&hir::Expr { kind: hir::ExprKind::Closure(..), .. }) => {
@@ -2583,7 +2597,7 @@ fn should_inherit_track_caller(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
                     .associated_items(trait_def_id)
                     .filter_by_name_unhygienic(impl_item.ident.name)
                     .find(move |trait_item| {
-                        trait_item.kind == ty::AssocKind::Method
+                        trait_item.kind == ty::AssocKind::Fn
                             && tcx.hygienic_eq(impl_item.ident, trait_item.ident, trait_def_id)
                     })
                 {

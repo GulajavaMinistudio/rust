@@ -154,7 +154,6 @@ use std::slice;
 
 use crate::require_c_abi_if_c_variadic;
 use crate::util::common::indenter;
-use crate::TypeAndSubsts;
 
 use self::autoderef::Autoderef;
 use self::callee::DeferredCallResolution;
@@ -1904,7 +1903,7 @@ fn check_specialization_validity<'tcx>(
 ) {
     let kind = match impl_item.kind {
         hir::ImplItemKind::Const(..) => ty::AssocKind::Const,
-        hir::ImplItemKind::Fn(..) => ty::AssocKind::Method,
+        hir::ImplItemKind::Fn(..) => ty::AssocKind::Fn,
         hir::ImplItemKind::OpaqueTy(..) => ty::AssocKind::OpaqueTy,
         hir::ImplItemKind::TyAlias(_) => ty::AssocKind::Type,
     };
@@ -2050,7 +2049,7 @@ fn check_impl_items_against_trait<'tcx>(
                 }
                 hir::ImplItemKind::Fn(..) => {
                     let opt_trait_span = tcx.hir().span_if_local(ty_trait_item.def_id);
-                    if ty_trait_item.kind == ty::AssocKind::Method {
+                    if ty_trait_item.kind == ty::AssocKind::Fn {
                         compare_impl_method(
                             tcx,
                             &ty_impl_item,
@@ -2296,7 +2295,7 @@ fn fn_sig_suggestion(
 /// structured suggestion.
 fn suggestion_signature(assoc: &ty::AssocItem, tcx: TyCtxt<'_>) -> String {
     match assoc.kind {
-        ty::AssocKind::Method => {
+        ty::AssocKind::Fn => {
             // We skip the binder here because the binder would deanonymize all
             // late-bound regions, and we don't want method signatures to show up
             // `as for<'r> fn(&'r MyType)`.  Pretty-printing handles late-bound
@@ -3312,8 +3311,31 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     pub fn to_const(&self, ast_c: &hir::AnonConst) -> &'tcx ty::Const<'tcx> {
-        let c = self.tcx.hir().local_def_id(ast_c.hir_id).expect_local();
-        ty::Const::from_anon_const(self.tcx, c)
+        let const_def_id = self.tcx.hir().local_def_id(ast_c.hir_id).expect_local();
+        let c = ty::Const::from_anon_const(self.tcx, const_def_id);
+
+        // HACK(eddyb) emulate what a `WellFormedConst` obligation would do.
+        // This code should be replaced with the proper WF handling ASAP.
+        if let ty::ConstKind::Unevaluated(def_id, substs, promoted) = c.val {
+            assert!(promoted.is_none());
+
+            // HACK(eddyb) let's hope these are always empty.
+            // let obligations = self.nominal_obligations(def_id, substs);
+            // self.out.extend(obligations);
+
+            let cause = traits::ObligationCause::new(
+                self.tcx.def_span(const_def_id.to_def_id()),
+                self.body_id,
+                traits::MiscObligation,
+            );
+            self.register_predicate(traits::Obligation::new(
+                cause,
+                self.param_env,
+                ty::Predicate::ConstEvaluatable(def_id, substs),
+            ));
+        }
+
+        c
     }
 
     // If the type given by the user has free regions, save it for later, since
@@ -4251,24 +4273,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
     }
 
-    // Determine the `Self` type, using fresh variables for all variables
-    // declared on the impl declaration e.g., `impl<A,B> for Vec<(A,B)>`
-    // would return `($0, $1)` where `$0` and `$1` are freshly instantiated type
-    // variables.
-    pub fn impl_self_ty(
-        &self,
-        span: Span, // (potential) receiver for this impl
-        did: DefId,
-    ) -> TypeAndSubsts<'tcx> {
-        let ity = self.tcx.type_of(did);
-        debug!("impl_self_ty: ity={:?}", ity);
-
-        let substs = self.fresh_substs_for_item(span, did);
-        let substd_ty = self.instantiate_type_scheme(span, &substs, &ity);
-
-        TypeAndSubsts { substs, ty: substd_ty }
-    }
-
     /// Unifies the output type with the expected type early, for more coercions
     /// and forward type information on the input expressions.
     fn expected_inputs_for_expected_output(
@@ -5000,7 +5004,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         } else if !self.check_for_cast(err, expr, found, expected) {
             let is_struct_pat_shorthand_field =
                 self.is_hir_id_from_struct_pattern_shorthand_field(expr.hir_id, expr.span);
-            let methods = self.get_conversion_methods(expr.span, expected, found);
+            let methods = self.get_conversion_methods(expr.span, expected, found, expr.hir_id);
             if let Ok(expr_text) = self.sess().source_map().span_to_snippet(expr.span) {
                 let mut suggestions = iter::repeat(&expr_text)
                     .zip(methods.iter())

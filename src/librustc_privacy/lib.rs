@@ -1012,7 +1012,7 @@ impl DefIdVisitor<'tcx> for ReachEverythingInTheInterfaceVisitor<'_, 'tcx> {
 struct NamePrivacyVisitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     tables: &'a ty::TypeckTables<'tcx>,
-    current_item: hir::HirId,
+    current_item: Option<hir::HirId>,
     empty_tables: &'a ty::TypeckTables<'tcx>,
 }
 
@@ -1028,7 +1028,7 @@ impl<'a, 'tcx> NamePrivacyVisitor<'a, 'tcx> {
     ) {
         // definition of the field
         let ident = Ident::new(kw::Invalid, use_ctxt);
-        let current_hir = self.current_item;
+        let current_hir = self.current_item.unwrap();
         let def_id = self.tcx.adjust_ident_and_get_scope(ident, def.did, current_hir).1;
         if !def.is_enum() && !field.vis.is_accessible_from(def_id, self.tcx) {
             let label = if in_update_syntax {
@@ -1074,7 +1074,7 @@ impl<'a, 'tcx> Visitor<'tcx> for NamePrivacyVisitor<'a, 'tcx> {
     }
 
     fn visit_item(&mut self, item: &'tcx hir::Item<'tcx>) {
-        let orig_current_item = mem::replace(&mut self.current_item, item.hir_id);
+        let orig_current_item = mem::replace(&mut self.current_item, Some(item.hir_id));
         let orig_tables =
             mem::replace(&mut self.tables, item_tables(self.tcx, item.hir_id, self.empty_tables));
         intravisit::walk_item(self, item);
@@ -1648,7 +1648,7 @@ impl<'a, 'tcx> Visitor<'tcx> for ObsoleteVisiblePrivateTypesVisitor<'a, 'tcx> {
                                     found_pub_static = true;
                                     intravisit::walk_impl_item(self, impl_item);
                                 }
-                                AssocItemKind::Method { has_self: false } => {
+                                AssocItemKind::Fn { has_self: false } => {
                                     found_pub_static = true;
                                     intravisit::walk_impl_item(self, impl_item);
                                 }
@@ -1927,7 +1927,7 @@ impl<'a, 'tcx> PrivateItemsInPublicInterfacesVisitor<'a, 'tcx> {
         let mut check = self.check(hir_id, vis);
 
         let (check_ty, is_assoc_ty) = match assoc_item_kind {
-            AssocItemKind::Const | AssocItemKind::Method { .. } => (true, false),
+            AssocItemKind::Const | AssocItemKind::Fn { .. } => (true, false),
             AssocItemKind::Type => (defaultness.has_value(), true),
             // `ty()` for opaque types is the underlying type,
             // it's not a part of interface, so we skip it.
@@ -2059,7 +2059,7 @@ fn check_mod_privacy(tcx: TyCtxt<'_>, module_def_id: DefId) {
     let mut visitor = NamePrivacyVisitor {
         tcx,
         tables: &empty_tables,
-        current_item: hir::DUMMY_HIR_ID,
+        current_item: None,
         empty_tables: &empty_tables,
     };
     let (module, span, hir_id) = tcx.hir().get_module(module_def_id);
