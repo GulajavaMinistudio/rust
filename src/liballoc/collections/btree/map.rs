@@ -40,7 +40,7 @@ use UnderflowResult::*;
 /// performance on *small* nodes of elements which are cheap to compare. However in the future we
 /// would like to further explore choosing the optimal search strategy based on the choice of B,
 /// and possibly other factors. Using linear search, searching for a random element is expected
-/// to take O(B log<sub>B</sub>n) comparisons, which is generally worse than a BST. In practice,
+/// to take O(B * log(n)) comparisons, which is generally worse than a BST. In practice,
 /// however, performance is excellent.
 ///
 /// It is a logic error for a key to be modified in such a way that the key's ordering relative to
@@ -2058,12 +2058,7 @@ where
         (Excluded(s), Excluded(e)) if s == e => {
             panic!("range start and end are equal and excluded in BTreeMap")
         }
-        (Included(s), Included(e))
-        | (Included(s), Excluded(e))
-        | (Excluded(s), Included(e))
-        | (Excluded(s), Excluded(e))
-            if s > e =>
-        {
+        (Included(s) | Excluded(s), Included(e) | Excluded(e)) if s > e => {
             panic!("range start is greater than range end in BTreeMap")
         }
         _ => {}

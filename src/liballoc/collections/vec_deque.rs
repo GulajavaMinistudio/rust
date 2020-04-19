@@ -488,7 +488,7 @@ impl<T> VecDeque<T> {
         VecDeque { tail: 0, head: 0, buf: RawVec::with_capacity(cap) }
     }
 
-    /// Retrieves an element in the `VecDeque` by index.
+    /// Provides a reference to the element at the given index.
     ///
     /// Element at index 0 is the front of the queue.
     ///
@@ -513,7 +513,7 @@ impl<T> VecDeque<T> {
         }
     }
 
-    /// Retrieves an element in the `VecDeque` mutably by index.
+    /// Provides a mutable reference to the element at the given index.
     ///
     /// Element at index 0 is the front of the queue.
     ///
@@ -651,7 +651,7 @@ impl<T> VecDeque<T> {
         }
     }
 
-    /// Tries to reserves the minimum capacity for exactly `additional` more elements to
+    /// Tries to reserve the minimum capacity for exactly `additional` more elements to
     /// be inserted in the given `VecDeque<T>`. After calling `reserve_exact`,
     /// capacity will be greater than or equal to `self.len() + additional`.
     /// Does nothing if the capacity is already sufficient.
@@ -662,7 +662,7 @@ impl<T> VecDeque<T> {
     ///
     /// # Errors
     ///
-    /// If the capacity overflows, or the allocator reports a failure, then an error
+    /// If the capacity overflows `usize`, or the allocator reports a failure, then an error
     /// is returned.
     ///
     /// # Examples
@@ -678,7 +678,7 @@ impl<T> VecDeque<T> {
     ///     // Pre-reserve the memory, exiting if we can't
     ///     output.try_reserve_exact(data.len())?;
     ///
-    ///     // Now we know this can't OOM in the middle of our complex work
+    ///     // Now we know this can't OOM(Out-Of-Memory) in the middle of our complex work
     ///     output.extend(data.iter().map(|&val| {
     ///         val * 2 + 5 // very complicated
     ///     }));
@@ -700,7 +700,7 @@ impl<T> VecDeque<T> {
     ///
     /// # Errors
     ///
-    /// If the capacity overflows, or the allocator reports a failure, then an error
+    /// If the capacity overflows `usize`, or the allocator reports a failure, then an error
     /// is returned.
     ///
     /// # Examples
@@ -1391,7 +1391,7 @@ impl<T> VecDeque<T> {
     /// Removes an element from anywhere in the `VecDeque` and returns it,
     /// replacing it with the first element.
     ///
-    /// This does not preserve ordering, but is O(1).
+    /// This does not preserve ordering, but is `O(1)`.
     ///
     /// Returns `None` if `index` is out of bounds.
     ///
@@ -1426,7 +1426,7 @@ impl<T> VecDeque<T> {
     /// Removes an element from anywhere in the `VecDeque` and returns it, replacing it with the
     /// last element.
     ///
-    /// This does not preserve ordering, but is O(1).
+    /// This does not preserve ordering, but is `O(1)`.
     ///
     /// Returns `None` if `index` is out of bounds.
     ///
@@ -2927,7 +2927,7 @@ impl<T> From<VecDeque<T>> for Vec<T> {
     /// [`Vec<T>`]: crate::vec::Vec
     /// [`VecDeque<T>`]: crate::collections::VecDeque
     ///
-    /// This never needs to re-allocate, but does need to do O(n) data movement if
+    /// This never needs to re-allocate, but does need to do `O(n)` data movement if
     /// the circular buffer doesn't happen to be at the beginning of the allocation.
     ///
     /// # Examples
