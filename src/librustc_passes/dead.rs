@@ -24,13 +24,15 @@ use rustc_span::symbol::sym;
 // may need to be marked as live.
 fn should_explore(tcx: TyCtxt<'_>, hir_id: hir::HirId) -> bool {
     match tcx.hir().find(hir_id) {
-        Some(Node::Item(..))
-        | Some(Node::ImplItem(..))
-        | Some(Node::ForeignItem(..))
-        | Some(Node::TraitItem(..))
-        | Some(Node::Variant(..))
-        | Some(Node::AnonConst(..))
-        | Some(Node::Pat(..)) => true,
+        Some(
+            Node::Item(..)
+            | Node::ImplItem(..)
+            | Node::ForeignItem(..)
+            | Node::TraitItem(..)
+            | Node::Variant(..)
+            | Node::AnonConst(..)
+            | Node::Pat(..),
+        ) => true,
         _ => false,
     }
 }
@@ -67,9 +69,7 @@ impl<'a, 'tcx> MarkSymbolVisitor<'a, 'tcx> {
 
     fn handle_res(&mut self, res: Res) {
         match res {
-            Res::Def(DefKind::Const, _)
-            | Res::Def(DefKind::AssocConst, _)
-            | Res::Def(DefKind::TyAlias, _) => {
+            Res::Def(DefKind::Const | DefKind::AssocConst | DefKind::TyAlias, _) => {
                 self.check_def_id(res.def_id());
             }
             _ if self.in_pat => {}
@@ -255,7 +255,9 @@ impl<'a, 'tcx> Visitor<'tcx> for MarkSymbolVisitor<'a, 'tcx> {
             hir::ExprKind::Field(ref lhs, ..) => {
                 self.handle_field_access(&lhs, expr.hir_id);
             }
-            hir::ExprKind::Struct(_, ref fields, _) => {
+            hir::ExprKind::Struct(ref qpath, ref fields, _) => {
+                let res = self.tables.qpath_res(qpath, expr.hir_id);
+                self.handle_res(res);
                 if let ty::Adt(ref adt, _) = self.tables.expr_ty(expr).kind {
                     self.mark_as_used_if_union(adt, fields);
                 }

@@ -319,10 +319,12 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     );
                     return;
                 }
-                hir::Node::Item(
-                    hir::Item { kind: hir::ItemKind::Trait(_, _, generics, _, _), .. }
-                    | hir::Item { kind: hir::ItemKind::Impl { generics, .. }, .. },
-                ) if projection.is_some() => {
+                hir::Node::Item(hir::Item {
+                    kind:
+                        hir::ItemKind::Trait(_, _, generics, _, _)
+                        | hir::ItemKind::Impl { generics, .. },
+                    ..
+                }) if projection.is_some() => {
                     // Missing restriction on associated type of type parameter (unmet projection).
                     suggest_restriction(
                         &generics,
@@ -335,19 +337,19 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     return;
                 }
 
-                hir::Node::Item(
-                    hir::Item { kind: hir::ItemKind::Struct(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::Enum(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::Union(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::Trait(_, _, generics, ..), .. }
-                    | hir::Item { kind: hir::ItemKind::Impl { generics, .. }, .. }
-                    | hir::Item { kind: hir::ItemKind::Fn(_, generics, _), .. }
-                    | hir::Item { kind: hir::ItemKind::TyAlias(_, generics), .. }
-                    | hir::Item { kind: hir::ItemKind::TraitAlias(generics, _), .. }
-                    | hir::Item {
-                        kind: hir::ItemKind::OpaqueTy(hir::OpaqueTy { generics, .. }), ..
-                    },
-                )
+                hir::Node::Item(hir::Item {
+                    kind:
+                        hir::ItemKind::Struct(_, generics)
+                        | hir::ItemKind::Enum(_, generics)
+                        | hir::ItemKind::Union(_, generics)
+                        | hir::ItemKind::Trait(_, _, generics, ..)
+                        | hir::ItemKind::Impl { generics, .. }
+                        | hir::ItemKind::Fn(_, generics, _)
+                        | hir::ItemKind::TyAlias(_, generics)
+                        | hir::ItemKind::TraitAlias(generics, _)
+                        | hir::ItemKind::OpaqueTy(hir::OpaqueTy { generics, .. }),
+                    ..
+                })
                 | hir::Node::TraitItem(hir::TraitItem { generics, .. })
                 | hir::Node::ImplItem(hir::ImplItem { generics, .. })
                     if param_ty =>
@@ -466,9 +468,11 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         );
 
         match self.evaluate_obligation(&obligation) {
-            Ok(EvaluationResult::EvaluatedToOk)
-            | Ok(EvaluationResult::EvaluatedToOkModuloRegions)
-            | Ok(EvaluationResult::EvaluatedToAmbig) => {}
+            Ok(
+                EvaluationResult::EvaluatedToOk
+                | EvaluationResult::EvaluatedToOkModuloRegions
+                | EvaluationResult::EvaluatedToAmbig,
+            ) => {}
             _ => return,
         }
         let hir = self.tcx.hir();
@@ -1135,7 +1139,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         while let Some(code) = next_code {
             debug!("maybe_note_obligation_cause_for_async_await: code={:?}", code);
             match code {
-                ObligationCauseCode::BuiltinDerivedObligation(derived_obligation)
+                ObligationCauseCode::DerivedObligation(derived_obligation)
+                | ObligationCauseCode::BuiltinDerivedObligation(derived_obligation)
                 | ObligationCauseCode::ImplDerivedObligation(derived_obligation) => {
                     let ty = derived_obligation.parent_trait_ref.self_ty();
                     debug!(
@@ -1313,10 +1318,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
 
         let is_async = inner_generator_body
             .and_then(|body| body.generator_kind())
-            .map(|generator_kind| match generator_kind {
-                hir::GeneratorKind::Async(..) => true,
-                _ => false,
-            })
+            .map(|generator_kind| matches!(generator_kind, hir::GeneratorKind::Async(..)))
             .unwrap_or(false);
         let (await_or_yield, an_await_or_yield) =
             if is_async { ("await", "an await") } else { ("yield", "a yield") };
@@ -1447,7 +1449,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 // ```
                 debug!("parent_def_kind: {:?}", self.tcx.def_kind(parent_did));
                 let is_raw_borrow_inside_fn_like_call = match self.tcx.def_kind(parent_did) {
-                    Some(DefKind::Fn) | Some(DefKind::Ctor(..)) => target_ty.is_unsafe_ptr(),
+                    Some(DefKind::Fn | DefKind::Ctor(..)) => target_ty.is_unsafe_ptr(),
                     _ => false,
                 };
 
@@ -1531,14 +1533,14 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 let item_name = tcx.def_path_str(item_def_id);
                 let msg = format!("required by this bound in `{}`", item_name);
                 if let Some(ident) = tcx.opt_item_name(item_def_id) {
-                    let sm = self.tcx.sess.source_map();
+                    let sm = tcx.sess.source_map();
                     let same_line =
                         match (sm.lookup_line(ident.span.hi()), sm.lookup_line(span.lo())) {
                             (Ok(l), Ok(r)) => l.line == r.line,
                             _ => true,
                         };
                     if !ident.span.overlaps(span) && !same_line {
-                        err.span_label(ident.span, "");
+                        err.span_label(ident.span, "required by a bound in this");
                     }
                 }
                 if span != DUMMY_SP {
@@ -1661,6 +1663,16 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     obligated_types,
                 );
             }
+            ObligationCauseCode::DerivedObligation(ref data) => {
+                let parent_trait_ref = self.resolve_vars_if_possible(&data.parent_trait_ref);
+                let parent_predicate = parent_trait_ref.without_const().to_predicate();
+                self.note_obligation_cause_code(
+                    err,
+                    &parent_predicate,
+                    &data.parent_code,
+                    obligated_types,
+                );
+            }
             ObligationCauseCode::CompareImplMethodObligation { .. } => {
                 err.note(&format!(
                     "the requirement `{}` appears on the impl method \
@@ -1682,15 +1694,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 err.help("see issue #48214");
                 if tcx.sess.opts.unstable_features.is_nightly_build() {
                     err.help("add `#![feature(trivial_bounds)]` to the crate attributes to enable");
-                }
-            }
-            ObligationCauseCode::AssocTypeBound(ref data) => {
-                err.span_label(data.original, "associated type defined here");
-                if let Some(sp) = data.impl_span {
-                    err.span_label(sp, "in this `impl` item");
-                }
-                for sp in &data.bounds {
-                    err.span_label(*sp, "restricted in this bound");
                 }
             }
         }

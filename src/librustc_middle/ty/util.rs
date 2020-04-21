@@ -316,10 +316,8 @@ impl<'tcx> TyCtxt<'tcx> {
                         break;
                     }
                 }
-                (ty::Projection(_), _)
-                | (ty::Opaque(..), _)
-                | (_, ty::Projection(_))
-                | (_, ty::Opaque(..)) => {
+                (ty::Projection(_) | ty::Opaque(..), _)
+                | (_, ty::Projection(_) | ty::Opaque(..)) => {
                     // If either side is a projection, attempt to
                     // progress via normalization. (Should be safe to
                     // apply to both sides as normalization is
@@ -1047,10 +1045,7 @@ pub fn needs_drop_components(
         // Foreign types can never have destructors.
         ty::Foreign(..) => Ok(SmallVec::new()),
 
-        // Pessimistically assume that all generators will require destructors
-        // as we don't know if a destructor is a noop or not until after the MIR
-        // state transformation pass.
-        ty::Generator(..) | ty::Dynamic(..) | ty::Error => Err(AlwaysRequiresDrop),
+        ty::Dynamic(..) | ty::Error => Err(AlwaysRequiresDrop),
 
         ty::Slice(ty) => needs_drop_components(ty, target_layout),
         ty::Array(elem_ty, size) => {
@@ -1083,7 +1078,8 @@ pub fn needs_drop_components(
         | ty::Placeholder(..)
         | ty::Opaque(..)
         | ty::Infer(_)
-        | ty::Closure(..) => Ok(smallvec![ty]),
+        | ty::Closure(..)
+        | ty::Generator(..) => Ok(smallvec![ty]),
     }
 }
 
