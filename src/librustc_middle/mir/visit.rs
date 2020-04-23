@@ -65,15 +65,6 @@ use rustc_span::Span;
 // variant argument) that does not require visiting, as in
 // `is_cleanup` above.
 
-macro_rules! body_type {
-    (mut $tcx:lifetime) => {
-        &mut BodyAndCache<$tcx>
-    };
-    ($tcx:lifetime) => {
-        &Body<$tcx>
-    };
-}
-
 macro_rules! make_mir_visitor {
     ($visitor_trait_name:ident, $($mutability:ident)?) => {
         pub trait $visitor_trait_name<'tcx> {
@@ -82,7 +73,7 @@ macro_rules! make_mir_visitor {
 
             fn visit_body(
                 &mut self,
-                body: body_type!($($mutability)? 'tcx)
+                body: &$($mutability)? Body<'tcx>,
             ) {
                 self.super_body(body);
             }
@@ -161,13 +152,6 @@ macro_rules! make_mir_visitor {
                             context: PlaceContext,
                             location: Location) {
                 self.super_place(place, context, location);
-            }
-
-            fn visit_place_base(&mut self,
-                                local: & $($mutability)? Local,
-                                context: PlaceContext,
-                                location: Location) {
-                self.super_place_base(local, context, location);
             }
 
             visit_place_fns!($($mutability)?);
@@ -254,7 +238,7 @@ macro_rules! make_mir_visitor {
 
             fn super_body(
                 &mut self,
-                $($mutability)? body: body_type!($($mutability)? 'tcx)
+                body: &$($mutability)? Body<'tcx>,
             ) {
                 let span = body.span;
                 if let Some(yield_ty) = &$($mutability)? body.yield_ty {
@@ -275,7 +259,6 @@ macro_rules! make_mir_visitor {
                     self.visit_basic_block_data(bb, data);
                 }
 
-                let body: & $($mutability)? Body<'_> = & $($mutability)? body;
                 for scope in &$($mutability)? body.source_scopes {
                     self.visit_source_scope_data(scope);
                 }
@@ -710,13 +693,6 @@ macro_rules! make_mir_visitor {
                 );
             }
 
-            fn super_place_base(&mut self,
-                                local: & $($mutability)? Local,
-                                context: PlaceContext,
-                                location: Location) {
-                self.visit_local(local, context, location);
-            }
-
             fn super_local_decl(&mut self,
                                 local: Local,
                                 local_decl: & $($mutability)? LocalDecl<'tcx>) {
@@ -819,10 +795,14 @@ macro_rules! make_mir_visitor {
 
             fn visit_location(
                 &mut self,
-                body: body_type!($($mutability)? 'tcx),
+                body: &$($mutability)? Body<'tcx>,
                 location: Location
             ) {
-                let basic_block = & $($mutability)? body[location.block];
+                macro_rules! basic_blocks {
+                    (mut) => (body.basic_blocks_mut());
+                    () => (body.basic_blocks());
+                };
+                let basic_block = & $($mutability)? basic_blocks!($($mutability)?)[location.block];
                 if basic_block.statements.len() == location.statement_index {
                     if let Some(ref $($mutability)? terminator) = basic_block.terminator {
                         self.visit_terminator(terminator, location)
@@ -847,7 +827,7 @@ macro_rules! visit_place_fns {
             context: PlaceContext,
             location: Location,
         ) {
-            self.visit_place_base(&mut place.local, context, location);
+            self.visit_local(&mut place.local, context, location);
 
             if let Some(new_projection) = self.process_projection(&place.projection, location) {
                 place.projection = self.tcx().intern_place_elems(&new_projection);
@@ -936,7 +916,7 @@ macro_rules! visit_place_fns {
                 };
             }
 
-            self.visit_place_base(&place.local, context, location);
+            self.visit_local(&place.local, context, location);
 
             self.visit_projection(place.local, &place.projection, context, location);
         }
