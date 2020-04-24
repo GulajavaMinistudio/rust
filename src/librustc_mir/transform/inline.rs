@@ -8,7 +8,7 @@ use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
 use rustc_middle::ty::subst::{Subst, SubstsRef};
-use rustc_middle::ty::{self, Instance, InstanceDef, ParamEnv, Ty, TyCtxt};
+use rustc_middle::ty::{self, ConstKind, Instance, InstanceDef, ParamEnv, Ty, TyCtxt};
 use rustc_session::config::Sanitizer;
 use rustc_target::spec::abi::Abi;
 
@@ -69,7 +69,7 @@ impl Inliner<'tcx> {
         let param_env = self.tcx.param_env(self.source.def_id()).with_reveal_all();
 
         // Only do inlining into fn bodies.
-        let id = self.tcx.hir().as_local_hir_id(self.source.def_id()).unwrap();
+        let id = self.tcx.hir().as_local_hir_id(self.source.def_id().expect_local());
         if self.tcx.hir().body_owner_kind(id).is_fn_or_closure() && self.source.promoted.is_none() {
             for (bb, bb_data) in caller_body.basic_blocks().iter_enumerated() {
                 if let Some(callsite) =
@@ -94,10 +94,10 @@ impl Inliner<'tcx> {
                     continue;
                 }
 
-                let callee_hir_id = self.tcx.hir().as_local_hir_id(callsite.callee);
-
-                let callee_body = if let Some(callee_hir_id) = callee_hir_id {
-                    let self_hir_id = self.tcx.hir().as_local_hir_id(self.source.def_id()).unwrap();
+                let callee_body = if let Some(callee_def_id) = callsite.callee.as_local() {
+                    let callee_hir_id = self.tcx.hir().as_local_hir_id(callee_def_id);
+                    let self_hir_id =
+                        self.tcx.hir().as_local_hir_id(self.source.def_id().expect_local());
                     // Avoid a cycle here by only using `optimized_mir` only if we have
                     // a lower `HirId` than the callee. This ensures that the callee will
                     // not inline us. This trick only works without incremental compilation.
@@ -122,6 +122,16 @@ impl Inliner<'tcx> {
                 } else {
                     continue;
                 };
+
+                // Copy only unevaluated constants from the callee_body into the caller_body.
+                // Although we are only pushing `ConstKind::Unevaluated` consts to
+                // `required_consts`, here we may not only have `ConstKind::Unevaluated`
+                // because we are calling `subst_and_normalize_erasing_regions`.
+                caller_body.required_consts.extend(
+                    callee_body.required_consts.iter().copied().filter(|&constant| {
+                        matches!(constant.literal.val, ConstKind::Unevaluated(_, _, _))
+                    }),
+                );
 
                 let start = caller_body.basic_blocks().len();
                 debug!("attempting to inline callsite {:?} - body={:?}", callsite, callee_body);

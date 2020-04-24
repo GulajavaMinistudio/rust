@@ -66,10 +66,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
         }
 
         use rustc_middle::hir::map::blocks::FnLikeNode;
-        let hir_id = tcx
-            .hir()
-            .as_local_hir_id(source.def_id())
-            .expect("Non-local call to local provider is_const_fn");
+        let hir_id = tcx.hir().as_local_hir_id(source.def_id().expect_local());
 
         let is_fn_like = FnLikeNode::from_node(tcx.hir().get(hir_id)).is_some();
         let is_assoc_const = match tcx.def_kind(source.def_id()) {
@@ -330,7 +327,6 @@ struct ConstPropagator<'mir, 'tcx> {
     // by accessing them through `ecx` instead.
     source_scopes: IndexVec<SourceScope, SourceScopeData>,
     local_decls: IndexVec<Local, LocalDecl<'tcx>>,
-    ret: Option<OpTy<'tcx, ()>>,
     // Because we have `MutVisitor` we can't obtain the `SourceInfo` from a `Location`. So we store
     // the last known `SourceInfo` here and just keep revisiting it.
     source_info: Option<SourceInfo>,
@@ -402,22 +398,19 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             source_scopes: body.source_scopes.clone(),
             //FIXME(wesleywiser) we can't steal this because `Visitor::super_visit_body()` needs it
             local_decls: body.local_decls.clone(),
-            ret: ret.map(Into::into),
             source_info: None,
         }
     }
 
     fn get_const(&self, local: Local) -> Option<OpTy<'tcx>> {
-        if local == RETURN_PLACE {
-            // Try to read the return place as an immediate so that if it is representable as a
-            // scalar, we can handle it as such, but otherwise, just return the value as is.
-            return match self.ret.map(|ret| self.ecx.try_read_immediate(ret)) {
-                Some(Ok(Ok(imm))) => Some(imm.into()),
-                _ => self.ret,
-            };
-        }
+        let op = self.ecx.access_local(self.ecx.frame(), local, None).ok();
 
-        self.ecx.access_local(self.ecx.frame(), local, None).ok()
+        // Try to read the local as an immediate so that if it is representable as a scalar, we can
+        // handle it as such, but otherwise, just return the value as is.
+        match op.map(|ret| self.ecx.try_read_immediate(ret)) {
+            Some(Ok(Ok(imm))) => Some(imm.into()),
+            _ => op,
+        }
     }
 
     fn remove_const(&mut self, local: Local) {
@@ -835,6 +828,12 @@ impl<'tcx> Visitor<'tcx> for CanConstProp {
 impl<'mir, 'tcx> MutVisitor<'tcx> for ConstPropagator<'mir, 'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
+    }
+
+    fn visit_body(&mut self, body: &mut Body<'tcx>) {
+        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+            self.visit_basic_block_data(bb, data);
+        }
     }
 
     fn visit_constant(&mut self, constant: &mut Constant<'tcx>, location: Location) {

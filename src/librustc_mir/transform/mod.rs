@@ -1,10 +1,12 @@
 use crate::{shim, util};
+use required_consts::RequiredConstsVisitor;
 use rustc_ast::ast;
 use rustc_hir as hir;
 use rustc_hir::def_id::{CrateNum, DefId, DefIdSet, LocalDefId, LOCAL_CRATE};
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_index::vec::IndexVec;
-use rustc_middle::mir::{Body, ConstQualifs, MirPhase, Promoted};
+use rustc_middle::mir::visit::Visitor as _;
+use rustc_middle::mir::{traversal, Body, ConstQualifs, MirPhase, Promoted};
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::steal::Steal;
 use rustc_middle::ty::{InstanceDef, TyCtxt, TypeFoldable};
@@ -29,6 +31,7 @@ pub mod no_landing_pads;
 pub mod promote_consts;
 pub mod qualify_min_const_fn;
 pub mod remove_noop_landing_pads;
+pub mod required_consts;
 pub mod rustc_peek;
 pub mod simplify;
 pub mod simplify_branches;
@@ -80,7 +83,7 @@ fn mir_keys(tcx: TyCtxt<'_>, krate: CrateNum) -> &DefIdSet {
             _: Span,
         ) {
             if let hir::VariantData::Tuple(_, hir_id) = *v {
-                self.set.insert(self.tcx.hir().local_def_id(hir_id));
+                self.set.insert(self.tcx.hir().local_def_id(hir_id).to_def_id());
             }
             intravisit::walk_struct_def(self, v)
         }
@@ -176,7 +179,7 @@ pub fn run_passes(
 }
 
 fn mir_const_qualif(tcx: TyCtxt<'_>, def_id: DefId) -> ConstQualifs {
-    let const_kind = check_consts::ConstKind::for_item(tcx, def_id);
+    let const_kind = check_consts::ConstKind::for_item(tcx, def_id.expect_local());
 
     // No need to const-check a non-const `fn`.
     if const_kind.is_none() {
@@ -194,10 +197,10 @@ fn mir_const_qualif(tcx: TyCtxt<'_>, def_id: DefId) -> ConstQualifs {
         return Default::default();
     }
 
-    let item =
-        check_consts::Item { body, tcx, def_id, const_kind, param_env: tcx.param_env(def_id) };
+    let ccx =
+        check_consts::ConstCx { body, tcx, def_id, const_kind, param_env: tcx.param_env(def_id) };
 
-    let mut validator = check_consts::validation::Validator::new(&item);
+    let mut validator = check_consts::validation::Validator::new(&ccx);
     validator.check_body();
 
     // We return the qualifs in the return place for every MIR body, even though it is only used
@@ -237,6 +240,14 @@ fn mir_validated(
     let _ = tcx.mir_const_qualif(def_id);
 
     let mut body = tcx.mir_const(def_id).steal();
+
+    let mut required_consts = Vec::new();
+    let mut required_consts_visitor = RequiredConstsVisitor::new(&mut required_consts);
+    for (bb, bb_data) in traversal::reverse_postorder(&body) {
+        required_consts_visitor.visit_basic_block_data(bb, bb_data);
+    }
+    body.required_consts = required_consts;
+
     let promote_pass = promote_consts::PromoteTemps::default();
     run_passes(
         tcx,
