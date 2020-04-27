@@ -207,7 +207,6 @@ macro_rules! acquire {
 /// counting in general.
 ///
 /// [rc_examples]: ../../std/rc/index.html#examples
-#[cfg_attr(all(bootstrap, not(test)), lang = "arc")]
 #[cfg_attr(not(test), rustc_diagnostic_item = "Arc")]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Arc<T: ?Sized> {
@@ -325,7 +324,7 @@ impl<T> Arc<T> {
             weak: atomic::AtomicUsize::new(1),
             data,
         };
-        Self::from_inner(Box::into_raw_non_null(x))
+        Self::from_inner(Box::leak(x).into())
     }
 
     /// Constructs a new `Arc` with uninitialized contents.
@@ -659,6 +658,7 @@ impl<T: ?Sized> Arc<T> {
     ///
     /// ```
     /// #![feature(rc_into_raw_non_null)]
+    /// #![allow(deprecated)]
     ///
     /// use std::sync::Arc;
     ///
@@ -668,6 +668,7 @@ impl<T: ?Sized> Arc<T> {
     /// assert_eq!(deref, "hello");
     /// ```
     #[unstable(feature = "rc_into_raw_non_null", issue = "47336")]
+    #[rustc_deprecated(since = "1.44.0", reason = "use `Arc::into_raw` instead")]
     #[inline]
     pub fn into_raw_non_null(this: Self) -> NonNull<T> {
         // safe because Arc guarantees its pointer is non-null

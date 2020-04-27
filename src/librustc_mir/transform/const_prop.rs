@@ -69,10 +69,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
         let hir_id = tcx.hir().as_local_hir_id(source.def_id().expect_local());
 
         let is_fn_like = FnLikeNode::from_node(tcx.hir().get(hir_id)).is_some();
-        let is_assoc_const = match tcx.def_kind(source.def_id()) {
-            Some(DefKind::AssocConst) => true,
-            _ => false,
-        };
+        let is_assoc_const = tcx.def_kind(source.def_id()) == DefKind::AssocConst;
 
         // Only run const prop on functions, methods, closures and associated constants
         if !is_fn_like && !is_assoc_const {
@@ -596,6 +593,11 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             return None;
         }
 
+        // FIXME we need to revisit this for #67176
+        if rvalue.needs_subst() {
+            return None;
+        }
+
         // Perform any special handling for specific Rvalue types.
         // Generally, checks here fall into one of two categories:
         //   1. Additional checking to provide useful lints to the user
@@ -634,11 +636,6 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             }
 
             _ => {}
-        }
-
-        // FIXME we need to revisit this for #67176
-        if rvalue.needs_subst() {
-            return None;
         }
 
         self.use_ecx(|this| {

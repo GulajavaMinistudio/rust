@@ -101,9 +101,15 @@ fn dump_crates(cstore: &CStore) {
         info!("  hash: {}", data.hash());
         info!("  reqd: {:?}", data.dep_kind());
         let CrateSource { dylib, rlib, rmeta } = data.source();
-        dylib.as_ref().map(|dl| info!("  dylib: {}", dl.0.display()));
-        rlib.as_ref().map(|rl| info!("   rlib: {}", rl.0.display()));
-        rmeta.as_ref().map(|rl| info!("   rmeta: {}", rl.0.display()));
+        if let Some(dylib) = dylib {
+            info!("  dylib: {}", dylib.0.display());
+        }
+        if let Some(rlib) = rlib {
+            info!("   rlib: {}", rlib.0.display());
+        }
+        if let Some(rmeta) = rmeta {
+            info!("   rmeta: {}", rmeta.0.display());
+        }
     });
 }
 
@@ -585,7 +591,7 @@ impl<'a> CrateLoader<'a> {
 
         // Make sure the path contains a / or the linker will search for it.
         let path = env::current_dir().unwrap().join(path);
-        let lib = match DynamicLibrary::open(Some(&path)) {
+        let lib = match DynamicLibrary::open(&path) {
             Ok(lib) => lib,
             Err(err) => self.sess.span_fatal(span, &err),
         };

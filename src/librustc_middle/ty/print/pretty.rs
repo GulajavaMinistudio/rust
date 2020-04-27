@@ -150,13 +150,10 @@ impl RegionHighlightMode {
 
     /// Returns `Some(n)` with the number to use for the given region, if any.
     fn region_highlighted(&self, region: ty::Region<'_>) -> Option<usize> {
-        self.highlight_regions
-            .iter()
-            .filter_map(|h| match h {
-                Some((r, n)) if r == region => Some(*n),
-                _ => None,
-            })
-            .next()
+        self.highlight_regions.iter().find_map(|h| match h {
+            Some((r, n)) if r == region => Some(*n),
+            _ => None,
+        })
     }
 
     /// Highlight the given bound region.
@@ -891,7 +888,7 @@ pub trait PrettyPrinter<'tcx>:
                     p!(write("::{:?}", promoted));
                 } else {
                     match self.tcx().def_kind(did) {
-                        Some(DefKind::Static | DefKind::Const | DefKind::AssocConst) => {
+                        DefKind::Static | DefKind::Const | DefKind::AssocConst => {
                             p!(print_value_path(did, substs))
                         }
                         _ => {

@@ -279,7 +279,6 @@ struct RcBox<T: ?Sized> {
 /// type `T`.
 ///
 /// [get_mut]: #method.get_mut
-#[cfg_attr(all(bootstrap, not(test)), lang = "rc")]
 #[cfg_attr(not(test), rustc_diagnostic_item = "Rc")]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Rc<T: ?Sized> {
@@ -324,11 +323,9 @@ impl<T> Rc<T> {
         // pointers, which ensures that the weak destructor never frees
         // the allocation while the strong destructor is running, even
         // if the weak pointer is stored inside the strong one.
-        Self::from_inner(Box::into_raw_non_null(box RcBox {
-            strong: Cell::new(1),
-            weak: Cell::new(1),
-            value,
-        }))
+        Self::from_inner(
+            Box::leak(box RcBox { strong: Cell::new(1), weak: Cell::new(1), value }).into(),
+        )
     }
 
     /// Constructs a new `Rc` with uninitialized contents.
@@ -662,6 +659,7 @@ impl<T: ?Sized> Rc<T> {
     ///
     /// ```
     /// #![feature(rc_into_raw_non_null)]
+    /// #![allow(deprecated)]
     ///
     /// use std::rc::Rc;
     ///
@@ -671,6 +669,7 @@ impl<T: ?Sized> Rc<T> {
     /// assert_eq!(deref, "hello");
     /// ```
     #[unstable(feature = "rc_into_raw_non_null", issue = "47336")]
+    #[rustc_deprecated(since = "1.44.0", reason = "use `Rc::into_raw` instead")]
     #[inline]
     pub fn into_raw_non_null(this: Self) -> NonNull<T> {
         // safe because Rc guarantees its pointer is non-null

@@ -755,7 +755,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             },
             ObligationCauseCode::IfExpression(box IfExpressionCause { then, outer, semicolon }) => {
                 err.span_label(then, "expected because of this");
-                outer.map(|sp| err.span_label(sp, "`if` and `else` have incompatible types"));
+                if let Some(sp) = outer {
+                    err.span_label(sp, "`if` and `else` have incompatible types");
+                }
                 if let Some(sp) = semicolon {
                     err.span_suggestion_short(
                         sp,
@@ -1630,8 +1632,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                     ];
                     if let Some(msg) = have_as_ref
                         .iter()
-                        .filter_map(|(path, msg)| if &path_str == path { Some(msg) } else { None })
-                        .next()
+                        .find_map(|(path, msg)| (&path_str == path).then_some(msg))
                     {
                         let mut show_suggestion = true;
                         for (exp_ty, found_ty) in exp_substs.types().zip(found_substs.types()) {

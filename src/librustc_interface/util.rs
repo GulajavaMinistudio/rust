@@ -205,7 +205,7 @@ pub fn spawn_thread_pool<F: FnOnce() -> R + Send, R: Send>(
 }
 
 fn load_backend_from_dylib(path: &Path) -> fn() -> Box<dyn CodegenBackend> {
-    let lib = DynamicLibrary::open(Some(path)).unwrap_or_else(|err| {
+    let lib = DynamicLibrary::open(path).unwrap_or_else(|err| {
         let err = format!("couldn't load codegen backend {:?}: {:?}", path, err);
         early_error(ErrorOutputType::default(), &err);
     });
@@ -267,17 +267,14 @@ pub fn rustc_path<'a>() -> Option<&'a Path> {
 }
 
 fn get_rustc_path_inner(bin_path: &str) -> Option<PathBuf> {
-    sysroot_candidates()
-        .iter()
-        .filter_map(|sysroot| {
-            let candidate = sysroot.join(bin_path).join(if cfg!(target_os = "windows") {
-                "rustc.exe"
-            } else {
-                "rustc"
-            });
-            candidate.exists().then_some(candidate)
-        })
-        .next()
+    sysroot_candidates().iter().find_map(|sysroot| {
+        let candidate = sysroot.join(bin_path).join(if cfg!(target_os = "windows") {
+            "rustc.exe"
+        } else {
+            "rustc"
+        });
+        candidate.exists().then_some(candidate)
+    })
 }
 
 fn sysroot_candidates() -> Vec<PathBuf> {
@@ -628,8 +625,8 @@ impl<'a, 'b> ReplaceBodyWithLoop<'a, 'b> {
                     | ast::TyKind::Rptr(_, ast::MutTy { ty: ref subty, .. })
                     | ast::TyKind::Paren(ref subty) => involves_impl_trait(subty),
                     ast::TyKind::Tup(ref tys) => any_involves_impl_trait(tys.iter()),
-                    ast::TyKind::Path(_, ref path) => path.segments.iter().any(|seg| {
-                        match seg.args.as_ref().map(|generic_arg| &**generic_arg) {
+                    ast::TyKind::Path(_, ref path) => {
+                        path.segments.iter().any(|seg| match seg.args.as_deref() {
                             None => false,
                             Some(&ast::GenericArgs::AngleBracketed(ref data)) => {
                                 data.args.iter().any(|arg| match arg {
@@ -650,8 +647,8 @@ impl<'a, 'b> ReplaceBodyWithLoop<'a, 'b> {
                                 any_involves_impl_trait(data.inputs.iter())
                                     || ReplaceBodyWithLoop::should_ignore_fn(&data.output)
                             }
-                        }
-                    }),
+                        })
+                    }
                     _ => false,
                 }
             }

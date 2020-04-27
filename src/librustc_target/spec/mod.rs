@@ -265,6 +265,46 @@ impl ToJson for MergeFunctions {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+pub enum RelocModel {
+    Static,
+    Pic,
+    DynamicNoPic,
+    Ropi,
+    Rwpi,
+    RopiRwpi,
+}
+
+impl FromStr for RelocModel {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<RelocModel, ()> {
+        Ok(match s {
+            "static" => RelocModel::Static,
+            "pic" => RelocModel::Pic,
+            "dynamic-no-pic" => RelocModel::DynamicNoPic,
+            "ropi" => RelocModel::Ropi,
+            "rwpi" => RelocModel::Rwpi,
+            "ropi-rwpi" => RelocModel::RopiRwpi,
+            _ => return Err(()),
+        })
+    }
+}
+
+impl ToJson for RelocModel {
+    fn to_json(&self) -> Json {
+        match *self {
+            RelocModel::Static => "static",
+            RelocModel::Pic => "pic",
+            RelocModel::DynamicNoPic => "dynamic-no-pic",
+            RelocModel::Ropi => "ropi",
+            RelocModel::Rwpi => "rwpi",
+            RelocModel::RopiRwpi => "ropi-rwpi",
+        }
+        .to_json()
+    }
+}
+
 pub enum LoadTargetError {
     BuiltinTargetNotFound(String),
     Other(String),
@@ -614,8 +654,8 @@ pub struct TargetOptions {
     /// libraries. Defaults to false.
     pub executables: bool,
     /// Relocation model to use in object file. Corresponds to `llc
-    /// -relocation-model=$relocation_model`. Defaults to "pic".
-    pub relocation_model: String,
+    /// -relocation-model=$relocation_model`. Defaults to `Pic`.
+    pub relocation_model: RelocModel,
     /// Code model to use. Corresponds to `llc -code-model=$code_model`.
     pub code_model: Option<String>,
     /// TLS model to use. Options are "global-dynamic" (default), "local-dynamic", "initial-exec"
@@ -821,7 +861,7 @@ impl Default for TargetOptions {
             dynamic_linking: false,
             only_cdylib: false,
             executables: false,
-            relocation_model: "pic".to_string(),
+            relocation_model: RelocModel::Pic,
             code_model: None,
             tls_model: "global-dynamic".to_string(),
             disable_redzone: false,
@@ -979,20 +1019,21 @@ impl Target {
         macro_rules! key {
             ($key_name:ident) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).map(|o| o.as_string()
-                                    .map(|s| base.options.$key_name = s.to_string()));
+                if let Some(s) = obj.find(&name).and_then(Json::as_string) {
+                    base.options.$key_name = s.to_string();
+                }
             } );
             ($key_name:ident, bool) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..])
-                    .map(|o| o.as_boolean()
-                         .map(|s| base.options.$key_name = s));
+                if let Some(s) = obj.find(&name).and_then(Json::as_boolean) {
+                    base.options.$key_name = s;
+                }
             } );
             ($key_name:ident, Option<u64>) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..])
-                    .map(|o| o.as_u64()
-                         .map(|s| base.options.$key_name = Some(s)));
+                if let Some(s) = obj.find(&name).and_then(Json::as_u64) {
+                    base.options.$key_name = Some(s);
+                }
             } );
             ($key_name:ident, MergeFunctions) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
@@ -1003,6 +1044,18 @@ impl Target {
                                                       merge-functions. Use 'disabled', \
                                                       'trampolines', or 'aliases'.",
                                                       s))),
+                    }
+                    Some(Ok(()))
+                })).unwrap_or(Ok(()))
+            } );
+            ($key_name:ident, RelocModel) => ( {
+                let name = (stringify!($key_name)).replace("_", "-");
+                obj.find(&name[..]).and_then(|o| o.as_string().and_then(|s| {
+                    match s.parse::<RelocModel>() {
+                        Ok(relocation_model) => base.options.$key_name = relocation_model,
+                        _ => return Some(Err(format!("'{}' is not a valid relocation model. \
+                                                      Run `rustc --print relocation-models` to \
+                                                      see the list of supported values.", s))),
                     }
                     Some(Ok(()))
                 })).unwrap_or(Ok(()))
@@ -1034,19 +1087,19 @@ impl Target {
             } );
             ($key_name:ident, list) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).map(|o| o.as_array()
-                    .map(|v| base.options.$key_name = v.iter()
-                        .map(|a| a.as_string().unwrap().to_string()).collect()
-                        )
-                    );
+                if let Some(v) = obj.find(&name).and_then(Json::as_array) {
+                    base.options.$key_name = v.iter()
+                        .map(|a| a.as_string().unwrap().to_string())
+                        .collect();
+                }
             } );
             ($key_name:ident, opt_list) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
-                obj.find(&name[..]).map(|o| o.as_array()
-                    .map(|v| base.options.$key_name = Some(v.iter()
-                        .map(|a| a.as_string().unwrap().to_string()).collect())
-                        )
-                    );
+                if let Some(v) = obj.find(&name).and_then(Json::as_array) {
+                    base.options.$key_name = Some(v.iter()
+                        .map(|a| a.as_string().unwrap().to_string())
+                        .collect());
+                }
             } );
             ($key_name:ident, optional) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
@@ -1145,7 +1198,7 @@ impl Target {
         key!(dynamic_linking, bool);
         key!(only_cdylib, bool);
         key!(executables, bool);
-        key!(relocation_model);
+        key!(relocation_model, RelocModel)?;
         key!(code_model, optional);
         key!(tls_model);
         key!(disable_redzone, bool);

@@ -24,11 +24,10 @@
 #![feature(decl_macro)]
 #![feature(extern_types)]
 #![feature(in_band_lifetimes)]
-#![cfg_attr(not(bootstrap), feature(negative_impls))]
+#![feature(negative_impls)]
 #![feature(optin_builtin_traits)]
 #![feature(rustc_attrs)]
-#![cfg_attr(bootstrap, feature(specialization))]
-#![cfg_attr(not(bootstrap), feature(min_specialization))]
+#![feature(min_specialization)]
 #![recursion_limit = "256"]
 
 #[unstable(feature = "proc_macro_internals", issue = "27812")]
@@ -274,14 +273,14 @@ impl !Send for Span {}
 impl !Sync for Span {}
 
 macro_rules! diagnostic_method {
-    ($name:ident, $level:expr) => (
+    ($name:ident, $level:expr) => {
         /// Creates a new `Diagnostic` with the given `message` at the span
         /// `self`.
         #[unstable(feature = "proc_macro_diagnostic", issue = "54140")]
         pub fn $name<T: Into<String>>(self, message: T) -> Diagnostic {
             Diagnostic::spanned(self, $level, message)
         }
-    )
+    };
 }
 
 impl Span {
@@ -352,14 +351,14 @@ impl Span {
 
     /// Creates a new span with the same line/column information as `self` but
     /// that resolves symbols as though it were at `other`.
-    #[unstable(feature = "proc_macro_span", issue = "54725")]
+    #[stable(feature = "proc_macro_span_resolved_at", since = "1.45.0")]
     pub fn resolved_at(&self, other: Span) -> Span {
         Span(self.0.resolved_at(other.0))
     }
 
     /// Creates a new span with the same name resolution behavior as `self` but
     /// with the line/column information of `other`.
-    #[unstable(feature = "proc_macro_span", issue = "54725")]
+    #[stable(feature = "proc_macro_span_located_at", since = "1.45.0")]
     pub fn located_at(&self, other: Span) -> Span {
         other.resolved_at(*self)
     }
