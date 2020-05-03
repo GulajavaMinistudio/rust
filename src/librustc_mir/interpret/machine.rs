@@ -10,8 +10,8 @@ use rustc_middle::ty::{self, Ty};
 use rustc_span::def_id::DefId;
 
 use super::{
-    AllocId, Allocation, AllocationExtra, Frame, ImmTy, InterpCx, InterpResult, Memory, MemoryKind,
-    OpTy, Operand, PlaceTy, Pointer, Scalar,
+    AllocId, Allocation, AllocationExtra, CheckInAllocMsg, Frame, ImmTy, InterpCx, InterpResult,
+    Memory, MemoryKind, OpTy, Operand, PlaceTy, Pointer, Scalar,
 };
 
 /// Data returned by Machine::stack_pop,
@@ -84,6 +84,8 @@ pub trait Machine<'mir, 'tcx>: Sized {
     /// Tag tracked alongside every pointer. This is used to implement "Stacked Borrows"
     /// <https://www.ralfj.de/blog/2018/08/07/stacked-borrows.html>.
     /// The `default()` is used for pointers to consts, statics, vtables and functions.
+    /// The `Debug` formatting is used for displaying pointers; we cannot use `Display`
+    /// as `()` does not implement that, but it should be "nice" output.
     type PointerTag: ::std::fmt::Debug + Copy + Eq + Hash + 'static;
 
     /// Machines can define extra (non-instance) things that represent values of function pointers.
@@ -344,7 +346,7 @@ pub trait Machine<'mir, 'tcx>: Sized {
     ) -> InterpResult<'tcx, Pointer<Self::PointerTag>> {
         Err((if int == 0 {
             // This is UB, seriously.
-            err_ub!(InvalidIntPointerUsage(0))
+            err_ub!(DanglingIntPointer(0, CheckInAllocMsg::InboundsTest))
         } else {
             // This is just something we cannot support during const-eval.
             err_unsup!(ReadBytesAsPointer)

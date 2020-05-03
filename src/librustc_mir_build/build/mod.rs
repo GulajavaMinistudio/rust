@@ -21,7 +21,7 @@ use rustc_target::spec::PanicStrategy;
 
 use super::lints;
 
-crate fn mir_built(tcx: TyCtxt<'_>, def_id: LocalDefId) -> &ty::steal::Steal<Body<'_>> {
+crate fn mir_built(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::steal::Steal<Body<'_>> {
     tcx.alloc_steal_mir(mir_build(tcx, def_id))
 }
 
@@ -533,11 +533,6 @@ fn should_abort_on_panic(tcx: TyCtxt<'_>, fn_def_id: LocalDefId, _abi: Abi) -> b
 
     // We never unwind, so it's not relevant to stop an unwind.
     if tcx.sess.panic_strategy() != PanicStrategy::Unwind {
-        return false;
-    }
-
-    // We cannot add landing pads, so don't add one.
-    if tcx.sess.no_landing_pads() {
         return false;
     }
 

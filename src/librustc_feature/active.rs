@@ -559,6 +559,12 @@ declare_features! (
     /// Allow negative trait implementations.
     (active, negative_impls, "1.44.0", Some(68318), None),
 
+    /// Allows the use of `#[target_feature]` on safe functions.
+    (active, target_feature_11, "1.45.0", Some(69098), None),
+
+    /// Allow conditional compilation depending on rust version
+    (active, cfg_version, "1.45.0", Some(64796), None),
+
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
     // -------------------------------------------------------------------------

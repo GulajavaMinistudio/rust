@@ -539,7 +539,7 @@ pub fn codegen_crate<B: ExtraBackendMethods>(
     // unnecessarily.
     if tcx.dep_graph.is_fully_enabled() {
         for cgu in codegen_units {
-            tcx.codegen_unit(cgu.name());
+            tcx.ensure().codegen_unit(cgu.name());
         }
     }
 
@@ -908,7 +908,7 @@ pub fn provide_both(providers: &mut Providers<'_>) {
             .map(|id| &module_map[&id])
             .flat_map(|module| module.foreign_items.iter().cloned())
             .collect();
-        tcx.arena.alloc(dllimports)
+        dllimports
     };
 
     providers.is_dllimport_foreign_item =
