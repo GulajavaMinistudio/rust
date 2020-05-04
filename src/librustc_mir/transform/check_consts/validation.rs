@@ -61,7 +61,7 @@ impl Qualifs<'mir, 'tcx> {
                 .into_results_cursor(&body)
         });
 
-        indirectly_mutable.seek_before(location);
+        indirectly_mutable.seek_before_primary_effect(location);
         indirectly_mutable.get().contains(local)
     }
 
@@ -88,7 +88,7 @@ impl Qualifs<'mir, 'tcx> {
                 .into_results_cursor(&body)
         });
 
-        needs_drop.seek_before(location);
+        needs_drop.seek_before_primary_effect(location);
         needs_drop.get().contains(local) || self.indirectly_mutable(ccx, local, location)
     }
 
@@ -115,7 +115,7 @@ impl Qualifs<'mir, 'tcx> {
                 .into_results_cursor(&body)
         });
 
-        has_mut_interior.seek_before(location);
+        has_mut_interior.seek_before_primary_effect(location);
         has_mut_interior.get().contains(local) || self.indirectly_mutable(ccx, local, location)
     }
 
@@ -161,7 +161,7 @@ impl Qualifs<'mir, 'tcx> {
                     .iterate_to_fixpoint()
                     .into_results_cursor(&ccx.body);
 
-                cursor.seek_after(return_loc);
+                cursor.seek_after_primary_effect(return_loc);
                 cursor.contains(RETURN_PLACE)
             }
         };
@@ -247,12 +247,12 @@ impl Validator<'mir, 'tcx> {
             return;
         }
 
-        // If an operation is supported in miri (and is not already controlled by a feature gate) it
-        // can be turned on with `-Zunleash-the-miri-inside-of-you`.
-        let is_unleashable = O::IS_SUPPORTED_IN_MIRI && O::feature_gate().is_none();
+        // If an operation is supported in miri it can be turned on with
+        // `-Zunleash-the-miri-inside-of-you`.
+        let is_unleashable = O::IS_SUPPORTED_IN_MIRI;
 
         if is_unleashable && self.tcx.sess.opts.debugging_opts.unleash_the_miri_inside_of_you {
-            self.tcx.sess.span_warn(span, "skipping const checks");
+            self.tcx.sess.miri_unleashed_feature(span, O::feature_gate());
             return;
         }
 
