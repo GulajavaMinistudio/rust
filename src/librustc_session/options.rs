@@ -253,6 +253,7 @@ macro_rules! options {
         pub const parse_sanitizer_list: &str = "comma separated list of sanitizers";
         pub const parse_sanitizer_memory_track_origins: &str = "0, 1, or 2";
         pub const parse_cfguard: &str = "either `disabled`, `nochecks`, or `checks`";
+        pub const parse_strip: &str = "either `none`, `debuginfo`, or `symbols`";
         pub const parse_linker_flavor: &str = ::rustc_target::spec::LinkerFlavor::one_of();
         pub const parse_optimization_fuel: &str = "crate=integer";
         pub const parse_unpretty: &str = "`string` or `string=string`";
@@ -489,6 +490,16 @@ macro_rules! options {
                 Some("0") => { *slot = 0; true }
                 Some(_) => false,
             }
+        }
+
+        fn parse_strip(slot: &mut Strip, v: Option<&str>) -> bool {
+            match v {
+                Some("none") => *slot = Strip::None,
+                Some("debuginfo") => *slot = Strip::Debuginfo,
+                Some("symbols") => *slot = Strip::Symbols,
+                _ => return false,
+            }
+            true
         }
 
         fn parse_cfguard(slot: &mut CFGuard, v: Option<&str>) -> bool {
@@ -768,6 +779,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "select which borrowck is used (`mir` or `migrate`) (default: `migrate`)"),
     borrowck_stats: bool = (false, parse_bool, [UNTRACKED],
         "gather borrowck statistics (default: no)"),
+    chalk: bool = (false, parse_bool, [TRACKED],
+        "enable the experimental Chalk-based trait solving engine"),
     codegen_backend: Option<String> = (None, parse_opt_string, [TRACKED],
         "the backend to use"),
     control_flow_guard: CFGuard = (CFGuard::Disabled, parse_cfguard, [UNTRACKED],
@@ -962,9 +975,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         "exclude spans when debug-printing compiler state (default: no)"),
     src_hash_algorithm: Option<SourceFileHashAlgorithm> = (None, parse_src_file_hash, [TRACKED],
         "hash algorithm of source files in debug info (`md5`, or `sha1`)"),
-    strip_debuginfo_if_disabled: bool = (false, parse_bool, [TRACKED],
-        "tell the linker to strip debuginfo when building without debuginfo enabled \
-        (default: no)"),
+    strip: Strip = (Strip::None, parse_strip, [UNTRACKED],
+        "tell the linker which information to strip (`none` (default), `debuginfo` or `symbols`)"),
     symbol_mangling_version: SymbolManglingVersion = (SymbolManglingVersion::Legacy,
         parse_symbol_mangling_version, [TRACKED],
         "which mangling version to use for symbol names"),
@@ -1008,6 +1020,8 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
         `mir` (the MIR), or `mir-cfg` (graphviz formatted MIR)"),
     unstable_options: bool = (false, parse_bool, [UNTRACKED],
         "adds unstable command line options to rustc interface (default: no)"),
+    use_ctors_section: Option<bool> = (None, parse_opt_bool, [TRACKED],
+        "use legacy .ctors section for initializers rather than .init_array"),
     verbose: bool = (false, parse_bool, [UNTRACKED],
         "in general, enable more debug printouts (default: no)"),
     verify_llvm_ir: bool = (false, parse_bool, [TRACKED],

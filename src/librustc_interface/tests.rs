@@ -3,6 +3,7 @@ use crate::interface::parse_cfgspecs;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{emitter::HumanReadableErrorType, registry, ColorConfig};
 use rustc_middle::middle::cstore;
+use rustc_session::config::Strip;
 use rustc_session::config::{build_configuration, build_session_options, to_crate_config};
 use rustc_session::config::{rustc_optgroups, ErrorOutputType, ExternLocation, Options, Passes};
 use rustc_session::config::{CFGuard, ExternEntry, LinkerPluginLto, LtoCli, SwitchWithOptPath};
@@ -500,6 +501,7 @@ fn test_debugging_options_tracking_hash() {
     untracked!(self_profile, SwitchWithOptPath::Enabled(None));
     untracked!(self_profile_events, Some(vec![String::new()]));
     untracked!(span_free_formats, true);
+    untracked!(strip, Strip::None);
     untracked!(terminal_width, Some(80));
     untracked!(threads, 99);
     untracked!(time, true);
@@ -525,6 +527,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(always_encode_mir, true);
     tracked!(asm_comments, true);
     tracked!(binary_dep_depinfo, true);
+    tracked!(chalk, true);
     tracked!(codegen_backend, Some("abc".to_string()));
     tracked!(crate_attr, vec!["abc".to_string()]);
     tracked!(debug_macros, true);
@@ -563,13 +566,13 @@ fn test_debugging_options_tracking_hash() {
     tracked!(share_generics, Some(true));
     tracked!(show_span, Some(String::from("abc")));
     tracked!(src_hash_algorithm, Some(SourceFileHashAlgorithm::Sha1));
-    tracked!(strip_debuginfo_if_disabled, true);
     tracked!(symbol_mangling_version, SymbolManglingVersion::V0);
     tracked!(teach, true);
     tracked!(thinlto, Some(true));
     tracked!(tls_model, Some(TlsModel::GeneralDynamic));
     tracked!(treat_err_as_bug, Some(1));
     tracked!(unleash_the_miri_inside_of_you, true);
+    tracked!(use_ctors_section, Some(true));
     tracked!(verify_llvm_ir, true);
 }
 
