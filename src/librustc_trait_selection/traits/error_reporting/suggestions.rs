@@ -15,7 +15,7 @@ use rustc_middle::ty::{
     self, suggest_constraining_type_param, AdtKind, DefIdTree, Infer, InferTy, ToPredicate, Ty,
     TyCtxt, TypeFoldable, WithConstness,
 };
-use rustc_span::symbol::{kw, sym, Symbol};
+use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{MultiSpan, Span, DUMMY_SP};
 use std::fmt;
 
@@ -156,7 +156,7 @@ fn predicate_constraint(generics: &hir::Generics<'_>, pred: String) -> (Span, St
     (
         generics.where_clause.span_for_predicates_or_empty_place().shrink_to_hi(),
         format!(
-            "{} {} ",
+            "{} {}",
             if !generics.where_clause.predicates.is_empty() { "," } else { " where" },
             pred,
         ),
@@ -173,7 +173,13 @@ fn suggest_restriction(
     fn_sig: Option<&hir::FnSig<'_>>,
     projection: Option<&ty::ProjectionTy<'_>>,
     trait_ref: ty::PolyTraitRef<'_>,
+    super_traits: Option<(&Ident, &hir::GenericBounds<'_>)>,
 ) {
+    // When we are dealing with a trait, `super_traits` will be `Some`:
+    // Given `trait T: A + B + C {}`
+    //              -  ^^^^^^^^^ GenericBounds
+    //              |
+    //              &Ident
     let span = generics.where_clause.span_for_predicates_or_empty_place();
     if span.from_expansion() || span.desugaring_kind().is_some() {
         return;
@@ -262,10 +268,28 @@ fn suggest_restriction(
         );
     } else {
         // Trivial case: `T` needs an extra bound: `T: Bound`.
-        let (sp, sugg) =
-            predicate_constraint(generics, trait_ref.without_const().to_predicate().to_string());
-        let appl = Applicability::MachineApplicable;
-        err.span_suggestion(sp, &format!("consider further restricting {}", msg), sugg, appl);
+        let (sp, suggestion) = match super_traits {
+            None => {
+                predicate_constraint(generics, trait_ref.without_const().to_predicate().to_string())
+            }
+            Some((ident, bounds)) => match bounds {
+                [.., bound] => (
+                    bound.span().shrink_to_hi(),
+                    format!(" + {}", trait_ref.print_only_trait_path().to_string()),
+                ),
+                [] => (
+                    ident.span.shrink_to_hi(),
+                    format!(": {}", trait_ref.print_only_trait_path().to_string()),
+                ),
+            },
+        };
+
+        err.span_suggestion_verbose(
+            sp,
+            &format!("consider further restricting {}", msg),
+            suggestion,
+            Applicability::MachineApplicable,
+        );
     }
 }
 
@@ -288,13 +312,35 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let mut hir_id = body_id;
         while let Some(node) = self.tcx.hir().find(hir_id) {
             match node {
+                hir::Node::Item(hir::Item {
+                    ident,
+                    kind: hir::ItemKind::Trait(_, _, generics, bounds, _),
+                    ..
+                }) if self_ty == self.tcx.types.self_param => {
+                    assert!(param_ty);
+                    // Restricting `Self` for a single method.
+                    suggest_restriction(
+                        &generics,
+                        "`Self`",
+                        err,
+                        None,
+                        projection,
+                        trait_ref,
+                        Some((ident, bounds)),
+                    );
+                    return;
+                }
+
                 hir::Node::TraitItem(hir::TraitItem {
                     generics,
                     kind: hir::TraitItemKind::Fn(..),
                     ..
-                }) if param_ty && self_ty == self.tcx.types.self_param => {
+                }) if self_ty == self.tcx.types.self_param => {
+                    assert!(param_ty);
                     // Restricting `Self` for a single method.
-                    suggest_restriction(&generics, "`Self`", err, None, projection, trait_ref);
+                    suggest_restriction(
+                        &generics, "`Self`", err, None, projection, trait_ref, None,
+                    );
                     return;
                 }
 
@@ -319,6 +365,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         Some(fn_sig),
                         projection,
                         trait_ref,
+                        None,
                     );
                     return;
                 }
@@ -336,6 +383,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         None,
                         projection,
                         trait_ref,
+                        None,
                     );
                     return;
                 }
@@ -691,6 +739,15 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             }
 
             if let ty::Ref(region, t_type, mutability) = trait_ref.skip_binder().self_ty().kind {
+                if region.is_late_bound() || t_type.has_escaping_bound_vars() {
+                    // Avoid debug assertion in `mk_obligation_for_def_id`.
+                    //
+                    // If the self type has escaping bound vars then it's not
+                    // going to be the type of an expression, so the suggestion
+                    // probably won't apply anyway.
+                    return;
+                }
+
                 let trait_type = match mutability {
                     hir::Mutability::Mut => self.tcx.mk_imm_ref(region, t_type),
                     hir::Mutability::Not => self.tcx.mk_mut_ref(region, t_type),
@@ -1854,7 +1911,7 @@ impl NextTypeParamName for &[hir::GenericParam<'_>] {
     fn next_type_param_name(&self, name: Option<&str>) -> String {
         // This is the whitelist of possible parameter names that we might suggest.
         let name = name.and_then(|n| n.chars().next()).map(|c| c.to_string().to_uppercase());
-        let name = name.as_ref().map(|s| s.as_str());
+        let name = name.as_deref();
         let possible_names = [name.unwrap_or("T"), "T", "U", "V", "X", "Y", "Z", "A", "B", "C"];
         let used_names = self
             .iter()
