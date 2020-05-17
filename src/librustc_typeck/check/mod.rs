@@ -100,7 +100,9 @@ use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LocalDefId, LOCAL_CRATE};
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
-use rustc_hir::lang_items;
+use rustc_hir::lang_items::{
+    FutureTraitLangItem, PinTypeLangItem, SizedTraitLangItem, VaListTypeLangItem,
+};
 use rustc_hir::{ExprKind, GenericArg, HirIdMap, Item, ItemKind, Node, PatKind, QPath};
 use rustc_index::bit_set::BitSet;
 use rustc_index::vec::Idx;
@@ -1335,10 +1337,8 @@ fn check_fn<'a, 'tcx>(
     // C-variadic fns also have a `VaList` input that's not listed in `fn_sig`
     // (as it's created inside the body itself, not passed in from outside).
     let maybe_va_list = if fn_sig.c_variadic {
-        let va_list_did = tcx.require_lang_item(
-            lang_items::VaListTypeLangItem,
-            Some(body.params.last().unwrap().span),
-        );
+        let va_list_did =
+            tcx.require_lang_item(VaListTypeLangItem, Some(body.params.last().unwrap().span));
         let region = tcx.mk_region(ty::ReScope(region::Scope {
             id: body.value.hir_id.local_id,
             data: region::ScopeData::CallSite,
@@ -3296,7 +3296,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         code: traits::ObligationCauseCode<'tcx>,
     ) {
         if !ty.references_error() {
-            let lang_item = self.tcx.require_lang_item(lang_items::SizedTraitLangItem, None);
+            let lang_item = self.tcx.require_lang_item(SizedTraitLangItem, None);
             self.require_type_meets(ty, span, code, lang_item);
         }
     }
@@ -5135,7 +5135,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             _ => {}
         }
         let boxed_found = self.tcx.mk_box(found);
-        let new_found = self.tcx.mk_lang_item(boxed_found, lang_items::PinTypeLangItem).unwrap();
+        let new_found = self.tcx.mk_lang_item(boxed_found, PinTypeLangItem).unwrap();
         if let (true, Ok(snippet)) = (
             self.can_coerce(new_found, expected),
             self.sess().source_map().span_to_snippet(expr.span),
@@ -5282,6 +5282,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
     ) {
+        debug!("suggest_missing_await: expr={:?} expected={:?}, found={:?}", expr, expected, found);
         // `.await` is not permitted outside of `async` bodies, so don't bother to suggest if the
         // body isn't `async`.
         let item_id = self.tcx().hir().get_parent_node(self.body_id);
@@ -5291,7 +5292,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let sp = expr.span;
                 // Check for `Future` implementations by constructing a predicate to
                 // prove: `<T as Future>::Output == U`
-                let future_trait = self.tcx.lang_items().future_trait().unwrap();
+                let future_trait = self.tcx.require_lang_item(FutureTraitLangItem, Some(sp));
                 let item_def_id = self
                     .tcx
                     .associated_items(future_trait)
@@ -5299,22 +5300,25 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     .next()
                     .unwrap()
                     .def_id;
+                // `<T as Future>::Output`
+                let projection_ty = ty::ProjectionTy {
+                    // `T`
+                    substs: self
+                        .tcx
+                        .mk_substs_trait(found, self.fresh_substs_for_item(sp, item_def_id)),
+                    // `Future::Output`
+                    item_def_id,
+                };
+
                 let predicate =
                     ty::Predicate::Projection(ty::Binder::bind(ty::ProjectionPredicate {
-                        // `<T as Future>::Output`
-                        projection_ty: ty::ProjectionTy {
-                            // `T`
-                            substs: self.tcx.mk_substs_trait(
-                                found,
-                                self.fresh_substs_for_item(sp, item_def_id),
-                            ),
-                            // `Future::Output`
-                            item_def_id,
-                        },
+                        projection_ty,
                         ty: expected,
                     }));
                 let obligation = traits::Obligation::new(self.misc(sp), self.param_env, predicate);
+
                 debug!("suggest_missing_await: trying obligation {:?}", obligation);
+
                 if self.infcx.predicate_may_hold(&obligation) {
                     debug!("suggest_missing_await: obligation held: {:?}", obligation);
                     if let Ok(code) = self.sess().source_map().span_to_snippet(sp) {

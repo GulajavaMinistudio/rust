@@ -616,6 +616,13 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         value: OpTy<'tcx>,
         source_info: SourceInfo,
     ) {
+        if let Rvalue::Use(Operand::Constant(c)) = rval {
+            if !matches!(c.literal.val, ConstKind::Unevaluated(..)) {
+                trace!("skipping replace of Rvalue::Use({:?} because it is already a const", c);
+                return;
+            }
+        }
+
         trace!("attepting to replace {:?} with {:?}", rval, value);
         if let Err(e) = self.ecx.const_validate_operand(
             value,
@@ -702,8 +709,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
             )) => l.is_bits() && r.is_bits(),
             interpret::Operand::Indirect(_) if mir_opt_level >= 2 => {
                 let mplace = op.assert_mem_place(&self.ecx);
-                intern_const_alloc_recursive(&mut self.ecx, InternKind::ConstProp, mplace, false)
-                    .expect("failed to intern alloc");
+                intern_const_alloc_recursive(&mut self.ecx, InternKind::ConstProp, mplace, false);
                 true
             }
             _ => false,
