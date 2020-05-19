@@ -252,6 +252,7 @@ use core::ptr::{self, NonNull};
 use core::slice::from_raw_parts_mut;
 
 use crate::alloc::{box_free, handle_alloc_error, AllocInit, AllocRef, Global, Layout};
+use crate::borrow::{Cow, ToOwned};
 use crate::string::String;
 use crate::vec::Vec;
 
@@ -1497,6 +1498,21 @@ impl<T> From<Vec<T>> for Rc<[T]> {
     }
 }
 
+#[stable(feature = "shared_from_cow", since = "1.45.0")]
+impl<'a, B> From<Cow<'a, B>> for Rc<B>
+where
+    B: ToOwned + ?Sized,
+    Rc<B>: From<&'a B> + From<B::Owned>,
+{
+    #[inline]
+    fn from(cow: Cow<'a, B>) -> Rc<B> {
+        match cow {
+            Cow::Borrowed(s) => Rc::from(s),
+            Cow::Owned(s) => Rc::from(s),
+        }
+    }
+}
+
 #[stable(feature = "boxed_slice_try_from", since = "1.43.0")]
 impl<T, const N: usize> TryFrom<Rc<[T]>> for Rc<[T; N]>
 where
@@ -2027,6 +2043,8 @@ trait RcBoxPtr<T: ?Sized> {
         // nevertheless, we insert an abort here to hint LLVM at
         // an otherwise missed optimization.
         if strong == 0 || strong == usize::max_value() {
+            // remove `unsafe` on bootstrap bump
+            #[cfg_attr(not(bootstrap), allow(unused_unsafe))]
             unsafe {
                 abort();
             }
@@ -2053,6 +2071,8 @@ trait RcBoxPtr<T: ?Sized> {
         // nevertheless, we insert an abort here to hint LLVM at
         // an otherwise missed optimization.
         if weak == 0 || weak == usize::max_value() {
+            // remove `unsafe` on bootstrap bump
+            #[cfg_attr(not(bootstrap), allow(unused_unsafe))]
             unsafe {
                 abort();
             }
