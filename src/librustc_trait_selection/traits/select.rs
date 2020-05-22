@@ -24,12 +24,13 @@ use super::{ObjectCastObligation, Obligation};
 use super::{ObligationCause, PredicateObligation, TraitObligation};
 use super::{OutputTypeParameterMismatch, Overflow, SelectionError, Unimplemented};
 use super::{
-    VtableAutoImpl, VtableBuiltin, VtableClosure, VtableFnPointer, VtableGenerator, VtableImpl,
-    VtableObject, VtableParam, VtableTraitAlias,
+    VtableAutoImpl, VtableBuiltin, VtableClosure, VtableDiscriminantKind, VtableFnPointer,
+    VtableGenerator, VtableImpl, VtableObject, VtableParam, VtableTraitAlias,
 };
 use super::{
-    VtableAutoImplData, VtableBuiltinData, VtableClosureData, VtableFnPointerData,
-    VtableGeneratorData, VtableImplData, VtableObjectData, VtableTraitAliasData,
+    VtableAutoImplData, VtableBuiltinData, VtableClosureData, VtableDiscriminantKindData,
+    VtableFnPointerData, VtableGeneratorData, VtableImplData, VtableObjectData,
+    VtableTraitAliasData,
 };
 
 use crate::infer::{CombinedSnapshot, InferCtxt, InferOk, PlaceholderMap, TypeFreshener};
@@ -413,14 +414,14 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             None => self.check_recursion_limit(&obligation, &obligation)?,
         }
 
-        match obligation.predicate {
-            ty::Predicate::Trait(ref t, _) => {
+        match obligation.predicate.kind() {
+            ty::PredicateKind::Trait(t, _) => {
                 debug_assert!(!t.has_escaping_bound_vars());
                 let obligation = obligation.with(*t);
                 self.evaluate_trait_predicate_recursively(previous_stack, obligation)
             }
 
-            ty::Predicate::Subtype(ref p) => {
+            ty::PredicateKind::Subtype(p) => {
                 // Does this code ever run?
                 match self.infcx.subtype_predicate(&obligation.cause, obligation.param_env, p) {
                     Some(Ok(InferOk { mut obligations, .. })) => {
@@ -435,7 +436,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
             }
 
-            ty::Predicate::WellFormed(ty) => match wf::obligations(
+            &ty::PredicateKind::WellFormed(ty) => match wf::obligations(
                 self.infcx,
                 obligation.param_env,
                 obligation.cause.body_id,
@@ -449,12 +450,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 None => Ok(EvaluatedToAmbig),
             },
 
-            ty::Predicate::TypeOutlives(..) | ty::Predicate::RegionOutlives(..) => {
+            ty::PredicateKind::TypeOutlives(..) | ty::PredicateKind::RegionOutlives(..) => {
                 // We do not consider region relationships when evaluating trait matches.
                 Ok(EvaluatedToOkModuloRegions)
             }
 
-            ty::Predicate::ObjectSafe(trait_def_id) => {
+            &ty::PredicateKind::ObjectSafe(trait_def_id) => {
                 if self.tcx().is_object_safe(trait_def_id) {
                     Ok(EvaluatedToOk)
                 } else {
@@ -462,7 +463,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
             }
 
-            ty::Predicate::Projection(ref data) => {
+            ty::PredicateKind::Projection(data) => {
                 let project_obligation = obligation.with(*data);
                 match project::poly_project_and_unify_type(self, &project_obligation) {
                     Ok(Some(mut subobligations)) => {
@@ -483,7 +484,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
             }
 
-            ty::Predicate::ClosureKind(_, closure_substs, kind) => {
+            &ty::PredicateKind::ClosureKind(_, closure_substs, kind) => {
                 match self.infcx.closure_kind(closure_substs) {
                     Some(closure_kind) => {
                         if closure_kind.extends(kind) {
@@ -496,7 +497,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
             }
 
-            ty::Predicate::ConstEvaluatable(def_id, substs) => {
+            &ty::PredicateKind::ConstEvaluatable(def_id, substs) => {
                 match self.tcx().const_eval_resolve(
                     obligation.param_env,
                     def_id,
@@ -510,7 +511,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
             }
 
-            ty::Predicate::ConstEquate(c1, c2) => {
+            ty::PredicateKind::ConstEquate(c1, c2) => {
                 debug!("evaluate_predicate_recursively: equating consts c1={:?} c2={:?}", c1, c2);
 
                 let evaluate = |c: &'tcx ty::Const<'tcx>| {
@@ -675,8 +676,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             // trait refs. This is important because it's only a cycle
             // if the regions match exactly.
             let cycle = stack.iter().skip(1).take_while(|s| s.depth >= cycle_depth);
+            let tcx = self.tcx();
             let cycle = cycle.map(|stack| {
-                ty::Predicate::Trait(stack.obligation.predicate, hir::Constness::NotConst)
+                ty::PredicateKind::Trait(stack.obligation.predicate, hir::Constness::NotConst)
+                    .to_predicate(tcx)
             });
             if self.coinductive_match(cycle) {
                 debug!("evaluate_stack({:?}) --> recursive, coinductive", stack.fresh_trait_ref);
@@ -791,8 +794,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     }
 
     fn coinductive_predicate(&self, predicate: ty::Predicate<'tcx>) -> bool {
-        let result = match predicate {
-            ty::Predicate::Trait(ref data, _) => self.tcx().trait_is_auto(data.def_id()),
+        let result = match predicate.kind() {
+            ty::PredicateKind::Trait(ref data, _) => self.tcx().trait_is_auto(data.def_id()),
             _ => false,
         };
         debug!("coinductive_predicate({:?}) = {:?}", predicate, result);
@@ -1382,6 +1385,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             // For other types, we'll use the builtin rules.
             let copy_conditions = self.copy_clone_conditions(obligation);
             self.assemble_builtin_bound_candidates(copy_conditions, &mut candidates)?;
+        } else if lang_items.discriminant_kind_trait() == Some(def_id) {
+            // `DiscriminantKind` is automatically implemented for every type.
+            candidates.vec.push(DiscriminantKindCandidate);
         } else if lang_items.sized_trait() == Some(def_id) {
             // Sized is never implementable by end-users, it is
             // always automatically computed.
@@ -1995,11 +2001,14 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let is_global =
             |cand: &ty::PolyTraitRef<'_>| cand.is_global() && !cand.has_late_bound_regions();
 
+        // (*) Prefer `BuiltinCandidate { has_nested: false }` and `DiscriminantKindCandidate`
+        // to anything else.
+        //
+        // This is a fix for #53123 and prevents winnowing from accidentally extending the
+        // lifetime of a variable.
         match other.candidate {
-            // Prefer `BuiltinCandidate { has_nested: false }` to anything else.
-            // This is a fix for #53123 and prevents winnowing from accidentally extending the
-            // lifetime of a variable.
-            BuiltinCandidate { has_nested: false } => true,
+            // (*)
+            BuiltinCandidate { has_nested: false } | DiscriminantKindCandidate => true,
             ParamCandidate(ref cand) => match victim.candidate {
                 AutoImplCandidate(..) => {
                     bug!(
@@ -2007,10 +2016,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                          when there are other valid candidates"
                     );
                 }
-                // Prefer `BuiltinCandidate { has_nested: false }` to anything else.
-                // This is a fix for #53123 and prevents winnowing from accidentally extending the
-                // lifetime of a variable.
-                BuiltinCandidate { has_nested: false } => false,
+                // (*)
+                BuiltinCandidate { has_nested: false } | DiscriminantKindCandidate => false,
                 ImplCandidate(..)
                 | ClosureCandidate
                 | GeneratorCandidate
@@ -2038,10 +2045,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                          when there are other valid candidates"
                     );
                 }
-                // Prefer `BuiltinCandidate { has_nested: false }` to anything else.
-                // This is a fix for #53123 and prevents winnowing from accidentally extending the
-                // lifetime of a variable.
-                BuiltinCandidate { has_nested: false } => false,
+                // (*)
+                BuiltinCandidate { has_nested: false } | DiscriminantKindCandidate => false,
                 ImplCandidate(..)
                 | ClosureCandidate
                 | GeneratorCandidate
@@ -2486,6 +2491,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 Ok(VtableFnPointer(data))
             }
 
+            DiscriminantKindCandidate => Ok(VtableDiscriminantKind(VtableDiscriminantKindData)),
+
             TraitAliasCandidate(alias_def_id) => {
                 let data = self.confirm_trait_alias_candidate(obligation, alias_def_id);
                 Ok(VtableTraitAlias(data))
@@ -2921,7 +2928,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             obligations.push(Obligation::new(
                 obligation.cause.clone(),
                 obligation.param_env,
-                ty::Predicate::ClosureKind(closure_def_id, substs, kind),
+                ty::PredicateKind::ClosureKind(closure_def_id, substs, kind)
+                    .to_predicate(self.tcx()),
             ));
         }
 
@@ -3031,7 +3039,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     cause,
                     obligation.recursion_depth + 1,
                     obligation.param_env,
-                    ty::Binder::bind(outlives).to_predicate(),
+                    ty::Binder::bind(outlives).to_predicate(tcx),
                 ));
             }
 
@@ -3074,12 +3082,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     tcx.require_lang_item(lang_items::SizedTraitLangItem, None),
                     tcx.mk_substs_trait(source, &[]),
                 );
-                nested.push(predicate_to_obligation(tr.without_const().to_predicate()));
+                nested.push(predicate_to_obligation(tr.without_const().to_predicate(tcx)));
 
                 // If the type is `Foo + 'a`, ensure that the type
                 // being cast to `Foo + 'a` outlives `'a`:
                 let outlives = ty::OutlivesPredicate(source, r);
-                nested.push(predicate_to_obligation(ty::Binder::dummy(outlives).to_predicate()));
+                nested.push(predicate_to_obligation(ty::Binder::dummy(outlives).to_predicate(tcx)));
             }
 
             // `[T; n]` -> `[T]`

@@ -1169,7 +1169,7 @@ impl<T> [T] {
     /// assert_eq!(iter.next().unwrap(), &[10, 40, 33]);
     /// assert!(iter.next().is_none());
     /// ```
-    #[unstable(feature = "split_inclusive", issue = "none")]
+    #[unstable(feature = "split_inclusive", issue = "72360")]
     #[inline]
     pub fn split_inclusive<F>(&self, pred: F) -> SplitInclusive<'_, T, F>
     where
@@ -1194,7 +1194,7 @@ impl<T> [T] {
     /// }
     /// assert_eq!(v, [10, 40, 1, 20, 1, 1]);
     /// ```
-    #[unstable(feature = "split_inclusive", issue = "none")]
+    #[unstable(feature = "split_inclusive", issue = "72360")]
     #[inline]
     pub fn split_inclusive_mut<F>(&mut self, pred: F) -> SplitInclusiveMut<'_, T, F>
     where
@@ -3852,7 +3852,7 @@ impl<T, P> FusedIterator for Split<'_, T, P> where P: FnMut(&T) -> bool {}
 ///
 /// [`split_inclusive`]: ../../std/primitive.slice.html#method.split_inclusive
 /// [slices]: ../../std/primitive.slice.html
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 pub struct SplitInclusive<'a, T: 'a, P>
 where
     P: FnMut(&T) -> bool,
@@ -3862,7 +3862,7 @@ where
     finished: bool,
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<T: fmt::Debug, P> fmt::Debug for SplitInclusive<'_, T, P>
 where
     P: FnMut(&T) -> bool,
@@ -3876,7 +3876,7 @@ where
 }
 
 // FIXME(#26925) Remove in favor of `#[derive(Clone)]`
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<T, P> Clone for SplitInclusive<'_, T, P>
 where
     P: Clone + FnMut(&T) -> bool,
@@ -3886,7 +3886,7 @@ where
     }
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<'a, T, P> Iterator for SplitInclusive<'a, T, P>
 where
     P: FnMut(&T) -> bool,
@@ -3915,7 +3915,7 @@ where
     }
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<'a, T, P> DoubleEndedIterator for SplitInclusive<'a, T, P>
 where
     P: FnMut(&T) -> bool,
@@ -3940,7 +3940,7 @@ where
     }
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<T, P> FusedIterator for SplitInclusive<'_, T, P> where P: FnMut(&T) -> bool {}
 
 /// An iterator over the mutable subslices of the vector which are separated
@@ -4065,7 +4065,7 @@ impl<T, P> FusedIterator for SplitMut<'_, T, P> where P: FnMut(&T) -> bool {}
 ///
 /// [`split_inclusive_mut`]: ../../std/primitive.slice.html#method.split_inclusive_mut
 /// [slices]: ../../std/primitive.slice.html
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 pub struct SplitInclusiveMut<'a, T: 'a, P>
 where
     P: FnMut(&T) -> bool,
@@ -4075,7 +4075,7 @@ where
     finished: bool,
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<T: fmt::Debug, P> fmt::Debug for SplitInclusiveMut<'_, T, P>
 where
     P: FnMut(&T) -> bool,
@@ -4088,7 +4088,7 @@ where
     }
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<'a, T, P> Iterator for SplitInclusiveMut<'a, T, P>
 where
     P: FnMut(&T) -> bool,
@@ -4128,7 +4128,7 @@ where
     }
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<'a, T, P> DoubleEndedIterator for SplitInclusiveMut<'a, T, P>
 where
     P: FnMut(&T) -> bool,
@@ -4162,7 +4162,7 @@ where
     }
 }
 
-#[unstable(feature = "split_inclusive", issue = "none")]
+#[unstable(feature = "split_inclusive", issue = "72360")]
 impl<T, P> FusedIterator for SplitInclusiveMut<'_, T, P> where P: FnMut(&T) -> bool {}
 
 /// An iterator over subslices separated by elements that match a predicate
@@ -5740,7 +5740,8 @@ unsafe impl<'a, T> TrustedRandomAccess for RChunksExactMut<'a, T> {
 ///   and it must be properly aligned. This means in particular:
 ///
 ///     * The entire memory range of this slice must be contained within a single allocated object!
-///       Slices can never span across multiple allocated objects.
+///       Slices can never span across multiple allocated objects. See [below](#incorrect-usage)
+///       for an example incorrectly not taking this into account.
 ///     * `data` must be non-null and aligned even for zero-length slices. One
 ///       reason for this is that enum layout optimizations may rely on references
 ///       (including slices of any length) being aligned and non-null to distinguish
@@ -5771,6 +5772,34 @@ unsafe impl<'a, T> TrustedRandomAccess for RChunksExactMut<'a, T> {
 /// let ptr = &x as *const _;
 /// let slice = unsafe { slice::from_raw_parts(ptr, 1) };
 /// assert_eq!(slice[0], 42);
+/// ```
+///
+/// ### Incorrect usage
+///
+/// The following `join_slices` function is **unsound** ⚠️
+///
+/// ```rust,no_run
+/// use std::slice;
+///
+/// fn join_slices<'a, T>(fst: &'a [T], snd: &'a [T]) -> &'a [T] {
+///     let fst_end = fst.as_ptr().wrapping_add(fst.len());
+///     let snd_start = snd.as_ptr();
+///     assert_eq!(fst_end, snd_start, "Slices must be contiguous!");
+///     unsafe {
+///         // The assertion above ensures `fst` and `snd` are contiguous, but they might
+///         // still be contained within _different allocated objects_, in which case
+///         // creating this slice is undefined behavior.
+///         slice::from_raw_parts(fst.as_ptr(), fst.len() + snd.len())
+///     }
+/// }
+///
+/// fn main() {
+///     // `a` and `b` are different allocated objects...
+///     let a = 42;
+///     let b = 27;
+///     // ... which may nevertheless be laid out contiguously in memory: | a | b |
+///     let _ = join_slices(slice::from_ref(&a), slice::from_ref(&b)); // UB
+/// }
 /// ```
 ///
 /// [valid]: ../../std/ptr/index.html#safety

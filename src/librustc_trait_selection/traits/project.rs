@@ -12,7 +12,10 @@ use super::Selection;
 use super::SelectionContext;
 use super::SelectionError;
 use super::{Normalized, NormalizedTy, ProjectionCacheEntry, ProjectionCacheKey};
-use super::{VtableClosureData, VtableFnPointerData, VtableGeneratorData, VtableImplData};
+use super::{
+    VtableClosureData, VtableDiscriminantKindData, VtableFnPointerData, VtableGeneratorData,
+    VtableImplData,
+};
 
 use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::infer::{InferCtxt, InferOk, LateBoundRegionConversionTime};
@@ -23,6 +26,7 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::lang_items::{FnOnceTraitLangItem, GeneratorTraitLangItem};
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder};
 use rustc_middle::ty::subst::{InternalSubsts, Subst};
+use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{self, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, WithConstness};
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::DUMMY_SP;
@@ -432,7 +436,7 @@ pub fn normalize_projection_type<'a, 'b, 'tcx>(
         });
         let projection = ty::Binder::dummy(ty::ProjectionPredicate { projection_ty, ty: ty_var });
         let obligation =
-            Obligation::with_depth(cause, depth + 1, param_env, projection.to_predicate());
+            Obligation::with_depth(cause, depth + 1, param_env, projection.to_predicate(tcx));
         obligations.push(obligation);
         ty_var
     })
@@ -661,7 +665,7 @@ fn prune_cache_value_obligations<'a, 'tcx>(
     let mut obligations: Vec<_> = result
         .obligations
         .iter()
-        .filter(|obligation| match obligation.predicate {
+        .filter(|obligation| match obligation.predicate.kind() {
             // We found a `T: Foo<X = U>` predicate, let's check
             // if `U` references any unresolved type
             // variables. In principle, we only care if this
@@ -671,7 +675,9 @@ fn prune_cache_value_obligations<'a, 'tcx>(
             // indirect obligations (e.g., we project to `?0`,
             // but we have `T: Foo<X = ?1>` and `?1: Bar<X =
             // ?0>`).
-            ty::Predicate::Projection(ref data) => infcx.unresolved_type_vars(&data.ty()).is_some(),
+            ty::PredicateKind::Projection(ref data) => {
+                infcx.unresolved_type_vars(&data.ty()).is_some()
+            }
 
             // We are only interested in `T: Foo<X = U>` predicates, whre
             // `U` references one of `unresolved_type_vars`. =)
@@ -720,7 +726,7 @@ fn get_paranoid_cache_value_obligation<'a, 'tcx>(
         cause,
         recursion_depth: depth,
         param_env,
-        predicate: trait_ref.without_const().to_predicate(),
+        predicate: trait_ref.without_const().to_predicate(infcx.tcx),
     }
 }
 
@@ -755,7 +761,7 @@ fn normalize_to_error<'a, 'tcx>(
         cause,
         recursion_depth: depth,
         param_env,
-        predicate: trait_ref.without_const().to_predicate(),
+        predicate: trait_ref.without_const().to_predicate(selcx.tcx()),
     };
     let tcx = selcx.infcx().tcx;
     let def_id = projection_ty.item_def_id;
@@ -928,7 +934,7 @@ fn assemble_candidates_from_predicates<'cx, 'tcx>(
     let infcx = selcx.infcx();
     for predicate in env_predicates {
         debug!("assemble_candidates_from_predicates: predicate={:?}", predicate);
-        if let ty::Predicate::Projection(data) = predicate {
+        if let &ty::PredicateKind::Projection(data) = predicate.kind() {
             let same_def_id = data.projection_def_id() == obligation.predicate.item_def_id;
 
             let is_match = same_def_id
@@ -1043,6 +1049,46 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                     }
                 }
             }
+            super::VtableDiscriminantKind(..) => {
+                // While `DiscriminantKind` is automatically implemented for every type,
+                // the concrete discriminant may not be known yet.
+                //
+                // Any type with multiple potential discriminant types is therefore not eligible.
+                let self_ty = selcx.infcx().shallow_resolve(obligation.predicate.self_ty());
+
+                match self_ty.kind {
+                    ty::Bool
+                    | ty::Char
+                    | ty::Int(_)
+                    | ty::Uint(_)
+                    | ty::Float(_)
+                    | ty::Adt(..)
+                    | ty::Foreign(_)
+                    | ty::Str
+                    | ty::Array(..)
+                    | ty::Slice(_)
+                    | ty::RawPtr(..)
+                    | ty::Ref(..)
+                    | ty::FnDef(..)
+                    | ty::FnPtr(..)
+                    | ty::Dynamic(..)
+                    | ty::Closure(..)
+                    | ty::Generator(..)
+                    | ty::GeneratorWitness(..)
+                    | ty::Never
+                    | ty::Tuple(..)
+                    // Integers and floats always have `u8` as their discriminant.
+                    | ty::Infer(ty::InferTy::IntVar(_) | ty::InferTy::FloatVar(..)) => true,
+
+                    ty::Projection(..)
+                    | ty::Opaque(..)
+                    | ty::Param(..)
+                    | ty::Bound(..)
+                    | ty::Placeholder(..)
+                    | ty::Infer(..)
+                    | ty::Error => false,
+                }
+            }
             super::VtableParam(..) => {
                 // This case tell us nothing about the value of an
                 // associated type. Consider:
@@ -1124,13 +1170,15 @@ fn confirm_select_candidate<'cx, 'tcx>(
         super::VtableGenerator(data) => confirm_generator_candidate(selcx, obligation, data),
         super::VtableClosure(data) => confirm_closure_candidate(selcx, obligation, data),
         super::VtableFnPointer(data) => confirm_fn_pointer_candidate(selcx, obligation, data),
+        super::VtableDiscriminantKind(data) => {
+            confirm_discriminant_kind_candidate(selcx, obligation, data)
+        }
         super::VtableObject(_) => confirm_object_candidate(selcx, obligation, obligation_trait_ref),
         super::VtableAutoImpl(..)
         | super::VtableParam(..)
         | super::VtableBuiltin(..)
-        | super::VtableTraitAlias(..) =>
-        // we don't create Select candidates with this kind of resolution
-        {
+        | super::VtableTraitAlias(..) => {
+            // we don't create Select candidates with this kind of resolution
             span_bug!(
                 obligation.cause.span,
                 "Cannot project an associated type from `{:?}`",
@@ -1156,20 +1204,19 @@ fn confirm_object_candidate<'cx, 'tcx>(
             object_ty
         ),
     };
-    let env_predicates =
-        data.projection_bounds().map(|p| p.with_self_ty(selcx.tcx(), object_ty).to_predicate());
+    let env_predicates = data
+        .projection_bounds()
+        .map(|p| p.with_self_ty(selcx.tcx(), object_ty).to_predicate(selcx.tcx()));
     let env_predicate = {
         let env_predicates = elaborate_predicates(selcx.tcx(), env_predicates);
 
         // select only those projections that are actually projecting an
         // item with the correct name
-        let env_predicates = env_predicates.filter_map(|o| match o.predicate {
-            ty::Predicate::Projection(data) => {
-                if data.projection_def_id() == obligation.predicate.item_def_id {
-                    Some(data)
-                } else {
-                    None
-                }
+        let env_predicates = env_predicates.filter_map(|o| match o.predicate.kind() {
+            &ty::PredicateKind::Projection(data)
+                if data.projection_def_id() == obligation.predicate.item_def_id =>
+            {
+                Some(data)
             }
             _ => None,
         });
@@ -1257,6 +1304,37 @@ fn confirm_generator_candidate<'cx, 'tcx>(
     confirm_param_env_candidate(selcx, obligation, predicate)
         .with_addl_obligations(vtable.nested)
         .with_addl_obligations(obligations)
+}
+
+fn confirm_discriminant_kind_candidate<'cx, 'tcx>(
+    selcx: &mut SelectionContext<'cx, 'tcx>,
+    obligation: &ProjectionTyObligation<'tcx>,
+    _: VtableDiscriminantKindData,
+) -> Progress<'tcx> {
+    let tcx = selcx.tcx();
+
+    let self_ty = selcx.infcx().shallow_resolve(obligation.predicate.self_ty());
+    let substs = tcx.mk_substs([self_ty.into()].iter());
+
+    let assoc_items = tcx.associated_items(tcx.lang_items().discriminant_kind_trait().unwrap());
+    // FIXME: emit an error if the trait definition is wrong
+    let discriminant_def_id = assoc_items.in_definition_order().next().unwrap().def_id;
+
+    let discriminant_ty = match self_ty.kind {
+        // Use the discriminant type for enums.
+        ty::Adt(adt, _) if adt.is_enum() => adt.repr.discr_type().to_ty(tcx),
+        // Default to `i32` for generators.
+        ty::Generator(..) => tcx.types.i32,
+        // Use `u8` for all other types.
+        _ => tcx.types.u8,
+    };
+
+    let predicate = ty::ProjectionPredicate {
+        projection_ty: ty::ProjectionTy { substs, item_def_id: discriminant_def_id },
+        ty: discriminant_ty,
+    };
+
+    confirm_param_env_candidate(selcx, obligation, ty::Binder::bind(predicate))
 }
 
 fn confirm_fn_pointer_candidate<'cx, 'tcx>(
