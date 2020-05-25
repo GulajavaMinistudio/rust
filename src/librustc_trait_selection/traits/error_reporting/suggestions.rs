@@ -532,14 +532,17 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         };
         let msg = format!("use parentheses to call the {}", callable);
 
-        let obligation = self.mk_obligation_for_def_id(
-            trait_ref.def_id(),
-            output_ty.skip_binder(),
-            obligation.cause.clone(),
-            obligation.param_env,
-        );
+        // `mk_trait_obligation_with_new_self_ty` only works for types with no escaping bound
+        // variables, so bail out if we have any.
+        let output_ty = match output_ty.no_bound_vars() {
+            Some(ty) => ty,
+            None => return,
+        };
 
-        match self.evaluate_obligation(&obligation) {
+        let new_obligation =
+            self.mk_trait_obligation_with_new_self_ty(obligation.param_env, trait_ref, output_ty);
+
+        match self.evaluate_obligation(&new_obligation) {
             Ok(
                 EvaluationResult::EvaluatedToOk
                 | EvaluationResult::EvaluatedToOkModuloRegions
@@ -631,6 +634,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 param_env,
                 new_trait_ref.without_const().to_predicate(self.tcx),
             );
+
             if self.predicate_must_hold_modulo_regions(&new_obligation) {
                 if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span) {
                     // We have a very specific type of error, where just borrowing this argument
@@ -638,6 +642,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     // original type obligation, not the last one that failed, which is arbitrary.
                     // Because of this, we modify the error to refer to the original obligation and
                     // return early in the caller.
+
                     let msg = format!(
                         "the trait bound `{}: {}` is not satisfied",
                         found,
@@ -660,12 +665,23 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             obligation.parent_trait_ref.skip_binder().print_only_trait_path(),
                         ),
                     );
-                    err.span_suggestion(
-                        span,
-                        "consider borrowing here",
-                        format!("&{}", snippet),
-                        Applicability::MaybeIncorrect,
-                    );
+
+                    // This if is to prevent a special edge-case
+                    if !span.from_expansion() {
+                        // We don't want a borrowing suggestion on the fields in structs,
+                        // ```
+                        // struct Foo {
+                        //  the_foos: Vec<Foo>
+                        // }
+                        // ```
+
+                        err.span_suggestion(
+                            span,
+                            "consider borrowing here",
+                            format!("&{}", snippet),
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
                     return true;
                 }
             }
@@ -681,7 +697,6 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         err: &mut DiagnosticBuilder<'_>,
         trait_ref: &ty::Binder<ty::TraitRef<'tcx>>,
     ) {
-        let trait_ref = trait_ref.skip_binder();
         let span = obligation.cause.span;
 
         if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span) {
@@ -692,17 +707,16 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 return;
             }
 
-            let mut trait_type = trait_ref.self_ty();
+            let mut suggested_ty = trait_ref.self_ty();
 
             for refs_remaining in 0..refs_number {
-                if let ty::Ref(_, t_type, _) = trait_type.kind {
-                    trait_type = t_type;
+                if let ty::Ref(_, inner_ty, _) = suggested_ty.kind {
+                    suggested_ty = inner_ty;
 
-                    let new_obligation = self.mk_obligation_for_def_id(
-                        trait_ref.def_id,
-                        trait_type,
-                        ObligationCause::dummy(),
+                    let new_obligation = self.mk_trait_obligation_with_new_self_ty(
                         obligation.param_env,
+                        trait_ref,
+                        suggested_ty,
                     );
 
                     if self.predicate_may_hold(&new_obligation) {
@@ -769,20 +783,20 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     return;
                 }
 
-                let trait_type = match mutability {
+                let suggested_ty = match mutability {
                     hir::Mutability::Mut => self.tcx.mk_imm_ref(region, t_type),
                     hir::Mutability::Not => self.tcx.mk_mut_ref(region, t_type),
                 };
 
-                let new_obligation = self.mk_obligation_for_def_id(
-                    trait_ref.skip_binder().def_id,
-                    trait_type,
-                    ObligationCause::dummy(),
+                let new_obligation = self.mk_trait_obligation_with_new_self_ty(
                     obligation.param_env,
+                    &trait_ref,
+                    suggested_ty,
                 );
-
-                if self.evaluate_obligation_no_overflow(&new_obligation).must_apply_modulo_regions()
-                {
+                let suggested_ty_would_satisfy_obligation = self
+                    .evaluate_obligation_no_overflow(&new_obligation)
+                    .must_apply_modulo_regions();
+                if suggested_ty_would_satisfy_obligation {
                     let sp = self
                         .tcx
                         .sess
@@ -799,7 +813,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         err.note(&format!(
                             "`{}` is implemented for `{:?}`, but not for `{:?}`",
                             trait_ref.print_only_trait_path(),
-                            trait_type,
+                            suggested_ty,
                             trait_ref.skip_binder().self_ty(),
                         ));
                     }
@@ -1862,7 +1876,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     }
 
     fn suggest_new_overflow_limit(&self, err: &mut DiagnosticBuilder<'_>) {
-        let current_limit = self.tcx.sess.recursion_limit.get();
+        let current_limit = self.tcx.sess.recursion_limit();
         let suggested_limit = current_limit * 2;
         err.help(&format!(
             "consider adding a `#![recursion_limit=\"{}\"]` attribute to your crate (`{}`)",
@@ -1878,7 +1892,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         span: Span,
     ) {
         debug!(
-            "suggest_await_befor_try: obligation={:?}, span={:?}, trait_ref={:?}, trait_ref_self_ty={:?}",
+            "suggest_await_before_try: obligation={:?}, span={:?}, trait_ref={:?}, trait_ref_self_ty={:?}",
             obligation,
             span,
             trait_ref,
@@ -1933,16 +1947,15 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 );
 
                 debug!(
-                    "suggest_await_befor_try: normalized_projection_type {:?}",
+                    "suggest_await_before_try: normalized_projection_type {:?}",
                     self.resolve_vars_if_possible(&normalized_ty)
                 );
-                let try_obligation = self.mk_obligation_for_def_id(
-                    trait_ref.def_id(),
-                    normalized_ty,
-                    obligation.cause.clone(),
+                let try_obligation = self.mk_trait_obligation_with_new_self_ty(
                     obligation.param_env,
+                    trait_ref,
+                    normalized_ty,
                 );
-                debug!("suggest_await_befor_try: try_trait_obligation {:?}", try_obligation);
+                debug!("suggest_await_before_try: try_trait_obligation {:?}", try_obligation);
                 if self.predicate_may_hold(&try_obligation) && impls_future {
                     if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span) {
                         if snippet.ends_with('?') {

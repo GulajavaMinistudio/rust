@@ -142,8 +142,22 @@ impl ModuleConfig {
         let emit_obj = if !should_emit_obj {
             EmitObj::None
         } else if sess.target.target.options.obj_is_bitcode
-            || sess.opts.cg.linker_plugin_lto.enabled()
+            || (sess.opts.cg.linker_plugin_lto.enabled() && !no_builtins)
         {
+            // This case is selected if the target uses objects as bitcode, or
+            // if linker plugin LTO is enabled. In the linker plugin LTO case
+            // the assumption is that the final link-step will read the bitcode
+            // and convert it to object code. This may be done by either the
+            // native linker or rustc itself.
+            //
+            // Note, however, that the linker-plugin-lto requested here is
+            // explicitly ignored for `#![no_builtins]` crates. These crates are
+            // specifically ignored by rustc's LTO passes and wouldn't work if
+            // loaded into the linker. These crates define symbols that LLVM
+            // lowers intrinsics to, and these symbol dependencies aren't known
+            // until after codegen. As a result any crate marked
+            // `#![no_builtins]` is assumed to not participate in LTO and
+            // instead goes on to generate object code.
             EmitObj::Bitcode
         } else if need_bitcode_in_object(sess) {
             EmitObj::ObjectCode(BitcodeSection::Full)
@@ -368,7 +382,7 @@ pub struct CompiledModules {
 
 fn need_bitcode_in_object(sess: &Session) -> bool {
     let requested_for_rlib = sess.opts.cg.embed_bitcode
-        && sess.crate_types.borrow().contains(&CrateType::Rlib)
+        && sess.crate_types().contains(&CrateType::Rlib)
         && sess.opts.output_types.contains_key(&OutputType::Exe);
     let forced_by_target = sess.target.target.options.forces_embed_bitcode;
     requested_for_rlib || forced_by_target
@@ -977,7 +991,7 @@ fn start_executing_work<B: ExtraBackendMethods>(
     };
     let cgcx = CodegenContext::<B> {
         backend: backend.clone(),
-        crate_types: sess.crate_types.borrow().clone(),
+        crate_types: sess.crate_types().to_vec(),
         each_linked_rlib_for_lto,
         lto: sess.lto(),
         no_landing_pads: sess.panic_strategy() == PanicStrategy::Abort,
@@ -1798,7 +1812,7 @@ fn msvc_imps_needed(tcx: TyCtxt<'_>) -> bool {
     );
 
     tcx.sess.target.target.options.is_like_msvc &&
-        tcx.sess.crate_types.borrow().iter().any(|ct| *ct == CrateType::Rlib) &&
+        tcx.sess.crate_types().iter().any(|ct| *ct == CrateType::Rlib) &&
     // ThinLTO can't handle this workaround in all cases, so we don't
     // emit the `__imp_` symbols. Instead we make them unnecessary by disallowing
     // dynamic linking when linker plugin LTO is enabled.
