@@ -1,5 +1,4 @@
 use crate::dep_graph::SerializedDepNodeIndex;
-use crate::mir;
 use crate::mir::interpret::{GlobalId, LitToConstInput};
 use crate::traits;
 use crate::traits::query::{
@@ -553,13 +552,6 @@ rustc_queries! {
             }
         }
 
-        /// Extracts a field of a (variant of a) const.
-        query const_field(
-            key: ty::ParamEnvAnd<'tcx, (&'tcx ty::Const<'tcx>, mir::Field)>
-        ) -> ConstValue<'tcx> {
-            desc { "extract field of const" }
-        }
-
         /// Destructure a constant ADT or array into its variant index and its
         /// field values.
         query destructure_const(
@@ -1040,7 +1032,7 @@ rustc_queries! {
             desc { "generating a postorder list of CrateNums" }
         }
 
-        query upvars(_: DefId) -> Option<&'tcx FxIndexMap<hir::HirId, hir::Upvar>> {
+        query upvars_mentioned(_: DefId) -> Option<&'tcx FxIndexMap<hir::HirId, hir::Upvar>> {
             eval_always
         }
         query maybe_unused_trait_import(def_id: LocalDefId) -> bool {
