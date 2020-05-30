@@ -312,7 +312,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
             parent_substs,
             false,
             None,
-            arg_count_correct.is_ok(),
+            arg_count_correct,
             // Provide the generic args, and whether types should be inferred.
             |def_id| {
                 // The last component of the returned tuple here is unimportant.
@@ -597,9 +597,12 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
     fn enforce_illegal_method_limitations(&self, pick: &probe::Pick<'_>) {
         // Disallow calls to the method `drop` defined in the `Drop` trait.
         match pick.item.container {
-            ty::TraitContainer(trait_def_id) => {
-                callee::check_legal_trait_for_method_call(self.tcx, self.span, trait_def_id)
-            }
+            ty::TraitContainer(trait_def_id) => callee::check_legal_trait_for_method_call(
+                self.tcx,
+                self.span,
+                Some(self.self_expr.span),
+                trait_def_id,
+            ),
             ty::ImplContainer(..) => {}
         }
     }

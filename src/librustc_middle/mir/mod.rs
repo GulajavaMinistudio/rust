@@ -408,7 +408,7 @@ impl<'tcx> Body<'tcx> {
     }
 }
 
-#[derive(Copy, Clone, Debug, RustcEncodable, RustcDecodable, HashStable)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, RustcEncodable, RustcDecodable, HashStable)]
 pub enum Safety {
     Safe,
     /// Unsafe because of a PushUnsafeBlock
@@ -1072,7 +1072,8 @@ pub enum TerminatorKind<'tcx> {
     Abort,
 
     /// Indicates a normal return. The return place should have
-    /// been filled in by now. This should occur at most once.
+    /// been filled in before this executes. This can occur multiple times
+    /// in different basic blocks.
     Return,
 
     /// Indicates a terminator that can never be reached.
