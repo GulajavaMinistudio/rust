@@ -535,6 +535,7 @@ macro_rules! make_mir_visitor {
                         template: _,
                         operands,
                         options: _,
+                        line_spans: _,
                         destination: _,
                     } => {
                         for op in operands {
@@ -599,6 +600,8 @@ macro_rules! make_mir_visitor {
                     Rvalue::Repeat(value, _) => {
                         self.visit_operand(value, location);
                     }
+
+                    Rvalue::ThreadLocalRef(_) => {}
 
                     Rvalue::Ref(r, bk, path) => {
                         self.visit_region(r, location);

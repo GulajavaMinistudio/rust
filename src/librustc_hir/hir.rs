@@ -524,6 +524,13 @@ impl WhereClause<'_> {
     pub fn span_for_predicates_or_empty_place(&self) -> Span {
         self.span
     }
+
+    /// `Span` where further predicates would be suggested, accounting for trailing commas, like
+    ///  in `fn foo<T>(t: T) where T: Foo,` so we don't suggest two trailing commas.
+    pub fn tail_span_for_suggestion(&self) -> Span {
+        let end = self.span_for_predicates_or_empty_place().shrink_to_hi();
+        self.predicates.last().map(|p| p.span()).unwrap_or(end).shrink_to_hi().to(end)
+    }
 }
 
 /// A single predicate in a where-clause.
@@ -2106,6 +2113,7 @@ pub struct InlineAsm<'hir> {
     pub template: &'hir [InlineAsmTemplatePiece],
     pub operands: &'hir [InlineAsmOperand<'hir>],
     pub options: InlineAsmOptions,
+    pub line_spans: &'hir [Span],
 }
 
 #[derive(Copy, Clone, RustcEncodable, RustcDecodable, Debug, HashStable_Generic, PartialEq)]

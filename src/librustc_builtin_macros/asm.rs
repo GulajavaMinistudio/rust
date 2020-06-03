@@ -33,7 +33,10 @@ fn parse_args<'a>(
 
     // Detect use of the legacy llvm_asm! syntax (which used to be called asm!)
     if p.look_ahead(1, |t| *t == token::Colon || *t == token::ModSep) {
-        let mut err = ecx.struct_span_err(sp, "legacy asm! syntax is no longer supported");
+        let mut err =
+            ecx.struct_span_err(sp, "the legacy LLVM-style asm! syntax is no longer supported");
+        err.note("consider migrating to the new asm! syntax specified in RFC 2873");
+        err.note("alternatively, switch to llvm_asm! to keep your code working as it is");
 
         // Find the span of the "asm!" so that we can offer an automatic suggestion
         let asm_span = sp.from_inner(InnerSpan::new(0, 4));
@@ -513,10 +516,16 @@ fn expand_preparsed_asm(ecx: &mut ExtCtxt<'_>, sp: Span, args: AsmArgs) -> P<ast
         }
     }
 
-    let inline_asm = ast::InlineAsm { template, operands, options: args.options };
+    let line_spans = if parser.line_spans.is_empty() {
+        vec![template_sp]
+    } else {
+        parser.line_spans.iter().map(|span| template_span.from_inner(*span)).collect()
+    };
+
+    let inline_asm = ast::InlineAsm { template, operands, options: args.options, line_spans };
     P(ast::Expr {
         id: ast::DUMMY_NODE_ID,
-        kind: ast::ExprKind::InlineAsm(inline_asm),
+        kind: ast::ExprKind::InlineAsm(P(inline_asm)),
         span: sp,
         attrs: ast::AttrVec::new(),
         tokens: None,

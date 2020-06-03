@@ -513,6 +513,8 @@ pub enum UnsupportedOpInfo {
     //
     /// Encountered raw bytes where we needed a pointer.
     ReadBytesAsPointer,
+    /// Accessing thread local statics
+    ThreadLocalStatic(DefId),
 }
 
 impl fmt::Display for UnsupportedOpInfo {
@@ -521,11 +523,12 @@ impl fmt::Display for UnsupportedOpInfo {
         match self {
             Unsupported(ref msg) => write!(f, "{}", msg),
             ReadForeignStatic(did) => {
-                write!(f, "cannot read from foreign (extern) static {:?}", did)
+                write!(f, "cannot read from foreign (extern) static ({:?})", did)
             }
             NoMirFor(did) => write!(f, "no MIR body is available for {:?}", did),
             ReadPointerAsBytes => write!(f, "unable to turn pointer into raw bytes",),
             ReadBytesAsPointer => write!(f, "unable to turn bytes into a pointer"),
+            ThreadLocalStatic(did) => write!(f, "cannot access thread local static ({:?})", did),
         }
     }
 }

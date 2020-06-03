@@ -170,7 +170,7 @@ pub trait InferCtxtExt<'tcx> {
 
 fn predicate_constraint(generics: &hir::Generics<'_>, pred: String) -> (Span, String) {
     (
-        generics.where_clause.span_for_predicates_or_empty_place().shrink_to_hi(),
+        generics.where_clause.tail_span_for_suggestion(),
         format!(
             "{} {}",
             if !generics.where_clause.predicates.is_empty() { "," } else { " where" },
@@ -1908,6 +1908,12 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     self.tcx.require_lang_item(lang_items::FutureTraitLangItem, None);
 
                 let self_ty = self.resolve_vars_if_possible(&trait_ref.self_ty());
+
+                // Do not check on infer_types to avoid panic in evaluate_obligation.
+                if self_ty.has_infer_types() {
+                    return;
+                }
+                let self_ty = self.tcx.erase_regions(&self_ty);
 
                 let impls_future = self.tcx.type_implements_trait((
                     future_trait,

@@ -8,6 +8,7 @@
 use crate::collect::PlaceholderHirTyCollector;
 use crate::middle::resolve_lifetime as rl;
 use crate::require_c_abi_if_c_variadic;
+use rustc_ast::ast::ParamKindOrd;
 use rustc_ast::util::lev_distance::find_best_match_for_name;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::ErrorReported;
@@ -483,8 +484,25 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             arg.descr(),
             kind,
         );
+
+        let kind_ord = match kind {
+            "lifetime" => ParamKindOrd::Lifetime,
+            "type" => ParamKindOrd::Type,
+            "constant" => ParamKindOrd::Const,
+            // It's more concise to match on the string representation, though it means
+            // the match is non-exhaustive.
+            _ => bug!("invalid generic parameter kind {}", kind),
+        };
+        let arg_ord = match arg {
+            GenericArg::Lifetime(_) => ParamKindOrd::Lifetime,
+            GenericArg::Type(_) => ParamKindOrd::Type,
+            GenericArg::Const(_) => ParamKindOrd::Const,
+        };
+
         // This note will be true as long as generic parameters are strictly ordered by their kind.
-        err.note(&format!("{} arguments must be provided before {} arguments", kind, arg.descr()));
+        let (first, last) =
+            if kind_ord < arg_ord { (kind, arg.descr()) } else { (arg.descr(), kind) };
+        err.note(&format!("{} arguments must be provided before {} arguments", first, last));
         err.emit();
     }
 
@@ -1151,9 +1169,16 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                             .as_ref()
                             .and_then(|args| args.args.get(0))
                             .and_then(|arg| match arg {
-                                hir::GenericArg::Type(ty) => {
-                                    sess.source_map().span_to_snippet(ty.span).ok()
+                                hir::GenericArg::Type(ty) => match ty.kind {
+                                    hir::TyKind::Tup(t) => t
+                                        .iter()
+                                        .map(|e| sess.source_map().span_to_snippet(e.span))
+                                        .collect::<Result<Vec<_>, _>>()
+                                        .map(|a| a.join(", ")),
+                                    _ => sess.source_map().span_to_snippet(ty.span),
                                 }
+                                .map(|s| format!("({})", s))
+                                .ok(),
                                 _ => None,
                             })
                             .unwrap_or_else(|| "()".to_string()),

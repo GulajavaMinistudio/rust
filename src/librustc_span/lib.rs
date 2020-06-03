@@ -53,7 +53,7 @@ use std::cmp::{self, Ordering};
 use std::fmt;
 use std::hash::Hash;
 use std::ops::{Add, Sub};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use md5::Md5;
@@ -81,11 +81,61 @@ impl Globals {
 
 scoped_tls::scoped_thread_local!(pub static GLOBALS: Globals);
 
+// FIXME: Perhaps this should not implement Rustc{Decodable, Encodable}
+//
+// FIXME: We should use this enum or something like it to get rid of the
+// use of magic `/rust/1.x/...` paths across the board.
+#[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd, Hash, RustcDecodable, RustcEncodable)]
+#[derive(HashStable_Generic)]
+pub enum RealFileName {
+    Named(PathBuf),
+    /// For de-virtualized paths (namely paths into libstd that have been mapped
+    /// to the appropriate spot on the local host's file system),
+    Devirtualized {
+        /// `local_path` is the (host-dependent) local path to the file.
+        local_path: PathBuf,
+        /// `virtual_name` is the stable path rustc will store internally within
+        /// build artifacts.
+        virtual_name: PathBuf,
+    },
+}
+
+impl RealFileName {
+    /// Returns the path suitable for reading from the file system on the local host.
+    /// Avoid embedding this in build artifacts; see `stable_name` for that.
+    pub fn local_path(&self) -> &Path {
+        match self {
+            RealFileName::Named(p)
+            | RealFileName::Devirtualized { local_path: p, virtual_name: _ } => &p,
+        }
+    }
+
+    /// Returns the path suitable for reading from the file system on the local host.
+    /// Avoid embedding this in build artifacts; see `stable_name` for that.
+    pub fn into_local_path(self) -> PathBuf {
+        match self {
+            RealFileName::Named(p)
+            | RealFileName::Devirtualized { local_path: p, virtual_name: _ } => p,
+        }
+    }
+
+    /// Returns the path suitable for embedding into build artifacts. Note that
+    /// a virtualized path will not correspond to a valid file system path; see
+    /// `local_path` for something that is more likely to return paths into the
+    /// local host file system.
+    pub fn stable_name(&self) -> &Path {
+        match self {
+            RealFileName::Named(p)
+            | RealFileName::Devirtualized { local_path: _, virtual_name: p } => &p,
+        }
+    }
+}
+
 /// Differentiates between real files and common virtual files.
 #[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd, Hash, RustcDecodable, RustcEncodable)]
 #[derive(HashStable_Generic)]
 pub enum FileName {
-    Real(PathBuf),
+    Real(RealFileName),
     /// Call to `quote!`.
     QuoteExpansion(u64),
     /// Command line.
@@ -101,13 +151,21 @@ pub enum FileName {
     /// Custom sources for explicit parser calls from plugins and drivers.
     Custom(String),
     DocTest(PathBuf, isize),
+    /// Post-substitution inline assembly from LLVM
+    InlineAsm(u64),
 }
 
 impl std::fmt::Display for FileName {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use FileName::*;
         match *self {
-            Real(ref path) => write!(fmt, "{}", path.display()),
+            Real(RealFileName::Named(ref path)) => write!(fmt, "{}", path.display()),
+            // FIXME: might be nice to display both compoments of Devirtualized.
+            // But for now (to backport fix for issue #70924), best to not
+            // perturb diagnostics so its obvious test suite still works.
+            Real(RealFileName::Devirtualized { ref local_path, virtual_name: _ }) => {
+                write!(fmt, "{}", local_path.display())
+            }
             QuoteExpansion(_) => write!(fmt, "<quote expansion>"),
             MacroExpansion(_) => write!(fmt, "<macro expansion>"),
             Anon(_) => write!(fmt, "<anon>"),
@@ -116,6 +174,7 @@ impl std::fmt::Display for FileName {
             CliCrateAttr(_) => write!(fmt, "<crate attribute>"),
             Custom(ref s) => write!(fmt, "<{}>", s),
             DocTest(ref path, _) => write!(fmt, "{}", path.display()),
+            InlineAsm(_) => write!(fmt, "<inline asm>"),
         }
     }
 }
@@ -123,7 +182,7 @@ impl std::fmt::Display for FileName {
 impl From<PathBuf> for FileName {
     fn from(p: PathBuf) -> Self {
         assert!(!p.to_string_lossy().ends_with('>'));
-        FileName::Real(p)
+        FileName::Real(RealFileName::Named(p))
     }
 }
 
@@ -139,7 +198,8 @@ impl FileName {
             | CliCrateAttr(_)
             | Custom(_)
             | QuoteExpansion(_)
-            | DocTest(_, _) => false,
+            | DocTest(_, _)
+            | InlineAsm(_) => false,
         }
     }
 
@@ -181,6 +241,12 @@ impl FileName {
 
     pub fn doc_test_source_code(path: PathBuf, line: isize) -> FileName {
         FileName::DocTest(path, line)
+    }
+
+    pub fn inline_asm_source_code(src: &str) -> FileName {
+        let mut hasher = StableHasher::new();
+        src.hash(&mut hasher);
+        FileName::InlineAsm(hasher.finish())
     }
 }
 

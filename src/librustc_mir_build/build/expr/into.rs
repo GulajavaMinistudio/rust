@@ -310,7 +310,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 );
                 block.unit()
             }
-            ExprKind::InlineAsm { template, operands, options } => {
+            ExprKind::InlineAsm { template, operands, options, line_spans } => {
                 use crate::hair;
                 use rustc_middle::mir;
                 let operands = operands
@@ -368,6 +368,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         template,
                         operands,
                         options,
+                        line_spans,
                         destination: if options.contains(InlineAsmOptions::NORETURN) {
                             None
                         } else {
@@ -444,6 +445,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             | ExprKind::Tuple { .. }
             | ExprKind::Closure { .. }
             | ExprKind::Literal { .. }
+            | ExprKind::ThreadLocalRef(_)
             | ExprKind::StaticRef { .. } => {
                 debug_assert!(match Category::of(&expr.kind).unwrap() {
                     // should be handled above

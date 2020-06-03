@@ -1,38 +1,27 @@
 //! Type context book-keeping.
 
 use crate::arena::Arena;
-use crate::dep_graph::DepGraph;
-use crate::dep_graph::{self, DepConstructor};
+use crate::dep_graph::{self, DepConstructor, DepGraph};
 use crate::hir::exports::Export;
 use crate::ich::{NodeIdHashingMode, StableHashingContext};
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
-use crate::lint::LintDiagnosticBuilder;
-use crate::lint::{struct_lint_level, LintSource};
+use crate::lint::{struct_lint_level, LintDiagnosticBuilder, LintSource};
 use crate::middle;
-use crate::middle::cstore::CrateStoreDyn;
-use crate::middle::cstore::EncodedMetadata;
+use crate::middle::cstore::{CrateStoreDyn, EncodedMetadata};
 use crate::middle::resolve_lifetime::{self, ObjectLifetimeDefault};
 use crate::middle::stability;
-use crate::mir::interpret::{Allocation, ConstValue, Scalar};
-use crate::mir::{interpret, Body, Field, Local, Place, PlaceElem, ProjectionKind, Promoted};
+use crate::mir::interpret::{self, Allocation, ConstValue, Scalar};
+use crate::mir::{Body, Field, Local, Place, PlaceElem, ProjectionKind, Promoted};
 use crate::traits;
-use crate::ty::query;
 use crate::ty::steal::Steal;
-use crate::ty::subst::{GenericArg, InternalSubsts, Subst, SubstsRef};
-use crate::ty::subst::{GenericArgKind, UserSubsts};
-use crate::ty::CanonicalPolyFnSig;
-use crate::ty::GenericParamDefKind;
-use crate::ty::RegionKind;
-use crate::ty::ReprOptions;
+use crate::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, Subst, SubstsRef, UserSubsts};
 use crate::ty::TyKind::*;
-use crate::ty::{self, DefIdTree, Ty, TypeAndMut};
-use crate::ty::{AdtDef, AdtKind, Const, Region};
-use crate::ty::{BindingMode, BoundVar};
-use crate::ty::{ConstVid, FloatVar, FloatVid, IntVar, IntVid, TyVar, TyVid};
-use crate::ty::{ExistentialPredicate, Predicate, PredicateKind};
-use crate::ty::{InferConst, ParamConst};
-use crate::ty::{InferTy, ParamTy, PolyFnSig, ProjectionTy};
-use crate::ty::{List, TyKind, TyS};
+use crate::ty::{
+    self, query, AdtDef, AdtKind, BindingMode, BoundVar, CanonicalPolyFnSig, Const, ConstVid,
+    DefIdTree, ExistentialPredicate, FloatVar, FloatVid, GenericParamDefKind, InferConst, InferTy,
+    IntVar, IntVid, List, ParamConst, ParamTy, PolyFnSig, Predicate, PredicateKind, ProjectionTy,
+    Region, RegionKind, ReprOptions, TraitObjectVisitor, Ty, TyKind, TyS, TyVar, TyVid, TypeAndMut,
+};
 use rustc_ast::ast;
 use rustc_ast::expand::allocator::AllocatorKind;
 use rustc_attr as attr;
@@ -48,10 +37,8 @@ use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LocalDefId, LOCAL_CRATE};
 use rustc_hir::definitions::{DefPathHash, Definitions};
-use rustc_hir::lang_items;
-use rustc_hir::lang_items::PanicLocationLangItem;
-use rustc_hir::{HirId, Node, TraitCandidate};
-use rustc_hir::{ItemKind, ItemLocalId, ItemLocalMap, ItemLocalSet};
+use rustc_hir::lang_items::{self, PanicLocationLangItem};
+use rustc_hir::{HirId, ItemKind, ItemLocalId, ItemLocalMap, ItemLocalSet, Node, TraitCandidate};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
 use rustc_session::config::{BorrowckMode, CrateType, OutputFilenames};
@@ -1396,6 +1383,66 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
+    pub fn return_type_impl_or_dyn_trait(&self, scope_def_id: DefId) -> Option<(Span, bool)> {
+        let hir_id = self.hir().as_local_hir_id(scope_def_id.expect_local());
+        let hir_output = match self.hir().get(hir_id) {
+            Node::Item(hir::Item {
+                kind:
+                    ItemKind::Fn(
+                        hir::FnSig {
+                            decl: hir::FnDecl { output: hir::FnRetTy::Return(ty), .. },
+                            ..
+                        },
+                        ..,
+                    ),
+                ..
+            })
+            | Node::ImplItem(hir::ImplItem {
+                kind:
+                    hir::ImplItemKind::Fn(
+                        hir::FnSig {
+                            decl: hir::FnDecl { output: hir::FnRetTy::Return(ty), .. },
+                            ..
+                        },
+                        _,
+                    ),
+                ..
+            })
+            | Node::TraitItem(hir::TraitItem {
+                kind:
+                    hir::TraitItemKind::Fn(
+                        hir::FnSig {
+                            decl: hir::FnDecl { output: hir::FnRetTy::Return(ty), .. },
+                            ..
+                        },
+                        _,
+                    ),
+                ..
+            }) => ty,
+            _ => return None,
+        };
+
+        let ret_ty = self.type_of(scope_def_id);
+        match ret_ty.kind {
+            ty::FnDef(_, _) => {
+                let sig = ret_ty.fn_sig(*self);
+                let output = self.erase_late_bound_regions(&sig.output());
+                if output.is_impl_trait() {
+                    let fn_decl = self.hir().fn_decl_by_hir_id(hir_id).unwrap();
+                    Some((fn_decl.output.span(), false))
+                } else {
+                    let mut v = TraitObjectVisitor(vec![]);
+                    rustc_hir::intravisit::walk_ty(&mut v, hir_output);
+                    if v.0.len() == 1 {
+                        return Some((v.0[0], true));
+                    }
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn return_type_impl_trait(&self, scope_def_id: DefId) -> Option<(Ty<'tcx>, Span)> {
         // HACK: `type_of_def_id()` will fail on these (#55796), so return `None`.
         let hir_id = self.hir().as_local_hir_id(scope_def_id.expect_local());
@@ -1924,32 +1971,8 @@ impl<'tcx, T: Hash> Hash for Interned<'tcx, List<T>> {
     }
 }
 
-impl<'tcx> Borrow<[Ty<'tcx>]> for Interned<'tcx, List<Ty<'tcx>>> {
-    fn borrow<'a>(&'a self) -> &'a [Ty<'tcx>] {
-        &self.0[..]
-    }
-}
-
-impl<'tcx> Borrow<[CanonicalVarInfo]> for Interned<'tcx, List<CanonicalVarInfo>> {
-    fn borrow(&self) -> &[CanonicalVarInfo] {
-        &self.0[..]
-    }
-}
-
-impl<'tcx> Borrow<[GenericArg<'tcx>]> for Interned<'tcx, InternalSubsts<'tcx>> {
-    fn borrow<'a>(&'a self) -> &'a [GenericArg<'tcx>] {
-        &self.0[..]
-    }
-}
-
-impl<'tcx> Borrow<[ProjectionKind]> for Interned<'tcx, List<ProjectionKind>> {
-    fn borrow(&self) -> &[ProjectionKind] {
-        &self.0[..]
-    }
-}
-
-impl<'tcx> Borrow<[PlaceElem<'tcx>]> for Interned<'tcx, List<PlaceElem<'tcx>>> {
-    fn borrow(&self) -> &[PlaceElem<'tcx>] {
+impl<'tcx, T> Borrow<[T]> for Interned<'tcx, List<T>> {
+    fn borrow<'a>(&'a self) -> &'a [T] {
         &self.0[..]
     }
 }
@@ -1960,31 +1983,9 @@ impl<'tcx> Borrow<RegionKind> for Interned<'tcx, RegionKind> {
     }
 }
 
-impl<'tcx> Borrow<[ExistentialPredicate<'tcx>]>
-    for Interned<'tcx, List<ExistentialPredicate<'tcx>>>
-{
-    fn borrow<'a>(&'a self) -> &'a [ExistentialPredicate<'tcx>] {
-        &self.0[..]
-    }
-}
-
-impl<'tcx> Borrow<[Predicate<'tcx>]> for Interned<'tcx, List<Predicate<'tcx>>> {
-    fn borrow<'a>(&'a self) -> &'a [Predicate<'tcx>] {
-        &self.0[..]
-    }
-}
-
 impl<'tcx> Borrow<Const<'tcx>> for Interned<'tcx, Const<'tcx>> {
     fn borrow<'a>(&'a self) -> &'a Const<'tcx> {
         &self.0
-    }
-}
-
-impl<'tcx> Borrow<[traits::ChalkEnvironmentClause<'tcx>]>
-    for Interned<'tcx, List<traits::ChalkEnvironmentClause<'tcx>>>
-{
-    fn borrow<'a>(&'a self) -> &'a [traits::ChalkEnvironmentClause<'tcx>] {
-        &self.0[..]
     }
 }
 

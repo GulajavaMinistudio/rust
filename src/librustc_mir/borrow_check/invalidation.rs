@@ -183,7 +183,13 @@ impl<'cx, 'tcx> Visitor<'tcx> for InvalidationGenerator<'cx, 'tcx> {
                     }
                 }
             }
-            TerminatorKind::InlineAsm { template: _, ref operands, options: _, destination: _ } => {
+            TerminatorKind::InlineAsm {
+                template: _,
+                ref operands,
+                options: _,
+                line_spans: _,
+                destination: _,
+            } => {
                 for op in operands {
                     match *op {
                         InlineAsmOperand::In { reg: _, ref value }
@@ -294,6 +300,8 @@ impl<'cx, 'tcx> InvalidationGenerator<'cx, 'tcx> {
 
                 self.access_place(location, place, access_kind, LocalMutationIsAllowed::No);
             }
+
+            Rvalue::ThreadLocalRef(_) => {}
 
             Rvalue::Use(ref operand)
             | Rvalue::Repeat(ref operand, _)

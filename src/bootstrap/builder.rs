@@ -344,10 +344,12 @@ impl<'a> Builder<'a> {
                 tool::Rls,
                 tool::Rustdoc,
                 tool::Clippy,
+                tool::CargoClippy,
                 native::Llvm,
                 native::Sanitizers,
                 tool::Rustfmt,
                 tool::Miri,
+                tool::CargoMiri,
                 native::Lld
             ),
             Kind::Check | Kind::Clippy | Kind::Fix | Kind::Format => {
@@ -648,6 +650,7 @@ impl<'a> Builder<'a> {
     pub fn sysroot_libdir_relative(&self, compiler: Compiler) -> &Path {
         match self.config.libdir_relative() {
             Some(relative_libdir) if compiler.stage >= 1 => relative_libdir,
+            _ if compiler.stage == 0 => &self.build.initial_libdir,
             _ => Path::new("lib"),
         }
     }
