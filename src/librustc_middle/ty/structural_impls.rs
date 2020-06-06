@@ -236,7 +236,7 @@ impl fmt::Debug for ty::PredicateKind<'tcx> {
             ty::PredicateKind::RegionOutlives(ref pair) => pair.fmt(f),
             ty::PredicateKind::TypeOutlives(ref pair) => pair.fmt(f),
             ty::PredicateKind::Projection(ref pair) => pair.fmt(f),
-            ty::PredicateKind::WellFormed(ty) => write!(f, "WellFormed({:?})", ty),
+            ty::PredicateKind::WellFormed(data) => write!(f, "WellFormed({:?})", data),
             ty::PredicateKind::ObjectSafe(trait_def_id) => {
                 write!(f, "ObjectSafe({:?})", trait_def_id)
             }
@@ -987,7 +987,8 @@ impl<'tcx> TypeFoldable<'tcx> for ty::Region<'tcx> {
 
 impl<'tcx> TypeFoldable<'tcx> for ty::Predicate<'tcx> {
     fn super_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        folder.tcx().mk_predicate(ty::PredicateKind::super_fold_with(self.kind, folder))
+        let new = ty::PredicateKind::super_fold_with(self.kind, folder);
+        if new != *self.kind { folder.tcx().mk_predicate(new) } else { *self }
     }
 
     fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool {

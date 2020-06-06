@@ -100,15 +100,15 @@ Compatibility Notes
 - [Removed the `-C no_integrated_as` flag from rustc.][70345]
 - [The `file_name` property in JSON output of macro errors now points the actual
   source file rather than the previous format of `<NAME macros>`.][70969]
-  **Note:** this may not point a file that actually exists on the user's system.
+  **Note:** this may not point to a file that actually exists on the user's system.
 - [The minimum required external LLVM version has been bumped to LLVM 8.][71147]
 - [`mem::{zeroed, uninitialised}` will now panic when used with types that do
   not allow zero initialization such as `NonZeroU8`.][66059] This was
   previously a warning.
 - [In 1.45.0 (the next release) converting a `f64` to `u32` using the `as`
   operator has been defined as a saturating operation.][71269] This was previously
-  undefined behaviour, you can use the `{f64, f32}::to_int_unchecked` methods to
-  continue using the current behaviour which may desirable in rare performance
+  undefined behaviour, but you can use the `{f64, f32}::to_int_unchecked` methods to
+  continue using the current behaviour, which may be desirable in rare performance
   sensitive situations.
 
 Internal Only

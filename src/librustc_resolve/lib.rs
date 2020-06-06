@@ -19,6 +19,7 @@ pub use rustc_hir::def::{Namespace, PerNS};
 
 use Determinacy::*;
 
+use rustc_arena::TypedArena;
 use rustc_ast::ast::{self, FloatTy, IntTy, NodeId, UintTy};
 use rustc_ast::ast::{Crate, CRATE_NODE_ID};
 use rustc_ast::ast::{ItemKind, Path};
@@ -618,13 +619,13 @@ struct PrivacyError<'a> {
 
 struct UseError<'a> {
     err: DiagnosticBuilder<'a>,
-    /// Attach `use` statements for these candidates.
+    /// Candidates which user could `use` to access the missing type.
     candidates: Vec<ImportSuggestion>,
-    /// The `NodeId` of the module to place the use-statements in.
+    /// The `DefId` of the module to place the use-statements in.
     def_id: DefId,
-    /// Whether the diagnostic should state that it's "better".
-    better: bool,
-    /// Extra free form suggestion. Currently used to suggest new type parameter.
+    /// Whether the diagnostic should say "instead" (as in `consider importing ... instead`).
+    instead: bool,
+    /// Extra free-form suggestion.
     suggestion: Option<(Span, &'static str, String, Applicability)>,
 }
 
@@ -981,13 +982,13 @@ pub struct Resolver<'a> {
 /// Nothing really interesting here; it just provides memory for the rest of the crate.
 #[derive(Default)]
 pub struct ResolverArenas<'a> {
-    modules: arena::TypedArena<ModuleData<'a>>,
+    modules: TypedArena<ModuleData<'a>>,
     local_modules: RefCell<Vec<Module<'a>>>,
-    name_bindings: arena::TypedArena<NameBinding<'a>>,
-    imports: arena::TypedArena<Import<'a>>,
-    name_resolutions: arena::TypedArena<RefCell<NameResolution<'a>>>,
-    macro_rules_bindings: arena::TypedArena<MacroRulesBinding<'a>>,
-    ast_paths: arena::TypedArena<ast::Path>,
+    name_bindings: TypedArena<NameBinding<'a>>,
+    imports: TypedArena<Import<'a>>,
+    name_resolutions: TypedArena<RefCell<NameResolution<'a>>>,
+    macro_rules_bindings: TypedArena<MacroRulesBinding<'a>>,
+    ast_paths: TypedArena<ast::Path>,
 }
 
 impl<'a> ResolverArenas<'a> {
@@ -2577,12 +2578,12 @@ impl<'a> Resolver<'a> {
     }
 
     fn report_with_use_injections(&mut self, krate: &Crate) {
-        for UseError { mut err, candidates, def_id, better, suggestion } in
+        for UseError { mut err, candidates, def_id, instead, suggestion } in
             self.use_injections.drain(..)
         {
             let (span, found_use) = UsePlacementFinder::check(&self.definitions, krate, def_id);
             if !candidates.is_empty() {
-                diagnostics::show_candidates(&mut err, span, &candidates, better, found_use);
+                diagnostics::show_candidates(&mut err, span, &candidates, instead, found_use);
             } else if let Some((span, msg, sugg, appl)) = suggestion {
                 err.span_suggestion(span, msg, sugg, appl);
             }
