@@ -10,14 +10,14 @@ use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::intravisit::{walk_body, walk_expr, walk_ty, FnKind, NestedVisitorMap, Visitor};
 use rustc_hir::{
-    BinOpKind, Body, Expr, ExprKind, FnDecl, FnRetTy, FnSig, GenericArg, GenericParamKind, HirId, ImplItem,
+    BinOpKind, Block, Body, Expr, ExprKind, FnDecl, FnRetTy, FnSig, GenericArg, GenericParamKind, HirId, ImplItem,
     ImplItemKind, Item, ItemKind, Lifetime, Local, MatchSource, MutTy, Mutability, QPath, Stmt, StmtKind, TraitFn,
     TraitItem, TraitItemKind, TyKind, UnOp,
 };
 use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_middle::hir::map::Map;
 use rustc_middle::lint::in_external_macro;
-use rustc_middle::ty::{self, InferTy, Ty, TyCtxt, TypeckTables};
+use rustc_middle::ty::{self, InferTy, Ty, TyCtxt, TyS, TypeckTables};
 use rustc_session::{declare_lint_pass, declare_tool_lint, impl_lint_pass};
 use rustc_span::hygiene::{ExpnKind, MacroKind};
 use rustc_span::source_map::Span;
@@ -29,10 +29,10 @@ use rustc_typeck::hir_ty_to_ty;
 use crate::consts::{constant, Constant};
 use crate::utils::paths;
 use crate::utils::{
-    clip, comparisons, differing_macro_contexts, higher, in_constant, int_bits, is_type_diagnostic_item,
+    clip, comparisons, differing_macro_contexts, higher, in_constant, indent_of, int_bits, is_type_diagnostic_item,
     last_path_segment, match_def_path, match_path, method_chain_args, multispan_sugg, numeric_literal::NumericLiteral,
-    qpath_res, same_tys, sext, snippet, snippet_opt, snippet_with_applicability, snippet_with_macro_callsite,
-    span_lint, span_lint_and_help, span_lint_and_sugg, span_lint_and_then, unsext,
+    qpath_res, sext, snippet, snippet_block_with_applicability, snippet_opt, snippet_with_applicability,
+    snippet_with_macro_callsite, span_lint, span_lint_and_help, span_lint_and_sugg, span_lint_and_then, unsext,
 };
 
 declare_clippy_lint! {
@@ -778,30 +778,123 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnitArg {
         }
 
         match expr.kind {
-            ExprKind::Call(_, args) | ExprKind::MethodCall(_, _, args) => {
-                for arg in args {
-                    if is_unit(cx.tables.expr_ty(arg)) && !is_unit_literal(arg) {
-                        if let ExprKind::Match(.., match_source) = &arg.kind {
-                            if *match_source == MatchSource::TryDesugar {
-                                continue;
+            ExprKind::Call(_, args) | ExprKind::MethodCall(_, _, args, _) => {
+                let args_to_recover = args
+                    .iter()
+                    .filter(|arg| {
+                        if is_unit(cx.tables.expr_ty(arg)) && !is_unit_literal(arg) {
+                            if let ExprKind::Match(.., MatchSource::TryDesugar) = &arg.kind {
+                                false
+                            } else {
+                                true
                             }
+                        } else {
+                            false
                         }
-
-                        span_lint_and_sugg(
-                            cx,
-                            UNIT_ARG,
-                            arg.span,
-                            "passing a unit value to a function",
-                            "if you intended to pass a unit value, use a unit literal instead",
-                            "()".to_string(),
-                            Applicability::MaybeIncorrect,
-                        );
-                    }
+                    })
+                    .collect::<Vec<_>>();
+                if !args_to_recover.is_empty() {
+                    lint_unit_args(cx, expr, &args_to_recover);
                 }
             },
             _ => (),
         }
     }
+}
+
+fn lint_unit_args(cx: &LateContext<'_, '_>, expr: &Expr<'_>, args_to_recover: &[&Expr<'_>]) {
+    let mut applicability = Applicability::MachineApplicable;
+    let (singular, plural) = if args_to_recover.len() > 1 {
+        ("", "s")
+    } else {
+        ("a ", "")
+    };
+    span_lint_and_then(
+        cx,
+        UNIT_ARG,
+        expr.span,
+        &format!("passing {}unit value{} to a function", singular, plural),
+        |db| {
+            let mut or = "";
+            args_to_recover
+                .iter()
+                .filter_map(|arg| {
+                    if_chain! {
+                        if let ExprKind::Block(block, _) = arg.kind;
+                        if block.expr.is_none();
+                        if let Some(last_stmt) = block.stmts.iter().last();
+                        if let StmtKind::Semi(last_expr) = last_stmt.kind;
+                        if let Some(snip) = snippet_opt(cx, last_expr.span);
+                        then {
+                            Some((
+                                last_stmt.span,
+                                snip,
+                            ))
+                        }
+                        else {
+                            None
+                        }
+                    }
+                })
+                .for_each(|(span, sugg)| {
+                    db.span_suggestion(
+                        span,
+                        "remove the semicolon from the last statement in the block",
+                        sugg,
+                        Applicability::MaybeIncorrect,
+                    );
+                    or = "or ";
+                });
+            let sugg = args_to_recover
+                .iter()
+                .filter(|arg| !is_empty_block(arg))
+                .enumerate()
+                .map(|(i, arg)| {
+                    let indent = if i == 0 {
+                        0
+                    } else {
+                        indent_of(cx, expr.span).unwrap_or(0)
+                    };
+                    format!(
+                        "{}{};",
+                        " ".repeat(indent),
+                        snippet_block_with_applicability(cx, arg.span, "..", Some(expr.span), &mut applicability)
+                    )
+                })
+                .collect::<Vec<String>>();
+            let mut and = "";
+            if !sugg.is_empty() {
+                let plural = if sugg.len() > 1 { "s" } else { "" };
+                db.span_suggestion(
+                    expr.span.with_hi(expr.span.lo()),
+                    &format!("{}move the expression{} in front of the call...", or, plural),
+                    format!("{}\n", sugg.join("\n")),
+                    applicability,
+                );
+                and = "...and "
+            }
+            db.multipart_suggestion(
+                &format!("{}use {}unit literal{} instead", and, singular, plural),
+                args_to_recover
+                    .iter()
+                    .map(|arg| (arg.span, "()".to_string()))
+                    .collect::<Vec<_>>(),
+                applicability,
+            );
+        },
+    );
+}
+
+fn is_empty_block(expr: &Expr<'_>) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::Block(
+            Block {
+                stmts: &[], expr: None, ..
+            },
+            _,
+        )
+    )
 }
 
 fn is_questionmark_desugar_marked_call(expr: &Expr<'_>) -> bool {
@@ -974,7 +1067,8 @@ declare_clippy_lint! {
     /// behavior.
     ///
     /// **Known problems:** Using `std::ptr::read_unaligned` and `std::ptr::write_unaligned` or similar
-    /// on the resulting pointer is fine.
+    /// on the resulting pointer is fine. Is over-zealous: Casts with manual alignment checks or casts like
+    /// u64-> u8 -> u16 can be fine. Miri is able to do a more in-depth analysis.
     ///
     /// **Example:**
     /// ```rust
@@ -982,7 +1076,7 @@ declare_clippy_lint! {
     /// let _ = (&mut 1u8 as *mut u8) as *mut u16;
     /// ```
     pub CAST_PTR_ALIGNMENT,
-    correctness,
+    pedantic,
     "cast from a pointer to a more-strictly-aligned pointer"
 }
 
@@ -1168,14 +1262,14 @@ fn check_loss_of_sign(cx: &LateContext<'_, '_>, expr: &Expr<'_>, op: &Expr<'_>, 
     }
 
     // don't lint for the result of methods that always return non-negative values
-    if let ExprKind::MethodCall(ref path, _, _) = op.kind {
+    if let ExprKind::MethodCall(ref path, _, _, _) = op.kind {
         let mut method_name = path.ident.name.as_str();
         let whitelisted_methods = ["abs", "checked_abs", "rem_euclid", "checked_rem_euclid"];
 
         if_chain! {
             if method_name == "unwrap";
             if let Some(arglist) = method_chain_args(op, &["unwrap"]);
-            if let ExprKind::MethodCall(ref inner_path, _, _) = &arglist[0][0].kind;
+            if let ExprKind::MethodCall(ref inner_path, _, _, _) = &arglist[0][0].kind;
             then {
                 method_name = inner_path.ident.name.as_str();
             }
@@ -1852,18 +1946,18 @@ fn detect_extreme_expr<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr<'_
     let which = match (&ty.kind, cv) {
         (&ty::Bool, Constant::Bool(false)) | (&ty::Uint(_), Constant::Int(0)) => Minimum,
         (&ty::Int(ity), Constant::Int(i))
-            if i == unsext(cx.tcx, i128::min_value() >> (128 - int_bits(cx.tcx, ity)), ity) =>
+            if i == unsext(cx.tcx, i128::MIN >> (128 - int_bits(cx.tcx, ity)), ity) =>
         {
             Minimum
         },
 
         (&ty::Bool, Constant::Bool(true)) => Maximum,
         (&ty::Int(ity), Constant::Int(i))
-            if i == unsext(cx.tcx, i128::max_value() >> (128 - int_bits(cx.tcx, ity)), ity) =>
+            if i == unsext(cx.tcx, i128::MAX >> (128 - int_bits(cx.tcx, ity)), ity) =>
         {
             Maximum
         },
-        (&ty::Uint(uty), Constant::Int(i)) if clip(cx.tcx, u128::max_value(), uty) == i => Maximum,
+        (&ty::Uint(uty), Constant::Int(i)) if clip(cx.tcx, u128::MAX, uty) == i => Maximum,
 
         _ => return None,
     };
@@ -1945,7 +2039,7 @@ impl FullInt {
     fn cmp_s_u(s: i128, u: u128) -> Ordering {
         if s < 0 {
             Ordering::Less
-        } else if u > (i128::max_value() as u128) {
+        } else if u > (i128::MAX as u128) {
             Ordering::Greater
         } else {
             (s as u128).cmp(&u)
@@ -1990,48 +2084,48 @@ fn numeric_cast_precast_bounds<'a>(cx: &LateContext<'_, '_>, expr: &'a Expr<'_>)
         match pre_cast_ty.kind {
             ty::Int(int_ty) => Some(match int_ty {
                 IntTy::I8 => (
-                    FullInt::S(i128::from(i8::min_value())),
-                    FullInt::S(i128::from(i8::max_value())),
+                    FullInt::S(i128::from(i8::MIN)),
+                    FullInt::S(i128::from(i8::MAX)),
                 ),
                 IntTy::I16 => (
-                    FullInt::S(i128::from(i16::min_value())),
-                    FullInt::S(i128::from(i16::max_value())),
+                    FullInt::S(i128::from(i16::MIN)),
+                    FullInt::S(i128::from(i16::MAX)),
                 ),
                 IntTy::I32 => (
-                    FullInt::S(i128::from(i32::min_value())),
-                    FullInt::S(i128::from(i32::max_value())),
+                    FullInt::S(i128::from(i32::MIN)),
+                    FullInt::S(i128::from(i32::MAX)),
                 ),
                 IntTy::I64 => (
-                    FullInt::S(i128::from(i64::min_value())),
-                    FullInt::S(i128::from(i64::max_value())),
+                    FullInt::S(i128::from(i64::MIN)),
+                    FullInt::S(i128::from(i64::MAX)),
                 ),
-                IntTy::I128 => (FullInt::S(i128::min_value()), FullInt::S(i128::max_value())),
+                IntTy::I128 => (FullInt::S(i128::MIN), FullInt::S(i128::MAX)),
                 IntTy::Isize => (
-                    FullInt::S(isize::min_value() as i128),
-                    FullInt::S(isize::max_value() as i128),
+                    FullInt::S(isize::MIN as i128),
+                    FullInt::S(isize::MAX as i128),
                 ),
             }),
             ty::Uint(uint_ty) => Some(match uint_ty {
                 UintTy::U8 => (
-                    FullInt::U(u128::from(u8::min_value())),
-                    FullInt::U(u128::from(u8::max_value())),
+                    FullInt::U(u128::from(u8::MIN)),
+                    FullInt::U(u128::from(u8::MAX)),
                 ),
                 UintTy::U16 => (
-                    FullInt::U(u128::from(u16::min_value())),
-                    FullInt::U(u128::from(u16::max_value())),
+                    FullInt::U(u128::from(u16::MIN)),
+                    FullInt::U(u128::from(u16::MAX)),
                 ),
                 UintTy::U32 => (
-                    FullInt::U(u128::from(u32::min_value())),
-                    FullInt::U(u128::from(u32::max_value())),
+                    FullInt::U(u128::from(u32::MIN)),
+                    FullInt::U(u128::from(u32::MAX)),
                 ),
                 UintTy::U64 => (
-                    FullInt::U(u128::from(u64::min_value())),
-                    FullInt::U(u128::from(u64::max_value())),
+                    FullInt::U(u128::from(u64::MIN)),
+                    FullInt::U(u128::from(u64::MAX)),
                 ),
-                UintTy::U128 => (FullInt::U(u128::min_value()), FullInt::U(u128::max_value())),
+                UintTy::U128 => (FullInt::U(u128::MIN), FullInt::U(u128::MAX)),
                 UintTy::Usize => (
-                    FullInt::U(usize::min_value() as u128),
-                    FullInt::U(usize::max_value() as u128),
+                    FullInt::U(usize::MIN as u128),
+                    FullInt::U(usize::MAX as u128),
                 ),
             }),
             _ => None,
@@ -2462,7 +2556,7 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for ImplicitHasherConstructorVisitor<'a, 'b, 't
             if let ExprKind::Path(QPath::TypeRelative(ref ty, ref method)) = fun.kind;
             if let TyKind::Path(QPath::Resolved(None, ty_path)) = ty.kind;
             then {
-                if !same_tys(self.cx, self.target.ty(), self.body.expr_ty(e)) {
+                if !TyS::same_type(self.target.ty(), self.body.expr_ty(e)) {
                     return;
                 }
 

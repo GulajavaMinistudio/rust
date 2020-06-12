@@ -8,7 +8,7 @@ use crate::utils::{
     multispan_sugg, snippet, snippet_opt, snippet_with_applicability, span_lint, span_lint_and_help,
     span_lint_and_sugg, span_lint_and_then, SpanlessEq,
 };
-use crate::utils::{is_type_diagnostic_item, qpath_res, same_tys, sugg};
+use crate::utils::{is_type_diagnostic_item, qpath_res, sugg};
 use if_chain::if_chain;
 use rustc_ast::ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -24,10 +24,10 @@ use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_middle::hir::map::Map;
 use rustc_middle::lint::in_external_macro;
 use rustc_middle::middle::region;
-use rustc_middle::ty::{self, Ty};
+use rustc_middle::ty::{self, Ty, TyS};
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::source_map::Span;
-use rustc_span::BytePos;
+use rustc_span::symbol::Symbol;
 use rustc_typeck::expr_use_visitor::{ConsumeMode, Delegate, ExprUseVisitor, Place, PlaceBase};
 use std::iter::{once, Iterator};
 use std::mem;
@@ -526,7 +526,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Loops {
             let pat = &arms[0].pat.kind;
             if let (
                 &PatKind::TupleStruct(ref qpath, ref pat_args, _),
-                &ExprKind::MethodCall(ref method_path, _, ref method_args),
+                &ExprKind::MethodCall(ref method_path, _, ref method_args, _),
             ) = (pat, &match_expr.kind)
             {
                 let iter_expr = &method_args[0];
@@ -654,7 +654,7 @@ fn never_loop_expr(expr: &Expr<'_>, main_loop_id: HirId) -> NeverLoopResult {
         | ExprKind::Struct(_, _, Some(ref e))
         | ExprKind::Repeat(ref e, _)
         | ExprKind::DropTemps(ref e) => never_loop_expr(e, main_loop_id),
-        ExprKind::Array(ref es) | ExprKind::MethodCall(_, _, ref es) | ExprKind::Tup(ref es) => {
+        ExprKind::Array(ref es) | ExprKind::MethodCall(_, _, ref es, _) | ExprKind::Tup(ref es) => {
             never_loop_expr_all(&mut es.iter(), main_loop_id)
         },
         ExprKind::Call(ref e, ref es) => never_loop_expr_all(&mut once(&**e).chain(es.iter()), main_loop_id),
@@ -806,7 +806,7 @@ fn is_slice_like<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, ty: Ty<'_>) -> bool {
 
 fn fetch_cloned_expr<'tcx>(expr: &'tcx Expr<'tcx>) -> &'tcx Expr<'tcx> {
     if_chain! {
-        if let ExprKind::MethodCall(method, _, args) = expr.kind;
+        if let ExprKind::MethodCall(method, _, args, _) = expr.kind;
         if method.ident.name == sym!(clone);
         if args.len() == 1;
         if let Some(arg) = args.get(0);
@@ -915,7 +915,7 @@ fn build_manual_memcpy_suggestion<'a, 'tcx>(
 
     let print_limit = |end: &Expr<'_>, offset: Offset, var: &Expr<'_>| {
         if_chain! {
-            if let ExprKind::MethodCall(method, _, len_args) = end.kind;
+            if let ExprKind::MethodCall(method, _, len_args, _) = end.kind;
             if method.ident.name == sym!(len);
             if len_args.len() == 1;
             if let Some(arg) = len_args.get(0);
@@ -1190,7 +1190,7 @@ fn check_for_loop_range<'a, 'tcx>(
 
 fn is_len_call(expr: &Expr<'_>, var: Name) -> bool {
     if_chain! {
-        if let ExprKind::MethodCall(ref method, _, ref len_args) = expr.kind;
+        if let ExprKind::MethodCall(ref method, _, ref len_args, _) = expr.kind;
         if len_args.len() == 1;
         if method.ident.name == sym!(len);
         if let ExprKind::Path(QPath::Resolved(_, ref path)) = len_args[0].kind;
@@ -1244,7 +1244,7 @@ fn lint_iter_method(cx: &LateContext<'_, '_>, args: &[Expr<'_>], arg: &Expr<'_>,
 
 fn check_for_loop_arg(cx: &LateContext<'_, '_>, pat: &Pat<'_>, arg: &Expr<'_>, expr: &Expr<'_>) {
     let mut next_loop_linted = false; // whether or not ITER_NEXT_LOOP lint was used
-    if let ExprKind::MethodCall(ref method, _, ref args) = arg.kind {
+    if let ExprKind::MethodCall(ref method, _, ref args, _) = arg.kind {
         // just the receiver, no arguments
         if args.len() == 1 {
             let method_name = &*method.ident.as_str();
@@ -1256,7 +1256,7 @@ fn check_for_loop_arg(cx: &LateContext<'_, '_>, pat: &Pat<'_>, arg: &Expr<'_>, e
             } else if method_name == "into_iter" && match_trait_method(cx, arg, &paths::INTO_ITERATOR) {
                 let receiver_ty = cx.tables.expr_ty(&args[0]);
                 let receiver_ty_adjusted = cx.tables.expr_ty_adjusted(&args[0]);
-                if same_tys(cx, receiver_ty, receiver_ty_adjusted) {
+                if TyS::same_type(receiver_ty, receiver_ty_adjusted) {
                     let mut applicability = Applicability::MachineApplicable;
                     let object = snippet_with_applicability(cx, args[0].span, "_", &mut applicability);
                     span_lint_and_sugg(
@@ -1277,7 +1277,7 @@ fn check_for_loop_arg(cx: &LateContext<'_, '_>, pat: &Pat<'_>, arg: &Expr<'_>, e
                             mutbl: Mutability::Not,
                         },
                     );
-                    if same_tys(cx, receiver_ty_adjusted, ref_receiver_ty) {
+                    if TyS::same_type(receiver_ty_adjusted, ref_receiver_ty) {
                         lint_iter_method(cx, args, arg, method_name)
                     }
                 }
@@ -1718,7 +1718,7 @@ impl<'a, 'tcx> Visitor<'tcx> for VarVisitor<'a, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'_>) {
         if_chain! {
             // a range index op
-            if let ExprKind::MethodCall(ref meth, _, ref args) = expr.kind;
+            if let ExprKind::MethodCall(ref meth, _, ref args, _) = expr.kind;
             if (meth.ident.name == sym!(index) && match_trait_method(self.cx, expr, &paths::INDEX))
                 || (meth.ident.name == sym!(index_mut) && match_trait_method(self.cx, expr, &paths::INDEX_MUT));
             if !self.check(&args[1], &args[0], expr);
@@ -1776,7 +1776,7 @@ impl<'a, 'tcx> Visitor<'tcx> for VarVisitor<'a, 'tcx> {
                     self.visit_expr(expr);
                 }
             },
-            ExprKind::MethodCall(_, _, args) => {
+            ExprKind::MethodCall(_, _, args, _) => {
                 let def_id = self.cx.tables.type_dependent_def_id(expr.hir_id).unwrap();
                 for (ty, expr) in self.cx.tcx.fn_sig(def_id).inputs().skip_binder().iter().zip(args) {
                     self.prefer_mutable = false;
@@ -2369,8 +2369,8 @@ const NEEDLESS_COLLECT_MSG: &str = "avoid using `collect()` when not needed";
 
 fn check_needless_collect<'a, 'tcx>(expr: &'tcx Expr<'_>, cx: &LateContext<'a, 'tcx>) {
     if_chain! {
-        if let ExprKind::MethodCall(ref method, _, ref args) = expr.kind;
-        if let ExprKind::MethodCall(ref chain_method, _, _) = args[0].kind;
+        if let ExprKind::MethodCall(ref method, _, ref args, _) = expr.kind;
+        if let ExprKind::MethodCall(ref chain_method, _, _, _) = args[0].kind;
         if chain_method.ident.name == sym!(collect) && match_trait_method(cx, &args[0], &paths::ITERATOR);
         if let Some(ref generic_args) = chain_method.args;
         if let Some(GenericArg::Type(ref ty)) = generic_args.args.get(0);
@@ -2381,32 +2381,32 @@ fn check_needless_collect<'a, 'tcx>(expr: &'tcx Expr<'_>, cx: &LateContext<'a, '
                 match_type(cx, ty, &paths::BTREEMAP) ||
                 is_type_diagnostic_item(cx, ty, sym!(hashmap_type)) {
                 if method.ident.name == sym!(len) {
-                    let span = shorten_needless_collect_span(expr);
+                    let span = shorten_span(expr, sym!(collect));
                     span_lint_and_sugg(
                         cx,
                         NEEDLESS_COLLECT,
                         span,
                         NEEDLESS_COLLECT_MSG,
                         "replace with",
-                        ".count()".to_string(),
+                        "count()".to_string(),
                         Applicability::MachineApplicable,
                     );
                 }
                 if method.ident.name == sym!(is_empty) {
-                    let span = shorten_needless_collect_span(expr);
+                    let span = shorten_span(expr, sym!(iter));
                     span_lint_and_sugg(
                         cx,
                         NEEDLESS_COLLECT,
                         span,
                         NEEDLESS_COLLECT_MSG,
                         "replace with",
-                        ".next().is_none()".to_string(),
+                        "get(0).is_none()".to_string(),
                         Applicability::MachineApplicable,
                     );
                 }
                 if method.ident.name == sym!(contains) {
                     let contains_arg = snippet(cx, args[1].span, "??");
-                    let span = shorten_needless_collect_span(expr);
+                    let span = shorten_span(expr, sym!(collect));
                     span_lint_and_then(
                         cx,
                         NEEDLESS_COLLECT,
@@ -2422,7 +2422,7 @@ fn check_needless_collect<'a, 'tcx>(expr: &'tcx Expr<'_>, cx: &LateContext<'a, '
                                 span,
                                 "replace with",
                                 format!(
-                                    ".any(|{}| x == {})",
+                                    "any(|{}| x == {})",
                                     arg, pred
                                 ),
                                 Applicability::MachineApplicable,
@@ -2435,13 +2435,13 @@ fn check_needless_collect<'a, 'tcx>(expr: &'tcx Expr<'_>, cx: &LateContext<'a, '
     }
 }
 
-fn shorten_needless_collect_span(expr: &Expr<'_>) -> Span {
-    if_chain! {
-        if let ExprKind::MethodCall(_, _, ref args) = expr.kind;
-        if let ExprKind::MethodCall(_, ref span, _) = args[0].kind;
-        then {
-            return expr.span.with_lo(span.lo() - BytePos(1));
+fn shorten_span(expr: &Expr<'_>, target_fn_name: Symbol) -> Span {
+    let mut current_expr = expr;
+    while let ExprKind::MethodCall(ref path, ref span, ref args, _) = current_expr.kind {
+        if path.ident.name == target_fn_name {
+            return expr.span.with_lo(span.lo());
         }
+        current_expr = &args[0];
     }
     unreachable!()
 }

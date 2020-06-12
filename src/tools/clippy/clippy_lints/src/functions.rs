@@ -49,11 +49,11 @@ declare_clippy_lint! {
     /// **Known problems:** None.
     ///
     /// **Example:**
-    /// ``` rust
+    /// ```rust
     /// fn im_too_long() {
-    /// println!("");
-    /// // ... 100 more LoC
-    /// println!("");
+    ///     println!("");
+    ///     // ... 100 more LoC
+    ///     println!("");
     /// }
     /// ```
     pub TOO_MANY_LINES,
@@ -79,8 +79,14 @@ declare_clippy_lint! {
     /// `some_argument.get_raw_ptr()`).
     ///
     /// **Example:**
-    /// ```rust
+    /// ```rust,ignore
+    /// // Bad
     /// pub fn foo(x: *const u8) {
+    ///     println!("{}", unsafe { *x });
+    /// }
+    ///
+    /// // Good
+    /// pub unsafe fn foo(x: *const u8) {
     ///     println!("{}", unsafe { *x });
     /// }
     /// ```
@@ -550,7 +556,7 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for DerefVisitor<'a, 'tcx> {
                     }
                 }
             },
-            hir::ExprKind::MethodCall(_, _, args) => {
+            hir::ExprKind::MethodCall(_, _, args, _) => {
                 let def_id = self.tables.type_dependent_def_id(expr.hir_id).unwrap();
                 let base_type = self.cx.tcx.type_of(def_id);
 
@@ -604,7 +610,7 @@ impl<'a, 'tcx> intravisit::Visitor<'tcx> for StaticMutVisitor<'a, 'tcx> {
             return;
         }
         match expr.kind {
-            Call(_, args) | MethodCall(_, _, args) => {
+            Call(_, args) | MethodCall(_, _, args, _) => {
                 let mut tys = FxHashSet::default();
                 for arg in args {
                     let def_id = arg.hir_id.owner.to_def_id();

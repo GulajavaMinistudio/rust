@@ -39,7 +39,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     let f = self.lower_expr(f);
                     hir::ExprKind::Call(f, self.lower_exprs(args))
                 }
-                ExprKind::MethodCall(ref seg, ref args) => {
+                ExprKind::MethodCall(ref seg, ref args, span) => {
                     let hir_seg = self.arena.alloc(self.lower_path_segment(
                         e.span,
                         seg,
@@ -50,7 +50,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         None,
                     ));
                     let args = self.lower_exprs(args);
-                    hir::ExprKind::MethodCall(hir_seg, seg.ident.span, args)
+                    hir::ExprKind::MethodCall(hir_seg, seg.ident.span, args, span)
                 }
                 ExprKind::Binary(binop, ref lhs, ref rhs) => {
                     let binop = self.lower_binop(binop);
@@ -1237,10 +1237,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                                             ) => {
                                                 assert!(!*late);
                                                 let out_op_sp = if input { op_sp2 } else { op_sp };
-                                                let msg = &format!(
-                                                    "use `lateout` instead of \
-                                                     `out` to avoid conflict"
-                                                );
+                                                let msg = "use `lateout` instead of \
+                                                     `out` to avoid conflict";
                                                 err.span_help(out_op_sp, msg);
                                             }
                                             _ => {}

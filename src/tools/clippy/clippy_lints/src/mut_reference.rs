@@ -16,7 +16,11 @@ declare_clippy_lint! {
     ///
     /// **Example:**
     /// ```ignore
+    /// // Bad
     /// my_vec.push(&mut value)
+    ///
+    /// // Good
+    /// my_vec.push(&value)
     /// ```
     pub UNNECESSARY_MUT_PASSED,
     style,
@@ -38,7 +42,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnnecessaryMutPassed {
                     );
                 }
             },
-            ExprKind::MethodCall(ref path, _, ref arguments) => {
+            ExprKind::MethodCall(ref path, _, ref arguments, _) => {
                 let def_id = cx.tables.type_dependent_def_id(e.hir_id).unwrap();
                 let substs = cx.tables.node_substs(e.hir_id);
                 let method_type = cx.tcx.type_of(def_id).subst(cx.tcx, substs);

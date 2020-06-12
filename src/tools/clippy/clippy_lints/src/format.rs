@@ -25,9 +25,13 @@ declare_clippy_lint! {
     ///
     /// **Examples:**
     /// ```rust
+    ///
+    /// // Bad
     /// # let foo = "foo";
-    /// format!("foo");
     /// format!("{}", foo);
+    ///
+    /// // Good
+    /// format!("foo");
     /// ```
     pub USELESS_FORMAT,
     complexity,
@@ -100,7 +104,7 @@ fn on_argumentv1_new<'a, 'tcx>(
                 }
             } else {
                 let snip = snippet(cx, format_args.span, "<arg>");
-                if let ExprKind::MethodCall(ref path, _, _) = format_args.kind {
+                if let ExprKind::MethodCall(ref path, _, _, _) = format_args.kind {
                     if path.ident.name == sym!(to_string) {
                         return Some(format!("{}", snip));
                     }

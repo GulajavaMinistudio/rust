@@ -657,7 +657,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                     // be silent, as it causes a type mismatch later.
                 }
 
-                Ok(Some(vtable)) => queue.extend(vtable.nested_obligations()),
+                Ok(Some(impl_source)) => queue.extend(impl_source.nested_obligations()),
             }
         }
 
@@ -1377,7 +1377,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                 }
 
                 if let Some(expr) = expression {
-                    fcx.emit_coerce_suggestions(&mut err, expr, found, expected);
+                    fcx.emit_coerce_suggestions(&mut err, expr, found, expected, None);
                 }
 
                 // Error possibly reported in `check_assign` so avoid emitting error again.

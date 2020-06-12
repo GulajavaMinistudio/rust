@@ -699,6 +699,7 @@ impl<'cx, 'tcx> dataflow::ResultsVisitor<'cx, 'tcx> for MirBorrowckCtxt<'cx, 'tc
                 ref destination,
                 cleanup: _,
                 from_hir_call: _,
+                fn_span: _,
             } => {
                 self.consume_operand(loc, (func, span), flow_state);
                 for arg in args {
@@ -759,7 +760,7 @@ impl<'cx, 'tcx> dataflow::ResultsVisitor<'cx, 'tcx> for MirBorrowckCtxt<'cx, 'tc
                             }
                         }
                         InlineAsmOperand::SymFn { value: _ }
-                        | InlineAsmOperand::SymStatic { value: _ } => {}
+                        | InlineAsmOperand::SymStatic { def_id: _ } => {}
                     }
                 }
             }

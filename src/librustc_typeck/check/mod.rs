@@ -31,9 +31,6 @@ can be broken down into several distinct phases:
   final assignments of the various region variables if there is some
   flexibility.
 
-- vtable: find and records the impls to use for each trait bound that
-  appears on a type parameter.
-
 - writeback: writes the final types within a function body, replacing
   type variables with their final inferred types.  These final types
   are written into the `tcx.node_types` table, which should *never* contain
@@ -1049,7 +1046,7 @@ fn typeck_tables_of_with_fallback<'tcx>(
             // Gather locals in statics (because of block expressions).
             GatherLocalsVisitor { fcx: &fcx, parent_id: id }.visit_body(body);
 
-            fcx.check_expr_coercable_to_type(&body.value, revealed_ty);
+            fcx.check_expr_coercable_to_type(&body.value, revealed_ty, None);
 
             fcx.write_ty(id, revealed_ty);
 
@@ -3915,7 +3912,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                  sugg_unit: bool| {
             let (span, start_span, args) = match &expr.kind {
                 hir::ExprKind::Call(hir::Expr { span, .. }, args) => (*span, *span, &args[..]),
-                hir::ExprKind::MethodCall(path_segment, span, args) => (
+                hir::ExprKind::MethodCall(path_segment, span, args, _) => (
                     *span,
                     // `sp` doesn't point at the whole `foo.bar()`, only at `bar`.
                     path_segment
@@ -4070,7 +4067,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             debug!("check_closures={}", check_closures);
 
             // More awful hacks: before we check argument types, try to do
-            // an "opportunistic" vtable resolution of any trait bounds on
+            // an "opportunistic" trait resolution of any trait bounds on
             // the call. This helps coercions.
             if check_closures {
                 self.select_obligations_where_possible(false, |errors| {
@@ -4126,7 +4123,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let coerce_ty = expected.only_has_type(self).unwrap_or(formal_ty);
                 // We're processing function arguments so we definitely want to use
                 // two-phase borrows.
-                self.demand_coerce(&arg, checked_ty, coerce_ty, AllowTwoPhase::Yes);
+                self.demand_coerce(&arg, checked_ty, coerce_ty, None, AllowTwoPhase::Yes);
                 final_arg_types.push((i, checked_ty, coerce_ty));
 
                 // 3. Relate the expected type and the formal one,
@@ -4544,7 +4541,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.demand_eqtype(init.span, local_ty, init_ty);
             init_ty
         } else {
-            self.check_expr_coercable_to_type(init, local_ty)
+            self.check_expr_coercable_to_type(init, local_ty, None)
         }
     }
 
@@ -5030,6 +5027,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr: &hir::Expr<'_>,
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
+        expected_ty_expr: Option<&'tcx hir::Expr<'tcx>>,
     ) {
         if let Some((sp, msg, suggestion, applicability)) = self.check_ref(expr, found, expected) {
             err.span_suggestion(sp, msg, suggestion, applicability);
@@ -5040,7 +5038,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let sp = self.sess().source_map().guess_head_span(sp);
                 err.span_label(sp, &format!("{} defined here", found));
             }
-        } else if !self.check_for_cast(err, expr, found, expected) {
+        } else if !self.check_for_cast(err, expr, found, expected, expected_ty_expr) {
             let is_struct_pat_shorthand_field =
                 self.is_hir_id_from_struct_pattern_shorthand_field(expr.hir_id, expr.span);
             let methods = self.get_conversion_methods(expr.span, expected, found, expr.hir_id);
@@ -5094,7 +5092,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
     ) {
-        if self.tcx.hir().is_const_context(expr.hir_id) {
+        if self.tcx.hir().is_inside_const_context(expr.hir_id) {
             // Do not suggest `Box::new` in const context.
             return;
         }
@@ -5131,7 +5129,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) -> bool {
         // Handle #68197.
 
-        if self.tcx.hir().is_const_context(expr.hir_id) {
+        if self.tcx.hir().is_inside_const_context(expr.hir_id) {
             // Do not suggest `Box::new` in const context.
             return false;
         }
