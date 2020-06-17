@@ -1943,7 +1943,6 @@ fn check_specialization_validity<'tcx>(
     let kind = match impl_item.kind {
         hir::ImplItemKind::Const(..) => ty::AssocKind::Const,
         hir::ImplItemKind::Fn(..) => ty::AssocKind::Fn,
-        hir::ImplItemKind::OpaqueTy(..) => ty::AssocKind::OpaqueTy,
         hir::ImplItemKind::TyAlias(_) => ty::AssocKind::Type,
     };
 
@@ -2114,7 +2113,7 @@ fn check_impl_items_against_trait<'tcx>(
                         err.emit()
                     }
                 }
-                hir::ImplItemKind::OpaqueTy(..) | hir::ImplItemKind::TyAlias(_) => {
+                hir::ImplItemKind::TyAlias(_) => {
                     let opt_trait_span = tcx.hir().span_if_local(ty_trait_item.def_id);
                     if ty_trait_item.kind == ty::AssocKind::Type {
                         compare_ty_impl(
@@ -2367,8 +2366,6 @@ fn suggestion_signature(assoc: &ty::AssocItem, tcx: TyCtxt<'_>) -> String {
             )
         }
         ty::AssocKind::Type => format!("type {} = Type;", assoc.ident),
-        // FIXME(type_alias_impl_trait): we should print bounds here too.
-        ty::AssocKind::OpaqueTy => format!("type {} = Type;", assoc.ident),
         ty::AssocKind::Const => {
             let ty = tcx.type_of(assoc.def_id);
             let val = expr::ty_kind_suggestion(ty).unwrap_or("value");
@@ -2390,11 +2387,7 @@ fn check_representable(tcx: TyCtxt<'_>, sp: Span, item_def_id: LocalDefId) -> bo
     // caught by case 1.
     match rty.is_representable(tcx, sp) {
         Representability::SelfRecursive(spans) => {
-            let mut err = recursive_type_with_infinite_size_error(tcx, item_def_id.to_def_id());
-            for span in spans {
-                err.span_label(span, "recursive without indirection");
-            }
-            err.emit();
+            recursive_type_with_infinite_size_error(tcx, item_def_id.to_def_id(), spans);
             return false;
         }
         Representability::Representable | Representability::ContainsRecursive => (),
@@ -4225,7 +4218,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if let (Some(ref_in), None) = (referenced_in.pop(), referenced_in.pop()) {
                     // We make sure that only *one* argument matches the obligation failure
                     // and we assign the obligation's span to its expression's.
-                    error.obligation.cause.span = args[ref_in].span;
+                    error.obligation.cause.make_mut().span = args[ref_in].span;
                     error.points_at_arg_span = true;
                 }
             }
@@ -4268,7 +4261,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                         let ty = AstConv::ast_ty_to_ty(self, hir_ty);
                                         let ty = self.resolve_vars_if_possible(&ty);
                                         if ty == predicate.skip_binder().self_ty() {
-                                            error.obligation.cause.span = hir_ty.span;
+                                            error.obligation.cause.make_mut().span = hir_ty.span;
                                         }
                                     }
                                 }
@@ -5696,7 +5689,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         {
             // This makes the error point at the bound, but we want to point at the argument
             if let Some(span) = spans.get(i) {
-                obligation.cause.code = traits::BindingObligation(def_id, *span);
+                obligation.cause.make_mut().code = traits::BindingObligation(def_id, *span);
             }
             self.register_predicate(obligation);
         }
