@@ -4,7 +4,7 @@ use rustc_hir::def_id::CrateNum;
 use rustc_middle::middle::cstore::{EncodedMetadata, LibSource, NativeLib};
 use rustc_middle::middle::dependency_format::Linkage;
 use rustc_session::config::{self, CFGuard, CrateType, DebugInfo};
-use rustc_session::config::{OutputFilenames, OutputType, PrintRequest, Sanitizer};
+use rustc_session::config::{OutputFilenames, OutputType, PrintRequest, SanitizerSet};
 use rustc_session::output::{check_file_is_writeable, invalid_output_for_target, out_filename};
 use rustc_session::search_paths::PathKind;
 use rustc_session::utils::NativeLibKind;
@@ -766,23 +766,26 @@ fn link_natively<'a, B: ArchiveBuilder<'a>>(
     }
 }
 
-fn link_sanitizer_runtime(sess: &Session, crate_type: CrateType, linker: &mut dyn Linker) {
-    let sanitizer = match &sess.opts.debugging_opts.sanitizer {
-        Some(s) => s,
-        None => return,
-    };
-
+fn link_sanitizers(sess: &Session, crate_type: CrateType, linker: &mut dyn Linker) {
     if crate_type != CrateType::Executable {
         return;
     }
+    let sanitizer = sess.opts.debugging_opts.sanitizer;
+    if sanitizer.contains(SanitizerSet::ADDRESS) {
+        link_sanitizer_runtime(sess, linker, "asan");
+    }
+    if sanitizer.contains(SanitizerSet::LEAK) {
+        link_sanitizer_runtime(sess, linker, "lsan");
+    }
+    if sanitizer.contains(SanitizerSet::MEMORY) {
+        link_sanitizer_runtime(sess, linker, "msan");
+    }
+    if sanitizer.contains(SanitizerSet::THREAD) {
+        link_sanitizer_runtime(sess, linker, "tsan");
+    }
+}
 
-    let name = match sanitizer {
-        Sanitizer::Address => "asan",
-        Sanitizer::Leak => "lsan",
-        Sanitizer::Memory => "msan",
-        Sanitizer::Thread => "tsan",
-    };
-
+fn link_sanitizer_runtime(sess: &Session, linker: &mut dyn Linker, name: &str) {
     let default_sysroot = filesearch::get_or_default_sysroot();
     let default_tlib =
         filesearch::make_target_lib_path(&default_sysroot, sess.opts.target_triple.triple());
@@ -801,7 +804,10 @@ fn link_sanitizer_runtime(sess: &Session, crate_type: CrateType, linker: &mut dy
             linker.args(&["-Wl,-rpath", "-Xlinker", rpath]);
             linker.link_dylib(Symbol::intern(&libname));
         }
-        "x86_64-unknown-linux-gnu" | "x86_64-fuchsia" | "aarch64-fuchsia" => {
+        "aarch64-fuchsia"
+        | "aarch64-unknown-linux-gnu"
+        | "x86_64-fuchsia"
+        | "x86_64-unknown-linux-gnu" => {
             let filename = format!("librustc{}_rt.{}.a", channel, name);
             let path = default_tlib.join(&filename);
             linker.link_whole_rlib(&path);
@@ -1072,6 +1078,10 @@ fn get_object_file_path(sess: &Session, name: &str) -> PathBuf {
     }
     let fs = sess.target_filesearch(PathKind::Native);
     let file_path = fs.get_lib_path().join(name);
+    if file_path.exists() {
+        return file_path;
+    }
+    let file_path = fs.get_selfcontained_lib_path().join(name);
     if file_path.exists() {
         return file_path;
     }
@@ -1470,6 +1480,9 @@ fn add_library_search_dirs(cmd: &mut dyn Linker, sess: &Session) {
     // The location of crates will be determined as needed.
     let lib_path = sess.target_filesearch(PathKind::All).get_lib_path();
     cmd.include_path(&fix_windows_verbatim_for_gcc(&lib_path));
+
+    let lib_path = sess.target_filesearch(PathKind::All).get_selfcontained_lib_path();
+    cmd.include_path(&fix_windows_verbatim_for_gcc(&lib_path));
 }
 
 /// Add options making relocation sections in the produced ELF files read-only
@@ -1548,9 +1561,10 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
 
     // NO-OPT-OUT, OBJECT-FILES-NO, AUDIT-ORDER
     if sess.target.target.options.is_like_fuchsia && crate_type == CrateType::Executable {
-        let prefix = match sess.opts.debugging_opts.sanitizer {
-            Some(Sanitizer::Address) => "asan/",
-            _ => "",
+        let prefix = if sess.opts.debugging_opts.sanitizer.contains(SanitizerSet::ADDRESS) {
+            "asan/"
+        } else {
+            ""
         };
         cmd.arg(format!("--dynamic-linker={}ld.so.1", prefix));
     }
@@ -1574,7 +1588,7 @@ fn linker_with_args<'a, B: ArchiveBuilder<'a>>(
     }
 
     // OBJECT-FILES-YES, AUDIT-ORDER
-    link_sanitizer_runtime(sess, crate_type, cmd);
+    link_sanitizers(sess, crate_type, cmd);
 
     // OBJECT-FILES-NO, AUDIT-ORDER
     // Linker plugins should be specified early in the list of arguments

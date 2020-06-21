@@ -424,6 +424,12 @@ extern "C" void LLVMRustPrintTargetFeatures(LLVMTargetMachineRef TM) {
   printf("Available features for this target:\n");
   for (auto &Feature : FeatTable)
     printf("    %-*s - %s.\n", MaxFeatLen, Feature.Key, Feature.Desc);
+  printf("\nRust-specific features:\n");
+  printf("    %-*s - %s.\n",
+    MaxFeatLen,
+    "crt-static",
+    "Enables libraries with C Run-time Libraries(CRT) to be statically linked"
+  );
   printf("\n");
 
   printf("Use +feature to enable a feature, or -feature to disable it.\n"
@@ -711,11 +717,12 @@ enum class LLVMRustOptStage {
 };
 
 struct LLVMRustSanitizerOptions {
-  bool SanitizeMemory;
-  bool SanitizeThread;
   bool SanitizeAddress;
-  bool SanitizeRecover;
-  int SanitizeMemoryTrackOrigins;
+  bool SanitizeAddressRecover;
+  bool SanitizeMemory;
+  bool SanitizeMemoryRecover;
+  int  SanitizeMemoryTrackOrigins;
+  bool SanitizeThread;
 };
 
 extern "C" void
@@ -802,7 +809,7 @@ LLVMRustOptimizeWithNewPassManager(
     if (SanitizerOptions->SanitizeMemory) {
       MemorySanitizerOptions Options(
           SanitizerOptions->SanitizeMemoryTrackOrigins,
-          SanitizerOptions->SanitizeRecover,
+          SanitizerOptions->SanitizeMemoryRecover,
           /*CompileKernel=*/false);
 #if LLVM_VERSION_GE(10, 0)
       PipelineStartEPCallbacks.push_back([Options](ModulePassManager &MPM) {
@@ -836,14 +843,14 @@ LLVMRustOptimizeWithNewPassManager(
       OptimizerLastEPCallbacks.push_back(
         [SanitizerOptions](FunctionPassManager &FPM, PassBuilder::OptimizationLevel Level) {
           FPM.addPass(AddressSanitizerPass(
-              /*CompileKernel=*/false, SanitizerOptions->SanitizeRecover,
+              /*CompileKernel=*/false, SanitizerOptions->SanitizeAddressRecover,
               /*UseAfterScope=*/true));
         }
       );
       PipelineStartEPCallbacks.push_back(
         [SanitizerOptions](ModulePassManager &MPM) {
           MPM.addPass(ModuleAddressSanitizerPass(
-              /*CompileKernel=*/false, SanitizerOptions->SanitizeRecover));
+              /*CompileKernel=*/false, SanitizerOptions->SanitizeAddressRecover));
         }
       );
     }

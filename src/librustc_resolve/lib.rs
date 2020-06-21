@@ -38,7 +38,7 @@ use rustc_hir::def::{self, CtorOf, DefKind, NonMacroAttrKind, PartialRes};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, CRATE_DEF_INDEX};
 use rustc_hir::definitions::{DefKey, Definitions};
 use rustc_hir::PrimTy::{self, Bool, Char, Float, Int, Str, Uint};
-use rustc_hir::TraitMap;
+use rustc_hir::TraitCandidate;
 use rustc_metadata::creader::{CStore, CrateLoader};
 use rustc_middle::hir::exports::ExportMap;
 use rustc_middle::middle::cstore::{CrateStore, MetadataLoaderDyn};
@@ -225,13 +225,15 @@ enum VisResolutionError<'a> {
     ModuleOnly(Span),
 }
 
-// A minimal representation of a path segment. We use this in resolve because
-// we synthesize 'path segments' which don't have the rest of an AST or HIR
-// `PathSegment`.
+/// A minimal representation of a path segment. We use this in resolve because we synthesize 'path
+/// segments' which don't have the rest of an AST or HIR `PathSegment`.
 #[derive(Clone, Copy, Debug)]
 pub struct Segment {
     ident: Ident,
     id: Option<NodeId>,
+    /// Signals whether this `PathSegment` has generic arguments. Used to avoid providing
+    /// nonsensical suggestions.
+    has_generic_args: bool,
 }
 
 impl Segment {
@@ -240,7 +242,7 @@ impl Segment {
     }
 
     fn from_ident(ident: Ident) -> Segment {
-        Segment { ident, id: None }
+        Segment { ident, id: None, has_generic_args: false }
     }
 
     fn names_to_string(segments: &[Segment]) -> String {
@@ -250,7 +252,7 @@ impl Segment {
 
 impl<'a> From<&'a ast::PathSegment> for Segment {
     fn from(seg: &'a ast::PathSegment) -> Segment {
-        Segment { ident: seg.ident, id: Some(seg.id) }
+        Segment { ident: seg.ident, id: Some(seg.id), has_generic_args: seg.args.is_some() }
     }
 }
 
@@ -879,7 +881,7 @@ pub struct Resolver<'a> {
     /// `CrateNum` resolutions of `extern crate` items.
     extern_crate_map: FxHashMap<LocalDefId, CrateNum>,
     export_map: ExportMap<LocalDefId>,
-    trait_map: TraitMap<NodeId>,
+    trait_map: NodeMap<Vec<TraitCandidate>>,
 
     /// A map from nodes to anonymous modules.
     /// Anonymous modules are pseudo-modules that are implicitly created around items
@@ -1107,6 +1109,10 @@ impl rustc_ast_lowering::Resolver for Resolver<'_> {
     fn next_node_id(&mut self) -> NodeId {
         self.next_node_id()
     }
+
+    fn trait_map(&self) -> &NodeMap<Vec<TraitCandidate>> {
+        &self.trait_map
+    }
 }
 
 impl<'a> Resolver<'a> {
@@ -1282,18 +1288,6 @@ impl<'a> Resolver<'a> {
         let definitions = self.definitions;
         let extern_crate_map = self.extern_crate_map;
         let export_map = self.export_map;
-        let trait_map = self
-            .trait_map
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    definitions.node_id_to_hir_id(k),
-                    v.into_iter()
-                        .map(|tc| tc.map_import_ids(|id| definitions.node_id_to_hir_id(id)))
-                        .collect(),
-                )
-            })
-            .collect();
         let maybe_unused_trait_imports = self.maybe_unused_trait_imports;
         let maybe_unused_extern_crates = self.maybe_unused_extern_crates;
         let glob_map = self.glob_map;
@@ -1302,7 +1296,6 @@ impl<'a> Resolver<'a> {
             cstore: Box::new(self.crate_loader.into_cstore()),
             extern_crate_map,
             export_map,
-            trait_map,
             glob_map,
             maybe_unused_trait_imports,
             maybe_unused_extern_crates,
@@ -1320,21 +1313,6 @@ impl<'a> Resolver<'a> {
             cstore: Box::new(self.cstore().clone()),
             extern_crate_map: self.extern_crate_map.clone(),
             export_map: self.export_map.clone(),
-            trait_map: self
-                .trait_map
-                .iter()
-                .map(|(&k, v)| {
-                    (
-                        self.definitions.node_id_to_hir_id(k),
-                        v.iter()
-                            .cloned()
-                            .map(|tc| {
-                                tc.map_import_ids(|id| self.definitions.node_id_to_hir_id(id))
-                            })
-                            .collect(),
-                    )
-                })
-                .collect(),
             glob_map: self.glob_map.clone(),
             maybe_unused_trait_imports: self.maybe_unused_trait_imports.clone(),
             maybe_unused_extern_crates: self.maybe_unused_extern_crates.clone(),
@@ -2017,7 +1995,7 @@ impl<'a> Resolver<'a> {
             path, opt_ns, record_used, path_span, crate_lint,
         );
 
-        for (i, &Segment { ident, id }) in path.iter().enumerate() {
+        for (i, &Segment { ident, id, has_generic_args: _ }) in path.iter().enumerate() {
             debug!("resolve_path ident {} {:?} {:?}", i, ident, id);
             let record_segment_res = |this: &mut Self, res| {
                 if record_used {

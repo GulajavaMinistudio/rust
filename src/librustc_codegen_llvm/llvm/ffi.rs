@@ -439,11 +439,12 @@ pub enum OptStage {
 /// LLVMRustSanitizerOptions
 #[repr(C)]
 pub struct SanitizerOptions {
-    pub sanitize_memory: bool,
-    pub sanitize_thread: bool,
     pub sanitize_address: bool,
-    pub sanitize_recover: bool,
+    pub sanitize_address_recover: bool,
+    pub sanitize_memory: bool,
+    pub sanitize_memory_recover: bool,
     pub sanitize_memory_track_origins: c_int,
+    pub sanitize_thread: bool,
 }
 
 /// LLVMRelocMode
@@ -1360,6 +1361,7 @@ extern "C" {
 
     // Miscellaneous instructions
     pub fn LLVMBuildPhi(B: &Builder<'a>, Ty: &'a Type, Name: *const c_char) -> &'a Value;
+    pub fn LLVMRustGetInstrprofIncrementIntrinsic(M: &Module) -> &'a Value;
     pub fn LLVMRustBuildCall(
         B: &Builder<'a>,
         Fn: &'a Value,

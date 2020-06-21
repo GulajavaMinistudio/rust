@@ -35,7 +35,7 @@ use rustc_data_structures::sync::{self, Lock, Lrc, WorkerLocal};
 use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, DefIdSet, LocalDefId, LOCAL_CRATE};
+use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LOCAL_CRATE};
 use rustc_hir::definitions::{DefPathHash, Definitions};
 use rustc_hir::lang_items::{self, PanicLocationLangItem};
 use rustc_hir::{HirId, ItemKind, ItemLocalId, ItemLocalMap, ItemLocalSet, Node, TraitCandidate};
@@ -46,7 +46,7 @@ use rustc_session::lint::{Level, Lint};
 use rustc_session::Session;
 use rustc_span::source_map::MultiSpan;
 use rustc_span::symbol::{kw, sym, Symbol};
-use rustc_span::Span;
+use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::{Layout, TargetDataLayout, VariantIdx};
 use rustc_target::spec::abi;
 
@@ -143,9 +143,9 @@ pub struct CommonTypes<'tcx> {
     pub u128: Ty<'tcx>,
     pub f32: Ty<'tcx>,
     pub f64: Ty<'tcx>,
+    pub str_: Ty<'tcx>,
     pub never: Ty<'tcx>,
     pub self_param: Ty<'tcx>,
-    pub err: Ty<'tcx>,
 
     /// Dummy type used for the `Self` of a `TraitRef` created for converting
     /// a trait object, and which gets removed in `ExistentialTraitRef`.
@@ -391,7 +391,7 @@ pub struct TypeckTables<'tcx> {
     /// This is used for warning unused imports. During type
     /// checking, this `Lrc` should not be cloned: it must have a ref-count
     /// of 1 so that we can insert things into the set mutably.
-    pub used_trait_imports: Lrc<DefIdSet>,
+    pub used_trait_imports: Lrc<FxHashSet<LocalDefId>>,
 
     /// If any errors occurred while type-checking this body,
     /// this field will be set to `Some(ErrorReported)`.
@@ -803,7 +803,6 @@ impl<'tcx> CommonTypes<'tcx> {
             bool: mk(Bool),
             char: mk(Char),
             never: mk(Never),
-            err: mk(Error),
             isize: mk(Int(ast::IntTy::Isize)),
             i8: mk(Int(ast::IntTy::I8)),
             i16: mk(Int(ast::IntTy::I16)),
@@ -818,6 +817,7 @@ impl<'tcx> CommonTypes<'tcx> {
             u128: mk(Uint(ast::UintTy::U128)),
             f32: mk(Float(ast::FloatTy::F32)),
             f64: mk(Float(ast::FloatTy::F64)),
+            str_: mk(Str),
             self_param: mk(ty::Param(ty::ParamTy { index: 0, name: kw::SelfUpper })),
 
             trait_object_dummy_self: mk(Infer(ty::FreshTy(0))),
@@ -1101,9 +1101,9 @@ impl<'tcx> TyCtxt<'tcx> {
         };
 
         let mut trait_map: FxHashMap<_, FxHashMap<_, _>> = FxHashMap::default();
-        for (hir_id, v) in resolutions.trait_map.into_iter() {
+        for (hir_id, v) in krate.trait_map.iter() {
             let map = trait_map.entry(hir_id.owner).or_default();
-            map.insert(hir_id.local_id, StableVec::new(v));
+            map.insert(hir_id.local_id, StableVec::new(v.to_vec()));
         }
 
         GlobalCtxt {
@@ -1140,6 +1140,31 @@ impl<'tcx> TyCtxt<'tcx> {
             alloc_map: Lock::new(interpret::AllocMap::new()),
             output_filenames: Arc::new(output_filenames.clone()),
         }
+    }
+
+    /// Constructs a `TyKind::Error` type and registers a `delay_span_bug` to ensure it gets used.
+    #[track_caller]
+    pub fn ty_error(self) -> Ty<'tcx> {
+        self.ty_error_with_message(DUMMY_SP, "TyKind::Error constructed but no error reported")
+    }
+
+    /// Constructs a `TyKind::Error` type and registers a `delay_span_bug` with the given `msg to
+    /// ensure it gets used.
+    #[track_caller]
+    pub fn ty_error_with_message<S: Into<MultiSpan>>(self, span: S, msg: &str) -> Ty<'tcx> {
+        self.sess.delay_span_bug(span, msg);
+        self.mk_ty(Error(super::sty::DelaySpanBugEmitted(())))
+    }
+
+    /// Like `err` but for constants.
+    #[track_caller]
+    pub fn const_error(self, ty: Ty<'tcx>) -> &'tcx Const<'tcx> {
+        self.sess
+            .delay_span_bug(DUMMY_SP, "ty::ConstKind::Error constructed but no error reported.");
+        self.mk_const(ty::Const {
+            val: ty::ConstKind::Error(super::sty::DelaySpanBugEmitted(())),
+            ty,
+        })
     }
 
     pub fn consider_optimizing<T: Fn() -> String>(&self, msg: T) -> bool {
@@ -1382,7 +1407,10 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
-    pub fn return_type_impl_or_dyn_trait(&self, scope_def_id: DefId) -> Option<(Span, bool)> {
+    pub fn return_type_impl_or_dyn_trait(
+        &self,
+        scope_def_id: DefId,
+    ) -> Option<&'tcx hir::Ty<'tcx>> {
         let hir_id = self.hir().as_local_hir_id(scope_def_id.expect_local());
         let hir_output = match self.hir().get(hir_id) {
             Node::Item(hir::Item {
@@ -1428,15 +1456,17 @@ impl<'tcx> TyCtxt<'tcx> {
                 let output = self.erase_late_bound_regions(&sig.output());
                 if output.is_impl_trait() {
                     let fn_decl = self.hir().fn_decl_by_hir_id(hir_id).unwrap();
-                    Some((fn_decl.output.span(), false))
+                    if let hir::FnRetTy::Return(ty) = fn_decl.output {
+                        return Some(ty);
+                    }
                 } else {
                     let mut v = TraitObjectVisitor(vec![]);
                     rustc_hir::intravisit::walk_ty(&mut v, hir_output);
                     if v.0.len() == 1 {
-                        return Some((v.0[0], true));
+                        return Some(v.0[0]);
                     }
-                    None
                 }
+                None
             }
             _ => None,
         }
@@ -1845,7 +1875,7 @@ macro_rules! sty_debug_print {
                     let variant = match t.kind {
                         ty::Bool | ty::Char | ty::Int(..) | ty::Uint(..) |
                             ty::Float(..) | ty::Str | ty::Never => continue,
-                        ty::Error => /* unimportant */ continue,
+                        ty::Error(_) => /* unimportant */ continue,
                         $(ty::$variant(..) => &mut $variant,)*
                     };
                     let lt = t.flags.intersects(ty::TypeFlags::HAS_RE_INFER);
@@ -2080,6 +2110,13 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
+    /// Same a `self.mk_region(kind)`, but avoids accessing the interners if
+    /// `*r == kind`.
+    #[inline]
+    pub fn reuse_or_mk_region(self, r: Region<'tcx>, kind: RegionKind) -> Region<'tcx> {
+        if *r == kind { r } else { self.mk_region(kind) }
+    }
+
     #[allow(rustc::usage_of_ty_tykind)]
     #[inline]
     pub fn mk_ty(&self, st: TyKind<'tcx>) -> Ty<'tcx> {
@@ -2122,13 +2159,8 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn mk_str(self) -> Ty<'tcx> {
-        self.mk_ty(Str)
-    }
-
-    #[inline]
     pub fn mk_static_str(self) -> Ty<'tcx> {
-        self.mk_imm_ref(self.lifetimes.re_static, self.mk_str())
+        self.mk_imm_ref(self.lifetimes.re_static, self.types.str_)
     }
 
     #[inline]

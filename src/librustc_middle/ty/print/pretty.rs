@@ -518,7 +518,7 @@ pub trait PrettyPrinter<'tcx>:
                     p!(write("{}", infer_ty))
                 }
             }
-            ty::Error => p!(write("[type error]")),
+            ty::Error(_) => p!(write("[type error]")),
             ty::Param(ref param_ty) => p!(write("{}", param_ty)),
             ty::Bound(debruijn, bound_ty) => match bound_ty.kind {
                 ty::BoundTyKind::Anon => self.pretty_print_bound_var(debruijn, bound_ty.var)?,
@@ -919,7 +919,7 @@ pub trait PrettyPrinter<'tcx>:
                 self.pretty_print_bound_var(debruijn, bound_var)?
             }
             ty::ConstKind::Placeholder(placeholder) => p!(write("Placeholder({:?})", placeholder)),
-            ty::ConstKind::Error => p!(write("[const error]")),
+            ty::ConstKind::Error(_) => p!(write("[const error]")),
         };
         Ok(self)
     }
@@ -1177,8 +1177,13 @@ pub trait PrettyPrinter<'tcx>:
                         }
                         p!(write(")"));
                     }
+                    ty::Adt(def, substs) if def.variants.is_empty() => {
+                        p!(print_value_path(def.did, substs));
+                    }
                     ty::Adt(def, substs) => {
-                        let variant_def = &def.variants[contents.variant];
+                        let variant_id =
+                            contents.variant.expect("destructed const of adt without variant id");
+                        let variant_def = &def.variants[variant_id];
                         p!(print_value_path(variant_def.def_id, substs));
 
                         match variant_def.ctor_kind {
