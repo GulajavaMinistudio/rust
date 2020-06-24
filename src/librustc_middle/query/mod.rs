@@ -231,6 +231,12 @@ rustc_queries! {
             cache_on_disk_if { key.is_local() }
         }
 
+        query coverage_data(key: DefId) -> mir::CoverageData {
+            desc { |tcx| "retrieving coverage data from MIR for `{}`", tcx.def_path_str(key) }
+            storage(ArenaCacheSelector<'tcx>)
+            cache_on_disk_if { key.is_local() }
+        }
+
         query promoted_mir(key: DefId) -> IndexVec<mir::Promoted, mir::Body<'tcx>> {
             desc { |tcx| "optimizing promoted MIR for `{}`", tcx.def_path_str(key) }
             storage(ArenaCacheSelector<'tcx>)
@@ -723,7 +729,7 @@ rustc_queries! {
     }
 
     Other {
-        query fn_arg_names(def_id: DefId) -> &'tcx [rustc_span::symbol::Ident] {
+        query fn_arg_names(def_id: DefId) -> &'tcx [Symbol] {
             desc { |tcx| "looking up function parameter names for `{}`", tcx.def_path_str(def_id) }
         }
         /// Gets the rendered value of the specified constant or associated constant.
