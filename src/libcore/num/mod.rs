@@ -457,13 +457,13 @@ $EndFeature, "
 Basic usage:
 
 ```
-", $Feature, "#![feature(leading_trailing_ones)]
-let n = -1", stringify!($SelfT), ";
+", $Feature, "let n = -1", stringify!($SelfT), ";
 
 assert_eq!(n.leading_ones(), ", stringify!($BITS), ");",
 $EndFeature, "
 ```"),
-            #[unstable(feature = "leading_trailing_ones", issue = "57969")]
+            #[stable(feature = "leading_trailing_ones", since = "1.46.0")]
+            #[rustc_const_stable(feature = "leading_trailing_ones", since = "1.46.0")]
             #[inline]
             pub const fn leading_ones(self) -> u32 {
                 (self as $UnsignedT).leading_ones()
@@ -478,13 +478,13 @@ $EndFeature, "
 Basic usage:
 
 ```
-", $Feature, "#![feature(leading_trailing_ones)]
-let n = 3", stringify!($SelfT), ";
+", $Feature, "let n = 3", stringify!($SelfT), ";
 
 assert_eq!(n.trailing_ones(), 2);",
 $EndFeature, "
 ```"),
-            #[unstable(feature = "leading_trailing_ones", issue = "57969")]
+            #[stable(feature = "leading_trailing_ones", since = "1.46.0")]
+            #[rustc_const_stable(feature = "leading_trailing_ones", since = "1.46.0")]
             #[inline]
             pub const fn trailing_ones(self) -> u32 {
                 (self as $UnsignedT).trailing_ones()
@@ -1578,7 +1578,7 @@ $EndFeature, "
             #[stable(feature = "no_panic_abs", since = "1.13.0")]
             #[rustc_const_stable(feature = "const_int_methods", since = "1.32.0")]
             #[allow(unused_attributes)]
-            #[allow_internal_unstable(const_if_match)]
+            #[cfg_attr(bootstrap, allow_internal_unstable(const_if_match))]
             #[inline]
             pub const fn wrapping_abs(self) -> Self {
                  if self.is_negative() {
@@ -1867,7 +1867,7 @@ assert_eq!(", stringify!($SelfT), "::MIN.overflowing_neg(), (", stringify!($Self
             #[stable(feature = "wrapping", since = "1.7.0")]
             #[rustc_const_stable(feature = "const_int_methods", since = "1.32.0")]
             #[allow(unused_attributes)]
-            #[allow_internal_unstable(const_if_match)]
+            #[cfg_attr(bootstrap, allow_internal_unstable(const_if_match))]
             pub const fn overflowing_neg(self) -> (Self, bool) {
                 if self == Self::MIN {
                     (Self::MIN, true)
@@ -2160,7 +2160,7 @@ $EndFeature, "
             #[stable(feature = "rust1", since = "1.0.0")]
             #[rustc_const_stable(feature = "const_int_methods", since = "1.32.0")]
             #[allow(unused_attributes)]
-            #[allow_internal_unstable(const_if_match)]
+            #[cfg_attr(bootstrap, allow_internal_unstable(const_if_match))]
             #[inline]
             #[rustc_inherit_overflow_checks]
             pub const fn abs(self) -> Self {
@@ -2695,12 +2695,12 @@ assert_eq!(n.trailing_zeros(), 3);", $EndFeature, "
 Basic usage:
 
 ```
-", $Feature, "#![feature(leading_trailing_ones)]
-let n = !(", stringify!($SelfT), "::MAX >> 2);
+", $Feature, "let n = !(", stringify!($SelfT), "::MAX >> 2);
 
 assert_eq!(n.leading_ones(), 2);", $EndFeature, "
 ```"),
-            #[unstable(feature = "leading_trailing_ones", issue = "57969")]
+            #[stable(feature = "leading_trailing_ones", since = "1.46.0")]
+            #[rustc_const_stable(feature = "leading_trailing_ones", since = "1.46.0")]
             #[inline]
             pub const fn leading_ones(self) -> u32 {
                 (!self).leading_zeros()
@@ -2716,12 +2716,12 @@ of `self`.
 Basic usage:
 
 ```
-", $Feature, "#![feature(leading_trailing_ones)]
-let n = 0b1010111", stringify!($SelfT), ";
+", $Feature, "let n = 0b1010111", stringify!($SelfT), ";
 
 assert_eq!(n.trailing_ones(), 3);", $EndFeature, "
 ```"),
-            #[unstable(feature = "leading_trailing_ones", issue = "57969")]
+            #[stable(feature = "leading_trailing_ones", since = "1.46.0")]
+            #[rustc_const_stable(feature = "leading_trailing_ones", since = "1.46.0")]
             #[inline]
             pub const fn trailing_ones(self) -> u32 {
                 (!self).trailing_zeros()
