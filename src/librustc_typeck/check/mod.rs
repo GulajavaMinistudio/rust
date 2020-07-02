@@ -1126,7 +1126,7 @@ fn typeck_tables_of_with_fallback<'tcx>(
 
     // Consistency check our TypeckTables instance can hold all ItemLocalIds
     // it will need to hold.
-    assert_eq!(tables.hir_owner, Some(id.owner));
+    assert_eq!(tables.hir_owner, id.owner);
 
     tables
 }
@@ -2446,7 +2446,7 @@ fn bounds_from_generic_predicates(
 /// Return placeholder code for the given function.
 fn fn_sig_suggestion(
     tcx: TyCtxt<'_>,
-    sig: &ty::FnSig<'_>,
+    sig: ty::FnSig<'_>,
     ident: Ident,
     predicates: ty::GenericPredicates<'_>,
     assoc: &ty::AssocItem,

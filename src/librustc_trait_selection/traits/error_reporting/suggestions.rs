@@ -1179,7 +1179,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     ) -> DiagnosticBuilder<'tcx> {
         crate fn build_fn_sig_string<'tcx>(
             tcx: TyCtxt<'tcx>,
-            trait_ref: &ty::TraitRef<'tcx>,
+            trait_ref: ty::TraitRef<'tcx>,
         ) -> String {
             let inputs = trait_ref.substs.type_at(1);
             let sig = if let ty::Tuple(inputs) = inputs.kind {
@@ -1360,7 +1360,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         }
                         ty::GeneratorWitness(..) => {}
                         _ if generator.is_none() => {
-                            trait_ref = Some(*derived_obligation.parent_trait_ref.skip_binder());
+                            trait_ref = Some(derived_obligation.parent_trait_ref.skip_binder());
                             target_ty = Some(ty);
                         }
                         _ => {}
@@ -1407,7 +1407,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         );
         let query_tables;
         let tables: &TypeckTables<'tcx> = match &in_progress_tables {
-            Some(t) if t.hir_owner.map(|owner| owner.to_def_id()) == Some(generator_did_root) => t,
+            Some(t) if t.hir_owner.to_def_id() == generator_did_root => t,
             _ => {
                 query_tables = self.tcx.typeck_tables_of(generator_did.expect_local());
                 &query_tables
