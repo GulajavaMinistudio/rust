@@ -419,8 +419,7 @@ impl<T> Arc<T> {
     #[inline]
     #[stable(feature = "arc_unique", since = "1.4.0")]
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
-        // See `drop` for why all these atomics are like this
-        if this.inner().strong.compare_exchange(1, 0, Release, Relaxed).is_err() {
+        if this.inner().strong.compare_exchange(1, 0, Relaxed, Relaxed).is_err() {
             return Err(this);
         }
 
@@ -588,7 +587,7 @@ impl<T: ?Sized> Arc<T> {
     /// assert_eq!(x_ptr, Arc::as_ptr(&y));
     /// assert_eq!(unsafe { &*x_ptr }, "hello");
     /// ```
-    #[stable(feature = "weak_into_raw", since = "1.45.0")]
+    #[stable(feature = "rc_as_ptr", since = "1.45.0")]
     pub fn as_ptr(this: &Self) -> *const T {
         let ptr: *mut ArcInner<T> = NonNull::as_ptr(this.ptr);
 
