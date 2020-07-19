@@ -107,7 +107,7 @@ fn reachable_non_generics_provider(tcx: TyCtxt<'_>, cnum: CrateNum) -> DefIdMap<
         })
         .map(|def_id| {
             let export_level = if special_runtime_crate {
-                let name = tcx.symbol_name(Instance::mono(tcx, def_id.to_def_id())).name.as_str();
+                let name = tcx.symbol_name(Instance::mono(tcx, def_id.to_def_id())).name;
                 // We can probably do better here by just ensuring that
                 // it has hidden visibility rather than public
                 // visibility, as this is primarily here to ensure it's
@@ -115,13 +115,12 @@ fn reachable_non_generics_provider(tcx: TyCtxt<'_>, cnum: CrateNum) -> DefIdMap<
                 //
                 // In general though we won't link right if these
                 // symbols are stripped, and LTO currently strips them.
-                if name == "rust_eh_personality"
-                    || name == "rust_eh_register_frames"
-                    || name == "rust_eh_unregister_frames"
-                {
-                    SymbolExportLevel::C
-                } else {
-                    SymbolExportLevel::Rust
+                match name {
+                    "rust_eh_personality"
+                    | "rust_eh_register_frames"
+                    | "rust_eh_unregister_frames" =>
+                        SymbolExportLevel::C,
+                    _ => SymbolExportLevel::Rust,
                 }
             } else {
                 symbol_export_level(tcx, def_id.to_def_id())
@@ -177,7 +176,7 @@ fn exported_symbols_provider_local(
         .collect();
 
     if tcx.entry_fn(LOCAL_CRATE).is_some() {
-        let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new("main"));
+        let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(tcx, "main"));
 
         symbols.push((exported_symbol, SymbolExportLevel::C));
     }
@@ -185,7 +184,7 @@ fn exported_symbols_provider_local(
     if tcx.allocator_kind().is_some() {
         for method in ALLOCATOR_METHODS {
             let symbol_name = format!("__rust_{}", method.name);
-            let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(&symbol_name));
+            let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(tcx, &symbol_name));
 
             symbols.push((exported_symbol, SymbolExportLevel::Rust));
         }
@@ -199,7 +198,18 @@ fn exported_symbols_provider_local(
             ["__llvm_profile_raw_version", "__llvm_profile_filename"];
 
         symbols.extend(PROFILER_WEAK_SYMBOLS.iter().map(|sym| {
-            let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(sym));
+            let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(tcx, sym));
+            (exported_symbol, SymbolExportLevel::C)
+        }));
+    }
+
+    if tcx.sess.opts.debugging_opts.instrument_coverage {
+        // Similar to PGO profiling, preserve symbols used by LLVM InstrProf coverage profiling.
+        const COVERAGE_WEAK_SYMBOLS: [&str; 3] =
+            ["__llvm_profile_filename", "__llvm_coverage_mapping", "__llvm_covmap"];
+
+        symbols.extend(COVERAGE_WEAK_SYMBOLS.iter().map(|sym| {
+            let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(tcx, sym));
             (exported_symbol, SymbolExportLevel::C)
         }));
     }
@@ -209,14 +219,14 @@ fn exported_symbols_provider_local(
         const MSAN_WEAK_SYMBOLS: [&str; 2] = ["__msan_track_origins", "__msan_keep_going"];
 
         symbols.extend(MSAN_WEAK_SYMBOLS.iter().map(|sym| {
-            let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(sym));
+            let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(tcx, sym));
             (exported_symbol, SymbolExportLevel::C)
         }));
     }
 
     if tcx.sess.crate_types().contains(&CrateType::Dylib) {
         let symbol_name = metadata_symbol_name(tcx);
-        let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(&symbol_name));
+        let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(tcx, &symbol_name));
 
         symbols.push((exported_symbol, SymbolExportLevel::Rust));
     }
@@ -249,9 +259,9 @@ fn exported_symbols_provider_local(
             }
 
             match *mono_item {
-                MonoItem::Fn(Instance { def: InstanceDef::Item(def_id), substs }) => {
+                MonoItem::Fn(Instance { def: InstanceDef::Item(def), substs }) => {
                     if substs.non_erasable_generics().next().is_some() {
-                        let symbol = ExportedSymbol::Generic(def_id, substs);
+                        let symbol = ExportedSymbol::Generic(def.did, substs);
                         symbols.push((symbol, SymbolExportLevel::Rust));
                     }
                 }

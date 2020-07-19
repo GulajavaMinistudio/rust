@@ -480,10 +480,12 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
 
         let mut bad_struct_syntax_suggestion = |def_id: DefId| {
             let (followed_by_brace, closing_brace) = self.followed_by_brace(span);
-            let mut suggested = false;
+
             match source {
-                PathSource::Expr(Some(parent)) => {
-                    suggested = path_sep(err, &parent);
+                PathSource::Expr(Some(
+                    parent @ Expr { kind: ExprKind::Field(..) | ExprKind::MethodCall(..), .. },
+                )) => {
+                    path_sep(err, &parent);
                 }
                 PathSource::Expr(None) if followed_by_brace => {
                     if let Some(sp) = closing_brace {
@@ -505,15 +507,56 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
                             ),
                         );
                     }
-                    suggested = true;
+                }
+                PathSource::Expr(
+                    None | Some(Expr { kind: ExprKind::Call(..) | ExprKind::Path(..), .. }),
+                )
+                | PathSource::TupleStruct(_)
+                | PathSource::Pat => {
+                    let span = match &source {
+                        PathSource::Expr(Some(Expr {
+                            span, kind: ExprKind::Call(_, _), ..
+                        }))
+                        | PathSource::TupleStruct(span) => {
+                            // We want the main underline to cover the suggested code as well for
+                            // cleaner output.
+                            err.set_span(*span);
+                            *span
+                        }
+                        _ => span,
+                    };
+                    if let Some(span) = self.r.opt_span(def_id) {
+                        err.span_label(span, &format!("`{}` defined here", path_str));
+                    }
+                    let (tail, descr, applicability) = match source {
+                        PathSource::Pat | PathSource::TupleStruct(_) => {
+                            ("", "pattern", Applicability::MachineApplicable)
+                        }
+                        _ => (": val", "literal", Applicability::HasPlaceholders),
+                    };
+                    let (fields, applicability) = match self.r.field_names.get(&def_id) {
+                        Some(fields) => (
+                            fields
+                                .iter()
+                                .map(|f| format!("{}{}", f.node, tail))
+                                .collect::<Vec<String>>()
+                                .join(", "),
+                            applicability,
+                        ),
+                        None => ("/* fields */".to_string(), Applicability::HasPlaceholders),
+                    };
+                    let pad = match self.r.field_names.get(&def_id) {
+                        Some(fields) if fields.is_empty() => "",
+                        _ => " ",
+                    };
+                    err.span_suggestion(
+                        span,
+                        &format!("use struct {} syntax instead", descr),
+                        format!("{} {{{pad}{}{pad}}}", path_str, fields, pad = pad),
+                        applicability,
+                    );
                 }
                 _ => {}
-            }
-            if !suggested {
-                if let Some(span) = self.r.opt_span(def_id) {
-                    err.span_label(span, &format!("`{}` defined here", path_str));
-                }
-                err.span_label(span, format!("did you mean `{} {{ /* fields */ }}`?", path_str));
             }
         };
 
@@ -546,7 +589,10 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
                     return false;
                 }
             }
-            (Res::Def(DefKind::Enum, def_id), PathSource::TupleStruct | PathSource::Expr(..)) => {
+            (
+                Res::Def(DefKind::Enum, def_id),
+                PathSource::TupleStruct(_) | PathSource::Expr(..),
+            ) => {
                 if let Some(variants) = self.collect_enum_variants(def_id) {
                     if !variants.is_empty() {
                         let msg = if variants.len() == 1 {
@@ -714,10 +760,8 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
                         if !module.no_implicit_prelude {
                             let extern_prelude = self.r.extern_prelude.clone();
                             names.extend(extern_prelude.iter().flat_map(|(ident, _)| {
-                                self.r
-                                    .crate_loader
-                                    .maybe_process_path_extern(ident.name, ident.span)
-                                    .and_then(|crate_id| {
+                                self.r.crate_loader.maybe_process_path_extern(ident.name).and_then(
+                                    |crate_id| {
                                         let crate_mod = Res::Def(
                                             DefKind::Mod,
                                             DefId { krate: crate_id, index: CRATE_DEF_INDEX },
@@ -728,7 +772,8 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
                                         } else {
                                             None
                                         }
-                                    })
+                                    },
+                                )
                             }));
 
                             if let Some(prelude) = self.r.prelude {
@@ -765,7 +810,7 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
 
         match find_best_match_for_name(
             names.iter().map(|suggestion| &suggestion.candidate),
-            &name.as_str(),
+            name,
             None,
         ) {
             Some(found) if found != name => {
@@ -1008,7 +1053,7 @@ impl<'a> LateResolutionVisitor<'a, '_, '_> {
             .filter(|(id, _)| id.span.ctxt() == label.span.ctxt())
             .map(|(id, _)| &id.name);
 
-        find_best_match_for_name(names, &label.as_str(), None).map(|symbol| {
+        find_best_match_for_name(names, label.name, None).map(|symbol| {
             // Upon finding a similar name, get the ident that it was from - the span
             // contained within helps make a useful diagnostic. In addition, determine
             // whether this candidate is within scope.

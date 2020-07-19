@@ -321,7 +321,7 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
             }
         } else {
             let tcx = self.tcx();
-            if let ty::ConstKind::Unevaluated(def_id, substs, promoted) = constant.literal.val {
+            if let ty::ConstKind::Unevaluated(def, substs, promoted) = constant.literal.val {
                 if let Some(promoted) = promoted {
                     let check_err = |verifier: &mut TypeVerifier<'a, 'b, 'tcx>,
                                      promoted: &Body<'tcx>,
@@ -357,7 +357,7 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
                         ConstraintCategory::Boring,
                         self.cx.param_env.and(type_op::ascribe_user_type::AscribeUserType::new(
                             constant.literal.ty,
-                            def_id,
+                            def.did,
                             UserSubsts { substs, user_self_ty: None },
                         )),
                     ) {
@@ -1239,7 +1239,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         let tcx = infcx.tcx;
         let param_env = self.param_env;
         let body = self.body;
-        let concrete_opaque_types = &tcx.typeck_tables_of(anon_owner_def_id).concrete_opaque_types;
+        let concrete_opaque_types = &tcx.typeck(anon_owner_def_id).concrete_opaque_types;
         let mut opaque_type_values = Vec::new();
 
         debug!("eq_opaque_type_and_type: mir_def_id={:?}", self.mir_def_id);

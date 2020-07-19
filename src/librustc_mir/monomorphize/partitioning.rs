@@ -161,7 +161,7 @@ where
 
     // Next we try to make as many symbols "internal" as possible, so LLVM has
     // more freedom to optimize.
-    if !tcx.sess.opts.cg.link_dead_code {
+    if tcx.sess.opts.cg.link_dead_code != Some(true) {
         let _prof_timer = tcx.prof.generic_activity("cgu_partitioning_internalize_symbols");
         internalize_symbols(tcx, &mut post_inlining, inlining_map);
     }
@@ -314,7 +314,8 @@ fn mono_item_visibility(
     };
 
     let def_id = match instance.def {
-        InstanceDef::Item(def_id) | InstanceDef::DropGlue(def_id, Some(_)) => def_id,
+        InstanceDef::Item(def) => def.did,
+        InstanceDef::DropGlue(def_id, Some(_)) => def_id,
 
         // These are all compiler glue and such, never exported, always hidden.
         InstanceDef::VtableShim(..)
@@ -704,7 +705,7 @@ fn characteristic_def_id_of_mono_item<'tcx>(
     match mono_item {
         MonoItem::Fn(instance) => {
             let def_id = match instance.def {
-                ty::InstanceDef::Item(def_id) => def_id,
+                ty::InstanceDef::Item(def) => def.did,
                 ty::InstanceDef::VtableShim(..)
                 | ty::InstanceDef::ReifyShim(..)
                 | ty::InstanceDef::FnPtrShim(..)
@@ -817,7 +818,7 @@ where
             debug!("CodegenUnit {} estimated size {} :", cgu.name(), cgu.size_estimate());
 
             for (mono_item, linkage) in cgu.items() {
-                let symbol_name = mono_item.symbol_name(tcx).name.as_str();
+                let symbol_name = mono_item.symbol_name(tcx).name;
                 let symbol_hash_start = symbol_name.rfind('h');
                 let symbol_hash =
                     symbol_hash_start.map(|i| &symbol_name[i..]).unwrap_or("<no hash>");
@@ -905,7 +906,7 @@ fn collect_and_partition_mono_items(
             }
         }
         None => {
-            if tcx.sess.opts.cg.link_dead_code {
+            if tcx.sess.opts.cg.link_dead_code == Some(true) {
                 MonoItemCollectionMode::Eager
             } else {
                 MonoItemCollectionMode::Lazy

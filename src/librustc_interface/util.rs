@@ -53,7 +53,7 @@ pub fn add_configuration(
     cfg.extend(target_features.into_iter().map(|feat| (tf, Some(feat))));
 
     if sess.crt_static(None) {
-        cfg.insert((tf, Some(Symbol::intern("crt-static"))));
+        cfg.insert((tf, Some(sym::crt_dash_static)));
     }
 }
 
@@ -235,13 +235,8 @@ pub fn get_codegen_backend(sess: &Session) -> Box<dyn CodegenBackend> {
     static mut LOAD: fn() -> Box<dyn CodegenBackend> = || unreachable!();
 
     INIT.call_once(|| {
-        let codegen_name = sess
-            .opts
-            .debugging_opts
-            .codegen_backend
-            .as_ref()
-            .unwrap_or(&sess.target.target.options.codegen_backend);
-        let backend = match &codegen_name[..] {
+        let codegen_name = sess.opts.debugging_opts.codegen_backend.as_deref().unwrap_or("llvm");
+        let backend = match codegen_name {
             filename if filename.contains('.') => load_backend_from_dylib(filename.as_ref()),
             codegen_name => get_builtin_codegen_backend(codegen_name),
         };
@@ -427,11 +422,8 @@ pub(crate) fn check_attr_crate_type(attrs: &[ast::Attribute], lint_buffer: &mut 
 
                 if let ast::MetaItemKind::NameValue(spanned) = a.meta().unwrap().kind {
                     let span = spanned.span;
-                    let lev_candidate = find_best_match_for_name(
-                        CRATE_TYPES.iter().map(|(k, _)| k),
-                        &n.as_str(),
-                        None,
-                    );
+                    let lev_candidate =
+                        find_best_match_for_name(CRATE_TYPES.iter().map(|(k, _)| k), n, None);
                     if let Some(candidate) = lev_candidate {
                         lint_buffer.buffer_lint_with_diagnostic(
                             lint::builtin::UNKNOWN_CRATE_TYPES,

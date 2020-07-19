@@ -193,11 +193,11 @@ enum ResolutionError<'a> {
     /// Error E0409: variable `{}` is bound in inconsistent ways within the same match arm.
     VariableBoundWithDifferentMode(Symbol, Span),
     /// Error E0415: identifier is bound more than once in this parameter list.
-    IdentifierBoundMoreThanOnceInParameterList(&'a str),
+    IdentifierBoundMoreThanOnceInParameterList(Symbol),
     /// Error E0416: identifier is bound more than once in the same pattern.
-    IdentifierBoundMoreThanOnceInSamePattern(&'a str),
+    IdentifierBoundMoreThanOnceInSamePattern(Symbol),
     /// Error E0426: use of undeclared label.
-    UndeclaredLabel { name: &'a str, suggestion: Option<LabelSuggestion> },
+    UndeclaredLabel { name: Symbol, suggestion: Option<LabelSuggestion> },
     /// Error E0429: `self` imports are only allowed within a `{ }` list.
     SelfImportsOnlyAllowedWithin { root: bool, span_with_rename: Span },
     /// Error E0430: `self` import can only appear once in the list.
@@ -211,13 +211,15 @@ enum ResolutionError<'a> {
     /// Error E0435: attempt to use a non-constant value in a constant.
     AttemptToUseNonConstantValueInConstant,
     /// Error E0530: `X` bindings cannot shadow `Y`s.
-    BindingShadowsSomethingUnacceptable(&'a str, Symbol, &'a NameBinding<'a>),
+    BindingShadowsSomethingUnacceptable(&'static str, Symbol, &'a NameBinding<'a>),
     /// Error E0128: type parameters with a default cannot use forward-declared identifiers.
     ForwardDeclaredTyParam, // FIXME(const_generics:defaults)
+    /// ERROR E0770: the type of const parameters must not depend on other generic parameters.
+    ParamInTyOfConstArg(Symbol),
     /// Error E0735: type parameters with a default cannot use `Self`
     SelfInTyParamDefault,
     /// Error E0767: use of unreachable label
-    UnreachableLabel { name: &'a str, definition_span: Span, suggestion: Option<LabelSuggestion> },
+    UnreachableLabel { name: Symbol, definition_span: Span, suggestion: Option<LabelSuggestion> },
 }
 
 enum VisResolutionError<'a> {
@@ -2480,6 +2482,12 @@ impl<'a> Resolver<'a> {
                             }
                             return Res::Err;
                         }
+                        ConstParamTyRibKind => {
+                            if record_used {
+                                self.report_error(span, ParamInTyOfConstArg(rib_ident.name));
+                            }
+                            return Res::Err;
+                        }
                     }
                 }
                 if let Some(res_err) = res_err {
@@ -2503,6 +2511,15 @@ impl<'a> Resolver<'a> {
                         // This was an attempt to use a type parameter outside its scope.
                         ItemRibKind(has_generic_params) => has_generic_params,
                         FnItemRibKind => HasGenericParams::Yes,
+                        ConstParamTyRibKind => {
+                            if record_used {
+                                self.report_error(
+                                    span,
+                                    ResolutionError::ParamInTyOfConstArg(rib_ident.name),
+                                );
+                            }
+                            return Res::Err;
+                        }
                     };
 
                     if record_used {
@@ -2527,9 +2544,24 @@ impl<'a> Resolver<'a> {
                 }
                 for rib in ribs {
                     let has_generic_params = match rib.kind {
+                        NormalRibKind
+                        | ClosureOrAsyncRibKind
+                        | AssocItemRibKind
+                        | ModuleRibKind(..)
+                        | MacroDefinition(..)
+                        | ForwardTyParamBanRibKind
+                        | ConstantItemRibKind => continue,
                         ItemRibKind(has_generic_params) => has_generic_params,
                         FnItemRibKind => HasGenericParams::Yes,
-                        _ => continue,
+                        ConstParamTyRibKind => {
+                            if record_used {
+                                self.report_error(
+                                    span,
+                                    ResolutionError::ParamInTyOfConstArg(rib_ident.name),
+                                );
+                            }
+                            return Res::Err;
+                        }
                     };
 
                     // This was an attempt to use a const parameter outside its scope.
@@ -2925,7 +2957,7 @@ impl<'a> Resolver<'a> {
                 let crate_id = if !speculative {
                     self.crate_loader.process_path_extern(ident.name, ident.span)
                 } else {
-                    self.crate_loader.maybe_process_path_extern(ident.name, ident.span)?
+                    self.crate_loader.maybe_process_path_extern(ident.name)?
                 };
                 let crate_root = self.get_module(DefId { krate: crate_id, index: CRATE_DEF_INDEX });
                 Some(
@@ -2946,7 +2978,7 @@ impl<'a> Resolver<'a> {
         span: Span,
         path_str: &str,
         ns: Namespace,
-        module_id: LocalDefId,
+        module_id: DefId,
     ) -> Result<(ast::Path, Res), ()> {
         let path = if path_str.starts_with("::") {
             ast::Path {
@@ -2966,7 +2998,7 @@ impl<'a> Resolver<'a> {
                     .collect(),
             }
         };
-        let module = self.module_map.get(&module_id).copied().unwrap_or(self.graph_root);
+        let module = self.get_module(module_id);
         let parent_scope = &ParentScope::module(module);
         let res = self.resolve_ast_path(&path, ns, parent_scope).map_err(|_| ())?;
         Ok((path, res))

@@ -16,7 +16,7 @@ use rustc_middle::ty::{self, DefIdTree};
 use rustc_session::Session;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::SourceMap;
-use rustc_span::symbol::{kw, Ident, Symbol};
+use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{BytePos, MultiSpan, Span};
 
 use crate::imports::{Import, ImportKind, ImportResolver};
@@ -442,6 +442,19 @@ impl<'a> Resolver<'a> {
                 );
                 err
             }
+            ResolutionError::ParamInTyOfConstArg(name) => {
+                let mut err = struct_span_err!(
+                    self.session,
+                    span,
+                    E0770,
+                    "the type of const parameters must not depend on other generic parameters"
+                );
+                err.span_label(
+                    span,
+                    format!("the type must not depend on the parameter `{}`", name),
+                );
+                err
+            }
             ResolutionError::SelfInTyParamDefault => {
                 let mut err = struct_span_err!(
                     self.session,
@@ -674,7 +687,7 @@ impl<'a> Resolver<'a> {
 
         match find_best_match_for_name(
             suggestions.iter().map(|suggestion| &suggestion.candidate),
-            &ident.as_str(),
+            ident.name,
             None,
         ) {
             Some(found) if found != ident.name => {
@@ -846,9 +859,7 @@ impl<'a> Resolver<'a> {
                     // otherwise cause duplicate suggestions.
                     continue;
                 }
-                if let Some(crate_id) =
-                    self.crate_loader.maybe_process_path_extern(ident.name, ident.span)
-                {
+                if let Some(crate_id) = self.crate_loader.maybe_process_path_extern(ident.name) {
                     let crate_root =
                         self.get_module(DefId { krate: crate_id, index: CRATE_DEF_INDEX });
                     suggestions.extend(self.lookup_import_candidates_from_module(
@@ -882,8 +893,7 @@ impl<'a> Resolver<'a> {
         );
         self.add_typo_suggestion(err, suggestion, ident.span);
 
-        if macro_kind == MacroKind::Derive && (ident.as_str() == "Send" || ident.as_str() == "Sync")
-        {
+        if macro_kind == MacroKind::Derive && (ident.name == sym::Send || ident.name == sym::Sync) {
             let msg = format!("unsafe traits like `{}` should be implemented explicitly", ident);
             err.span_note(ident.span, &msg);
         }

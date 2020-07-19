@@ -29,7 +29,7 @@ use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId, LOCAL_CRATE};
 use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_hir::weak_lang_items;
-use rustc_hir::{GenericParamKind, Node};
+use rustc_hir::{GenericParamKind, HirId, Node};
 use rustc_middle::hir::map::blocks::FnLikeNode;
 use rustc_middle::hir::map::Map;
 use rustc_middle::middle::codegen_fn_attrs::{CodegenFnAttrFlags, CodegenFnAttrs};
@@ -64,6 +64,7 @@ fn collect_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
 
 pub fn provide(providers: &mut Providers) {
     *providers = Providers {
+        opt_const_param_of: type_of::opt_const_param_of,
         type_of: type_of::type_of,
         generics_of,
         predicates_of,
@@ -129,7 +130,7 @@ struct CollectItemTypesVisitor<'tcx> {
 /// all already existing generic type parameters to avoid suggesting a name that is already in use.
 crate fn placeholder_type_error(
     tcx: TyCtxt<'tcx>,
-    span: Span,
+    span: Option<Span>,
     generics: &[hir::GenericParam<'_>],
     placeholder_types: Vec<Span>,
     suggest: bool,
@@ -137,12 +138,15 @@ crate fn placeholder_type_error(
     if placeholder_types.is_empty() {
         return;
     }
-    let type_name = generics.next_type_param_name(None);
 
+    let type_name = generics.next_type_param_name(None);
     let mut sugg: Vec<_> =
         placeholder_types.iter().map(|sp| (*sp, (*type_name).to_string())).collect();
+
     if generics.is_empty() {
-        sugg.push((span, format!("<{}>", type_name)));
+        if let Some(span) = span {
+            sugg.push((span, format!("<{}>", type_name)));
+        }
     } else if let Some(arg) = generics.iter().find(|arg| match arg.name {
         hir::ParamName::Plain(Ident { name: kw::Underscore, .. }) => true,
         _ => false,
@@ -158,6 +162,7 @@ crate fn placeholder_type_error(
             format!(", {}", type_name),
         ));
     }
+
     let mut err = bad_placeholder_type(tcx, placeholder_types);
     if suggest {
         err.multipart_suggestion(
@@ -186,7 +191,7 @@ fn reject_placeholder_type_signatures_in_item(tcx: TyCtxt<'tcx>, item: &'tcx hir
     let mut visitor = PlaceholderHirTyCollector::default();
     visitor.visit_item(item);
 
-    placeholder_type_error(tcx, generics.span, &generics.params[..], visitor.0, suggest);
+    placeholder_type_error(tcx, Some(generics.span), &generics.params[..], visitor.0, suggest);
 }
 
 impl Visitor<'tcx> for CollectItemTypesVisitor<'tcx> {
@@ -722,7 +727,7 @@ fn convert_trait_item(tcx: TyCtxt<'_>, trait_item_id: hir::HirId) {
             // Account for `const C: _;` and `type T = _;`.
             let mut visitor = PlaceholderHirTyCollector::default();
             visitor.visit_trait_item(trait_item);
-            placeholder_type_error(tcx, DUMMY_SP, &[], visitor.0, false);
+            placeholder_type_error(tcx, None, &[], visitor.0, false);
         }
 
         hir::TraitItemKind::Type(_, None) => {}
@@ -745,7 +750,7 @@ fn convert_impl_item(tcx: TyCtxt<'_>, impl_item_id: hir::HirId) {
             // Account for `type T = _;`
             let mut visitor = PlaceholderHirTyCollector::default();
             visitor.visit_impl_item(impl_item);
-            placeholder_type_error(tcx, DUMMY_SP, &[], visitor.0, false);
+            placeholder_type_error(tcx, None, &[], visitor.0, false);
         }
         hir::ImplItemKind::Const(..) => {}
     }
@@ -1150,6 +1155,35 @@ fn has_late_bound_regions<'tcx>(tcx: TyCtxt<'tcx>, node: Node<'tcx>) -> Option<S
     }
 }
 
+struct AnonConstInParamListDetector {
+    in_param_list: bool,
+    found_anon_const_in_list: bool,
+    ct: HirId,
+}
+
+impl<'v> Visitor<'v> for AnonConstInParamListDetector {
+    type Map = intravisit::ErasedMap<'v>;
+
+    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
+        NestedVisitorMap::None
+    }
+
+    fn visit_generic_param(&mut self, p: &'v hir::GenericParam<'v>) {
+        let prev = self.in_param_list;
+        self.in_param_list = true;
+        intravisit::walk_generic_param(self, p);
+        self.in_param_list = prev;
+    }
+
+    fn visit_anon_const(&mut self, c: &'v hir::AnonConst) {
+        if self.in_param_list && self.ct == c.hir_id {
+            self.found_anon_const_in_list = true;
+        } else {
+            intravisit::walk_anon_const(self, c)
+        }
+    }
+}
+
 fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
     use rustc_hir::*;
 
@@ -1171,10 +1205,32 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
             let parent_id = tcx.hir().get_parent_item(hir_id);
             let parent_def_id = tcx.hir().local_def_id(parent_id);
 
-            // HACK(eddyb) this provides the correct generics when
-            // `feature(const_generics)` is enabled, so that const expressions
-            // used with const generics, e.g. `Foo<{N+1}>`, can work at all.
-            if tcx.lazy_normalization() {
+            let mut in_param_list = false;
+            for (_parent, node) in tcx.hir().parent_iter(hir_id) {
+                if let Some(generics) = node.generics() {
+                    let mut visitor = AnonConstInParamListDetector {
+                        in_param_list: false,
+                        found_anon_const_in_list: false,
+                        ct: hir_id,
+                    };
+
+                    visitor.visit_generics(generics);
+                    in_param_list = visitor.found_anon_const_in_list;
+                    break;
+                }
+            }
+
+            if in_param_list {
+                // We do not allow generic parameters in anon consts if we are inside
+                // of a param list.
+                //
+                // This affects both default type bindings, e.g. `struct<T, U = [u8; std::mem::size_of::<T>()]>(T, U)`,
+                // and the types of const parameters, e.g. `struct V<const N: usize, const M: [u8; N]>();`.
+                None
+            } else if tcx.lazy_normalization() {
+                // HACK(eddyb) this provides the correct generics when
+                // `feature(const_generics)` is enabled, so that const expressions
+                // used with const generics, e.g. `Foo<{N+1}>`, can work at all.
                 Some(parent_def_id.to_def_id())
             } else {
                 let parent_node = tcx.hir().get(tcx.hir().get_parent_node(hir_id));
@@ -1459,7 +1515,7 @@ fn fn_sig(tcx: TyCtxt<'_>, def_id: DefId) -> ty::PolyFnSig<'_> {
         | Item(hir::Item { kind: ItemKind::Fn(sig, generics, _), ident, .. }) => {
             match get_infer_ret_ty(&sig.decl.output) {
                 Some(ty) => {
-                    let fn_sig = tcx.typeck_tables_of(def_id).liberated_fn_sigs()[hir_id];
+                    let fn_sig = tcx.typeck(def_id).liberated_fn_sigs()[hir_id];
                     let mut visitor = PlaceholderHirTyCollector::default();
                     visitor.visit_ty(ty);
                     let mut diag = bad_placeholder_type(tcx, visitor.0);
