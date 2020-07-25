@@ -15,7 +15,7 @@
 //!
 //! If an intrinsic is supposed to be used from a `const fn` with a `rustc_const_stable` attribute,
 //! the intrinsic's attribute must be `rustc_const_stable`, too. Such a change should not be done
-//! without T-lang consulation, because it bakes a feature into the language that cannot be
+//! without T-lang consultation, because it bakes a feature into the language that cannot be
 //! replicated in user code without compiler support.
 //!
 //! # Volatiles
@@ -994,7 +994,7 @@ extern "rust-intrinsic" {
     /// [`std::mem::align_of`](../../std/mem/fn.align_of.html).
     #[rustc_const_stable(feature = "const_min_align_of", since = "1.40.0")]
     pub fn min_align_of<T>() -> usize;
-    /// The prefered alignment of a type.
+    /// The preferred alignment of a type.
     ///
     /// This intrinsic does not have a stable counterpart.
     #[rustc_const_unstable(feature = "const_pref_align_of", issue = "none")]
@@ -1246,14 +1246,14 @@ extern "rust-intrinsic" {
     ///     assert!(mid <= len);
     ///     unsafe {
     ///         let slice2 = mem::transmute::<&mut [T], &mut [T]>(slice);
-    ///         // first: transmute is not typesafe; all it checks is that T and
+    ///         // first: transmute is not type safe; all it checks is that T and
     ///         // U are of the same size. Second, right here, you have two
     ///         // mutable references pointing to the same memory.
     ///         (&mut slice[0..mid], &mut slice2[mid..len])
     ///     }
     /// }
     ///
-    /// // This gets rid of the typesafety problems; `&mut *` will *only* give
+    /// // This gets rid of the type safety problems; `&mut *` will *only* give
     /// // you an `&mut T` from an `&mut T` or `*mut T`.
     /// fn split_at_mut_casts<T>(slice: &mut [T], mid: usize)
     ///                          -> (&mut [T], &mut [T]) {
@@ -1946,14 +1946,6 @@ extern "rust-intrinsic" {
     /// See documentation of `<*const T>::offset_from` for details.
     #[rustc_const_unstable(feature = "const_ptr_offset_from", issue = "41079")]
     pub fn ptr_offset_from<T>(ptr: *const T, base: *const T) -> isize;
-
-    /// Internal hook used by Miri to implement unwinding.
-    /// ICEs when encountered during non-Miri codegen.
-    ///
-    /// The `payload` ptr here will be exactly the one `do_catch` gets passed by `try`.
-    ///
-    /// Perma-unstable: do not use.
-    pub fn miri_start_panic(payload: *mut u8) -> !;
 
     /// Internal placeholder for injecting code coverage counters when the "instrument-coverage"
     /// option is enabled. The placeholder is replaced with `llvm.instrprof.increment` during code
