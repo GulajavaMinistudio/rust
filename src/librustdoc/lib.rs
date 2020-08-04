@@ -14,7 +14,6 @@
 #![feature(never_type)]
 #![recursion_limit = "256"]
 
-extern crate env_logger;
 #[macro_use]
 extern crate lazy_static;
 extern crate rustc_ast;
@@ -44,7 +43,7 @@ extern crate rustc_trait_selection;
 extern crate rustc_typeck;
 extern crate test as testing;
 #[macro_use]
-extern crate log;
+extern crate tracing as log;
 
 use std::default::Default;
 use std::env;
@@ -90,7 +89,8 @@ pub fn main() {
     };
     rustc_driver::set_sigpipe_handler();
     rustc_driver::install_ice_hook();
-    env_logger::init_from_env("RUSTDOC_LOG");
+    rustc_driver::init_env_logger("RUSTDOC_LOG");
+
     let res = std::thread::Builder::new()
         .stack_size(thread_stack_size)
         .spawn(move || get_args().map(|args| main_args(&args)).unwrap_or(1))
