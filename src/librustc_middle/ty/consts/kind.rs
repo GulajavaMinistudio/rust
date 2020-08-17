@@ -10,7 +10,7 @@ use rustc_macros::HashStable;
 use rustc_target::abi::Size;
 
 /// Represents a constant in Rust.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, TyEncodable, TyDecodable, Hash)]
 #[derive(HashStable)]
 pub enum ConstKind<'tcx> {
     /// A const generic parameter.
@@ -34,7 +34,7 @@ pub enum ConstKind<'tcx> {
 
     /// A placeholder for a const which could not be computed; this is
     /// propagated to avoid useless error messages.
-    Error(ty::sty::DelaySpanBugEmitted),
+    Error(ty::DelaySpanBugEmitted),
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -68,7 +68,7 @@ impl<'tcx> ConstKind<'tcx> {
 }
 
 /// An inference variable for a const, for use in const generics.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, TyEncodable, TyDecodable, Hash)]
 #[derive(HashStable)]
 pub enum InferConst<'tcx> {
     /// Infer the value of the const.

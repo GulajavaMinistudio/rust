@@ -20,9 +20,9 @@ use rustc_span::edition::Edition;
 use rustc_span::source_map::{self, Span};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 
-use log::debug;
 use std::convert::TryFrom;
 use std::mem;
+use tracing::debug;
 
 impl<'a> Parser<'a> {
     /// Parses a source module as a crate. This is the main entry point for the parser.
@@ -1313,7 +1313,7 @@ impl<'a> Parser<'a> {
         vis: Visibility,
         attrs: Vec<Attribute>,
     ) -> PResult<'a, StructField> {
-        let name = self.parse_ident()?;
+        let name = self.parse_ident_common(false)?;
         self.expect(&token::Colon)?;
         let ty = self.parse_ty()?;
         Ok(StructField {

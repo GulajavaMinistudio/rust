@@ -352,7 +352,7 @@ rustc_queries! {
         /// per-type-parameter predicates for resolving `T::AssocTy`.
         query type_param_predicates(key: (DefId, LocalDefId)) -> ty::GenericPredicates<'tcx> {
             desc { |tcx| "computing the bounds for type parameter `{}`", {
-                let id = tcx.hir().as_local_hir_id(key.1);
+                let id = tcx.hir().local_def_id_to_hir_id(key.1);
                 tcx.hir().ty_param_name(id)
             }}
         }
@@ -740,7 +740,8 @@ rustc_queries! {
     }
 
     Other {
-        query reachable_set(_: CrateNum) -> &'tcx HirIdSet {
+        query reachable_set(_: CrateNum) -> FxHashSet<LocalDefId> {
+            storage(ArenaCacheSelector<'tcx>)
             desc { "reachability" }
         }
 

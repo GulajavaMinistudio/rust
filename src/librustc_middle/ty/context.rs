@@ -13,13 +13,14 @@ use crate::middle::stability;
 use crate::mir::interpret::{self, Allocation, ConstValue, Scalar};
 use crate::mir::{Body, Field, Local, Place, PlaceElem, ProjectionKind, Promoted};
 use crate::traits;
+use crate::ty::query::{self, TyCtxtAt};
 use crate::ty::steal::Steal;
 use crate::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, Subst, SubstsRef, UserSubsts};
 use crate::ty::TyKind::*;
 use crate::ty::{
-    self, query, AdtDef, AdtKind, BindingMode, BoundVar, CanonicalPolyFnSig, Const, ConstVid,
-    DefIdTree, ExistentialPredicate, FloatVar, FloatVid, GenericParamDefKind, InferConst, InferTy,
-    IntVar, IntVid, List, ParamConst, ParamTy, PolyFnSig, Predicate, PredicateInner, PredicateKind,
+    self, AdtDef, AdtKind, BindingMode, BoundVar, CanonicalPolyFnSig, Const, ConstVid, DefIdTree,
+    ExistentialPredicate, FloatVar, FloatVid, GenericParamDefKind, InferConst, InferTy, IntVar,
+    IntVid, List, ParamConst, ParamTy, PolyFnSig, Predicate, PredicateInner, PredicateKind,
     ProjectionTy, Region, RegionKind, ReprOptions, TraitObjectVisitor, Ty, TyKind, TyS, TyVar,
     TyVid, TypeAndMut,
 };
@@ -63,6 +64,12 @@ use std::iter;
 use std::mem;
 use std::ops::{Bound, Deref};
 use std::sync::Arc;
+
+/// A type that is not publicly constructable. This prevents people from making `TyKind::Error`
+/// except through `tcx.err*()`, which are in this module.
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(TyEncodable, TyDecodable, HashStable)]
+pub struct DelaySpanBugEmitted(());
 
 type InternedSet<'tcx, T> = ShardedHashMap<Interned<'tcx, T>, ()>;
 
@@ -263,7 +270,7 @@ impl<'a, V> LocalTableInContextMut<'a, V> {
 }
 
 /// All information necessary to validate and reveal an `impl Trait`.
-#[derive(RustcEncodable, RustcDecodable, Debug, HashStable)]
+#[derive(TyEncodable, TyDecodable, Debug, HashStable)]
 pub struct ResolvedOpaqueTy<'tcx> {
     /// The revealed type as seen by this function.
     pub concrete_type: Ty<'tcx>,
@@ -291,7 +298,7 @@ pub struct ResolvedOpaqueTy<'tcx> {
 ///
 /// Here, we would store the type `T`, the span of the value `x`, the "scope-span" for
 /// the scope that contains `x`, the expr `T` evaluated from, and the span of `foo.await`.
-#[derive(RustcEncodable, RustcDecodable, Clone, Debug, Eq, Hash, PartialEq, HashStable)]
+#[derive(TyEncodable, TyDecodable, Clone, Debug, Eq, Hash, PartialEq, HashStable)]
 pub struct GeneratorInteriorTypeCause<'tcx> {
     /// Type of the captured binding.
     pub ty: Ty<'tcx>,
@@ -305,7 +312,7 @@ pub struct GeneratorInteriorTypeCause<'tcx> {
     pub expr: Option<hir::HirId>,
 }
 
-#[derive(RustcEncodable, RustcDecodable, Debug)]
+#[derive(TyEncodable, TyDecodable, Debug)]
 pub struct TypeckResults<'tcx> {
     /// The `HirId::owner` all `ItemLocalId`s in this table are relative to.
     pub hir_owner: LocalDefId,
@@ -728,7 +735,7 @@ rustc_index::newtype_index! {
 pub type CanonicalUserTypeAnnotations<'tcx> =
     IndexVec<UserTypeAnnotationIndex, CanonicalUserTypeAnnotation<'tcx>>;
 
-#[derive(Clone, Debug, RustcEncodable, RustcDecodable, HashStable, TypeFoldable, Lift)]
+#[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable, TypeFoldable, Lift)]
 pub struct CanonicalUserTypeAnnotation<'tcx> {
     pub user_ty: CanonicalUserType<'tcx>,
     pub span: Span,
@@ -787,7 +794,7 @@ impl CanonicalUserType<'tcx> {
 /// A user-given type annotation attached to a constant. These arise
 /// from constants that are named via paths, like `Foo::<A>::new` and
 /// so forth.
-#[derive(Copy, Clone, Debug, PartialEq, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, Debug, PartialEq, TyEncodable, TyDecodable)]
 #[derive(HashStable, TypeFoldable, Lift)]
 pub enum UserType<'tcx> {
     Ty(Ty<'tcx>),
@@ -1170,7 +1177,7 @@ impl<'tcx> TyCtxt<'tcx> {
     #[track_caller]
     pub fn ty_error_with_message<S: Into<MultiSpan>>(self, span: S, msg: &str) -> Ty<'tcx> {
         self.sess.delay_span_bug(span, msg);
-        self.mk_ty(Error(super::sty::DelaySpanBugEmitted(())))
+        self.mk_ty(Error(DelaySpanBugEmitted(())))
     }
 
     /// Like `err` but for constants.
@@ -1178,10 +1185,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn const_error(self, ty: Ty<'tcx>) -> &'tcx Const<'tcx> {
         self.sess
             .delay_span_bug(DUMMY_SP, "ty::ConstKind::Error constructed but no error reported.");
-        self.mk_const(ty::Const {
-            val: ty::ConstKind::Error(super::sty::DelaySpanBugEmitted(())),
-            ty,
-        })
+        self.mk_const(ty::Const { val: ty::ConstKind::Error(DelaySpanBugEmitted(())), ty })
     }
 
     pub fn consider_optimizing<T: Fn() -> String>(&self, msg: T) -> bool {
@@ -1333,7 +1337,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn serialize_query_result_cache<E>(self, encoder: &mut E) -> Result<(), E::Error>
     where
-        E: ty::codec::TyEncoder,
+        E: ty::codec::OpaqueEncoder,
     {
         self.queries.on_disk_cache.serialize(self, encoder)
     }
@@ -1420,7 +1424,7 @@ impl<'tcx> TyCtxt<'tcx> {
             _ => return None, // not a free region
         };
 
-        let hir_id = self.hir().as_local_hir_id(suitable_region_binding_scope);
+        let hir_id = self.hir().local_def_id_to_hir_id(suitable_region_binding_scope);
         let is_impl_item = match self.hir().find(hir_id) {
             Some(Node::Item(..) | Node::TraitItem(..)) => false,
             Some(Node::ImplItem(..)) => {
@@ -1441,7 +1445,7 @@ impl<'tcx> TyCtxt<'tcx> {
         &self,
         scope_def_id: LocalDefId,
     ) -> Vec<&'tcx hir::Ty<'tcx>> {
-        let hir_id = self.hir().as_local_hir_id(scope_def_id);
+        let hir_id = self.hir().local_def_id_to_hir_id(scope_def_id);
         let hir_output = match self.hir().get(hir_id) {
             Node::Item(hir::Item {
                 kind:
@@ -1486,7 +1490,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn return_type_impl_trait(&self, scope_def_id: LocalDefId) -> Option<(Ty<'tcx>, Span)> {
         // HACK: `type_of_def_id()` will fail on these (#55796), so return `None`.
-        let hir_id = self.hir().as_local_hir_id(scope_def_id);
+        let hir_id = self.hir().local_def_id_to_hir_id(scope_def_id);
         match self.hir().get(hir_id) {
             Node::Item(item) => {
                 match item.kind {
@@ -2612,6 +2616,21 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn object_lifetime_defaults(self, id: HirId) -> Option<&'tcx [ObjectLifetimeDefault]> {
         self.object_lifetime_defaults_map(id.owner)
             .and_then(|map| map.get(&id.local_id).map(|v| &**v))
+    }
+}
+
+impl TyCtxtAt<'tcx> {
+    /// Constructs a `TyKind::Error` type and registers a `delay_span_bug` to ensure it gets used.
+    #[track_caller]
+    pub fn ty_error(self) -> Ty<'tcx> {
+        self.tcx.ty_error_with_message(self.span, "TyKind::Error constructed but no error reported")
+    }
+
+    /// Constructs a `TyKind::Error` type and registers a `delay_span_bug` with the given `msg to
+    /// ensure it gets used.
+    #[track_caller]
+    pub fn ty_error_with_message(self, msg: &str) -> Ty<'tcx> {
+        self.tcx.ty_error_with_message(self.span, msg)
     }
 }
 

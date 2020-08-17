@@ -745,7 +745,6 @@ impl<'a> Builder<'a> {
             .env("RUSTDOC_LIBDIR", self.rustc_libdir(compiler))
             .env("CFG_RELEASE_CHANNEL", &self.config.channel)
             .env("RUSTDOC_REAL", self.rustdoc(compiler))
-            .env("RUSTDOC_CRATE_VERSION", self.rust_version())
             .env("RUSTC_BOOTSTRAP", "1")
             .arg("-Winvalid_codeblock_attributes");
         if self.config.deny_warnings {
@@ -858,6 +857,10 @@ impl<'a> Builder<'a> {
             }
             rustflags.env("RUSTFLAGS_BOOTSTRAP");
             rustflags.arg("--cfg=bootstrap");
+        }
+
+        if self.config.rust_new_symbol_mangling {
+            rustflags.arg("-Zsymbol-mangling-version=v0");
         }
 
         // FIXME: It might be better to use the same value for both `RUSTFLAGS` and `RUSTDOCFLAGS`,
@@ -1271,7 +1274,11 @@ impl<'a> Builder<'a> {
         }
 
         // For `cargo doc` invocations, make rustdoc print the Rust version into the docs
-        cargo.env("RUSTDOC_CRATE_VERSION", self.rust_version());
+        // This replaces spaces with newlines because RUSTDOCFLAGS does not
+        // support arguments with regular spaces. Hopefully someday Cargo will
+        // have space support.
+        let rust_version = self.rust_version().replace(' ', "\n");
+        rustdocflags.arg("--crate-version").arg(&rust_version);
 
         // Environment variables *required* throughout the build
         //
@@ -1448,14 +1455,14 @@ impl Rustflags {
 
     fn env(&mut self, env: &str) {
         if let Ok(s) = env::var(env) {
-            for part in s.split_whitespace() {
+            for part in s.split(' ') {
                 self.arg(part);
             }
         }
     }
 
     fn arg(&mut self, arg: &str) -> &mut Self {
-        assert_eq!(arg.split_whitespace().count(), 1);
+        assert_eq!(arg.split(' ').count(), 1);
         if !self.0.is_empty() {
             self.0.push_str(" ");
         }
