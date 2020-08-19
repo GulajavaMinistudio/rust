@@ -12,7 +12,7 @@ doctest = false
 [dependencies]
 ena = "0.14"
 indexmap = "1.5.1"
-log = { package = "tracing", version = "0.1" }
+tracing = "0.1"
 jobserver_crate = { version = "0.1.13", package = "jobserver" }
 lazy_static = "1"
 once_cell = { version = "1", features = ["parking_lot"] }
@@ -30,7 +30,7 @@ rustc_index = { path = "../librustc_index", package = "rustc_index" }
 bitflags = "1.2.1"
 measureme = "0.7.1"
 libc = "0.2"
-stacker = "0.1.9"
+stacker = "0.1.11"
 tempfile = "3.0.5"
 
 [dependencies.parking_lot]

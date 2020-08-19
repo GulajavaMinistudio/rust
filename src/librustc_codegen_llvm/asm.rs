@@ -5,8 +5,8 @@ use crate::type_::Type;
 use crate::type_of::LayoutLlvmExt;
 use crate::value::Value;
 
-use rustc_ast::ast::LlvmAsmDialect;
-use rustc_ast::ast::{InlineAsmOptions, InlineAsmTemplatePiece};
+use rustc_ast::LlvmAsmDialect;
+use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_codegen_ssa::mir::operand::OperandValue;
 use rustc_codegen_ssa::mir::place::PlaceRef;
 use rustc_codegen_ssa::traits::*;
@@ -19,7 +19,7 @@ use rustc_target::abi::*;
 use rustc_target::asm::*;
 
 use libc::{c_char, c_uint};
-use log::debug;
+use tracing::debug;
 
 impl AsmBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
     fn codegen_llvm_inline_asm(

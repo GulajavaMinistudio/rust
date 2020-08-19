@@ -1,7 +1,7 @@
 use crate::rmeta::table::{FixedSizeEncoding, TableBuilder};
 use crate::rmeta::*;
 
-use rustc_ast::ast;
+use rustc_ast as ast;
 use rustc_data_structures::fingerprint::{Fingerprint, FingerprintEncoder};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
 use rustc_data_structures::stable_hasher::StableHasher;
@@ -1089,7 +1089,7 @@ impl EncodeContext<'a, 'tcx> {
     }
 
     fn encode_fn_param_names_for_body(&mut self, body_id: hir::BodyId) -> Lazy<[Ident]> {
-        self.tcx.dep_graph.with_ignore(|| self.lazy(self.tcx.hir().body_param_names(body_id)))
+        self.lazy(self.tcx.hir().body_param_names(body_id))
     }
 
     fn encode_fn_param_names(&mut self, param_names: &[Ident]) -> Lazy<[Ident]> {

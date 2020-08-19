@@ -18,8 +18,7 @@ use crate::llvm::debuginfo::{
 };
 use crate::value::Value;
 
-use log::debug;
-use rustc_ast::ast;
+use rustc_ast as ast;
 use rustc_codegen_ssa::traits::*;
 use rustc_data_structures::const_cstr;
 use rustc_data_structures::fingerprint::Fingerprint;
@@ -43,6 +42,7 @@ use rustc_span::{self, SourceFile, SourceFileHash, Span};
 use rustc_target::abi::{Abi, Align, HasDataLayout, Integer, LayoutOf, TagEncoding};
 use rustc_target::abi::{Int, Pointer, F32, F64};
 use rustc_target::abi::{Primitive, Size, VariantIdx, Variants};
+use tracing::debug;
 
 use libc::{c_longlong, c_uint};
 use std::collections::hash_map::Entry;

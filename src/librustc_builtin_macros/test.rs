@@ -2,7 +2,7 @@
 /// Ideally, this code would be in libtest but for efficiency and error messages it lives here.
 use crate::util::check_builtin_macro_attribute;
 
-use rustc_ast::ast;
+use rustc_ast as ast;
 use rustc_ast::attr;
 use rustc_ast_pretty::pprust;
 use rustc_expand::base::*;
@@ -299,7 +299,7 @@ pub fn expand_test_or_bench(
     // extern crate test
     let test_extern = cx.item(sp, test_id, vec![], ast::ItemKind::ExternCrate(None));
 
-    log::debug!("synthetic test item:\n{}\n", pprust::item_to_string(&test_const));
+    tracing::debug!("synthetic test item:\n{}\n", pprust::item_to_string(&test_const));
 
     vec![
         // Access to libtest under a hygienic name
