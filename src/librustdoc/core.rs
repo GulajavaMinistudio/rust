@@ -69,6 +69,11 @@ pub struct DocContext<'tcx> {
     pub auto_traits: Vec<DefId>,
     /// The options given to rustdoc that could be relevant to a pass.
     pub render_options: RenderOptions,
+    /// The traits in scope for a given module.
+    ///
+    /// See `collect_intra_doc_links::traits_implemented_by` for more details.
+    /// `map<module, set<trait>>`
+    pub module_trait_cache: RefCell<FxHashMap<DefId, FxHashSet<DefId>>>,
 }
 
 impl<'tcx> DocContext<'tcx> {
@@ -117,13 +122,13 @@ impl<'tcx> DocContext<'tcx> {
     // def ids, as we'll end up with a panic if we use the DefId Debug impl for fake DefIds
     pub fn next_def_id(&self, crate_num: CrateNum) -> DefId {
         let start_def_id = {
-            let next_id = if crate_num == LOCAL_CRATE {
-                self.tcx.hir().definitions().def_path_table().next_id()
+            let num_def_ids = if crate_num == LOCAL_CRATE {
+                self.tcx.hir().definitions().def_path_table().num_def_ids()
             } else {
-                self.enter_resolver(|r| r.cstore().def_path_table(crate_num).next_id())
+                self.enter_resolver(|r| r.cstore().num_def_ids(crate_num))
             };
 
-            DefId { krate: crate_num, index: next_id }
+            DefId { krate: crate_num, index: DefIndex::from_usize(num_def_ids) }
         };
 
         let mut fake_ids = self.fake_def_ids.borrow_mut();
@@ -510,6 +515,7 @@ pub fn run_core(options: RustdocOptions) -> (clean::Crate, RenderInfo, RenderOpt
                         .filter(|trait_def_id| tcx.trait_is_auto(*trait_def_id))
                         .collect(),
                     render_options,
+                    module_trait_cache: RefCell::new(FxHashMap::default()),
                 };
                 debug!("crate: {:?}", tcx.hir().krate());
 
