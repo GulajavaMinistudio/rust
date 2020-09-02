@@ -289,10 +289,6 @@ fn token_kind_to_string_ext(tok: &TokenKind, convert_dollar_crate: Option<Span>)
             doc_comment_to_string(comment_kind, attr_style, data)
         }
         token::Eof => "<eof>".to_string(),
-        token::Whitespace => " ".to_string(),
-        token::Comment => "/* */".to_string(),
-        token::Shebang(s) => format!("/* shebang: {}*/", s),
-        token::Unknown(s) => s.to_string(),
 
         token::Interpolated(ref nt) => nonterminal_to_string(nt),
     }
@@ -1507,11 +1503,10 @@ impl<'a> State<'a> {
                 self.s.word(";");
             }
             ast::StmtKind::MacCall(ref mac) => {
-                let (ref mac, style, ref attrs) = **mac;
                 self.space_if_not_bol();
-                self.print_outer_attributes(attrs);
-                self.print_mac(mac);
-                if style == ast::MacStmtStyle::Semicolon {
+                self.print_outer_attributes(&mac.attrs);
+                self.print_mac(&mac.mac);
+                if mac.style == ast::MacStmtStyle::Semicolon {
                     self.s.word(";");
                 }
             }
