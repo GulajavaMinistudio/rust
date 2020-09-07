@@ -120,6 +120,9 @@ use crate::raw_vec::RawVec;
 /// assert_eq!(vec, [0, 0, 0, 0, 0]);
 /// ```
 ///
+/// For more information, see
+/// [Capacity and Reallocation](#capacity-and-reallocation).
+///
 /// Use a `Vec<T>` as an efficient stack:
 ///
 /// ```
@@ -159,7 +162,7 @@ use crate::raw_vec::RawVec;
 /// # Slicing
 ///
 /// A `Vec` can be mutable. Slices, on the other hand, are read-only objects.
-/// To get a slice, use `&`. Example:
+/// To get a [slice], use [`&`]. Example:
 ///
 /// ```
 /// fn read_slice(slice: &[usize]) {
@@ -287,6 +290,8 @@ use crate::raw_vec::RawVec;
 /// [`insert`]: Vec::insert
 /// [`reserve`]: Vec::reserve
 /// [owned slice]: Box
+/// [slice]: ../../std/primitive.slice.html
+/// [`&`]: ../../std/primitive.reference.html
 #[stable(feature = "rust1", since = "1.0.0")]
 #[cfg_attr(not(test), rustc_diagnostic_item = "vec_type")]
 pub struct Vec<T> {
