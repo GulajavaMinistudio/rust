@@ -103,8 +103,6 @@
 //! More documentation can be found in each respective module below, and you can
 //! also check out the `src/bootstrap/README.md` file for more information.
 
-#![feature(drain_filter)]
-
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -299,9 +297,6 @@ pub enum Mode {
 
     /// Build librustc, and compiler libraries, placing output in the "stageN-rustc" directory.
     Rustc,
-
-    /// Build codegen libraries, placing output in the "stageN-codegen" directory
-    Codegen,
 
     /// Build a tool, placing output in the "stage0-bootstrap-tools"
     /// directory. This is for miscellaneous sets of tools that are built
@@ -572,7 +567,6 @@ impl Build {
         let suffix = match mode {
             Mode::Std => "-std",
             Mode::Rustc => "-rustc",
-            Mode::Codegen => "-codegen",
             Mode::ToolBootstrap => "-bootstrap-tools",
             Mode::ToolStd | Mode::ToolRustc => "-tools",
         };
