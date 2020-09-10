@@ -756,8 +756,11 @@ impl<'a> Builder<'a> {
         cmd.env_remove("MAKEFLAGS");
         cmd.env_remove("MFLAGS");
 
-        if let Some(linker) = self.linker(compiler.host, true) {
-            cmd.env("RUSTC_TARGET_LINKER", linker);
+        if let Some(linker) = self.linker(compiler.host) {
+            cmd.env("RUSTDOC_LINKER", linker);
+        }
+        if self.is_fuse_ld_lld(compiler.host) {
+            cmd.env("RUSTDOC_FUSE_LD_LLD", "1");
         }
         cmd
     }
@@ -812,7 +815,7 @@ impl<'a> Builder<'a> {
             format!("CARGO_PROFILE_{}_{}", profile, name)
         };
 
-        // See comment in librustc_llvm/build.rs for why this is necessary, largely llvm-config
+        // See comment in rustc_llvm/build.rs for why this is necessary, largely llvm-config
         // needs to not accidentally link to libLLVM in stage0/lib.
         cargo.env("REAL_LIBRARY_PATH_VAR", &util::dylib_path_var());
         if let Some(e) = env::var_os(util::dylib_path_var()) {
@@ -829,9 +832,9 @@ impl<'a> Builder<'a> {
         // scripts can do less work (i.e. not building/requiring LLVM).
         if cmd == "check" || cmd == "clippy" || cmd == "fix" {
             // If we've not yet built LLVM, or it's stale, then bust
-            // the librustc_llvm cache. That will always work, even though it
+            // the rustc_llvm cache. That will always work, even though it
             // may mean that on the next non-check build we'll need to rebuild
-            // librustc_llvm. But if LLVM is stale, that'll be a tiny amount
+            // rustc_llvm. But if LLVM is stale, that'll be a tiny amount
             // of work comparitively, and we'd likely need to rebuild it anyway,
             // so that's okay.
             if crate::native::prebuilt_llvm_config(self, target).is_err() {
@@ -1042,16 +1045,18 @@ impl<'a> Builder<'a> {
             }
         }
 
-        if let Some(host_linker) = self.linker(compiler.host, true) {
+        if let Some(host_linker) = self.linker(compiler.host) {
             cargo.env("RUSTC_HOST_LINKER", host_linker);
         }
+        if self.is_fuse_ld_lld(compiler.host) {
+            cargo.env("RUSTC_HOST_FUSE_LD_LLD", "1");
+        }
 
-        if let Some(target_linker) = self.linker(target, true) {
+        if let Some(target_linker) = self.linker(target) {
             let target = crate::envify(&target.triple);
             cargo.env(&format!("CARGO_TARGET_{}_LINKER", target), target_linker);
         }
-
-        if self.config.use_lld && !target.contains("msvc") {
+        if self.is_fuse_ld_lld(target) {
             rustflags.arg("-Clink-args=-fuse-ld=lld");
         }
 
