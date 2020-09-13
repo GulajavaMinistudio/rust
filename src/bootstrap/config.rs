@@ -15,8 +15,19 @@ use std::process;
 use crate::cache::{Interned, INTERNER};
 use crate::flags::Flags;
 pub use crate::flags::Subcommand;
+use crate::util::exe;
 use build_helper::t;
 use serde::Deserialize;
+
+macro_rules! check_ci_llvm {
+    ($name:expr) => {
+        assert!(
+            $name.is_none(),
+            "setting {} is incompatible with download-ci-llvm.",
+            stringify!($name)
+        );
+    };
+}
 
 /// Global configuration for the entire build and/or bootstrap.
 ///
@@ -84,6 +95,7 @@ pub struct Config {
     pub llvm_version_suffix: Option<String>,
     pub llvm_use_linker: Option<String>,
     pub llvm_allow_old_toolchain: Option<bool>,
+    pub llvm_from_ci: bool,
 
     pub use_lld: bool,
     pub lld_enabled: bool,
@@ -100,6 +112,7 @@ pub struct Config {
     pub rust_codegen_units_std: Option<u32>,
     pub rust_debug_assertions: bool,
     pub rust_debug_assertions_std: bool,
+    pub rust_debug_logging: bool,
     pub rust_debuginfo_level_rustc: u32,
     pub rust_debuginfo_level_std: u32,
     pub rust_debuginfo_level_tools: u32,
@@ -273,10 +286,8 @@ struct TomlConfig {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct Build {
     build: Option<String>,
-    #[serde(default)]
-    host: Vec<String>,
-    #[serde(default)]
-    target: Vec<String>,
+    host: Option<Vec<String>>,
+    target: Option<Vec<String>>,
     // This is ignored, the rust code always gets the build directory from the `BUILD_DIR` env variable
     build_dir: Option<String>,
     cargo: Option<String>,
@@ -346,6 +357,7 @@ struct Llvm {
     use_libcxx: Option<bool>,
     use_linker: Option<String>,
     allow_old_toolchain: Option<bool>,
+    download_ci_llvm: Option<bool>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -381,6 +393,7 @@ struct Rust {
     codegen_units_std: Option<u32>,
     debug_assertions: Option<bool>,
     debug_assertions_std: Option<bool>,
+    debug_logging: Option<bool>,
     debuginfo_level: Option<u32>,
     debuginfo_level_rustc: Option<u32>,
     debuginfo_level_std: Option<u32>,
@@ -505,11 +518,6 @@ impl Config {
             config.out = dir;
         }
 
-        // If --target was specified but --host wasn't specified, don't run any host-only tests.
-        let has_hosts = !flags.host.is_empty();
-        let has_targets = !flags.target.is_empty();
-        config.skip_only_host_steps = !has_hosts && has_targets;
-
         let toml = file
             .map(|file| {
                 let contents = t!(fs::read_to_string(&file));
@@ -528,25 +536,28 @@ impl Config {
             .unwrap_or_else(TomlConfig::default);
 
         let build = toml.build.clone().unwrap_or_default();
-        // set by bootstrap.py
-        config.hosts.push(config.build);
-        for host in build.host.iter().map(|h| TargetSelection::from_user(h)) {
-            if !config.hosts.contains(&host) {
-                config.hosts.push(host);
-            }
-        }
-        for target in config
-            .hosts
-            .iter()
-            .copied()
-            .chain(build.target.iter().map(|h| TargetSelection::from_user(h)))
-        {
-            if !config.targets.contains(&target) {
-                config.targets.push(target);
-            }
-        }
-        config.hosts = if !flags.host.is_empty() { flags.host } else { config.hosts };
-        config.targets = if !flags.target.is_empty() { flags.target } else { config.targets };
+
+        // If --target was specified but --host wasn't specified, don't run any host-only tests.
+        let has_hosts = build.host.is_some() || flags.host.is_some();
+        let has_targets = build.target.is_some() || flags.target.is_some();
+        config.skip_only_host_steps = !has_hosts && has_targets;
+
+        config.hosts = if let Some(arg_host) = flags.host.clone() {
+            arg_host
+        } else if let Some(file_host) = build.host {
+            file_host.iter().map(|h| TargetSelection::from_user(h)).collect()
+        } else {
+            vec![config.build]
+        };
+        config.targets = if let Some(arg_target) = flags.target.clone() {
+            arg_target
+        } else if let Some(file_target) = build.target {
+            file_target.iter().map(|h| TargetSelection::from_user(h)).collect()
+        } else {
+            // If target is *not* configured, then default to the host
+            // toolchains.
+            config.hosts.clone()
+        };
 
         config.nodejs = build.nodejs.map(PathBuf::from);
         config.gdb = build.gdb.map(PathBuf::from);
@@ -591,6 +602,7 @@ impl Config {
         let mut debug = None;
         let mut debug_assertions = None;
         let mut debug_assertions_std = None;
+        let mut debug_logging = None;
         let mut debuginfo_level = None;
         let mut debuginfo_level_rustc = None;
         let mut debuginfo_level_std = None;
@@ -628,12 +640,50 @@ impl Config {
             set(&mut config.llvm_use_libcxx, llvm.use_libcxx);
             config.llvm_use_linker = llvm.use_linker.clone();
             config.llvm_allow_old_toolchain = llvm.allow_old_toolchain;
+            config.llvm_from_ci = llvm.download_ci_llvm.unwrap_or(false);
+
+            if config.llvm_from_ci {
+                // None of the LLVM options, except assertions, are supported
+                // when using downloaded LLVM. We could just ignore these but
+                // that's potentially confusing, so force them to not be
+                // explicitly set. The defaults and CI defaults don't
+                // necessarily match but forcing people to match (somewhat
+                // arbitrary) CI configuration locally seems bad/hard.
+                check_ci_llvm!(llvm.optimize);
+                check_ci_llvm!(llvm.thin_lto);
+                check_ci_llvm!(llvm.release_debuginfo);
+                check_ci_llvm!(llvm.link_shared);
+                check_ci_llvm!(llvm.static_libstdcpp);
+                check_ci_llvm!(llvm.targets);
+                check_ci_llvm!(llvm.experimental_targets);
+                check_ci_llvm!(llvm.link_jobs);
+                check_ci_llvm!(llvm.link_shared);
+                check_ci_llvm!(llvm.clang_cl);
+                check_ci_llvm!(llvm.version_suffix);
+                check_ci_llvm!(llvm.cflags);
+                check_ci_llvm!(llvm.cxxflags);
+                check_ci_llvm!(llvm.ldflags);
+                check_ci_llvm!(llvm.use_libcxx);
+                check_ci_llvm!(llvm.use_linker);
+                check_ci_llvm!(llvm.allow_old_toolchain);
+
+                // CI-built LLVM is shared
+                config.llvm_link_shared = true;
+            }
+
+            if config.llvm_thin_lto {
+                // If we're building with ThinLTO on, we want to link to LLVM
+                // shared, to avoid re-doing ThinLTO (which happens in the link
+                // step) with each stage.
+                config.llvm_link_shared = true;
+            }
         }
 
         if let Some(ref rust) = toml.rust {
             debug = rust.debug;
             debug_assertions = rust.debug_assertions;
             debug_assertions_std = rust.debug_assertions_std;
+            debug_logging = rust.debug_logging;
             debuginfo_level = rust.debuginfo_level;
             debuginfo_level_rustc = rust.debuginfo_level_rustc;
             debuginfo_level_std = rust.debuginfo_level_std;
@@ -710,6 +760,20 @@ impl Config {
             }
         }
 
+        if config.llvm_from_ci {
+            let triple = &config.build.triple;
+            let mut build_target = config
+                .target_config
+                .entry(config.build)
+                .or_insert_with(|| Target::from_triple(&triple));
+
+            check_ci_llvm!(build_target.llvm_config);
+            check_ci_llvm!(build_target.llvm_filecheck);
+            let ci_llvm_bin = config.out.join(&*config.build.triple).join("ci-llvm/bin");
+            build_target.llvm_config = Some(ci_llvm_bin.join(exe("llvm-config", config.build)));
+            build_target.llvm_filecheck = Some(ci_llvm_bin.join(exe("FileCheck", config.build)));
+        }
+
         if let Some(ref t) = toml.dist {
             config.dist_sign_folder = t.sign_folder.clone().map(PathBuf::from);
             config.dist_gpg_password_file = t.gpg_password_file.clone().map(PathBuf::from);
@@ -736,6 +800,8 @@ impl Config {
         config.rust_debug_assertions = debug_assertions.unwrap_or(default);
         config.rust_debug_assertions_std =
             debug_assertions_std.unwrap_or(config.rust_debug_assertions);
+
+        config.rust_debug_logging = debug_logging.unwrap_or(config.rust_debug_assertions);
 
         let with_defaults = |debuginfo_level_specific: Option<u32>| {
             debuginfo_level_specific.or(debuginfo_level).unwrap_or(if debug == Some(true) {
