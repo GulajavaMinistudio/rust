@@ -526,23 +526,9 @@ impl<'a> Builder<'a> {
     }
 
     fn new_internal(build: &Build, kind: Kind, paths: Vec<PathBuf>) -> Builder<'_> {
-        let top_stage = if let Some(explicit_stage) = build.config.stage {
-            explicit_stage
-        } else {
-            // See https://github.com/rust-lang/compiler-team/issues/326
-            match kind {
-                Kind::Doc => 0,
-                Kind::Build | Kind::Test => 1,
-                Kind::Bench | Kind::Dist | Kind::Install => 2,
-                // These are all bootstrap tools, which don't depend on the compiler.
-                // The stage we pass shouldn't matter, but use 0 just in case.
-                Kind::Check | Kind::Clippy | Kind::Fix | Kind::Run | Kind::Format => 0,
-            }
-        };
-
         Builder {
             build,
-            top_stage,
+            top_stage: build.config.stage,
             kind,
             cache: Cache::new(),
             stack: RefCell::new(Vec::new()),
@@ -566,20 +552,7 @@ impl<'a> Builder<'a> {
             Subcommand::Format { .. } | Subcommand::Clean { .. } => panic!(),
         };
 
-        let this = Self::new_internal(build, kind, paths.to_owned());
-
-        // CI should always run stage 2 builds, unless it specifically states otherwise
-        #[cfg(not(test))]
-        if build.config.stage.is_none() && build.ci_env != crate::CiEnv::None {
-            match kind {
-                Kind::Test | Kind::Doc | Kind::Build | Kind::Bench | Kind::Dist | Kind::Install => {
-                    assert_eq!(this.top_stage, 2)
-                }
-                Kind::Check | Kind::Clippy | Kind::Fix | Kind::Run | Kind::Format => {}
-            }
-        }
-
-        this
+        Self::new_internal(build, kind, paths.to_owned())
     }
 
     pub fn execute_cli(&self) {
@@ -710,7 +683,7 @@ impl<'a> Builder<'a> {
 
     /// Adds the compiler's directory of dynamic libraries to `cmd`'s dynamic
     /// library lookup path.
-    pub fn add_rustc_lib_path(&self, compiler: Compiler, cmd: &mut Cargo) {
+    pub fn add_rustc_lib_path(&self, compiler: Compiler, cmd: &mut Command) {
         // Windows doesn't need dylib path munging because the dlls for the
         // compiler live next to the compiler and the system will find them
         // automatically.
@@ -718,7 +691,7 @@ impl<'a> Builder<'a> {
             return;
         }
 
-        add_dylib_path(vec![self.rustc_libdir(compiler)], &mut cmd.command);
+        add_dylib_path(vec![self.rustc_libdir(compiler)], cmd);
     }
 
     /// Gets a path to the compiler specified.
@@ -1236,7 +1209,7 @@ impl<'a> Builder<'a> {
             cargo.env(format!("CC_{}", target.triple), &cc);
 
             let cflags = self.cflags(target, GitRepo::Rustc).join(" ");
-            cargo.env(format!("CFLAGS_{}", target.triple), cflags.clone());
+            cargo.env(format!("CFLAGS_{}", target.triple), &cflags);
 
             if let Some(ar) = self.ar(target) {
                 let ranlib = format!("{} s", ar.display());
@@ -1421,7 +1394,7 @@ impl<'a> Builder<'a> {
             (out, dur - deps)
         };
 
-        if self.config.print_step_timings {
+        if self.config.print_step_timings && !self.config.dry_run {
             println!("[TIMING] {:?} -- {}.{:03}", step, dur.as_secs(), dur.subsec_millis());
         }
 
@@ -1514,6 +1487,10 @@ impl Cargo {
         assert_ne!(key.as_ref(), "RUSTDOCFLAGS");
         self.command.env(key.as_ref(), value.as_ref());
         self
+    }
+
+    pub fn add_rustc_lib_path(&mut self, builder: &Builder<'_>, compiler: Compiler) {
+        builder.add_rustc_lib_path(compiler, &mut self.command);
     }
 }
 

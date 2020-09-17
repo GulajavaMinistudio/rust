@@ -1233,13 +1233,13 @@ rustc_index::newtype_index! {
     /// particular, imagine a type like this:
     ///
     ///     for<'a> fn(for<'b> fn(&'b isize, &'a isize), &'a char)
-    ///     ^          ^            |        |         |
-    ///     |          |            |        |         |
-    ///     |          +------------+ 0      |         |
-    ///     |                                |         |
-    ///     +--------------------------------+ 1       |
-    ///     |                                          |
-    ///     +------------------------------------------+ 0
+    ///     ^          ^            |          |           |
+    ///     |          |            |          |           |
+    ///     |          +------------+ 0        |           |
+    ///     |                                  |           |
+    ///     +----------------------------------+ 1         |
+    ///     |                                              |
+    ///     +----------------------------------------------+ 0
     ///
     /// In this type, there are two binders (the outer fn and the inner
     /// fn). We need to be able to determine, for any given region, which
@@ -2280,6 +2280,12 @@ impl<'tcx> TyS<'tcx> {
     ///
     /// Returning true means the type is known to be sized. Returning
     /// `false` means nothing -- could be sized, might not be.
+    ///
+    /// Note that we could never rely on the fact that a type such as `[_]` is
+    /// trivially `!Sized` because we could be in a type environment with a
+    /// bound such as `[_]: Copy`. A function with such a bound obviously never
+    /// can be called, but that doesn't mean it shouldn't typecheck. This is why
+    /// this method doesn't return `Option<bool>`.
     pub fn is_trivially_sized(&self, tcx: TyCtxt<'tcx>) -> bool {
         match self.kind() {
             ty::Infer(ty::IntVar(_) | ty::FloatVar(_))
