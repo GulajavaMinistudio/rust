@@ -24,7 +24,9 @@ pub mod cleanup_post_borrowck;
 pub mod const_prop;
 pub mod copy_prop;
 pub mod deaggregator;
+pub mod dest_prop;
 pub mod dump_mir;
+pub mod early_otherwise_branch;
 pub mod elaborate_drops;
 pub mod generator;
 pub mod inline;
@@ -464,9 +466,11 @@ fn run_optimization_passes<'tcx>(
         &instcombine::InstCombine,
         &const_prop::ConstProp,
         &simplify_branches::SimplifyBranches::new("after-const-prop"),
+        &early_otherwise_branch::EarlyOtherwiseBranch,
         &simplify_comparison_integral::SimplifyComparisonIntegral,
         &simplify_try::SimplifyArmIdentity,
         &simplify_try::SimplifyBranchSame,
+        &dest_prop::DestinationPropagation,
         &copy_prop::CopyPropagation,
         &simplify_branches::SimplifyBranches::new("after-copy-prop"),
         &remove_noop_landing_pads::RemoveNoopLandingPads,

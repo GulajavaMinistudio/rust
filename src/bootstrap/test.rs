@@ -636,7 +636,7 @@ impl Step for RustdocJSStd {
                 .arg("--crate-name")
                 .arg("std")
                 .arg("--resource-suffix")
-                .arg(crate::channel::CFG_RELEASE_NUM)
+                .arg(&builder.version)
                 .arg("--doc-folder")
                 .arg(builder.doc_out(self.target))
                 .arg("--test-folder")
@@ -1280,6 +1280,8 @@ impl Step for Compiletest {
         if builder.config.cmd.rustfix_coverage() {
             cmd.arg("--rustfix-coverage");
         }
+
+        cmd.env("BOOTSTRAP_CARGO", &builder.initial_cargo);
 
         builder.ci_env.force_coloring_in_ci(&mut cmd);
 
@@ -2022,6 +2024,8 @@ impl Step for Bootstrap {
             .current_dir(builder.src.join("src/bootstrap"))
             .env("RUSTFLAGS", "-Cdebuginfo=2")
             .env("CARGO_TARGET_DIR", builder.out.join("bootstrap"))
+            .env("BOOTSTRAP_OUTPUT_DIRECTORY", &builder.config.out)
+            .env("BOOTSTRAP_INITIAL_CARGO", &builder.config.initial_cargo)
             .env("RUSTC_BOOTSTRAP", "1")
             .env("RUSTC", &builder.initial_rustc);
         if let Some(flags) = option_env!("RUSTFLAGS") {

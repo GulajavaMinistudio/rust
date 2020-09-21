@@ -2343,8 +2343,8 @@ fn from_target_feature(
                         item.span(),
                         format!("`{}` is not valid for this target", feature),
                     );
-                    if feature.starts_with('+') {
-                        let valid = supported_target_features.contains_key(&feature[1..]);
+                    if let Some(stripped) = feature.strip_prefix('+') {
+                        let valid = supported_target_features.contains_key(stripped);
                         if valid {
                             err.help("consider removing the leading `+` in the feature name");
                         }
@@ -2363,7 +2363,6 @@ fn from_target_feature(
                 Some(sym::mips_target_feature) => rust_features.mips_target_feature,
                 Some(sym::riscv_target_feature) => rust_features.riscv_target_feature,
                 Some(sym::avx512_target_feature) => rust_features.avx512_target_feature,
-                Some(sym::mmx_target_feature) => rust_features.mmx_target_feature,
                 Some(sym::sse4a_target_feature) => rust_features.sse4a_target_feature,
                 Some(sym::tbm_target_feature) => rust_features.tbm_target_feature,
                 Some(sym::wasm_target_feature) => rust_features.wasm_target_feature,
