@@ -5,7 +5,7 @@
 //! generated instead.
 
 #![doc(
-    html_root_url = "https://doc.rust-lang.org/nightly/",
+    html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/",
     html_playground_url = "https://play.rust-lang.org/",
     test(attr(deny(warnings)))
 )]
@@ -525,12 +525,9 @@ impl<'a> Parser<'a> {
 
         // fill character
         if let Some(&(_, c)) = self.cur.peek() {
-            match self.cur.clone().nth(1) {
-                Some((_, '>' | '<' | '^')) => {
-                    spec.fill = Some(c);
-                    self.cur.next();
-                }
-                _ => {}
+            if let Some((_, '>' | '<' | '^')) = self.cur.clone().nth(1) {
+                spec.fill = Some(c);
+                self.cur.next();
             }
         }
         // Alignment

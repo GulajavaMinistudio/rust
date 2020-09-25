@@ -1,5 +1,6 @@
 #![feature(alloc_layout_extra)]
 #![feature(array_chunks)]
+#![feature(array_from_ref)]
 #![feature(array_methods)]
 #![feature(array_map)]
 #![feature(array_windows)]
@@ -43,6 +44,8 @@
 #![feature(iter_order_by)]
 #![feature(cmp_min_max_by)]
 #![feature(iter_map_while)]
+#![feature(const_mut_refs)]
+#![feature(const_pin)]
 #![feature(const_slice_from_raw_parts)]
 #![feature(const_raw_ptr_deref)]
 #![feature(never_type)]
@@ -79,6 +82,7 @@ mod num;
 mod ops;
 mod option;
 mod pattern;
+mod pin;
 mod ptr;
 mod result;
 mod slice;

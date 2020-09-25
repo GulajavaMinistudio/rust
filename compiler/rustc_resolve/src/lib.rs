@@ -8,7 +8,7 @@
 //!
 //! Type-relative name resolution (methods, fields, associated items) happens in `librustc_typeck`.
 
-#![doc(html_root_url = "https://doc.rust-lang.org/nightly/")]
+#![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![feature(bool_to_option)]
 #![feature(crate_visibility_modifier)]
 #![feature(nll)]
@@ -534,11 +534,8 @@ impl<'a> ModuleData<'a> {
                 if ns != TypeNS {
                     return;
                 }
-                match binding.res() {
-                    Res::Def(DefKind::Trait | DefKind::TraitAlias, _) => {
-                        collected_traits.push((name, binding))
-                    }
-                    _ => (),
+                if let Res::Def(DefKind::Trait | DefKind::TraitAlias, _) = binding.res() {
+                    collected_traits.push((name, binding))
                 }
             });
             *traits = Some(collected_traits.into_boxed_slice());
