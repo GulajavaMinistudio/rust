@@ -204,9 +204,6 @@ impl Validator<'mir, 'tcx> {
     pub fn check_body(&mut self) {
         let ConstCx { tcx, body, def_id, .. } = *self.ccx;
 
-        // HACK: This function has side-effects???? Make sure we call it.
-        let _ = crate::const_eval::is_min_const_fn(tcx, def_id.to_def_id());
-
         // The local type and predicate checks are not free and only relevant for `const fn`s.
         if self.const_kind() == hir::ConstContext::ConstFn {
             // Prevent const trait methods from being annotated as `stable`.
@@ -540,8 +537,12 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
 
             Rvalue::UnaryOp(_, ref operand) => {
                 let ty = operand.ty(self.body, self.tcx);
-                if !(ty.is_integral() || ty.is_bool()) {
-                    self.check_op(ops::NonPrimitiveOp)
+                if is_int_bool_or_char(ty) {
+                    // Int, bool, and char operations are fine.
+                } else if ty.is_floating_point() {
+                    self.check_op(ops::FloatingPointOp);
+                } else {
+                    span_bug!(self.span, "non-primitive type in `Rvalue::UnaryOp`: {:?}", ty);
                 }
             }
 
@@ -550,7 +551,9 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
                 let lhs_ty = lhs.ty(self.body, self.tcx);
                 let rhs_ty = rhs.ty(self.body, self.tcx);
 
-                if let ty::RawPtr(_) | ty::FnPtr(..) = lhs_ty.kind() {
+                if is_int_bool_or_char(lhs_ty) && is_int_bool_or_char(rhs_ty) {
+                    // Int, bool, and char operations are fine.
+                } else if lhs_ty.is_fn_ptr() || lhs_ty.is_unsafe_ptr() {
                     assert_eq!(lhs_ty, rhs_ty);
                     assert!(
                         op == BinOp::Eq
@@ -563,12 +566,15 @@ impl Visitor<'tcx> for Validator<'mir, 'tcx> {
                     );
 
                     self.check_op(ops::RawPtrComparison);
-                }
-
-                if !(lhs_ty.is_integral() || lhs_ty.is_bool() || lhs_ty.is_char())
-                    || !(rhs_ty.is_integral() || rhs_ty.is_bool() || rhs_ty.is_char())
-                {
-                    self.check_op(ops::NonPrimitiveOp)
+                } else if lhs_ty.is_floating_point() || rhs_ty.is_floating_point() {
+                    self.check_op(ops::FloatingPointOp);
+                } else {
+                    span_bug!(
+                        self.span,
+                        "non-primitive type in `Rvalue::BinaryOp`: {:?} ⚬ {:?}",
+                        lhs_ty,
+                        rhs_ty
+                    );
                 }
             }
         }
@@ -866,4 +872,8 @@ fn place_as_reborrow(
             _ => None,
         }
     })
+}
+
+fn is_int_bool_or_char(ty: Ty<'_>) -> bool {
+    ty.is_bool() || ty.is_integral() || ty.is_char()
 }
