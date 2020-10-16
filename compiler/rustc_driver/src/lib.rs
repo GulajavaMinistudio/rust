@@ -670,7 +670,7 @@ impl RustcDefaultCalls {
                 Input::File(ref ifile) => {
                     let path = &(*ifile);
                     let mut v = Vec::new();
-                    locator::list_file_metadata(&sess.target.target, path, metadata_loader, &mut v)
+                    locator::list_file_metadata(&sess.target, path, metadata_loader, &mut v)
                         .unwrap();
                     println!("{}", String::from_utf8(v).unwrap());
                 }
@@ -724,7 +724,7 @@ impl RustcDefaultCalls {
                     "{}",
                     sess.target_tlib_path.as_ref().unwrap_or(&sess.host_tlib_path).dir.display()
                 ),
-                TargetSpec => println!("{}", sess.target.target.to_json().pretty()),
+                TargetSpec => println!("{}", sess.target.to_json().pretty()),
                 FileNames | CrateName => {
                     let input = input.unwrap_or_else(|| {
                         early_error(ErrorOutputType::default(), "no input file provided")
@@ -1258,9 +1258,9 @@ pub fn report_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str) {
     // If backtraces are enabled, also print the query stack
     let backtrace = env::var_os("RUST_BACKTRACE").map(|x| &x != "0").unwrap_or(false);
 
-    if backtrace {
-        TyCtxt::try_print_query_stack(&handler);
-    }
+    let num_frames = if backtrace { None } else { Some(2) };
+
+    TyCtxt::try_print_query_stack(&handler, num_frames);
 
     #[cfg(windows)]
     unsafe {

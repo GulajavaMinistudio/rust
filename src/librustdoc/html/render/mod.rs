@@ -576,7 +576,8 @@ impl FormatRenderer for Context {
             settings(
                 self.shared.static_root_path.as_deref().unwrap_or("./"),
                 &self.shared.resource_suffix,
-            ),
+                &self.shared.style_files,
+            )?,
             &style_files,
         );
         self.shared.fs.write(&settings_file, v.as_bytes())?;
@@ -811,6 +812,7 @@ themePicker.onblur = handleThemeButtonsBlur;
     but.textContent = item;
     but.onclick = function(el) {{
         switchTheme(currentTheme, mainTheme, item, true);
+        useSystemTheme(false);
     }};
     but.onblur = handleThemeButtonsBlur;
     themes.appendChild(but);
@@ -1344,22 +1346,35 @@ impl AllTypes {
 
 #[derive(Debug)]
 enum Setting {
-    Section { description: &'static str, sub_settings: Vec<Setting> },
-    Entry { js_data_name: &'static str, description: &'static str, default_value: bool },
+    Section {
+        description: &'static str,
+        sub_settings: Vec<Setting>,
+    },
+    Toggle {
+        js_data_name: &'static str,
+        description: &'static str,
+        default_value: bool,
+    },
+    Select {
+        js_data_name: &'static str,
+        description: &'static str,
+        default_value: &'static str,
+        options: Vec<(String, String)>,
+    },
 }
 
 impl Setting {
-    fn display(&self) -> String {
+    fn display(&self, root_path: &str, suffix: &str) -> String {
         match *self {
-            Setting::Section { ref description, ref sub_settings } => format!(
+            Setting::Section { description, ref sub_settings } => format!(
                 "<div class='setting-line'>\
                      <div class='title'>{}</div>\
                      <div class='sub-settings'>{}</div>
                  </div>",
                 description,
-                sub_settings.iter().map(|s| s.display()).collect::<String>()
+                sub_settings.iter().map(|s| s.display(root_path, suffix)).collect::<String>()
             ),
-            Setting::Entry { ref js_data_name, ref description, ref default_value } => format!(
+            Setting::Toggle { js_data_name, description, default_value } => format!(
                 "<div class='setting-line'>\
                      <label class='toggle'>\
                      <input type='checkbox' id='{}' {}>\
@@ -1368,8 +1383,30 @@ impl Setting {
                      <div>{}</div>\
                  </div>",
                 js_data_name,
-                if *default_value { " checked" } else { "" },
+                if default_value { " checked" } else { "" },
                 description,
+            ),
+            Setting::Select { js_data_name, description, default_value, ref options } => format!(
+                "<div class=\"setting-line\">\
+                     <div>{}</div>\
+                     <label class=\"select-wrapper\">\
+                         <select id=\"{}\" autocomplete=\"off\">{}</select>\
+                         <img src=\"{}down-arrow{}.svg\" alt=\"Select item\">\
+                     </label>\
+                 </div>",
+                description,
+                js_data_name,
+                options
+                    .iter()
+                    .map(|opt| format!(
+                        "<option value=\"{}\" {}>{}</option>",
+                        opt.0,
+                        if &opt.0 == default_value { "selected" } else { "" },
+                        opt.1,
+                    ))
+                    .collect::<String>(),
+                root_path,
+                suffix,
             ),
         }
     }
@@ -1377,7 +1414,7 @@ impl Setting {
 
 impl From<(&'static str, &'static str, bool)> for Setting {
     fn from(values: (&'static str, &'static str, bool)) -> Setting {
-        Setting::Entry { js_data_name: values.0, description: values.1, default_value: values.2 }
+        Setting::Toggle { js_data_name: values.0, description: values.1, default_value: values.2 }
     }
 }
 
@@ -1390,9 +1427,39 @@ impl<T: Into<Setting>> From<(&'static str, Vec<T>)> for Setting {
     }
 }
 
-fn settings(root_path: &str, suffix: &str) -> String {
+fn settings(root_path: &str, suffix: &str, themes: &[StylePath]) -> Result<String, Error> {
+    let theme_names: Vec<(String, String)> = themes
+        .iter()
+        .map(|entry| {
+            let theme =
+                try_none!(try_none!(entry.path.file_stem(), &entry.path).to_str(), &entry.path)
+                    .to_string();
+
+            Ok((theme.clone(), theme))
+        })
+        .collect::<Result<_, Error>>()?;
+
     // (id, explanation, default value)
     let settings: &[Setting] = &[
+        (
+            "Theme preferences",
+            vec![
+                Setting::from(("use-system-theme", "Use system theme", true)),
+                Setting::Select {
+                    js_data_name: "preferred-dark-theme",
+                    description: "Preferred dark theme",
+                    default_value: "dark",
+                    options: theme_names.clone(),
+                },
+                Setting::Select {
+                    js_data_name: "preferred-light-theme",
+                    description: "Preferred light theme",
+                    default_value: "light",
+                    options: theme_names,
+                },
+            ],
+        )
+            .into(),
         (
             "Auto-hide item declarations",
             vec![
@@ -1414,16 +1481,17 @@ fn settings(root_path: &str, suffix: &str) -> String {
         ("line-numbers", "Show line numbers on code examples", false).into(),
         ("disable-shortcuts", "Disable keyboard shortcuts", false).into(),
     ];
-    format!(
+
+    Ok(format!(
         "<h1 class='fqn'>\
-    <span class='in-band'>Rustdoc settings</span>\
-</h1>\
-<div class='settings'>{}</div>\
-<script src='{}settings{}.js'></script>",
-        settings.iter().map(|s| s.display()).collect::<String>(),
+            <span class='in-band'>Rustdoc settings</span>\
+        </h1>\
+        <div class='settings'>{}</div>\
+        <script src='{}settings{}.js'></script>",
+        settings.iter().map(|s| s.display(root_path, suffix)).collect::<String>(),
         root_path,
         suffix
-    )
+    ))
 }
 
 impl Context {
@@ -1763,11 +1831,11 @@ crate fn shorten(s: String) -> String {
     }
 }
 
-fn document(w: &mut Buffer, cx: &Context, item: &clean::Item) {
+fn document(w: &mut Buffer, cx: &Context, item: &clean::Item, parent: Option<&clean::Item>) {
     if let Some(ref name) = item.name {
         info!("Documenting {}", name);
     }
-    document_stability(w, cx, item, false);
+    document_stability(w, cx, item, false, parent);
     document_full(w, item, cx, "", false);
 }
 
@@ -1851,8 +1919,14 @@ fn document_full(w: &mut Buffer, item: &clean::Item, cx: &Context, prefix: &str,
     }
 }
 
-fn document_stability(w: &mut Buffer, cx: &Context, item: &clean::Item, is_hidden: bool) {
-    let stabilities = short_stability(item, cx);
+fn document_stability(
+    w: &mut Buffer,
+    cx: &Context,
+    item: &clean::Item,
+    is_hidden: bool,
+    parent: Option<&clean::Item>,
+) {
+    let stabilities = short_stability(item, cx, parent);
     if !stabilities.is_empty() {
         write!(w, "<div class='stability{}'>", if is_hidden { " hidden" } else { "" });
         for stability in stabilities {
@@ -1952,7 +2026,7 @@ pub fn compare_names(mut lhs: &str, mut rhs: &str) -> Ordering {
 }
 
 fn item_module(w: &mut Buffer, cx: &Context, item: &clean::Item, items: &[clean::Item]) {
-    document(w, cx, item);
+    document(w, cx, item, None);
 
     let mut indices = (0..items.len()).filter(|i| !items[*i].is_stripped()).collect::<Vec<usize>>();
 
@@ -2111,7 +2185,7 @@ fn item_module(w: &mut Buffer, cx: &Context, item: &clean::Item, items: &[clean:
                          <td class='docblock-short'>{stab_tags}{docs}</td>\
                      </tr>",
                     name = *myitem.name.as_ref().unwrap(),
-                    stab_tags = stability_tags(myitem),
+                    stab_tags = stability_tags(myitem, item),
                     docs = MarkdownSummaryLine(doc_value, &myitem.links()).into_string(),
                     class = myitem.type_(),
                     add = add,
@@ -2135,7 +2209,7 @@ fn item_module(w: &mut Buffer, cx: &Context, item: &clean::Item, items: &[clean:
 
 /// Render the stability and deprecation tags that are displayed in the item's summary at the
 /// module level.
-fn stability_tags(item: &clean::Item) -> String {
+fn stability_tags(item: &clean::Item, parent: &clean::Item) -> String {
     let mut tags = String::new();
 
     fn tag_html(class: &str, title: &str, contents: &str) -> String {
@@ -2159,7 +2233,13 @@ fn stability_tags(item: &clean::Item) -> String {
         tags += &tag_html("unstable", "", "Experimental");
     }
 
-    if let Some(ref cfg) = item.attrs.cfg {
+    let cfg = match (&item.attrs.cfg, parent.attrs.cfg.as_ref()) {
+        (Some(cfg), Some(parent_cfg)) => cfg.simplify_with(parent_cfg),
+        (cfg, _) => cfg.as_deref().cloned(),
+    };
+
+    debug!("Portability {:?} - {:?} = {:?}", item.attrs.cfg, parent.attrs.cfg, cfg);
+    if let Some(ref cfg) = cfg {
         tags += &tag_html("portability", &cfg.render_long_plain(), &cfg.render_short_html());
     }
 
@@ -2168,7 +2248,7 @@ fn stability_tags(item: &clean::Item) -> String {
 
 /// Render the stability and/or deprecation warning that is displayed at the top of the item's
 /// documentation.
-fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
+fn short_stability(item: &clean::Item, cx: &Context, parent: Option<&clean::Item>) -> Vec<String> {
     let mut stability = vec![];
     let error_codes = cx.shared.codes;
 
@@ -2243,7 +2323,18 @@ fn short_stability(item: &clean::Item, cx: &Context) -> Vec<String> {
         stability.push(format!("<div class='stab unstable'>{}</div>", message));
     }
 
-    if let Some(ref cfg) = item.attrs.cfg {
+    let cfg = match (&item.attrs.cfg, parent.and_then(|p| p.attrs.cfg.as_ref())) {
+        (Some(cfg), Some(parent_cfg)) => cfg.simplify_with(parent_cfg),
+        (cfg, _) => cfg.as_deref().cloned(),
+    };
+
+    debug!(
+        "Portability {:?} - {:?} = {:?}",
+        item.attrs.cfg,
+        parent.and_then(|p| p.attrs.cfg.as_ref()),
+        cfg
+    );
+    if let Some(cfg) = cfg {
         stability.push(format!("<div class='stab portability'>{}</div>", cfg.render_long_html()));
     }
 
@@ -2282,7 +2373,7 @@ fn item_constant(w: &mut Buffer, cx: &Context, it: &clean::Item, c: &clean::Cons
     }
 
     write!(w, "</pre>");
-    document(w, cx, it)
+    document(w, cx, it, None)
 }
 
 fn item_static(w: &mut Buffer, cx: &Context, it: &clean::Item, s: &clean::Static) {
@@ -2296,7 +2387,7 @@ fn item_static(w: &mut Buffer, cx: &Context, it: &clean::Item, s: &clean::Static
         name = it.name.as_ref().unwrap(),
         typ = s.type_.print()
     );
-    document(w, cx, it)
+    document(w, cx, it, None)
 }
 
 fn item_function(w: &mut Buffer, cx: &Context, it: &clean::Item, f: &clean::Function) {
@@ -2329,7 +2420,7 @@ fn item_function(w: &mut Buffer, cx: &Context, it: &clean::Item, f: &clean::Func
             .print(),
         spotlight = spotlight_decl(&f.decl),
     );
-    document(w, cx, it)
+    document(w, cx, it, None)
 }
 
 fn render_implementor(
@@ -2354,6 +2445,7 @@ fn render_implementor(
         w,
         cx,
         implementor,
+        None,
         AssocItemLink::Anchor(None),
         RenderMode::Normal,
         implementor.impl_item.stable_since().as_deref(),
@@ -2383,6 +2475,7 @@ fn render_impls(
                 &mut buffer,
                 cx,
                 i,
+                Some(containing_item),
                 assoc_link,
                 RenderMode::Normal,
                 containing_item.stable_since().as_deref(),
@@ -2502,7 +2595,7 @@ fn item_trait(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Trait, 
     });
 
     // Trait documentation
-    document(w, cx, it);
+    document(w, cx, it, None);
 
     fn write_small_section_header(w: &mut Buffer, id: &str, title: &str, extra_content: &str) {
         write!(
@@ -2520,6 +2613,7 @@ fn item_trait(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Trait, 
 
     fn trait_item(w: &mut Buffer, cx: &Context, m: &clean::Item, t: &clean::Item) {
         let name = m.name.as_ref().unwrap();
+        info!("Documenting {} on {}", name, t.name.as_deref().unwrap_or_default());
         let item_type = m.type_();
         let id = cx.derive_id(format!("{}.{}", item_type, name));
         write!(w, "<h3 id='{id}' class='method'><code>", id = id,);
@@ -2527,7 +2621,7 @@ fn item_trait(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Trait, 
         write!(w, "</code>");
         render_stability_since(w, m, t);
         write!(w, "</h3>");
-        document(w, cx, m);
+        document(w, cx, m, Some(t));
     }
 
     if !types.is_empty() {
@@ -2628,6 +2722,7 @@ fn item_trait(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Trait, 
                     w,
                     cx,
                     &implementor,
+                    None,
                     assoc_link,
                     RenderMode::Normal,
                     implementor.impl_item.stable_since().as_deref(),
@@ -2890,7 +2985,7 @@ fn item_struct(w: &mut Buffer, cx: &Context, it: &clean::Item, s: &clean::Struct
         write!(w, "</pre>")
     });
 
-    document(w, cx, it);
+    document(w, cx, it, None);
     let mut fields = s
         .fields
         .iter()
@@ -2925,7 +3020,7 @@ fn item_struct(w: &mut Buffer, cx: &Context, it: &clean::Item, s: &clean::Struct
                     name = field.name.as_ref().unwrap(),
                     ty = ty.print()
                 );
-                document(w, cx, field);
+                document(w, cx, field, Some(it));
             }
         }
     }
@@ -2940,7 +3035,7 @@ fn item_union(w: &mut Buffer, cx: &Context, it: &clean::Item, s: &clean::Union, 
         write!(w, "</pre>")
     });
 
-    document(w, cx, it);
+    document(w, cx, it, None);
     let mut fields = s
         .fields
         .iter()
@@ -2972,7 +3067,7 @@ fn item_union(w: &mut Buffer, cx: &Context, it: &clean::Item, s: &clean::Union, 
             if let Some(stability_class) = field.stability_class() {
                 write!(w, "<span class='stab {stab}'></span>", stab = stability_class);
             }
-            document(w, cx, field);
+            document(w, cx, field, Some(it));
         }
     }
     render_assoc_items(w, cx, it, it.def_id, AssocItemRender::All, cache)
@@ -3027,7 +3122,7 @@ fn item_enum(w: &mut Buffer, cx: &Context, it: &clean::Item, e: &clean::Enum, ca
         write!(w, "</pre>")
     });
 
-    document(w, cx, it);
+    document(w, cx, it, None);
     if !e.variants.is_empty() {
         write!(
             w,
@@ -3060,7 +3155,7 @@ fn item_enum(w: &mut Buffer, cx: &Context, it: &clean::Item, e: &clean::Enum, ca
                 }
             }
             write!(w, "</code></div>");
-            document(w, cx, variant);
+            document(w, cx, variant, Some(it));
             document_non_exhaustive(w, variant);
 
             use crate::clean::{Variant, VariantKind};
@@ -3095,7 +3190,7 @@ fn item_enum(w: &mut Buffer, cx: &Context, it: &clean::Item, e: &clean::Enum, ca
                             f = field.name.as_ref().unwrap(),
                             t = ty.print()
                         );
-                        document(w, cx, field);
+                        document(w, cx, field, Some(variant));
                     }
                 }
                 write!(w, "</div></div>");
@@ -3293,6 +3388,10 @@ fn render_assoc_items(
     what: AssocItemRender<'_>,
     cache: &Cache,
 ) {
+    info!(
+        "Documenting associated items of {}",
+        containing_item.name.as_deref().unwrap_or_default()
+    );
     let v = match cache.impls.get(&it) {
         Some(v) => v,
         None => return,
@@ -3327,6 +3426,7 @@ fn render_assoc_items(
                 w,
                 cx,
                 i,
+                Some(containing_item),
                 AssocItemLink::Anchor(None),
                 render_mode,
                 containing_item.stable_since().as_deref(),
@@ -3518,6 +3618,7 @@ fn render_impl(
     w: &mut Buffer,
     cx: &Context,
     i: &Impl,
+    parent: Option<&clean::Item>,
     link: AssocItemLink<'_>,
     render_mode: RenderMode,
     outer_version: Option<&str>,
@@ -3600,6 +3701,7 @@ fn render_impl(
         w: &mut Buffer,
         cx: &Context,
         item: &clean::Item,
+        parent: Option<&clean::Item>,
         link: AssocItemLink<'_>,
         render_mode: RenderMode,
         is_default_item: bool,
@@ -3684,7 +3786,7 @@ fn render_impl(
                     if let Some(it) = t.items.iter().find(|i| i.name == item.name) {
                         // We need the stability of the item from the trait
                         // because impls can't have a stability.
-                        document_stability(w, cx, it, is_hidden);
+                        document_stability(w, cx, it, is_hidden, parent);
                         if item.doc_value().is_some() {
                             document_full(w, item, cx, "", is_hidden);
                         } else if show_def_docs {
@@ -3694,13 +3796,13 @@ fn render_impl(
                         }
                     }
                 } else {
-                    document_stability(w, cx, item, is_hidden);
+                    document_stability(w, cx, item, is_hidden, parent);
                     if show_def_docs {
                         document_full(w, item, cx, "", is_hidden);
                     }
                 }
             } else {
-                document_stability(w, cx, item, is_hidden);
+                document_stability(w, cx, item, is_hidden, parent);
                 if show_def_docs {
                     document_short(w, item, link, "", is_hidden);
                 }
@@ -3717,6 +3819,7 @@ fn render_impl(
             w,
             cx,
             trait_item,
+            parent,
             link,
             render_mode,
             false,
@@ -3732,6 +3835,7 @@ fn render_impl(
         cx: &Context,
         t: &clean::Trait,
         i: &clean::Impl,
+        parent: Option<&clean::Item>,
         render_mode: RenderMode,
         outer_version: Option<&str>,
         show_def_docs: bool,
@@ -3749,6 +3853,7 @@ fn render_impl(
                 w,
                 cx,
                 trait_item,
+                parent,
                 assoc_link,
                 render_mode,
                 true,
@@ -3771,6 +3876,7 @@ fn render_impl(
                 cx,
                 t,
                 &i.inner_impl(),
+                parent,
                 render_mode,
                 outer_version,
                 show_def_docs,
@@ -3799,7 +3905,7 @@ fn item_opaque_ty(
         bounds = bounds(&t.bounds, false)
     );
 
-    document(w, cx, it);
+    document(w, cx, it, None);
 
     // Render any items associated directly to this alias, as otherwise they
     // won't be visible anywhere in the docs. It would be nice to also show
@@ -3826,7 +3932,7 @@ fn item_trait_alias(
         bounds(&t.bounds, true)
     );
 
-    document(w, cx, it);
+    document(w, cx, it, None);
 
     // Render any items associated directly to this alias, as otherwise they
     // won't be visible anywhere in the docs. It would be nice to also show
@@ -3847,7 +3953,7 @@ fn item_typedef(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Typed
         type_ = t.type_.print()
     );
 
-    document(w, cx, it);
+    document(w, cx, it, None);
 
     // Render any items associated directly to this alias, as otherwise they
     // won't be visible anywhere in the docs. It would be nice to also show
@@ -3866,7 +3972,7 @@ fn item_foreign_type(w: &mut Buffer, cx: &Context, it: &clean::Item, cache: &Cac
         it.name.as_ref().unwrap(),
     );
 
-    document(w, cx, it);
+    document(w, cx, it, None);
 
     render_assoc_items(w, cx, it, it.def_id, AssocItemRender::All, cache)
 }
@@ -4511,7 +4617,7 @@ fn item_macro(w: &mut Buffer, cx: &Context, it: &clean::Item, t: &clean::Macro) 
             None,
         ))
     });
-    document(w, cx, it)
+    document(w, cx, it, None)
 }
 
 fn item_proc_macro(w: &mut Buffer, cx: &Context, it: &clean::Item, m: &clean::ProcMacro) {
@@ -4541,16 +4647,16 @@ fn item_proc_macro(w: &mut Buffer, cx: &Context, it: &clean::Item, m: &clean::Pr
             write!(w, "</pre>");
         }
     }
-    document(w, cx, it)
+    document(w, cx, it, None)
 }
 
 fn item_primitive(w: &mut Buffer, cx: &Context, it: &clean::Item, cache: &Cache) {
-    document(w, cx, it);
+    document(w, cx, it, None);
     render_assoc_items(w, cx, it, it.def_id, AssocItemRender::All, cache)
 }
 
 fn item_keyword(w: &mut Buffer, cx: &Context, it: &clean::Item) {
-    document(w, cx, it)
+    document(w, cx, it, None)
 }
 
 crate const BASIC_KEYWORDS: &str = "rust, rustlang, rust-lang";
