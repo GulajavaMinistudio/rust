@@ -821,9 +821,6 @@ pub struct LocalDecl<'tcx> {
     /// flag drop flags to avoid triggering this check as they are introduced
     /// after typeck.
     ///
-    /// Unsafety checking will also ignore dereferences of these locals,
-    /// so they can be used for raw pointers only used in a desugaring.
-    ///
     /// This should be sound because the drop flags are fully algebraic, and
     /// therefore don't affect the OIBIT or outlives properties of the
     /// generator.
@@ -1010,13 +1007,13 @@ impl<'tcx> LocalDecl<'tcx> {
     }
 
     /// Returns `Some` if this is a reference to a static item that is used to
-    /// access that static
+    /// access that static.
     pub fn is_ref_to_static(&self) -> bool {
         matches!(self.local_info, Some(box LocalInfo::StaticRef { .. }))
     }
 
-    /// Returns `Some` if this is a reference to a static item that is used to
-    /// access that static
+    /// Returns `Some` if this is a reference to a thread-local static item that is used to
+    /// access that static.
     pub fn is_ref_to_thread_local(&self) -> bool {
         match self.local_info {
             Some(box LocalInfo::StaticRef { is_thread_local, .. }) => is_thread_local,
@@ -2213,7 +2210,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
 
                         let name = ty::tls::with(|tcx| {
                             let mut name = String::new();
-                            let substs = tcx.lift(&substs).expect("could not lift for printing");
+                            let substs = tcx.lift(substs).expect("could not lift for printing");
                             FmtPrinter::new(tcx, &mut name, Namespace::ValueNS)
                                 .print_def_path(variant_def.def_id, substs)?;
                             Ok(name)
@@ -2236,7 +2233,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                         if let Some(def_id) = def_id.as_local() {
                             let hir_id = tcx.hir().local_def_id_to_hir_id(def_id);
                             let name = if tcx.sess.opts.debugging_opts.span_free_formats {
-                                let substs = tcx.lift(&substs).unwrap();
+                                let substs = tcx.lift(substs).unwrap();
                                 format!(
                                     "[closure@{}]",
                                     tcx.def_path_str_with_substs(def_id.to_def_id(), substs),
@@ -2530,7 +2527,7 @@ fn pretty_print_const(
 ) -> fmt::Result {
     use crate::ty::print::PrettyPrinter;
     ty::tls::with(|tcx| {
-        let literal = tcx.lift(&c).unwrap();
+        let literal = tcx.lift(c).unwrap();
         let mut cx = FmtPrinter::new(tcx, fmt, Namespace::ValueNS);
         cx.print_alloc_ids = true;
         cx.pretty_print_const(literal, print_types)?;
