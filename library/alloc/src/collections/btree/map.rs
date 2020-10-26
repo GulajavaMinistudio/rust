@@ -2,13 +2,14 @@ use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt::{self, Debug};
 use core::hash::{Hash, Hasher};
-use core::iter::{FromIterator, FusedIterator, Peekable};
+use core::iter::{FromIterator, FusedIterator};
 use core::marker::PhantomData;
 use core::mem::{self, ManuallyDrop};
 use core::ops::{Index, RangeBounds};
 use core::ptr;
 
 use super::borrow::DormantMutRef;
+use super::merge_iter::MergeIterInner;
 use super::node::{self, marker, ForceResult::*, Handle, NodeRef};
 use super::search::{self, SearchResult::*};
 use super::unwrap_unchecked;
@@ -16,6 +17,10 @@ use super::unwrap_unchecked;
 mod entry;
 pub use entry::{Entry, OccupiedEntry, VacantEntry};
 use Entry::*;
+
+/// Minimum number of elements in nodes that are not a root.
+/// We might temporarily have fewer elements during methods.
+pub(super) const MIN_LEN: usize = node::MIN_LEN_AFTER_SPLIT;
 
 /// A map based on a B-Tree.
 ///
@@ -454,10 +459,7 @@ impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for RangeMut<'_, K, V> {
 }
 
 // An iterator for merging two sorted sequences into one
-struct MergeIter<K, V, I: Iterator<Item = (K, V)>> {
-    left: Peekable<I>,
-    right: Peekable<I>,
-}
+struct MergeIter<K, V, I: Iterator<Item = (K, V)>>(MergeIterInner<I>);
 
 impl<K: Ord, V> BTreeMap<K, V> {
     /// Makes a new empty BTreeMap.
@@ -909,7 +911,7 @@ impl<K: Ord, V> BTreeMap<K, V> {
         // First, we merge `self` and `other` into a sorted sequence in linear time.
         let self_iter = mem::take(self).into_iter();
         let other_iter = mem::take(other).into_iter();
-        let iter = MergeIter { left: self_iter.peekable(), right: other_iter.peekable() };
+        let iter = MergeIter(MergeIterInner::new(self_iter, other_iter));
 
         // Second, we build a tree from the sorted sequence in linear time.
         self.from_sorted_iter(iter);
@@ -1094,13 +1096,13 @@ impl<K: Ord, V> BTreeMap<K, V> {
             // Check if right-most child is underfull.
             let mut last_edge = internal.last_edge();
             let right_child_len = last_edge.reborrow().descend().len();
-            if right_child_len < node::MIN_LEN {
+            if right_child_len < MIN_LEN {
                 // We need to steal.
                 let mut last_kv = match last_edge.left_kv() {
                     Ok(left) => left,
                     Err(_) => unreachable!(),
                 };
-                last_kv.bulk_steal_left(node::MIN_LEN - right_child_len);
+                last_kv.bulk_steal_left(MIN_LEN - right_child_len);
                 last_edge = last_kv.right_edge();
             }
 
@@ -2216,27 +2218,16 @@ impl<K, V> BTreeMap<K, V> {
     }
 }
 
-impl<K: Ord, V, I: Iterator<Item = (K, V)>> Iterator for MergeIter<K, V, I> {
+impl<K: Ord, V, I> Iterator for MergeIter<K, V, I>
+where
+    I: Iterator<Item = (K, V)> + ExactSizeIterator + FusedIterator,
+{
     type Item = (K, V);
 
+    /// If two keys are equal, returns the key/value-pair from the right source.
     fn next(&mut self) -> Option<(K, V)> {
-        let res = match (self.left.peek(), self.right.peek()) {
-            (Some(&(ref left_key, _)), Some(&(ref right_key, _))) => left_key.cmp(right_key),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => return None,
-        };
-
-        // Check which elements comes first and only advance the corresponding iterator.
-        // If two keys are equal, take the value from `right`.
-        match res {
-            Ordering::Less => self.left.next(),
-            Ordering::Greater => self.right.next(),
-            Ordering::Equal => {
-                self.left.next();
-                self.right.next()
-            }
-        }
+        let (a_next, b_next) = self.0.nexts(|a: &(K, V), b: &(K, V)| K::cmp(&a.0, &b.0));
+        b_next.or(a_next)
     }
 }
 
