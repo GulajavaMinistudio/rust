@@ -121,7 +121,7 @@ use std::os::windows::fs::symlink_file;
 use build_helper::{mtime, output, run, run_suppressed, t, try_run, try_run_suppressed};
 use filetime::FileTime;
 
-use crate::config::TargetSelection;
+use crate::config::{LlvmLibunwind, TargetSelection};
 use crate::util::{exe, libdir, CiEnv};
 
 mod builder;
@@ -306,6 +306,9 @@ pub enum Mode {
 
     /// Build librustc, and compiler libraries, placing output in the "stageN-rustc" directory.
     Rustc,
+
+    /// Build a codegen backend for rustc, placing the output in the "stageN-codegen" directory.
+    Codegen,
 
     /// Build a tool, placing output in the "stage0-bootstrap-tools"
     /// directory. This is for miscellaneous sets of tools that are built
@@ -537,8 +540,10 @@ impl Build {
     fn std_features(&self) -> String {
         let mut features = "panic-unwind".to_string();
 
-        if self.config.llvm_libunwind {
-            features.push_str(" llvm-libunwind");
+        match self.config.llvm_libunwind.unwrap_or_default() {
+            LlvmLibunwind::InTree => features.push_str(" llvm-libunwind"),
+            LlvmLibunwind::System => features.push_str(" system-llvm-libunwind"),
+            LlvmLibunwind::No => {}
         }
         if self.config.backtrace {
             features.push_str(" backtrace");
@@ -594,6 +599,7 @@ impl Build {
         let suffix = match mode {
             Mode::Std => "-std",
             Mode::Rustc => "-rustc",
+            Mode::Codegen => "-codegen",
             Mode::ToolBootstrap => "-bootstrap-tools",
             Mode::ToolStd | Mode::ToolRustc => "-tools",
         };

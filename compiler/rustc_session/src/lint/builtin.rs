@@ -2647,6 +2647,65 @@ declare_lint! {
     };
 }
 
+declare_lint! {
+    /// The `function_item_references` lint detects function references that are
+    /// formatted with [`fmt::Pointer`] or transmuted.
+    ///
+    /// [`fmt::Pointer`]: https://doc.rust-lang.org/std/fmt/trait.Pointer.html
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// fn foo() { }
+    ///
+    /// fn main() {
+    ///     println!("{:p}", &foo);
+    /// }
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// Taking a reference to a function may be mistaken as a way to obtain a
+    /// pointer to that function. This can give unexpected results when
+    /// formatting the reference as a pointer or transmuting it. This lint is
+    /// issued when function references are formatted as pointers, passed as
+    /// arguments bound by [`fmt::Pointer`] or transmuted.
+    pub FUNCTION_ITEM_REFERENCES,
+    Warn,
+    "suggest casting to a function pointer when attempting to take references to function items",
+}
+
+declare_lint! {
+    /// The `uninhabited_static` lint detects uninhabited statics.
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// enum Void {}
+    /// extern {
+    ///     static EXTERN: Void;
+    /// }
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// Statics with an uninhabited type can never be initialized, so they are impossible to define.
+    /// However, this can be side-stepped with an `extern static`, leading to problems later in the
+    /// compiler which assumes that there are no initialized uninhabited places (such as locals or
+    /// statics). This was accientally allowed, but is being phased out.
+    pub UNINHABITED_STATIC,
+    Warn,
+    "uninhabited static",
+    @future_incompatible = FutureIncompatibleInfo {
+        reference: "issue #74840 <https://github.com/rust-lang/rust/issues/74840>",
+        edition: None,
+    };
+}
+
 declare_tool_lint! {
     pub rustc::INEFFECTIVE_UNSTABLE_TRAIT_IMPL,
     Deny,
@@ -2732,6 +2791,8 @@ declare_lint_pass! {
         CENUM_IMPL_DROP_CAST,
         CONST_EVALUATABLE_UNCHECKED,
         INEFFECTIVE_UNSTABLE_TRAIT_IMPL,
+        UNINHABITED_STATIC,
+        FUNCTION_ITEM_REFERENCES,
     ]
 }
 
