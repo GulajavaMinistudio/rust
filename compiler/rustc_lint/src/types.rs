@@ -18,6 +18,7 @@ use rustc_target::abi::{Integer, LayoutOf, TagEncoding, VariantIdx, Variants};
 use rustc_target::spec::abi::Abi as SpecAbi;
 
 use std::cmp;
+use std::ops::ControlFlow;
 use tracing::debug;
 
 declare_lint! {
@@ -544,15 +545,15 @@ impl<'tcx> LateLintPass<'tcx> for TypeLimits {
         }
 
         fn is_comparison(binop: hir::BinOp) -> bool {
-            match binop.node {
+            matches!(
+                binop.node,
                 hir::BinOpKind::Eq
-                | hir::BinOpKind::Lt
-                | hir::BinOpKind::Le
-                | hir::BinOpKind::Ne
-                | hir::BinOpKind::Ge
-                | hir::BinOpKind::Gt => true,
-                _ => false,
-            }
+                    | hir::BinOpKind::Lt
+                    | hir::BinOpKind::Le
+                    | hir::BinOpKind::Ne
+                    | hir::BinOpKind::Ge
+                    | hir::BinOpKind::Gt
+            )
         }
     }
 }
@@ -1135,11 +1136,11 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
         };
 
         impl<'a, 'tcx> ty::fold::TypeVisitor<'tcx> for ProhibitOpaqueTypes<'a, 'tcx> {
-            fn visit_ty(&mut self, ty: Ty<'tcx>) -> bool {
+            fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow<()> {
                 match ty.kind() {
                     ty::Opaque(..) => {
                         self.ty = Some(ty);
-                        true
+                        ControlFlow::BREAK
                     }
                     // Consider opaque types within projections FFI-safe if they do not normalize
                     // to more opaque types.
@@ -1148,7 +1149,11 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
 
                         // If `ty` is a opaque type directly then `super_visit_with` won't invoke
                         // this function again.
-                        if ty.has_opaque_types() { self.visit_ty(ty) } else { false }
+                        if ty.has_opaque_types() {
+                            self.visit_ty(ty)
+                        } else {
+                            ControlFlow::CONTINUE
+                        }
                     }
                     _ => ty.super_visit_with(self),
                 }
@@ -1233,15 +1238,10 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
     }
 
     fn is_internal_abi(&self, abi: SpecAbi) -> bool {
-        if let SpecAbi::Rust
-        | SpecAbi::RustCall
-        | SpecAbi::RustIntrinsic
-        | SpecAbi::PlatformIntrinsic = abi
-        {
-            true
-        } else {
-            false
-        }
+        matches!(
+            abi,
+            SpecAbi::Rust | SpecAbi::RustCall | SpecAbi::RustIntrinsic | SpecAbi::PlatformIntrinsic
+        )
     }
 }
 
