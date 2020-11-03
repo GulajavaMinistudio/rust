@@ -155,6 +155,7 @@ pub struct AtomicBool {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Default for AtomicBool {
     /// Creates an `AtomicBool` initialized to `false`.
+    #[inline]
     fn default() -> Self {
         Self::new(false)
     }
@@ -800,6 +801,64 @@ impl AtomicBool {
     pub fn as_mut_ptr(&self) -> *mut bool {
         self.v.get() as *mut bool
     }
+
+    /// Fetches the value, and applies a function to it that returns an optional
+    /// new value. Returns a `Result` of `Ok(previous_value)` if the function
+    /// returned `Some(_)`, else `Err(previous_value)`.
+    ///
+    /// Note: This may call the function multiple times if the value has been
+    /// changed from other threads in the meantime, as long as the function
+    /// returns `Some(_)`, but the function will have been applied only once to
+    /// the stored value.
+    ///
+    /// `fetch_update` takes two [`Ordering`] arguments to describe the memory
+    /// ordering of this operation. The first describes the required ordering for
+    /// when the operation finally succeeds while the second describes the
+    /// required ordering for loads. These correspond to the success and failure
+    /// orderings of [`AtomicBool::compare_exchange`] respectively.
+    ///
+    /// Using [`Acquire`] as success ordering makes the store part of this
+    /// operation [`Relaxed`], and using [`Release`] makes the final successful
+    /// load [`Relaxed`]. The (failed) load ordering can only be [`SeqCst`],
+    /// [`Acquire`] or [`Relaxed`] and must be equivalent to or weaker than the
+    /// success ordering.
+    ///
+    /// **Note:** This method is only available on platforms that support atomic
+    /// operations on `u8`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// #![feature(atomic_fetch_update)]
+    /// use std::sync::atomic::{AtomicBool, Ordering};
+    ///
+    /// let x = AtomicBool::new(false);
+    /// assert_eq!(x.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |_| None), Err(false));
+    /// assert_eq!(x.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| Some(!x)), Ok(false));
+    /// assert_eq!(x.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| Some(!x)), Ok(true));
+    /// assert_eq!(x.load(Ordering::SeqCst), false);
+    /// ```
+    #[inline]
+    #[unstable(feature = "atomic_fetch_update", reason = "recently added", issue = "78639")]
+    #[cfg(target_has_atomic = "8")]
+    pub fn fetch_update<F>(
+        &self,
+        set_order: Ordering,
+        fetch_order: Ordering,
+        mut f: F,
+    ) -> Result<bool, bool>
+    where
+        F: FnMut(bool) -> Option<bool>,
+    {
+        let mut prev = self.load(fetch_order);
+        while let Some(next) = f(prev) {
+            match self.compare_exchange_weak(prev, next, set_order, fetch_order) {
+                x @ Ok(_) => return x,
+                Err(next_prev) => prev = next_prev,
+            }
+        }
+        Err(prev)
+    }
 }
 
 #[cfg(target_has_atomic_load_store = "ptr")]
@@ -1122,6 +1181,73 @@ impl<T> AtomicPtr<T> {
             }
         }
     }
+
+    /// Fetches the value, and applies a function to it that returns an optional
+    /// new value. Returns a `Result` of `Ok(previous_value)` if the function
+    /// returned `Some(_)`, else `Err(previous_value)`.
+    ///
+    /// Note: This may call the function multiple times if the value has been
+    /// changed from other threads in the meantime, as long as the function
+    /// returns `Some(_)`, but the function will have been applied only once to
+    /// the stored value.
+    ///
+    /// `fetch_update` takes two [`Ordering`] arguments to describe the memory
+    /// ordering of this operation. The first describes the required ordering for
+    /// when the operation finally succeeds while the second describes the
+    /// required ordering for loads. These correspond to the success and failure
+    /// orderings of [`AtomicPtr::compare_exchange`] respectively.
+    ///
+    /// Using [`Acquire`] as success ordering makes the store part of this
+    /// operation [`Relaxed`], and using [`Release`] makes the final successful
+    /// load [`Relaxed`]. The (failed) load ordering can only be [`SeqCst`],
+    /// [`Acquire`] or [`Relaxed`] and must be equivalent to or weaker than the
+    /// success ordering.
+    ///
+    /// **Note:** This method is only available on platforms that support atomic
+    /// operations on pointers.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// #![feature(atomic_fetch_update)]
+    /// use std::sync::atomic::{AtomicPtr, Ordering};
+    ///
+    /// let ptr: *mut _ = &mut 5;
+    /// let some_ptr = AtomicPtr::new(ptr);
+    ///
+    /// let new: *mut _ = &mut 10;
+    /// assert_eq!(some_ptr.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |_| None), Err(ptr));
+    /// let result = some_ptr.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+    ///     if x == ptr {
+    ///         Some(new)
+    ///     } else {
+    ///         None
+    ///     }
+    /// });
+    /// assert_eq!(result, Ok(ptr));
+    /// assert_eq!(some_ptr.load(Ordering::SeqCst), new);
+    /// ```
+    #[inline]
+    #[unstable(feature = "atomic_fetch_update", reason = "recently added", issue = "78639")]
+    #[cfg(target_has_atomic = "ptr")]
+    pub fn fetch_update<F>(
+        &self,
+        set_order: Ordering,
+        fetch_order: Ordering,
+        mut f: F,
+    ) -> Result<*mut T, *mut T>
+    where
+        F: FnMut(*mut T) -> Option<*mut T>,
+    {
+        let mut prev = self.load(fetch_order);
+        while let Some(next) = f(prev) {
+            match self.compare_exchange_weak(prev, next, set_order, fetch_order) {
+                x @ Ok(_) => return x,
+                Err(next_prev) => prev = next_prev,
+            }
+        }
+        Err(prev)
+    }
 }
 
 #[cfg(target_has_atomic_load_store = "8")]
@@ -1212,6 +1338,7 @@ macro_rules! atomic_int {
 
         #[$stable]
         impl Default for $atomic_type {
+            #[inline]
             fn default() -> Self {
                 Self::new(Default::default())
             }
@@ -2148,64 +2275,56 @@ atomic_int! {
     "AtomicU128::new(0)",
     u128 AtomicU128 ATOMIC_U128_INIT
 }
-#[cfg(target_has_atomic_load_store = "ptr")]
-#[cfg(target_pointer_width = "16")]
-macro_rules! ptr_width {
-    () => {
-        2
-    };
+
+macro_rules! atomic_int_ptr_sized {
+    ( $($target_pointer_width:literal $align:literal)* ) => { $(
+        #[cfg(target_has_atomic_load_store = "ptr")]
+        #[cfg(target_pointer_width = $target_pointer_width)]
+        atomic_int! {
+            cfg(target_has_atomic = "ptr"),
+            cfg(target_has_atomic_equal_alignment = "ptr"),
+            stable(feature = "rust1", since = "1.0.0"),
+            stable(feature = "extended_compare_and_swap", since = "1.10.0"),
+            stable(feature = "atomic_debug", since = "1.3.0"),
+            stable(feature = "atomic_access", since = "1.15.0"),
+            stable(feature = "atomic_from", since = "1.23.0"),
+            stable(feature = "atomic_nand", since = "1.27.0"),
+            rustc_const_stable(feature = "const_integer_atomics", since = "1.34.0"),
+            stable(feature = "rust1", since = "1.0.0"),
+            "isize", "../../../std/primitive.isize.html",
+            "",
+            atomic_min, atomic_max,
+            $align,
+            "AtomicIsize::new(0)",
+            isize AtomicIsize ATOMIC_ISIZE_INIT
+        }
+        #[cfg(target_has_atomic_load_store = "ptr")]
+        #[cfg(target_pointer_width = $target_pointer_width)]
+        atomic_int! {
+            cfg(target_has_atomic = "ptr"),
+            cfg(target_has_atomic_equal_alignment = "ptr"),
+            stable(feature = "rust1", since = "1.0.0"),
+            stable(feature = "extended_compare_and_swap", since = "1.10.0"),
+            stable(feature = "atomic_debug", since = "1.3.0"),
+            stable(feature = "atomic_access", since = "1.15.0"),
+            stable(feature = "atomic_from", since = "1.23.0"),
+            stable(feature = "atomic_nand", since = "1.27.0"),
+            rustc_const_stable(feature = "const_integer_atomics", since = "1.34.0"),
+            stable(feature = "rust1", since = "1.0.0"),
+            "usize", "../../../std/primitive.usize.html",
+            "",
+            atomic_umin, atomic_umax,
+            $align,
+            "AtomicUsize::new(0)",
+            usize AtomicUsize ATOMIC_USIZE_INIT
+        }
+    )* };
 }
-#[cfg(target_has_atomic_load_store = "ptr")]
-#[cfg(target_pointer_width = "32")]
-macro_rules! ptr_width {
-    () => {
-        4
-    };
-}
-#[cfg(target_has_atomic_load_store = "ptr")]
-#[cfg(target_pointer_width = "64")]
-macro_rules! ptr_width {
-    () => {
-        8
-    };
-}
-#[cfg(target_has_atomic_load_store = "ptr")]
-atomic_int! {
-    cfg(target_has_atomic = "ptr"),
-    cfg(target_has_atomic_equal_alignment = "ptr"),
-    stable(feature = "rust1", since = "1.0.0"),
-    stable(feature = "extended_compare_and_swap", since = "1.10.0"),
-    stable(feature = "atomic_debug", since = "1.3.0"),
-    stable(feature = "atomic_access", since = "1.15.0"),
-    stable(feature = "atomic_from", since = "1.23.0"),
-    stable(feature = "atomic_nand", since = "1.27.0"),
-    rustc_const_stable(feature = "const_integer_atomics", since = "1.34.0"),
-    stable(feature = "rust1", since = "1.0.0"),
-    "isize", "../../../std/primitive.isize.html",
-    "",
-    atomic_min, atomic_max,
-    ptr_width!(),
-    "AtomicIsize::new(0)",
-    isize AtomicIsize ATOMIC_ISIZE_INIT
-}
-#[cfg(target_has_atomic_load_store = "ptr")]
-atomic_int! {
-    cfg(target_has_atomic = "ptr"),
-    cfg(target_has_atomic_equal_alignment = "ptr"),
-    stable(feature = "rust1", since = "1.0.0"),
-    stable(feature = "extended_compare_and_swap", since = "1.10.0"),
-    stable(feature = "atomic_debug", since = "1.3.0"),
-    stable(feature = "atomic_access", since = "1.15.0"),
-    stable(feature = "atomic_from", since = "1.23.0"),
-    stable(feature = "atomic_nand", since = "1.27.0"),
-    rustc_const_stable(feature = "const_integer_atomics", since = "1.34.0"),
-    stable(feature = "rust1", since = "1.0.0"),
-    "usize", "../../../std/primitive.usize.html",
-    "",
-    atomic_umin, atomic_umax,
-    ptr_width!(),
-    "AtomicUsize::new(0)",
-    usize AtomicUsize ATOMIC_USIZE_INIT
+
+atomic_int_ptr_sized! {
+    "16" 2
+    "32" 4
+    "64" 8
 }
 
 #[inline]

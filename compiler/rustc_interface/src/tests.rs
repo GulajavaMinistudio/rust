@@ -477,6 +477,7 @@ fn test_debugging_options_tracking_hash() {
     untracked!(dump_mir_dir, String::from("abc"));
     untracked!(dump_mir_exclude_pass_number, true);
     untracked!(dump_mir_graphviz, true);
+    untracked!(emit_future_incompat_report, true);
     untracked!(emit_stack_sizes, true);
     untracked!(hir_stats, true);
     untracked!(identify_regions, true);
@@ -573,6 +574,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(print_fuel, Some("abc".to_string()));
     tracked!(profile, true);
     tracked!(profile_emit, Some(PathBuf::from("abc")));
+    tracked!(relax_elf_relocations, Some(true));
     tracked!(relro_level, Some(RelroLevel::Full));
     tracked!(report_delayed_bugs, true);
     tracked!(run_dsymutil, false);
