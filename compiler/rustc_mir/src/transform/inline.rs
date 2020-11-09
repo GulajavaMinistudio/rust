@@ -6,7 +6,6 @@ use rustc_index::vec::Idx;
 use rustc_middle::middle::codegen_fn_attrs::{CodegenFnAttrFlags, CodegenFnAttrs};
 use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
-use rustc_middle::ty::subst::Subst;
 use rustc_middle::ty::{self, ConstKind, Instance, InstanceDef, ParamEnv, Ty, TyCtxt};
 use rustc_span::{hygiene::ExpnKind, ExpnData, Span};
 use rustc_target::spec::abi::Abi;
@@ -128,17 +127,15 @@ impl Inliner<'tcx> {
                 self.tcx.instance_mir(callsite.callee.def)
             };
 
-            let callee_body: &Body<'tcx> = &*callee_body;
-
-            let callee_body = if self.consider_optimizing(callsite, callee_body) {
-                self.tcx.subst_and_normalize_erasing_regions(
-                    &callsite.callee.substs,
-                    self.param_env,
-                    callee_body,
-                )
-            } else {
+            if !self.consider_optimizing(callsite, &callee_body) {
                 continue;
-            };
+            }
+
+            let callee_body = callsite.callee.subst_mir_and_normalize_erasing_regions(
+                self.tcx,
+                self.param_env,
+                callee_body,
+            );
 
             let start = caller_body.basic_blocks().len();
             debug!("attempting to inline callsite {:?} - body={:?}", callsite, callee_body);
@@ -309,7 +306,7 @@ impl Inliner<'tcx> {
                     work_list.push(target);
                     // If the place doesn't actually need dropping, treat it like
                     // a regular goto.
-                    let ty = place.ty(callee_body, tcx).subst(tcx, callsite.callee.substs).ty;
+                    let ty = callsite.callee.subst_mir(self.tcx, &place.ty(callee_body, tcx).ty);
                     if ty.needs_drop(tcx, self.param_env) {
                         cost += CALL_PENALTY;
                         if let Some(unwind) = unwind {
@@ -371,8 +368,7 @@ impl Inliner<'tcx> {
         let ptr_size = tcx.data_layout.pointer_size.bytes();
 
         for v in callee_body.vars_and_temps_iter() {
-            let v = &callee_body.local_decls[v];
-            let ty = v.ty.subst(tcx, callsite.callee.substs);
+            let ty = callsite.callee.subst_mir(self.tcx, &callee_body.local_decls[v].ty);
             // Cost of the var is the size in machine-words, if we know
             // it.
             if let Some(size) = type_size_of(tcx, self.param_env, ty) {
@@ -425,7 +421,7 @@ impl Inliner<'tcx> {
                 }
 
                 let dest = if dest_needs_borrow(destination.0) {
-                    debug!("creating temp for return destination");
+                    trace!("creating temp for return destination");
                     let dest = Rvalue::Ref(
                         self.tcx.lifetimes.re_erased,
                         BorrowKind::Mut { allow_two_phase_borrow: false },
@@ -633,7 +629,7 @@ impl Inliner<'tcx> {
             }
         }
 
-        debug!("creating temp for argument {:?}", arg);
+        trace!("creating temp for argument {:?}", arg);
         // Otherwise, create a temporary for the arg
         let arg = Rvalue::Use(arg);
 
@@ -703,19 +699,19 @@ impl<'a, 'tcx> Integrator<'a, 'tcx> {
                 Local::new(self.new_locals.start.index() + (idx - self.args.len()))
             }
         };
-        debug!("mapping local `{:?}` to `{:?}`", local, new);
+        trace!("mapping local `{:?}` to `{:?}`", local, new);
         new
     }
 
     fn map_scope(&self, scope: SourceScope) -> SourceScope {
         let new = SourceScope::new(self.new_scopes.start.index() + scope.index());
-        debug!("mapping scope `{:?}` to `{:?}`", scope, new);
+        trace!("mapping scope `{:?}` to `{:?}`", scope, new);
         new
     }
 
     fn map_block(&self, block: BasicBlock) -> BasicBlock {
         let new = BasicBlock::new(self.new_blocks.start.index() + block.index());
-        debug!("mapping block `{:?}` to `{:?}`", block, new);
+        trace!("mapping block `{:?}` to `{:?}`", block, new);
         new
     }
 }
