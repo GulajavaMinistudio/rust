@@ -586,17 +586,17 @@ pub fn noop_visit_local<T: MutVisitor>(local: &mut P<Local>, vis: &mut T) {
 }
 
 pub fn noop_visit_attribute<T: MutVisitor>(attr: &mut Attribute, vis: &mut T) {
-    let Attribute { kind, id: _, style: _, span, tokens } = attr;
+    let Attribute { kind, id: _, style: _, span } = attr;
     match kind {
-        AttrKind::Normal(AttrItem { path, args, tokens }) => {
+        AttrKind::Normal(AttrItem { path, args, tokens }, attr_tokens) => {
             vis.visit_path(path);
             visit_mac_args(args, vis);
             visit_lazy_tts(tokens, vis);
+            visit_lazy_tts(attr_tokens, vis);
         }
         AttrKind::DocComment(..) => {}
     }
     vis.visit_span(span);
-    visit_lazy_tts(tokens, vis);
 }
 
 pub fn noop_visit_mac<T: MutVisitor>(mac: &mut MacCall, vis: &mut T) {
@@ -1288,7 +1288,11 @@ pub fn noop_visit_expr<T: MutVisitor>(
         ExprKind::Struct(path, fields, expr) => {
             vis.visit_path(path);
             fields.flat_map_in_place(|field| vis.flat_map_field(field));
-            visit_opt(expr, |expr| vis.visit_expr(expr));
+            match expr {
+                StructRest::Base(expr) => vis.visit_expr(expr),
+                StructRest::Rest(_span) => {}
+                StructRest::None => {}
+            }
         }
         ExprKind::Paren(expr) => {
             vis.visit_expr(expr);
