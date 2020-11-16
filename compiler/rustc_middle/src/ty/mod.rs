@@ -106,7 +106,6 @@ pub mod outlives;
 pub mod print;
 pub mod query;
 pub mod relate;
-pub mod steal;
 pub mod subst;
 pub mod trait_def;
 pub mod util;
@@ -609,6 +608,18 @@ pub struct TyS<'tcx> {
     /// De Bruijn indices within the type are contained within `0..D`
     /// (exclusive).
     outer_exclusive_binder: ty::DebruijnIndex,
+}
+
+impl<'tcx> TyS<'tcx> {
+    /// A constructor used only for internal testing.
+    #[allow(rustc::usage_of_ty_tykind)]
+    pub fn make_for_test(
+        kind: TyKind<'tcx>,
+        flags: TypeFlags,
+        outer_exclusive_binder: ty::DebruijnIndex,
+    ) -> TyS<'tcx> {
+        TyS { kind, flags, outer_exclusive_binder }
+    }
 }
 
 // `TyS` is used a lot. Make sure it doesn't unintentionally get bigger.

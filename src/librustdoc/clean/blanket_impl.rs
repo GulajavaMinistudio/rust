@@ -62,14 +62,30 @@ impl<'a, 'tcx> BlanketImplFinder<'a, 'tcx> {
                             "invoking predicate_may_hold: param_env={:?}, trait_ref={:?}, ty={:?}",
                             param_env, trait_ref, ty
                         );
-                        match infcx.evaluate_obligation(&traits::Obligation::new(
-                            cause,
-                            param_env,
-                            trait_ref.without_const().to_predicate(infcx.tcx),
-                        )) {
-                            Ok(eval_result) => eval_result.may_apply(),
-                            Err(traits::OverflowError) => true, // overflow doesn't mean yes *or* no
+                        let predicates = self
+                            .cx
+                            .tcx
+                            .predicates_of(impl_def_id)
+                            .instantiate(self.cx.tcx, impl_substs)
+                            .predicates
+                            .into_iter()
+                            .chain(Some(trait_ref.without_const().to_predicate(infcx.tcx)));
+                        for predicate in predicates {
+                            debug!("testing predicate {:?}", predicate);
+                            let obligation = traits::Obligation::new(
+                                traits::ObligationCause::dummy(),
+                                param_env,
+                                predicate,
+                            );
+                            match infcx.evaluate_obligation(&obligation) {
+                                Ok(eval_result) if eval_result.may_apply() => {}
+                                Err(traits::OverflowError) => {}
+                                _ => {
+                                    return false;
+                                }
+                            }
                         }
+                        true
                     } else {
                         false
                     }
@@ -98,7 +114,7 @@ impl<'a, 'tcx> BlanketImplFinder<'a, 'tcx> {
                     def_id: self.cx.next_def_id(impl_def_id.krate),
                     stability: None,
                     deprecation: None,
-                    inner: ImplItem(Impl {
+                    kind: ImplItem(Impl {
                         unsafety: hir::Unsafety::Normal,
                         generics: (
                             self.cx.tcx.generics_of(impl_def_id),

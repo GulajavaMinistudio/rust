@@ -3,7 +3,6 @@ use crate::llvm;
 use libc::c_int;
 use rustc_codegen_ssa::target_features::supported_target_features;
 use rustc_data_structures::fx::FxHashSet;
-use rustc_feature::UnstableFeatures;
 use rustc_middle::bug;
 use rustc_session::config::PrintRequest;
 use rustc_session::Session;
@@ -104,7 +103,7 @@ unsafe fn configure_llvm(sess: &Session) {
         }
     }
 
-    if sess.opts.debugging_opts.llvm_time_trace && get_major_version() >= 9 {
+    if sess.opts.debugging_opts.llvm_time_trace {
         // time-trace is not thread safe and running it in parallel will cause seg faults.
         if !sess.opts.debugging_opts.no_parallel_llvm {
             bug!("`-Z llvm-time-trace` requires `-Z no-parallel-llvm")
@@ -122,10 +121,8 @@ unsafe fn configure_llvm(sess: &Session) {
 
 pub fn time_trace_profiler_finish(file_name: &str) {
     unsafe {
-        if get_major_version() >= 9 {
-            let file_name = CString::new(file_name).unwrap();
-            llvm::LLVMTimeTraceProfilerFinish(file_name.as_ptr());
-        }
+        let file_name = CString::new(file_name).unwrap();
+        llvm::LLVMTimeTraceProfilerFinish(file_name.as_ptr());
     }
 }
 
@@ -149,13 +146,11 @@ pub fn target_features(sess: &Session) -> Vec<Symbol> {
     let target_machine = create_informational_target_machine(sess);
     supported_target_features(sess)
         .iter()
-        .filter_map(|&(feature, gate)| {
-            if UnstableFeatures::from_environment().is_nightly_build() || gate.is_none() {
-                Some(feature)
-            } else {
-                None
-            }
-        })
+        .filter_map(
+            |&(feature, gate)| {
+                if sess.is_nightly_build() || gate.is_none() { Some(feature) } else { None }
+            },
+        )
         .filter(|feature| {
             let llvm_feature = to_llvm_feature(sess, feature);
             let cstr = CString::new(llvm_feature).unwrap();

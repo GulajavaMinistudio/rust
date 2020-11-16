@@ -377,11 +377,6 @@ fn get_pgo_use_path(config: &ModuleConfig) -> Option<CString> {
 }
 
 pub(crate) fn should_use_new_llvm_pass_manager(config: &ModuleConfig) -> bool {
-    // We only support the new pass manager starting with LLVM 9.
-    if llvm_util::get_major_version() < 9 {
-        return false;
-    }
-
     // The new pass manager is disabled by default.
     config.new_llvm_pass_manager
 }
@@ -925,9 +920,7 @@ unsafe fn embed_bitcode(
         || cgcx.opts.target_triple.triple().starts_with("asmjs")
     {
         // nothing to do here
-    } else if cgcx.opts.target_triple.triple().contains("windows")
-        || cgcx.opts.target_triple.triple().contains("uefi")
-    {
+    } else if cgcx.is_pe_coff {
         let asm = "
             .section .llvmbc,\"n\"
             .section .llvmcmd,\"n\"
