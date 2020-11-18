@@ -420,7 +420,9 @@ impl<'tcx> Body<'tcx> {
     /// Returns an iterator over all user-defined variables and compiler-generated temporaries (all
     /// locals that are neither arguments nor the return place).
     #[inline]
-    pub fn vars_and_temps_iter(&self) -> impl Iterator<Item = Local> + ExactSizeIterator {
+    pub fn vars_and_temps_iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = Local> + ExactSizeIterator {
         let arg_count = self.arg_count;
         let local_count = self.local_decls.len();
         (arg_count + 1..local_count).map(Local::new)
@@ -2462,7 +2464,10 @@ impl<'tcx> TypeFoldable<'tcx> for UserTypeProjection {
         }
     }
 
-    fn super_visit_with<Vs: TypeVisitor<'tcx>>(&self, visitor: &mut Vs) -> ControlFlow<()> {
+    fn super_visit_with<Vs: TypeVisitor<'tcx>>(
+        &self,
+        visitor: &mut Vs,
+    ) -> ControlFlow<Vs::BreakTy> {
         self.base.visit_with(visitor)
         // Note: there's nothing in `self.proj` to visit.
     }

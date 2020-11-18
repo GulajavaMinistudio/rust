@@ -415,9 +415,19 @@ pub struct TypeckResults<'tcx> {
     /// entire variable.
     pub closure_captures: ty::UpvarListMap,
 
+    /// Tracks the minimum captures required for a closure;
+    /// see `MinCaptureInformationMap` for more details.
+    pub closure_min_captures: ty::MinCaptureInformationMap<'tcx>,
+
     /// Stores the type, expression, span and optional scope span of all types
     /// that are live across the yield of this generator (if a generator).
     pub generator_interior_types: Vec<GeneratorInteriorTypeCause<'tcx>>,
+
+    /// We sometimes treat byte string literals (which are of type `&[u8; N]`)
+    /// as `&[u8]`, depending on the pattern  in which they are used.
+    /// This hashset records all instances where we behave
+    /// like this to allow `const_to_pat` to reliably handle this situation.
+    pub treat_byte_string_as_slice: ItemLocalSet,
 }
 
 impl<'tcx> TypeckResults<'tcx> {
@@ -442,7 +452,9 @@ impl<'tcx> TypeckResults<'tcx> {
             tainted_by_errors: None,
             concrete_opaque_types: Default::default(),
             closure_captures: Default::default(),
+            closure_min_captures: Default::default(),
             generator_interior_types: Default::default(),
+            treat_byte_string_as_slice: Default::default(),
         }
     }
 
@@ -676,7 +688,9 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for TypeckResults<'tcx> {
             tainted_by_errors,
             ref concrete_opaque_types,
             ref closure_captures,
+            ref closure_min_captures,
             ref generator_interior_types,
+            ref treat_byte_string_as_slice,
         } = *self;
 
         hcx.with_node_id_hashing_mode(NodeIdHashingMode::HashDefPath, |hcx| {
@@ -709,7 +723,9 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for TypeckResults<'tcx> {
             tainted_by_errors.hash_stable(hcx, hasher);
             concrete_opaque_types.hash_stable(hcx, hasher);
             closure_captures.hash_stable(hcx, hasher);
+            closure_min_captures.hash_stable(hcx, hasher);
             generator_interior_types.hash_stable(hcx, hasher);
+            treat_byte_string_as_slice.hash_stable(hcx, hasher);
         })
     }
 }

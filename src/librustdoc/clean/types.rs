@@ -112,6 +112,48 @@ impl Item {
         self.attrs.doc_value()
     }
 
+    /// Convenience wrapper around [`Self::from_def_id_and_parts`] which converts
+    /// `hir_id` to a [`DefId`]
+    pub fn from_hir_id_and_parts(
+        hir_id: hir::HirId,
+        name: Option<Symbol>,
+        kind: ItemKind,
+        cx: &DocContext<'_>,
+    ) -> Item {
+        Item::from_def_id_and_parts(cx.tcx.hir().local_def_id(hir_id).to_def_id(), name, kind, cx)
+    }
+
+    pub fn from_def_id_and_parts(
+        def_id: DefId,
+        name: Option<Symbol>,
+        kind: ItemKind,
+        cx: &DocContext<'_>,
+    ) -> Item {
+        use super::Clean;
+
+        debug!("name={:?}, def_id={:?}", name, def_id);
+
+        // `span_if_local()` lies about functions and only gives the span of the function signature
+        let source = def_id.as_local().map_or_else(
+            || cx.tcx.def_span(def_id),
+            |local| {
+                let hir = cx.tcx.hir();
+                hir.span_with_body(hir.local_def_id_to_hir_id(local))
+            },
+        );
+
+        Item {
+            def_id,
+            kind,
+            name: name.clean(cx),
+            source: source.clean(cx),
+            attrs: cx.tcx.get_attrs(def_id).clean(cx),
+            visibility: cx.tcx.visibility(def_id).clean(cx),
+            stability: cx.tcx.lookup_stability(def_id).cloned(),
+            deprecation: cx.tcx.lookup_deprecation(def_id).clean(cx),
+        }
+    }
+
     /// Finds all `doc` attributes as NameValues and returns their corresponding values, joined
     /// with newlines.
     crate fn collapsed_doc_value(&self) -> Option<String> {
@@ -227,12 +269,8 @@ impl Item {
 
     crate fn is_default(&self) -> bool {
         match self.kind {
-            ItemKind::MethodItem(ref meth) => {
-                if let Some(defaultness) = meth.defaultness {
-                    defaultness.has_value() && !defaultness.is_final()
-                } else {
-                    false
-                }
+            ItemKind::MethodItem(_, Some(defaultness)) => {
+                defaultness.has_value() && !defaultness.is_final()
             }
             _ => false,
         }
@@ -264,9 +302,9 @@ crate enum ItemKind {
     ImplItem(Impl),
     /// A method signature only. Used for required methods in traits (ie,
     /// non-default-methods).
-    TyMethodItem(TyMethod),
+    TyMethodItem(Function),
     /// A method with a body.
-    MethodItem(Method),
+    MethodItem(Function, Option<hir::Defaultness>),
     StructFieldItem(Type),
     VariantItem(Variant),
     /// `fn`s from an extern block
@@ -911,25 +949,6 @@ crate struct Generics {
 }
 
 #[derive(Clone, Debug)]
-crate struct Method {
-    crate generics: Generics,
-    crate decl: FnDecl,
-    crate header: hir::FnHeader,
-    crate defaultness: Option<hir::Defaultness>,
-    crate all_types: Vec<(Type, TypeKind)>,
-    crate ret_types: Vec<(Type, TypeKind)>,
-}
-
-#[derive(Clone, Debug)]
-crate struct TyMethod {
-    crate header: hir::FnHeader,
-    crate decl: FnDecl,
-    crate generics: Generics,
-    crate all_types: Vec<(Type, TypeKind)>,
-    crate ret_types: Vec<(Type, TypeKind)>,
-}
-
-#[derive(Clone, Debug)]
 crate struct Function {
     crate decl: FnDecl,
     crate generics: Generics,
@@ -1026,7 +1045,6 @@ impl GetDefId for FnRetTy {
 
 #[derive(Clone, Debug)]
 crate struct Trait {
-    crate auto: bool,
     crate unsafety: hir::Unsafety,
     crate items: Vec<Item>,
     crate generics: Generics,
@@ -1484,12 +1502,17 @@ impl From<hir::PrimTy> for PrimitiveType {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug)]
 crate enum Visibility {
     Public,
     Inherited,
-    Crate,
-    Restricted(DefId, Path),
+    Restricted(DefId, rustc_hir::definitions::DefPath),
+}
+
+impl Visibility {
+    crate fn is_public(&self) -> bool {
+        matches!(self, Visibility::Public)
+    }
 }
 
 #[derive(Clone, Debug)]
