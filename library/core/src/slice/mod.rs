@@ -2599,6 +2599,34 @@ impl<T> [T] {
         }
     }
 
+    /// Fills `self` with elements returned by calling a closure repeatedly.
+    ///
+    /// This method uses a closure to create new values. If you'd rather
+    /// [`Clone`] a given value, use [`fill`]. If you want to use the [`Default`]
+    /// trait to generate values, you can pass [`Default::default`] as the
+    /// argument.
+    ///
+    /// [`fill`]: #method.fill
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(slice_fill_with)]
+    ///
+    /// let mut buf = vec![1; 10];
+    /// buf.fill_with(Default::default);
+    /// assert_eq!(buf, vec![0; 10]);
+    /// ```
+    #[unstable(feature = "slice_fill_with", issue = "79221")]
+    pub fn fill_with<F>(&mut self, mut f: F)
+    where
+        F: FnMut() -> T,
+    {
+        for el in self {
+            *el = f();
+        }
+    }
+
     /// Copies the elements from `src` into `self`.
     ///
     /// The length of `src` must be the same as `self`.
@@ -2724,6 +2752,7 @@ impl<T> [T] {
     ///
     /// [`clone_from_slice`]: #method.clone_from_slice
     /// [`split_at_mut`]: #method.split_at_mut
+    #[doc(alias = "memcpy")]
     #[stable(feature = "copy_from_slice", since = "1.9.0")]
     pub fn copy_from_slice(&mut self, src: &[T])
     where
