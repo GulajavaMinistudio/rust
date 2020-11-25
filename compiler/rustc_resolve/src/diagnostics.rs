@@ -143,7 +143,7 @@ impl<'a> Resolver<'a> {
                     _ => {
                         bug!(
                             "GenericParamsFromOuterFunction should only be used with Res::SelfTy, \
-                            DefKind::TyParam"
+                            DefKind::TyParam or DefKind::ConstParam"
                         );
                     }
                 }
@@ -481,6 +481,7 @@ impl<'a> Resolver<'a> {
                         name
                     ));
                 }
+                err.help("use `#![feature(const_generics)]` and `#![feature(const_evaluatable_checked)]` to allow generic const expressions");
 
                 err
             }
