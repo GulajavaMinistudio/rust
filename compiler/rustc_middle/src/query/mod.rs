@@ -130,8 +130,8 @@ rustc_queries! {
             storage(ArenaCacheSelector<'tcx>)
             cache_on_disk_if { key.is_local() }
             load_cached(tcx, id) {
-                let generics: Option<ty::Generics> = tcx.queries.on_disk_cache
-                                                        .try_load_query_result(tcx, id);
+                let generics: Option<ty::Generics> = tcx.queries.on_disk_cache.as_ref()
+                                                        .and_then(|c| c.try_load_query_result(tcx, id));
                 generics
             }
         }
@@ -635,6 +635,10 @@ rustc_queries! {
             desc { |tcx| "checking loops in {}", describe_as_module(key, tcx) }
         }
 
+        query check_mod_naked_functions(key: LocalDefId) -> () {
+            desc { |tcx| "checking naked functions in {}", describe_as_module(key, tcx) }
+        }
+
         query check_mod_item_types(key: LocalDefId) -> () {
             desc { |tcx| "checking item types in {}", describe_as_module(key, tcx) }
         }
@@ -688,8 +692,8 @@ rustc_queries! {
             cache_on_disk_if { true }
             load_cached(tcx, id) {
                 let typeck_results: Option<ty::TypeckResults<'tcx>> = tcx
-                    .queries.on_disk_cache
-                    .try_load_query_result(tcx, id);
+                    .queries.on_disk_cache.as_ref()
+                    .and_then(|c| c.try_load_query_result(tcx, id));
 
                 typeck_results.map(|x| &*tcx.arena.alloc(x))
             }
