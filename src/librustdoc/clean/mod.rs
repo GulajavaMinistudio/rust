@@ -122,7 +122,7 @@ impl Clean<ExternalCrate> for CrateNum {
                         }
                     }
                 }
-                return prim.map(|p| (def_id, p, attrs));
+                return prim.map(|p| (def_id, p));
             }
             None
         };
@@ -144,9 +144,9 @@ impl Clean<ExternalCrate> for CrateNum {
                         hir::ItemKind::Use(ref path, hir::UseKind::Single)
                             if item.vis.node.is_pub() =>
                         {
-                            as_primitive(path.res).map(|(_, prim, attrs)| {
+                            as_primitive(path.res).map(|(_, prim)| {
                                 // Pretend the primitive is local.
-                                (cx.tcx.hir().local_def_id(id.id).to_def_id(), prim, attrs)
+                                (cx.tcx.hir().local_def_id(id.id).to_def_id(), prim)
                             })
                         }
                         _ => None,
@@ -162,22 +162,34 @@ impl Clean<ExternalCrate> for CrateNum {
                 .collect()
         };
 
+        let get_span =
+            |attr: &ast::NestedMetaItem| Some(attr.meta_item()?.name_value_literal()?.span);
+
         let as_keyword = |res: Res| {
             if let Res::Def(DefKind::Mod, def_id) = res {
                 let attrs = cx.tcx.get_attrs(def_id).clean(cx);
                 let mut keyword = None;
                 for attr in attrs.lists(sym::doc) {
-                    if let Some(v) = attr.value_str() {
-                        if attr.has_name(sym::keyword) {
-                            if v.is_doc_keyword() {
-                                keyword = Some(v.to_string());
-                                break;
+                    if attr.has_name(sym::keyword) {
+                        if let Some(v) = attr.value_str() {
+                            let k = v.to_string();
+                            if !rustc_lexer::is_ident(&k) {
+                                let sp = get_span(&attr).unwrap_or_else(|| attr.span());
+                                cx.tcx
+                                    .sess
+                                    .struct_span_err(
+                                        sp,
+                                        &format!("`{}` is not a valid identifier", v),
+                                    )
+                                    .emit();
+                            } else {
+                                keyword = Some(k);
                             }
-                            // FIXME: should warn on unknown keywords?
+                            break;
                         }
                     }
                 }
-                return keyword.map(|p| (def_id, p, attrs));
+                return keyword.map(|p| (def_id, p));
             }
             None
         };
@@ -199,8 +211,8 @@ impl Clean<ExternalCrate> for CrateNum {
                         hir::ItemKind::Use(ref path, hir::UseKind::Single)
                             if item.vis.node.is_pub() =>
                         {
-                            as_keyword(path.res).map(|(_, prim, attrs)| {
-                                (cx.tcx.hir().local_def_id(id.id).to_def_id(), prim, attrs)
+                            as_keyword(path.res).map(|(_, prim)| {
+                                (cx.tcx.hir().local_def_id(id.id).to_def_id(), prim)
                             })
                         }
                         _ => None,
@@ -1099,7 +1111,7 @@ impl Clean<Item> for hir::TraitItem<'_> {
                     AssocTypeItem(bounds.clean(cx), default.clean(cx))
                 }
             };
-            Item::from_def_id_and_parts(local_did, Some(self.ident.name), inner, cx)
+            Item::from_def_id_and_parts(local_did, Some(self.ident.name.clean(cx)), inner, cx)
         })
     }
 }
@@ -1127,7 +1139,7 @@ impl Clean<Item> for hir::ImplItem<'_> {
                     TypedefItem(Typedef { type_, generics: Generics::default(), item_type }, true)
                 }
             };
-            Item::from_def_id_and_parts(local_did, Some(self.ident.name), inner, cx)
+            Item::from_def_id_and_parts(local_did, Some(self.ident.name.clean(cx)), inner, cx)
         })
     }
 }
@@ -1284,7 +1296,7 @@ impl Clean<Item> for ty::AssocItem {
             }
         };
 
-        Item::from_def_id_and_parts(self.def_id, Some(self.ident.name), kind, cx)
+        Item::from_def_id_and_parts(self.def_id, Some(self.ident.name.clean(cx)), kind, cx)
     }
 }
 
@@ -1503,7 +1515,9 @@ impl Clean<Type> for hir::Ty<'_> {
 }
 
 /// Returns `None` if the type could not be normalized
+#[allow(unreachable_code, unused_variables)]
 fn normalize(cx: &DocContext<'tcx>, ty: Ty<'_>) -> Option<Ty<'tcx>> {
+    return None; // HACK: low-churn fix for #79459 while we wait for a trait normalization fix
     use crate::rustc_trait_selection::infer::TyCtxtInferExt;
     use crate::rustc_trait_selection::traits::query::normalize::AtExt;
     use rustc_middle::traits::ObligationCause;
@@ -1769,7 +1783,7 @@ impl Clean<Item> for ty::FieldDef {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
         let what_rustc_thinks = Item::from_def_id_and_parts(
             self.did,
-            Some(self.ident.name),
+            Some(self.ident.name.clean(cx)),
             StructFieldItem(cx.tcx.type_of(self.did).clean(cx)),
             cx,
         );
@@ -1844,22 +1858,20 @@ impl Clean<Item> for ty::VariantDef {
                 fields: self
                     .fields
                     .iter()
-                    .map(|field| Item {
-                        source: cx.tcx.def_span(field.did).clean(cx),
-                        name: Some(field.ident.name.clean(cx)),
-                        attrs: cx.tcx.get_attrs(field.did).clean(cx),
-                        visibility: Visibility::Inherited,
-                        def_id: field.did,
-                        stability: get_stability(cx, field.did),
-                        deprecation: get_deprecation(cx, field.did),
-                        kind: StructFieldItem(cx.tcx.type_of(field.did).clean(cx)),
+                    .map(|field| {
+                        let name = Some(field.ident.name.clean(cx));
+                        let kind = StructFieldItem(cx.tcx.type_of(field.did).clean(cx));
+                        let what_rustc_thinks =
+                            Item::from_def_id_and_parts(field.did, name, kind, cx);
+                        // don't show `pub` for fields, which are always public
+                        Item { visibility: Visibility::Inherited, ..what_rustc_thinks }
                     })
                     .collect(),
             }),
         };
         let what_rustc_thinks = Item::from_def_id_and_parts(
             self.def_id,
-            Some(self.ident.name),
+            Some(self.ident.name.clean(cx)),
             VariantItem(Variant { kind }),
             cx,
         );
@@ -2057,7 +2069,7 @@ impl Clean<Vec<Item>> for (&hir::Item<'_>, Option<Ident>) {
                 _ => unreachable!("not yet converted"),
             };
 
-            vec![Item::from_def_id_and_parts(def_id, Some(name), kind, cx)]
+            vec![Item::from_def_id_and_parts(def_id, Some(name.clean(cx)), kind, cx)]
         })
     }
 }
@@ -2315,22 +2327,49 @@ impl Clean<Item> for (&hir::ForeignItem<'_>, Option<Ident>) {
     }
 }
 
-impl Clean<Item> for doctree::Macro {
+impl Clean<Item> for (&hir::MacroDef<'_>, Option<Ident>) {
     fn clean(&self, cx: &DocContext<'_>) -> Item {
-        Item::from_def_id_and_parts(
-            self.def_id,
-            Some(self.name),
-            MacroItem(Macro {
-                source: format!(
-                    "macro_rules! {} {{\n{}}}",
-                    self.name,
-                    self.matchers
+        let (item, renamed) = self;
+        let name = renamed.unwrap_or(item.ident).name;
+        let tts = item.ast.body.inner_tokens().trees().collect::<Vec<_>>();
+        // Extract the spans of all matchers. They represent the "interface" of the macro.
+        let matchers = tts.chunks(4).map(|arm| arm[0].span()).collect::<Vec<_>>();
+        let source = if item.ast.macro_rules {
+            format!(
+                "macro_rules! {} {{\n{}}}",
+                name,
+                matchers
+                    .iter()
+                    .map(|span| { format!("    {} => {{ ... }};\n", span.to_src(cx)) })
+                    .collect::<String>(),
+            )
+        } else {
+            let vis = item.vis.clean(cx);
+
+            if matchers.len() <= 1 {
+                format!(
+                    "{}macro {}{} {{\n    ...\n}}",
+                    vis.print_with_space(),
+                    name,
+                    matchers.iter().map(|span| span.to_src(cx)).collect::<String>(),
+                )
+            } else {
+                format!(
+                    "{}macro {} {{\n{}}}",
+                    vis.print_with_space(),
+                    name,
+                    matchers
                         .iter()
-                        .map(|span| { format!("    {} => {{ ... }};\n", span.to_src(cx)) })
-                        .collect::<String>()
-                ),
-                imported_from: self.imported_from.clean(cx),
-            }),
+                        .map(|span| { format!("    {} => {{ ... }},\n", span.to_src(cx)) })
+                        .collect::<String>(),
+                )
+            }
+        };
+
+        Item::from_hir_id_and_parts(
+            item.hir_id,
+            Some(name),
+            MacroItem(Macro { source, imported_from: None }),
             cx,
         )
     }
