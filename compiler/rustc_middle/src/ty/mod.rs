@@ -56,7 +56,7 @@ pub use self::sty::InferTy::*;
 pub use self::sty::RegionKind;
 pub use self::sty::RegionKind::*;
 pub use self::sty::TyKind::*;
-pub use self::sty::{Binder, BoundTy, BoundTyKind, BoundVar, DebruijnIndex, INNERMOST};
+pub use self::sty::{Binder, BoundTy, BoundTyKind, BoundVar};
 pub use self::sty::{BoundRegion, EarlyBoundRegion, FreeRegion, Region};
 pub use self::sty::{CanonicalPolyFnSig, FnSig, GenSig, PolyFnSig, PolyGenSig};
 pub use self::sty::{ClosureSubsts, GeneratorSubsts, TypeAndMut, UpvarSubsts};
@@ -67,6 +67,7 @@ pub use self::sty::{ExistentialProjection, PolyExistentialProjection};
 pub use self::sty::{ExistentialTraitRef, PolyExistentialTraitRef};
 pub use self::sty::{PolyTraitRef, TraitRef, TyKind};
 pub use crate::ty::diagnostics::*;
+pub use rustc_type_ir::{DebruijnIndex, TypeFlags, INNERMOST};
 
 pub use self::binding::BindingMode;
 pub use self::binding::BindingMode::*;
@@ -497,91 +498,6 @@ pub struct CReaderCacheKey {
     pub pos: usize,
 }
 
-bitflags! {
-    /// Flags that we track on types. These flags are propagated upwards
-    /// through the type during type construction, so that we can quickly check
-    /// whether the type has various kinds of types in it without recursing
-    /// over the type itself.
-    pub struct TypeFlags: u32 {
-        // Does this have parameters? Used to determine whether substitution is
-        // required.
-        /// Does this have [Param]?
-        const HAS_TY_PARAM                = 1 << 0;
-        /// Does this have [ReEarlyBound]?
-        const HAS_RE_PARAM                = 1 << 1;
-        /// Does this have [ConstKind::Param]?
-        const HAS_CT_PARAM                = 1 << 2;
-
-        const NEEDS_SUBST                 = TypeFlags::HAS_TY_PARAM.bits
-                                          | TypeFlags::HAS_RE_PARAM.bits
-                                          | TypeFlags::HAS_CT_PARAM.bits;
-
-        /// Does this have [Infer]?
-        const HAS_TY_INFER                = 1 << 3;
-        /// Does this have [ReVar]?
-        const HAS_RE_INFER                = 1 << 4;
-        /// Does this have [ConstKind::Infer]?
-        const HAS_CT_INFER                = 1 << 5;
-
-        /// Does this have inference variables? Used to determine whether
-        /// inference is required.
-        const NEEDS_INFER                 = TypeFlags::HAS_TY_INFER.bits
-                                          | TypeFlags::HAS_RE_INFER.bits
-                                          | TypeFlags::HAS_CT_INFER.bits;
-
-        /// Does this have [Placeholder]?
-        const HAS_TY_PLACEHOLDER          = 1 << 6;
-        /// Does this have [RePlaceholder]?
-        const HAS_RE_PLACEHOLDER          = 1 << 7;
-        /// Does this have [ConstKind::Placeholder]?
-        const HAS_CT_PLACEHOLDER          = 1 << 8;
-
-        /// `true` if there are "names" of regions and so forth
-        /// that are local to a particular fn/inferctxt
-        const HAS_FREE_LOCAL_REGIONS      = 1 << 9;
-
-        /// `true` if there are "names" of types and regions and so forth
-        /// that are local to a particular fn
-        const HAS_FREE_LOCAL_NAMES        = TypeFlags::HAS_TY_PARAM.bits
-                                          | TypeFlags::HAS_CT_PARAM.bits
-                                          | TypeFlags::HAS_TY_INFER.bits
-                                          | TypeFlags::HAS_CT_INFER.bits
-                                          | TypeFlags::HAS_TY_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_CT_PLACEHOLDER.bits
-                                          | TypeFlags::HAS_FREE_LOCAL_REGIONS.bits;
-
-        /// Does this have [Projection]?
-        const HAS_TY_PROJECTION           = 1 << 10;
-        /// Does this have [Opaque]?
-        const HAS_TY_OPAQUE               = 1 << 11;
-        /// Does this have [ConstKind::Unevaluated]?
-        const HAS_CT_PROJECTION           = 1 << 12;
-
-        /// Could this type be normalized further?
-        const HAS_PROJECTION              = TypeFlags::HAS_TY_PROJECTION.bits
-                                          | TypeFlags::HAS_TY_OPAQUE.bits
-                                          | TypeFlags::HAS_CT_PROJECTION.bits;
-
-        /// Is an error type/const reachable?
-        const HAS_ERROR                   = 1 << 13;
-
-        /// Does this have any region that "appears free" in the type?
-        /// Basically anything but [ReLateBound] and [ReErased].
-        const HAS_FREE_REGIONS            = 1 << 14;
-
-        /// Does this have any [ReLateBound] regions? Used to check
-        /// if a global bound is safe to evaluate.
-        const HAS_RE_LATE_BOUND           = 1 << 15;
-
-        /// Does this have any [ReErased] regions?
-        const HAS_RE_ERASED               = 1 << 16;
-
-        /// Does this value have parameters/placeholders/inference variables which could be
-        /// replaced later, in a way that would change the results of `impl` specialization?
-        const STILL_FURTHER_SPECIALIZABLE = 1 << 17;
-    }
-}
-
 #[allow(rustc::usage_of_ty_tykind)]
 pub struct TyS<'tcx> {
     /// This field shouldn't be used directly and may be removed in the future.
@@ -672,7 +588,18 @@ impl<'a, 'tcx> HashStable<StableHashingContext<'a>> for TyS<'tcx> {
 #[rustc_diagnostic_item = "Ty"]
 pub type Ty<'tcx> = &'tcx TyS<'tcx>;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable, HashStable)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    TyEncodable,
+    TyDecodable,
+    TypeFoldable,
+    HashStable
+)]
 pub struct UpvarPath {
     pub hir_id: hir::HirId,
 }
@@ -680,7 +607,7 @@ pub struct UpvarPath {
 /// Upvars do not get their own `NodeId`. Instead, we use the pair of
 /// the original var ID (that is, the root variable that is referenced
 /// by the upvar) and the ID of the closure expression.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable, HashStable)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, TyEncodable, TyDecodable, TypeFoldable, HashStable)]
 pub struct UpvarId {
     pub var_path: UpvarPath,
     pub closure_expr_id: LocalDefId,
@@ -692,7 +619,7 @@ impl UpvarId {
     }
 }
 
-#[derive(Clone, PartialEq, Debug, TyEncodable, TyDecodable, Copy, HashStable)]
+#[derive(Clone, PartialEq, Debug, TyEncodable, TyDecodable, TypeFoldable, Copy, HashStable)]
 pub enum BorrowKind {
     /// Data must be immutable and is aliasable.
     ImmBorrow,
@@ -746,7 +673,7 @@ pub enum BorrowKind {
 
 /// Information describing the capture of an upvar. This is computed
 /// during `typeck`, specifically by `regionck`.
-#[derive(PartialEq, Clone, Debug, Copy, TyEncodable, TyDecodable, HashStable)]
+#[derive(PartialEq, Clone, Debug, Copy, TyEncodable, TyDecodable, TypeFoldable, HashStable)]
 pub enum UpvarCapture<'tcx> {
     /// Upvar is captured by value. This is always true when the
     /// closure is labeled `move`, but can also be true in other cases
@@ -763,7 +690,7 @@ pub enum UpvarCapture<'tcx> {
     ByRef(UpvarBorrow<'tcx>),
 }
 
-#[derive(PartialEq, Clone, Copy, TyEncodable, TyDecodable, HashStable)]
+#[derive(PartialEq, Clone, Copy, TyEncodable, TyDecodable, TypeFoldable, HashStable)]
 pub struct UpvarBorrow<'tcx> {
     /// The kind of borrow: by-ref upvars have access to shared
     /// immutable borrows, which are not part of the normal language
@@ -790,7 +717,7 @@ pub type RootVariableMinCaptureList<'tcx> = FxIndexMap<hir::HirId, MinCaptureLis
 pub type MinCaptureList<'tcx> = Vec<CapturedPlace<'tcx>>;
 
 /// A `Place` and the corresponding `CaptureInfo`.
-#[derive(PartialEq, Clone, Debug, TyEncodable, TyDecodable, HashStable)]
+#[derive(PartialEq, Clone, Debug, TyEncodable, TyDecodable, TypeFoldable, HashStable)]
 pub struct CapturedPlace<'tcx> {
     pub place: HirPlace<'tcx>,
     pub info: CaptureInfo<'tcx>,
@@ -799,7 +726,7 @@ pub struct CapturedPlace<'tcx> {
 /// Part of `MinCaptureInformationMap`; describes the capture kind (&, &mut, move)
 /// for a particular capture as well as identifying the part of the source code
 /// that triggered this capture to occur.
-#[derive(PartialEq, Clone, Debug, Copy, TyEncodable, TyDecodable, HashStable)]
+#[derive(PartialEq, Clone, Debug, Copy, TyEncodable, TyDecodable, TypeFoldable, HashStable)]
 pub struct CaptureInfo<'tcx> {
     /// Expr Id pointing to use that resulted in selecting the current capture kind
     ///
