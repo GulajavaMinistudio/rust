@@ -12,7 +12,7 @@ use rustc_ast::attr;
 use rustc_ast::util::comments::beautify_doc_string;
 use rustc_ast::{self as ast, AttrStyle};
 use rustc_ast::{FloatTy, IntTy, UintTy};
-use rustc_attr::{ConstStability, Stability, StabilityLevel};
+use rustc_attr::{ConstStability, Deprecation, Stability, StabilityLevel};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_feature::UnstableFeatures;
 use rustc_hir as hir;
@@ -21,7 +21,7 @@ use rustc_hir::def_id::{CrateNum, DefId};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::Mutability;
 use rustc_index::vec::IndexVec;
-use rustc_middle::ty::{AssocKind, TyCtxt};
+use rustc_middle::ty::TyCtxt;
 use rustc_session::Session;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::DUMMY_SP;
@@ -70,7 +70,7 @@ crate struct ExternalCrate {
     crate src: FileName,
     crate attrs: Attributes,
     crate primitives: Vec<(DefId, PrimitiveType)>,
-    crate keywords: Vec<(DefId, String)>,
+    crate keywords: Vec<(DefId, Symbol)>,
 }
 
 /// Anything with a source location and set of attributes and, optionally, a
@@ -81,7 +81,7 @@ crate struct Item {
     /// Stringified span
     crate source: Span,
     /// Not everything has a name. E.g., impls
-    crate name: Option<String>,
+    crate name: Option<Symbol>,
     crate attrs: Attributes,
     crate visibility: Visibility,
     crate kind: ItemKind,
@@ -123,17 +123,12 @@ impl Item {
         kind: ItemKind,
         cx: &DocContext<'_>,
     ) -> Item {
-        Item::from_def_id_and_parts(
-            cx.tcx.hir().local_def_id(hir_id).to_def_id(),
-            name.clean(cx),
-            kind,
-            cx,
-        )
+        Item::from_def_id_and_parts(cx.tcx.hir().local_def_id(hir_id).to_def_id(), name, kind, cx)
     }
 
     pub fn from_def_id_and_parts(
         def_id: DefId,
-        name: Option<String>,
+        name: Option<Symbol>,
         kind: ItemKind,
         cx: &DocContext<'_>,
     ) -> Item {
@@ -156,7 +151,7 @@ impl Item {
             attrs: cx.tcx.get_attrs(def_id).clean(cx),
             visibility: cx.tcx.visibility(def_id).clean(cx),
             stability: cx.tcx.lookup_stability(def_id).cloned(),
-            deprecation: cx.tcx.lookup_deprecation(def_id).clean(cx),
+            deprecation: cx.tcx.lookup_deprecation(def_id),
             const_stability: cx.tcx.lookup_const_stability(def_id).cloned(),
         }
     }
@@ -334,7 +329,7 @@ crate enum ItemKind {
     AssocTypeItem(Vec<GenericBound>, Option<Type>),
     /// An item that has been stripped by a rustdoc pass
     StrippedItem(Box<ItemKind>),
-    KeywordItem(String),
+    KeywordItem(Symbol),
 }
 
 impl ItemKind {
@@ -378,15 +373,6 @@ impl ItemKind {
         match *self {
             ItemKind::TypedefItem(_, _) | ItemKind::AssocTypeItem(_, _) => true,
             _ => false,
-        }
-    }
-
-    crate fn as_assoc_kind(&self) -> Option<AssocKind> {
-        match *self {
-            ItemKind::AssocConstItem(..) => Some(AssocKind::Const),
-            ItemKind::AssocTypeItem(..) => Some(AssocKind::Type),
-            ItemKind::TyMethodItem(..) | ItemKind::MethodItem(..) => Some(AssocKind::Fn),
-            _ => None,
         }
     }
 }
@@ -1163,6 +1149,8 @@ crate enum Type {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Copy, Debug)]
+/// N.B. this has to be different from `hir::PrimTy` because it also includes types that aren't
+/// paths, like `Unit`.
 crate enum PrimitiveType {
     Isize,
     I8,
@@ -1502,6 +1490,37 @@ impl PrimitiveType {
     crate fn to_url_str(&self) -> &'static str {
         self.as_str()
     }
+
+    crate fn as_sym(&self) -> Symbol {
+        use PrimitiveType::*;
+        match self {
+            Isize => sym::isize,
+            I8 => sym::i8,
+            I16 => sym::i16,
+            I32 => sym::i32,
+            I64 => sym::i64,
+            I128 => sym::i128,
+            Usize => sym::usize,
+            U8 => sym::u8,
+            U16 => sym::u16,
+            U32 => sym::u32,
+            U64 => sym::u64,
+            U128 => sym::u128,
+            F32 => sym::f32,
+            F64 => sym::f64,
+            Str => sym::str,
+            Bool => sym::bool,
+            Char => sym::char,
+            Array => sym::array,
+            Slice => sym::slice,
+            Tuple => sym::tuple,
+            Unit => sym::unit,
+            RawPointer => sym::pointer,
+            Reference => sym::reference,
+            Fn => kw::Fn,
+            Never => sym::never,
+        }
+    }
 }
 
 impl From<ast::IntTy> for PrimitiveType {
@@ -1791,13 +1810,6 @@ crate struct Macro {
 crate struct ProcMacro {
     crate kind: MacroKind,
     crate helpers: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-crate struct Deprecation {
-    crate since: Option<String>,
-    crate note: Option<String>,
-    crate is_since_rustc_version: bool,
 }
 
 /// An type binding on an associated type (e.g., `A = Bar` in `Foo<A = Bar>` or

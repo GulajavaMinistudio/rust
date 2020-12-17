@@ -33,7 +33,7 @@ impl JsonRenderer {
             _ => Some(Item {
                 id: def_id.into(),
                 crate_id: def_id.krate.as_u32(),
-                name,
+                name: name.map(|sym| sym.to_string()),
                 source: self.convert_span(source),
                 visibility: visibility.into(),
                 docs: attrs.collapsed_doc_value().unwrap_or_default(),
@@ -77,10 +77,11 @@ impl JsonRenderer {
     }
 }
 
-impl From<clean::Deprecation> for Deprecation {
-    fn from(deprecation: clean::Deprecation) -> Self {
-        let clean::Deprecation { since, note, is_since_rustc_version: _ } = deprecation;
-        Deprecation { since, note }
+impl From<rustc_attr::Deprecation> for Deprecation {
+    fn from(deprecation: rustc_attr::Deprecation) -> Self {
+        #[rustfmt::skip]
+        let rustc_attr::Deprecation { since, note, is_since_rustc_version: _, suggestion: _ } = deprecation;
+        Deprecation { since: since.map(|s| s.to_string()), note: note.map(|s| s.to_string()) }
     }
 }
 
