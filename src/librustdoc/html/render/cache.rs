@@ -31,7 +31,7 @@ crate fn extern_location(
 ) -> ExternalLocation {
     use ExternalLocation::*;
     // See if there's documentation generated into the local directory
-    let local_location = dst.join(&e.name);
+    let local_location = dst.join(&*e.name.as_str());
     if local_location.is_dir() {
         return Local;
     }
@@ -208,7 +208,7 @@ fn get_index_type_name(clean_type: &clean::Type, accept_generic: bool) -> Option
             });
             Some(path_segment.name.clone())
         }
-        clean::Generic(ref s) if accept_generic => Some(s.clone()),
+        clean::Generic(s) if accept_generic => Some(s.to_string()),
         clean::Primitive(ref p) => Some(format!("{:?}", p)),
         clean::BorrowedRef { ref type_, .. } => get_index_type_name(type_, accept_generic),
         // FIXME: add all from clean::Type.
