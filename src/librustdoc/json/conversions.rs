@@ -14,7 +14,7 @@ use crate::formats::item_type::ItemType;
 use crate::json::types::*;
 use crate::json::JsonRenderer;
 
-impl JsonRenderer {
+impl JsonRenderer<'_> {
     pub(super) fn convert_item(&self, item: clean::Item) -> Option<Item> {
         let item_type = ItemType::from(&item);
         let clean::Item {
@@ -57,10 +57,10 @@ impl JsonRenderer {
     }
 
     fn convert_span(&self, span: clean::Span) -> Option<Span> {
-        match span.filename(&self.sess) {
+        match span.filename(self.sess()) {
             rustc_span::FileName::Real(name) => {
-                let hi = span.hi(&self.sess);
-                let lo = span.lo(&self.sess);
+                let hi = span.hi(self.sess());
+                let lo = span.lo(self.sess());
                 Some(Span {
                     filename: match name {
                         rustc_span::RealFileName::Named(path) => path,
@@ -120,7 +120,7 @@ impl From<clean::GenericArg> for GenericArg {
     fn from(arg: clean::GenericArg) -> Self {
         use clean::GenericArg::*;
         match arg {
-            Lifetime(l) => GenericArg::Lifetime(l.0),
+            Lifetime(l) => GenericArg::Lifetime(l.0.to_string()),
             Type(t) => GenericArg::Type(t.into()),
             Const(c) => GenericArg::Const(c.into()),
         }
@@ -163,7 +163,9 @@ impl From<clean::ItemKind> for ItemEnum {
         use clean::ItemKind::*;
         match item {
             ModuleItem(m) => ItemEnum::ModuleItem(m.into()),
-            ExternCrateItem(c, a) => ItemEnum::ExternCrateItem { name: c, rename: a },
+            ExternCrateItem(c, a) => {
+                ItemEnum::ExternCrateItem { name: c.to_string(), rename: a.map(|x| x.to_string()) }
+            }
             ImportItem(i) => ItemEnum::ImportItem(i.into()),
             StructItem(s) => ItemEnum::StructItem(s.into()),
             UnionItem(u) => ItemEnum::StructItem(u.into()),
@@ -302,7 +304,7 @@ impl From<clean::WherePredicate> for WherePredicate {
                 bounds: bounds.into_iter().map(Into::into).collect(),
             },
             RegionPredicate { lifetime, bounds } => WherePredicate::RegionPredicate {
-                lifetime: lifetime.0,
+                lifetime: lifetime.0.to_string(),
                 bounds: bounds.into_iter().map(Into::into).collect(),
             },
             EqPredicate { lhs, rhs } => {
@@ -323,7 +325,7 @@ impl From<clean::GenericBound> for GenericBound {
                     modifier: modifier.into(),
                 }
             }
-            Outlives(lifetime) => GenericBound::Outlives(lifetime.0),
+            Outlives(lifetime) => GenericBound::Outlives(lifetime.0.to_string()),
         }
     }
 }
@@ -365,7 +367,7 @@ impl From<clean::Type> for Type {
                 type_: Box::new((*type_).into()),
             },
             BorrowedRef { lifetime, mutability, type_ } => Type::BorrowedRef {
-                lifetime: lifetime.map(|l| l.0),
+                lifetime: lifetime.map(|l| l.0.to_string()),
                 mutable: mutability == ast::Mutability::Mut,
                 type_: Box::new((*type_).into()),
             },
@@ -438,7 +440,10 @@ impl From<clean::Impl> for Impl {
         Impl {
             is_unsafe: unsafety == rustc_hir::Unsafety::Unsafe,
             generics: generics.into(),
-            provided_trait_methods: provided_trait_methods.into_iter().collect(),
+            provided_trait_methods: provided_trait_methods
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect(),
             trait_: trait_.map(Into::into),
             for_: for_.into(),
             items: ids(items),
@@ -503,7 +508,7 @@ impl From<clean::Import> for Import {
         match import.kind {
             Simple(s) => Import {
                 span: import.source.path.whole_name(),
-                name: s,
+                name: s.to_string(),
                 id: import.source.did.map(Into::into),
                 glob: false,
             },
@@ -519,7 +524,10 @@ impl From<clean::Import> for Import {
 
 impl From<clean::ProcMacro> for ProcMacro {
     fn from(mac: clean::ProcMacro) -> Self {
-        ProcMacro { kind: mac.kind.into(), helpers: mac.helpers }
+        ProcMacro {
+            kind: mac.kind.into(),
+            helpers: mac.helpers.iter().map(|x| x.to_string()).collect(),
+        }
     }
 }
 
