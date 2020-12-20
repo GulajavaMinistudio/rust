@@ -299,6 +299,7 @@ pub struct ResolvedOpaqueTy<'tcx> {
 /// Here, we would store the type `T`, the span of the value `x`, the "scope-span" for
 /// the scope that contains `x`, the expr `T` evaluated from, and the span of `foo.await`.
 #[derive(TyEncodable, TyDecodable, Clone, Debug, Eq, Hash, PartialEq, HashStable)]
+#[derive(TypeFoldable)]
 pub struct GeneratorInteriorTypeCause<'tcx> {
     /// Type of the captured binding.
     pub ty: Ty<'tcx>,
@@ -423,7 +424,7 @@ pub struct TypeckResults<'tcx> {
 
     /// Stores the type, expression, span and optional scope span of all types
     /// that are live across the yield of this generator (if a generator).
-    pub generator_interior_types: Vec<GeneratorInteriorTypeCause<'tcx>>,
+    pub generator_interior_types: ty::Binder<Vec<GeneratorInteriorTypeCause<'tcx>>>,
 
     /// We sometimes treat byte string literals (which are of type `&[u8; N]`)
     /// as `&[u8]`, depending on the pattern  in which they are used.
@@ -455,7 +456,7 @@ impl<'tcx> TypeckResults<'tcx> {
             concrete_opaque_types: Default::default(),
             closure_captures: Default::default(),
             closure_min_captures: Default::default(),
-            generator_interior_types: Default::default(),
+            generator_interior_types: ty::Binder::dummy(Default::default()),
             treat_byte_string_as_slice: Default::default(),
         }
     }
@@ -889,7 +890,7 @@ pub struct FreeRegionInfo {
     // `LocalDefId` corresponding to FreeRegion
     pub def_id: LocalDefId,
     // the bound region corresponding to FreeRegion
-    pub boundregion: ty::BoundRegion,
+    pub boundregion: ty::BoundRegionKind,
     // checks if bound region is in Impl Item
     pub is_impl_item: bool,
 }
@@ -1411,7 +1412,7 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
-    // Returns the `DefId` and the `BoundRegion` corresponding to the given region.
+    // Returns the `DefId` and the `BoundRegionKind` corresponding to the given region.
     pub fn is_suitable_region(self, region: Region<'tcx>) -> Option<FreeRegionInfo> {
         let (suitable_region_binding_scope, bound_region) = match *region {
             ty::ReFree(ref free_region) => {
@@ -1419,7 +1420,7 @@ impl<'tcx> TyCtxt<'tcx> {
             }
             ty::ReEarlyBound(ref ebr) => (
                 self.parent(ebr.def_id).unwrap().expect_local(),
-                ty::BoundRegion::BrNamed(ebr.def_id, ebr.name),
+                ty::BoundRegionKind::BrNamed(ebr.def_id, ebr.name),
             ),
             _ => return None, // not a free region
         };

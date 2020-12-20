@@ -431,7 +431,9 @@ impl Clean<Option<Lifetime>> for ty::RegionKind {
     fn clean(&self, _cx: &DocContext<'_>) -> Option<Lifetime> {
         match *self {
             ty::ReStatic => Some(Lifetime::statik()),
-            ty::ReLateBound(_, ty::BrNamed(_, name)) => Some(Lifetime(name)),
+            ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name) }) => {
+                Some(Lifetime(name))
+            }
             ty::ReEarlyBound(ref data) => Some(Lifetime(data.name)),
 
             ty::ReLateBound(..)
@@ -469,8 +471,9 @@ impl Clean<WherePredicate> for hir::WherePredicate<'_> {
 
 impl<'a> Clean<Option<WherePredicate>> for ty::Predicate<'a> {
     fn clean(&self, cx: &DocContext<'_>) -> Option<WherePredicate> {
-        match self.skip_binders() {
-            ty::PredicateAtom::Trait(pred, _) => Some(ty::Binder::bind(pred).clean(cx)),
+        let bound_predicate = self.bound_atom();
+        match bound_predicate.skip_binder() {
+            ty::PredicateAtom::Trait(pred, _) => Some(bound_predicate.rebind(pred).clean(cx)),
             ty::PredicateAtom::RegionOutlives(pred) => pred.clean(cx),
             ty::PredicateAtom::TypeOutlives(pred) => pred.clean(cx),
             ty::PredicateAtom::Projection(pred) => Some(pred.clean(cx)),
@@ -733,7 +736,8 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics, ty::GenericPredicates<'tcx
             .flat_map(|(p, _)| {
                 let mut projection = None;
                 let param_idx = (|| {
-                    match p.skip_binders() {
+                    let bound_p = p.bound_atom();
+                    match bound_p.skip_binder() {
                         ty::PredicateAtom::Trait(pred, _constness) => {
                             if let ty::Param(param) = pred.self_ty().kind() {
                                 return Some(param.index);
@@ -746,7 +750,7 @@ impl<'a, 'tcx> Clean<Generics> for (&'a ty::Generics, ty::GenericPredicates<'tcx
                         }
                         ty::PredicateAtom::Projection(p) => {
                             if let ty::Param(param) = p.projection_ty.self_ty().kind() {
-                                projection = Some(ty::Binder::bind(p));
+                                projection = Some(bound_p.rebind(p));
                                 return Some(param.index);
                             }
                         }
@@ -1659,12 +1663,10 @@ impl<'tcx> Clean<Type> for Ty<'tcx> {
                     .filter_map(|bound| {
                         // Note: The substs of opaque types can contain unbound variables,
                         // meaning that we have to use `ignore_quantifiers_with_unbound_vars` here.
-                        let trait_ref = match bound
-                            .bound_atom_with_opt_escaping(cx.tcx)
-                            .skip_binder()
-                        {
+                        let bound_predicate = bound.bound_atom_with_opt_escaping(cx.tcx);
+                        let trait_ref = match bound_predicate.skip_binder() {
                             ty::PredicateAtom::Trait(tr, _constness) => {
-                                ty::Binder::bind(tr.trait_ref)
+                                bound_predicate.rebind(tr.trait_ref)
                             }
                             ty::PredicateAtom::TypeOutlives(ty::OutlivesPredicate(_ty, reg)) => {
                                 if let Some(r) = reg.clean(cx) {
