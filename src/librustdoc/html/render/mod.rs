@@ -164,7 +164,7 @@ crate struct SharedContext<'tcx> {
     playground: Option<markdown::Playground>,
 }
 
-impl Context<'_> {
+impl<'tcx> Context<'tcx> {
     fn path(&self, filename: &str) -> PathBuf {
         // We use splitn vs Path::extension here because we might get a filename
         // like `style.min.css` and we want to process that into
@@ -174,6 +174,10 @@ impl Context<'_> {
         let (base, ext) = filename.split_once('.').unwrap();
         let filename = format!("{}{}.{}", base, self.shared.resource_suffix, ext);
         self.dst.join(&filename)
+    }
+
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.shared.tcx
     }
 
     fn sess(&self) -> &Session {
@@ -1708,8 +1712,8 @@ fn print_item(cx: &Context<'_>, item: &clean::Item, buf: &mut Buffer, cache: &Ca
     write!(buf, "<h1 class=\"fqn\"><span class=\"out-of-band\">");
     render_stability_since_raw(
         buf,
-        item.stable_since().as_deref(),
-        item.const_stable_since().as_deref(),
+        item.stable_since(cx.tcx()).as_deref(),
+        item.const_stable_since(cx.tcx()).as_deref(),
         None,
         None,
     );
@@ -2061,14 +2065,20 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
         }
     }
 
-    fn cmp(i1: &clean::Item, i2: &clean::Item, idx1: usize, idx2: usize) -> Ordering {
+    fn cmp(
+        i1: &clean::Item,
+        i2: &clean::Item,
+        idx1: usize,
+        idx2: usize,
+        tcx: TyCtxt<'_>,
+    ) -> Ordering {
         let ty1 = i1.type_();
         let ty2 = i2.type_();
         if ty1 != ty2 {
             return (reorder(ty1), idx1).cmp(&(reorder(ty2), idx2));
         }
-        let s1 = i1.stability.as_ref().map(|s| s.level);
-        let s2 = i2.stability.as_ref().map(|s| s.level);
+        let s1 = i1.stability(tcx).as_ref().map(|s| s.level);
+        let s2 = i2.stability(tcx).as_ref().map(|s| s.level);
         if let (Some(a), Some(b)) = (s1, s2) {
             match (a.is_stable(), b.is_stable()) {
                 (true, true) | (false, false) => {}
@@ -2082,7 +2092,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
     }
 
     if cx.shared.sort_modules_alphabetically {
-        indices.sort_by(|&i1, &i2| cmp(&items[i1], &items[i2], i1, i2));
+        indices.sort_by(|&i1, &i2| cmp(&items[i1], &items[i2], i1, i2, cx.tcx()));
     }
     // This call is to remove re-export duplicates in cases such as:
     //
@@ -2147,14 +2157,14 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                     Some(ref src) => write!(
                         w,
                         "<tr><td><code>{}extern crate {} as {};",
-                        myitem.visibility.print_with_space(),
+                        myitem.visibility.print_with_space(cx.tcx()),
                         anchor(myitem.def_id, &*src.as_str()),
                         name
                     ),
                     None => write!(
                         w,
                         "<tr><td><code>{}extern crate {};",
-                        myitem.visibility.print_with_space(),
+                        myitem.visibility.print_with_space(cx.tcx()),
                         anchor(myitem.def_id, &*name.as_str())
                     ),
                 }
@@ -2165,7 +2175,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                 write!(
                     w,
                     "<tr><td><code>{}{}</code></td></tr>",
-                    myitem.visibility.print_with_space(),
+                    myitem.visibility.print_with_space(cx.tcx()),
                     import.print()
                 );
             }
@@ -2184,7 +2194,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                     _ => "",
                 };
 
-                let stab = myitem.stability_class();
+                let stab = myitem.stability_class(cx.tcx());
                 let add = if stab.is_some() { " " } else { "" };
 
                 let doc_value = myitem.doc_value().unwrap_or("");
@@ -2196,7 +2206,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                          <td class=\"docblock-short\">{stab_tags}{docs}</td>\
                      </tr>",
                     name = *myitem.name.as_ref().unwrap(),
-                    stab_tags = extra_info_tags(myitem, item),
+                    stab_tags = extra_info_tags(myitem, item, cx.tcx()),
                     docs = MarkdownSummaryLine(doc_value, &myitem.links()).into_string(),
                     class = myitem.type_(),
                     add = add,
@@ -2220,7 +2230,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
 
 /// Render the stability, deprecation and portability tags that are displayed in the item's summary
 /// at the module level.
-fn extra_info_tags(item: &clean::Item, parent: &clean::Item) -> String {
+fn extra_info_tags(item: &clean::Item, parent: &clean::Item, tcx: TyCtxt<'_>) -> String {
     let mut tags = String::new();
 
     fn tag_html(class: &str, title: &str, contents: &str) -> String {
@@ -2228,7 +2238,7 @@ fn extra_info_tags(item: &clean::Item, parent: &clean::Item) -> String {
     }
 
     // The trailing space after each tag is to space it properly against the rest of the docs.
-    if let Some(depr) = &item.deprecation {
+    if let Some(depr) = &item.deprecation(tcx) {
         let mut message = "Deprecated";
         if !stability::deprecation_in_effect(
             depr.is_since_rustc_version,
@@ -2241,7 +2251,10 @@ fn extra_info_tags(item: &clean::Item, parent: &clean::Item) -> String {
 
     // The "rustc_private" crates are permanently unstable so it makes no sense
     // to render "unstable" everywhere.
-    if item.stability.as_ref().map(|s| s.level.is_unstable() && s.feature != sym::rustc_private)
+    if item
+        .stability(tcx)
+        .as_ref()
+        .map(|s| s.level.is_unstable() && s.feature != sym::rustc_private)
         == Some(true)
     {
         tags += &tag_html("unstable", "", "Experimental");
@@ -2287,7 +2300,7 @@ fn short_item_info(
     let error_codes = cx.shared.codes;
 
     if let Some(Deprecation { note, since, is_since_rustc_version, suggestion: _ }) =
-        item.deprecation
+        item.deprecation(cx.tcx())
     {
         // We display deprecation messages for #[deprecated] and #[rustc_deprecated]
         // but only display the future-deprecation messages for #[rustc_deprecated].
@@ -2327,7 +2340,7 @@ fn short_item_info(
     // Render unstable items. But don't render "rustc_private" crates (internal compiler crates).
     // Those crates are permanently unstable so it makes no sense to render "unstable" everywhere.
     if let Some((StabilityLevel::Unstable { reason, issue, .. }, feature)) = item
-        .stability
+        .stability(cx.tcx())
         .as_ref()
         .filter(|stab| stab.feature != sym::rustc_private)
         .map(|stab| (stab.level, stab.feature))
@@ -2379,7 +2392,7 @@ fn item_constant(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, c: &clean::
     write!(
         w,
         "{vis}const {name}: {typ}",
-        vis = it.visibility.print_with_space(),
+        vis = it.visibility.print_with_space(cx.tcx()),
         name = it.name.as_ref().unwrap(),
         typ = c.type_.print(),
     );
@@ -2413,7 +2426,7 @@ fn item_static(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::St
     write!(
         w,
         "{vis}static {mutability}{name}: {typ}</pre>",
-        vis = it.visibility.print_with_space(),
+        vis = it.visibility.print_with_space(cx.tcx()),
         mutability = s.mutability.print_with_space(),
         name = it.name.as_ref().unwrap(),
         typ = s.type_.print()
@@ -2424,7 +2437,7 @@ fn item_static(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::St
 fn item_function(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, f: &clean::Function) {
     let header_len = format!(
         "{}{}{}{}{:#}fn {}{:#}",
-        it.visibility.print_with_space(),
+        it.visibility.print_with_space(cx.tcx()),
         f.header.constness.print_with_space(),
         f.header.asyncness.print_with_space(),
         f.header.unsafety.print_with_space(),
@@ -2439,7 +2452,7 @@ fn item_function(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, f: &clean::
         w,
         "{vis}{constness}{asyncness}{unsafety}{abi}fn \
          {name}{generics}{decl}{spotlight}{where_clause}</pre>",
-        vis = it.visibility.print_with_space(),
+        vis = it.visibility.print_with_space(cx.tcx()),
         constness = f.header.constness.print_with_space(),
         asyncness = f.header.asyncness.print_with_space(),
         unsafety = f.header.unsafety.print_with_space(),
@@ -2480,8 +2493,8 @@ fn render_implementor(
         parent,
         AssocItemLink::Anchor(None),
         RenderMode::Normal,
-        implementor.impl_item.stable_since().as_deref(),
-        implementor.impl_item.const_stable_since().as_deref(),
+        implementor.impl_item.stable_since(cx.tcx()).as_deref(),
+        implementor.impl_item.const_stable_since(cx.tcx()).as_deref(),
         false,
         Some(use_absolute),
         false,
@@ -2511,8 +2524,8 @@ fn render_impls(
                 containing_item,
                 assoc_link,
                 RenderMode::Normal,
-                containing_item.stable_since().as_deref(),
-                containing_item.const_stable_since().as_deref(),
+                containing_item.stable_since(cx.tcx()).as_deref(),
+                containing_item.const_stable_since(cx.tcx()).as_deref(),
                 true,
                 None,
                 false,
@@ -2565,7 +2578,7 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
         write!(
             w,
             "{}{}{}trait {}{}{}",
-            it.visibility.print_with_space(),
+            it.visibility.print_with_space(cx.tcx()),
             t.unsafety.print_with_space(),
             if t.is_auto { "auto " } else { "" },
             it.name.as_ref().unwrap(),
@@ -2585,21 +2598,21 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
             // FIXME: we should be using a derived_id for the Anchors here
             write!(w, "{{\n");
             for t in &types {
-                render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait);
+                render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait, cx);
                 write!(w, ";\n");
             }
             if !types.is_empty() && !consts.is_empty() {
                 w.write_str("\n");
             }
             for t in &consts {
-                render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait);
+                render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait, cx);
                 write!(w, ";\n");
             }
             if !consts.is_empty() && !required.is_empty() {
                 w.write_str("\n");
             }
             for (pos, m) in required.iter().enumerate() {
-                render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait);
+                render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait, cx);
                 write!(w, ";\n");
 
                 if pos < required.len() - 1 {
@@ -2610,7 +2623,7 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
                 w.write_str("\n");
             }
             for (pos, m) in provided.iter().enumerate() {
-                render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait);
+                render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait, cx);
                 match m.kind {
                     clean::MethodItem(ref inner, _)
                         if !inner.generics.where_predicates.is_empty() =>
@@ -2659,9 +2672,9 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
         let item_type = m.type_();
         let id = cx.derive_id(format!("{}.{}", item_type, name));
         write!(w, "<h3 id=\"{id}\" class=\"method\"><code>", id = id,);
-        render_assoc_item(w, m, AssocItemLink::Anchor(Some(&id)), ItemType::Impl);
+        render_assoc_item(w, m, AssocItemLink::Anchor(Some(&id)), ItemType::Impl, cx);
         write!(w, "</code>");
-        render_stability_since(w, m, t);
+        render_stability_since(w, m, t, cx.tcx());
         write_srclink(cx, m, w, cache);
         write!(w, "</h3>");
         document(w, cx, m, Some(t));
@@ -2768,8 +2781,8 @@ fn item_trait(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, t: &clean::Tra
                     it,
                     assoc_link,
                     RenderMode::Normal,
-                    implementor.impl_item.stable_since().as_deref(),
-                    implementor.impl_item.const_stable_since().as_deref(),
+                    implementor.impl_item.stable_since(cx.tcx()).as_deref(),
+                    implementor.impl_item.const_stable_since(cx.tcx()).as_deref(),
                     false,
                     None,
                     true,
@@ -2877,12 +2890,13 @@ fn assoc_const(
     _default: Option<&String>,
     link: AssocItemLink<'_>,
     extra: &str,
+    cx: &Context<'_>,
 ) {
     write!(
         w,
         "{}{}const <a href=\"{}\" class=\"constant\"><b>{}</b></a>: {}",
         extra,
-        it.visibility.print_with_space(),
+        it.visibility.print_with_space(cx.tcx()),
         naive_assoc_href(it, link),
         it.name.as_ref().unwrap(),
         ty.print()
@@ -2950,13 +2964,18 @@ fn render_stability_since_raw(
     }
 }
 
-fn render_stability_since(w: &mut Buffer, item: &clean::Item, containing_item: &clean::Item) {
+fn render_stability_since(
+    w: &mut Buffer,
+    item: &clean::Item,
+    containing_item: &clean::Item,
+    tcx: TyCtxt<'_>,
+) {
     render_stability_since_raw(
         w,
-        item.stable_since().as_deref(),
-        item.const_stable_since().as_deref(),
-        containing_item.stable_since().as_deref(),
-        containing_item.const_stable_since().as_deref(),
+        item.stable_since(tcx).as_deref(),
+        item.const_stable_since(tcx).as_deref(),
+        containing_item.stable_since(tcx).as_deref(),
+        containing_item.const_stable_since(tcx).as_deref(),
     )
 }
 
@@ -2965,6 +2984,7 @@ fn render_assoc_item(
     item: &clean::Item,
     link: AssocItemLink<'_>,
     parent: ItemType,
+    cx: &Context<'_>,
 ) {
     fn method(
         w: &mut Buffer,
@@ -2974,6 +2994,7 @@ fn render_assoc_item(
         d: &clean::FnDecl,
         link: AssocItemLink<'_>,
         parent: ItemType,
+        cx: &Context<'_>,
     ) {
         let name = meth.name.as_ref().unwrap();
         let anchor = format!("#{}.{}", meth.type_(), name);
@@ -2994,7 +3015,7 @@ fn render_assoc_item(
         };
         let mut header_len = format!(
             "{}{}{}{}{}{:#}fn {}{:#}",
-            meth.visibility.print_with_space(),
+            meth.visibility.print_with_space(cx.tcx()),
             header.constness.print_with_space(),
             header.asyncness.print_with_space(),
             header.unsafety.print_with_space(),
@@ -3016,7 +3037,7 @@ fn render_assoc_item(
             "{}{}{}{}{}{}{}fn <a href=\"{href}\" class=\"fnname\">{name}</a>\
              {generics}{decl}{spotlight}{where_clause}",
             if parent == ItemType::Trait { "    " } else { "" },
-            meth.visibility.print_with_space(),
+            meth.visibility.print_with_space(cx.tcx()),
             header.constness.print_with_space(),
             header.asyncness.print_with_space(),
             header.unsafety.print_with_space(),
@@ -3032,9 +3053,11 @@ fn render_assoc_item(
     }
     match item.kind {
         clean::StrippedItem(..) => {}
-        clean::TyMethodItem(ref m) => method(w, item, m.header, &m.generics, &m.decl, link, parent),
+        clean::TyMethodItem(ref m) => {
+            method(w, item, m.header, &m.generics, &m.decl, link, parent, cx)
+        }
         clean::MethodItem(ref m, _) => {
-            method(w, item, m.header, &m.generics, &m.decl, link, parent)
+            method(w, item, m.header, &m.generics, &m.decl, link, parent, cx)
         }
         clean::AssocConstItem(ref ty, ref default) => assoc_const(
             w,
@@ -3043,6 +3066,7 @@ fn render_assoc_item(
             default.as_ref(),
             link,
             if parent == ItemType::Trait { "    " } else { "" },
+            cx,
         ),
         clean::AssocTypeItem(ref bounds, ref default) => assoc_type(
             w,
@@ -3066,7 +3090,7 @@ fn item_struct(
     wrap_into_docblock(w, |w| {
         write!(w, "<pre class=\"rust struct\">");
         render_attributes(w, it, true);
-        render_struct(w, it, Some(&s.generics), s.struct_type, &s.fields, "", true);
+        render_struct(w, it, Some(&s.generics), s.struct_type, &s.fields, "", true, cx);
         write!(w, "</pre>")
     });
 
@@ -3116,7 +3140,7 @@ fn item_union(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::Uni
     wrap_into_docblock(w, |w| {
         write!(w, "<pre class=\"rust union\">");
         render_attributes(w, it, true);
-        render_union(w, it, Some(&s.generics), &s.fields, "", true);
+        render_union(w, it, Some(&s.generics), &s.fields, "", true, cx);
         write!(w, "</pre>")
     });
 
@@ -3149,7 +3173,7 @@ fn item_union(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, s: &clean::Uni
                 shortty = ItemType::StructField,
                 ty = ty.print()
             );
-            if let Some(stability_class) = field.stability_class() {
+            if let Some(stability_class) = field.stability_class(cx.tcx()) {
                 write!(w, "<span class=\"stab {stab}\"></span>", stab = stability_class);
             }
             document(w, cx, field, Some(it));
@@ -3165,7 +3189,7 @@ fn item_enum(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, e: &clean::Enum
         write!(
             w,
             "{}enum {}{}{}",
-            it.visibility.print_with_space(),
+            it.visibility.print_with_space(cx.tcx()),
             it.name.as_ref().unwrap(),
             e.generics.print(),
             WhereClause { gens: &e.generics, indent: 0, end_newline: true }
@@ -3191,7 +3215,7 @@ fn item_enum(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, e: &clean::Enum
                             write!(w, ")");
                         }
                         clean::VariantKind::Struct(ref s) => {
-                            render_struct(w, v, None, s.struct_type, &s.fields, "    ", false);
+                            render_struct(w, v, None, s.struct_type, &s.fields, "    ", false, cx);
                         }
                     },
                     _ => unreachable!(),
@@ -3279,7 +3303,7 @@ fn item_enum(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, e: &clean::Enum
                 }
                 write!(w, "</div></div>");
             }
-            render_stability_since(w, variant, it);
+            render_stability_since(w, variant, it, cx.tcx());
         }
     }
     render_assoc_items(w, cx, it, it.def_id, AssocItemRender::All, cache)
@@ -3335,11 +3359,12 @@ fn render_struct(
     fields: &[clean::Item],
     tab: &str,
     structhead: bool,
+    cx: &Context<'_>,
 ) {
     write!(
         w,
         "{}{}{}",
-        it.visibility.print_with_space(),
+        it.visibility.print_with_space(cx.tcx()),
         if structhead { "struct " } else { "" },
         it.name.as_ref().unwrap()
     );
@@ -3359,7 +3384,7 @@ fn render_struct(
                         w,
                         "\n{}    {}{}: {},",
                         tab,
-                        field.visibility.print_with_space(),
+                        field.visibility.print_with_space(cx.tcx()),
                         field.name.as_ref().unwrap(),
                         ty.print()
                     );
@@ -3388,7 +3413,7 @@ fn render_struct(
                 match field.kind {
                     clean::StrippedItem(box clean::StructFieldItem(..)) => write!(w, "_"),
                     clean::StructFieldItem(ref ty) => {
-                        write!(w, "{}{}", field.visibility.print_with_space(), ty.print())
+                        write!(w, "{}{}", field.visibility.print_with_space(cx.tcx()), ty.print())
                     }
                     _ => unreachable!(),
                 }
@@ -3416,11 +3441,12 @@ fn render_union(
     fields: &[clean::Item],
     tab: &str,
     structhead: bool,
+    cx: &Context<'_>,
 ) {
     write!(
         w,
         "{}{}{}",
-        it.visibility.print_with_space(),
+        it.visibility.print_with_space(cx.tcx()),
         if structhead { "union " } else { "" },
         it.name.as_ref().unwrap()
     );
@@ -3435,7 +3461,7 @@ fn render_union(
             write!(
                 w,
                 "    {}{}: {},\n{}",
-                field.visibility.print_with_space(),
+                field.visibility.print_with_space(cx.tcx()),
                 field.name.as_ref().unwrap(),
                 ty.print(),
                 tab
@@ -3510,8 +3536,8 @@ fn render_assoc_items(
                 containing_item,
                 AssocItemLink::Anchor(None),
                 render_mode,
-                containing_item.stable_since().as_deref(),
-                containing_item.const_stable_since().as_deref(),
+                containing_item.stable_since(cx.tcx()).as_deref(),
+                containing_item.const_stable_since(cx.tcx()).as_deref(),
                 true,
                 None,
                 false,
@@ -3758,8 +3784,8 @@ fn render_impl(
         write!(w, "<a href=\"#{}\" class=\"anchor\"></a>", id);
         render_stability_since_raw(
             w,
-            i.impl_item.stable_since().as_deref(),
-            i.impl_item.const_stable_since().as_deref(),
+            i.impl_item.stable_since(cx.tcx()).as_deref(),
+            i.impl_item.const_stable_since(cx.tcx()).as_deref(),
             outer_version,
             outer_const_version,
         );
@@ -3827,12 +3853,12 @@ fn render_impl(
                     let id = cx.derive_id(format!("{}.{}", item_type, name));
                     write!(w, "<h4 id=\"{}\" class=\"{}{}\">", id, item_type, extra_class);
                     write!(w, "<code>");
-                    render_assoc_item(w, item, link.anchor(&id), ItemType::Impl);
+                    render_assoc_item(w, item, link.anchor(&id), ItemType::Impl, cx);
                     write!(w, "</code>");
                     render_stability_since_raw(
                         w,
-                        item.stable_since().as_deref(),
-                        item.const_stable_since().as_deref(),
+                        item.stable_since(cx.tcx()).as_deref(),
+                        item.const_stable_since(cx.tcx()).as_deref(),
                         outer_version,
                         outer_const_version,
                     );
@@ -3849,12 +3875,12 @@ fn render_impl(
             clean::AssocConstItem(ref ty, ref default) => {
                 let id = cx.derive_id(format!("{}.{}", item_type, name));
                 write!(w, "<h4 id=\"{}\" class=\"{}{}\"><code>", id, item_type, extra_class);
-                assoc_const(w, item, ty, default.as_ref(), link.anchor(&id), "");
+                assoc_const(w, item, ty, default.as_ref(), link.anchor(&id), "", cx);
                 write!(w, "</code>");
                 render_stability_since_raw(
                     w,
-                    item.stable_since().as_deref(),
-                    item.const_stable_since().as_deref(),
+                    item.stable_since(cx.tcx()).as_deref(),
+                    item.const_stable_since(cx.tcx()).as_deref(),
                     outer_version,
                     outer_const_version,
                 );
@@ -4074,7 +4100,7 @@ fn item_foreign_type(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, cache: 
     write!(
         w,
         "    {}type {};\n}}</pre>",
-        it.visibility.print_with_space(),
+        it.visibility.print_with_space(cx.tcx()),
         it.name.as_ref().unwrap(),
     );
 
