@@ -889,7 +889,7 @@ fn analysis(tcx: TyCtxt<'_>, cnum: CrateNum) -> Result<()> {
 
     // Avoid overwhelming user with errors if borrow checking failed.
     // I'm not sure how helpful this is, to be honest, but it avoids a
-    // lot of annoying errors in the compile-fail tests (basically,
+    // lot of annoying errors in the ui tests (basically,
     // lint warnings and so on -- kindck used to do this abort, but
     // kindck is gone now). -nmatsakis
     if sess.has_errors() {
@@ -1012,6 +1012,23 @@ pub fn start_codegen<'tcx>(
     let codegen = tcx.sess.time("codegen_crate", move || {
         codegen_backend.codegen_crate(tcx, metadata, need_metadata_module)
     });
+
+    // Don't run these test assertions when not doing codegen. Compiletest tries to build
+    // build-fail tests in check mode first and expects it to not give an error in that case.
+    if tcx.sess.opts.output_types.should_codegen() {
+        rustc_incremental::assert_module_sources::assert_module_sources(tcx);
+        rustc_symbol_mangling::test::report_symbol_names(tcx);
+    }
+
+    tcx.sess.time("assert_dep_graph", || rustc_incremental::assert_dep_graph(tcx));
+    tcx.sess.time("serialize_dep_graph", || rustc_incremental::save_dep_graph(tcx));
+
+    // We assume that no queries are run past here. If there are new queries
+    // after this point, they'll show up as "<unknown>" in self-profiling data.
+    {
+        let _prof_timer = tcx.prof.generic_activity("self_profile_alloc_query_strings");
+        tcx.alloc_self_profile_query_strings();
+    }
 
     info!("Post-codegen\n{:?}", tcx.debug_stats());
 
