@@ -30,7 +30,6 @@ crate mod cache;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
@@ -198,12 +197,8 @@ impl SharedContext<'_> {
 
     /// Based on whether the `collapse-docs` pass was run, return either the `doc_value` or the
     /// `collapsed_doc_value` of the given item.
-    crate fn maybe_collapsed_doc_value<'a>(&self, item: &'a clean::Item) -> Option<Cow<'a, str>> {
-        if self.collapsed {
-            item.collapsed_doc_value().map(|s| s.into())
-        } else {
-            item.doc_value().map(|s| s.into())
-        }
+    crate fn maybe_collapsed_doc_value<'a>(&self, item: &'a clean::Item) -> Option<String> {
+        if self.collapsed { item.collapsed_doc_value() } else { item.doc_value() }
     }
 }
 
@@ -979,7 +974,7 @@ themePicker.onblur = handleThemeButtonsBlur;
                 .iter()
                 .map(|s| format!("\"{}\"", s.to_str().expect("invalid osstring conversion")))
                 .collect::<Vec<_>>();
-            files.sort_unstable_by(|a, b| a.cmp(b));
+            files.sort_unstable();
             let subs = subs.iter().map(|s| s.to_json_string()).collect::<Vec<_>>().join(",");
             let dirs =
                 if subs.is_empty() { String::new() } else { format!(",\"dirs\":[{}]", subs) };
@@ -1428,7 +1423,7 @@ impl Setting {
                     .map(|opt| format!(
                         "<option value=\"{}\" {}>{}</option>",
                         opt.0,
-                        if &opt.0 == default_value { "selected" } else { "" },
+                        if opt.0 == default_value { "selected" } else { "" },
                         opt.1,
                     ))
                     .collect::<String>(),
@@ -1595,7 +1590,7 @@ impl Context<'_> {
             if let Some(&(ref names, ty)) = cache.paths.get(&it.def_id) {
                 for name in &names[..names.len() - 1] {
                     url.push_str(name);
-                    url.push_str("/");
+                    url.push('/');
                 }
                 url.push_str(&item_path(ty, names.last().unwrap()));
                 layout::redirect(&url)
@@ -1622,7 +1617,7 @@ impl Context<'_> {
             let short = short.to_string();
             map.entry(short).or_default().push((
                 myname,
-                Some(item.doc_value().map_or_else(|| String::new(), plain_text_summary)),
+                Some(item.doc_value().map_or_else(String::new, |s| plain_text_summary(&s))),
             ));
         }
 
@@ -1880,7 +1875,7 @@ fn document_short(
         return;
     }
     if let Some(s) = item.doc_value() {
-        let mut summary_html = MarkdownSummaryLine(s, &item.links()).into_string();
+        let mut summary_html = MarkdownSummaryLine(&s, &item.links()).into_string();
 
         if s.contains('\n') {
             let link = format!(r#" <a href="{}">Read more</a>"#, naive_assoc_href(item, link));
@@ -2197,7 +2192,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                 let stab = myitem.stability_class(cx.tcx());
                 let add = if stab.is_some() { " " } else { "" };
 
-                let doc_value = myitem.doc_value().unwrap_or("");
+                let doc_value = myitem.doc_value().unwrap_or_default();
                 write!(
                     w,
                     "<tr class=\"{stab}{add}module-item\">\
@@ -2207,7 +2202,7 @@ fn item_module(w: &mut Buffer, cx: &Context<'_>, item: &clean::Item, items: &[cl
                      </tr>",
                     name = *myitem.name.as_ref().unwrap(),
                     stab_tags = extra_info_tags(myitem, item, cx.tcx()),
-                    docs = MarkdownSummaryLine(doc_value, &myitem.links()).into_string(),
+                    docs = MarkdownSummaryLine(&doc_value, &myitem.links()).into_string(),
                     class = myitem.type_(),
                     add = add,
                     stab = stab.unwrap_or_else(String::new),
@@ -2308,7 +2303,7 @@ fn short_item_info(
             let since = &since.as_str();
             if !stability::deprecation_in_effect(is_since_rustc_version, Some(since)) {
                 if *since == "TBD" {
-                    format!("Deprecating in a future Rust version")
+                    String::from("Deprecating in a future Rust version")
                 } else {
                     format!("Deprecating in {}", Escape(since))
                 }
@@ -4323,9 +4318,11 @@ fn sidebar_assoc_items(it: &clean::Item) -> String {
                         .any(|i| i.inner_impl().trait_.def_id() == c.deref_mut_trait_did);
                     let inner_impl = target
                         .def_id()
-                        .or(target
-                            .primitive_type()
-                            .and_then(|prim| c.primitive_locations.get(&prim).cloned()))
+                        .or_else(|| {
+                            target
+                                .primitive_type()
+                                .and_then(|prim| c.primitive_locations.get(&prim).cloned())
+                        })
                         .and_then(|did| c.impls.get(&did));
                     if let Some(impls) = inner_impl {
                         out.push_str("<a class=\"sidebar-title\" href=\"#deref-methods\">");

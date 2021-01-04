@@ -351,8 +351,8 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
                 if let Some(data) = ty_to_fn.get(&ty) {
                     let (poly_trait, output) =
                         (data.0.as_ref().expect("as_ref failed").clone(), data.1.as_ref().cloned());
-                    let new_ty = match &poly_trait.trait_ {
-                        &Type::ResolvedPath {
+                    let new_ty = match poly_trait.trait_ {
+                        Type::ResolvedPath {
                             ref path,
                             ref param_names,
                             ref did,
@@ -738,11 +738,11 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
     }
 
     fn is_fn_ty(&self, tcx: TyCtxt<'_>, ty: &Type) -> bool {
-        match &ty {
-            &&Type::ResolvedPath { ref did, .. } => {
-                *did == tcx.require_lang_item(LangItem::Fn, None)
-                    || *did == tcx.require_lang_item(LangItem::FnMut, None)
-                    || *did == tcx.require_lang_item(LangItem::FnOnce, None)
+        match ty {
+            &Type::ResolvedPath { did, .. } => {
+                did == tcx.require_lang_item(LangItem::Fn, None)
+                    || did == tcx.require_lang_item(LangItem::FnMut, None)
+                    || did == tcx.require_lang_item(LangItem::FnOnce, None)
             }
             _ => false,
         }
