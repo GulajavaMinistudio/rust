@@ -983,8 +983,8 @@ impl<'a> Parser<'a> {
                         _ => self.sess.gated_spans.gate(sym::extended_key_value_attributes, span),
                     }
 
-                    let token = token::Interpolated(Lrc::new(token::NtExpr(expr)));
-                    MacArgs::Eq(eq_span, TokenTree::token(token, span).into())
+                    let token_kind = token::Interpolated(Lrc::new(token::NtExpr(expr)));
+                    MacArgs::Eq(eq_span, Token::new(token_kind, span))
                 } else {
                     MacArgs::Empty
                 }
@@ -1239,7 +1239,15 @@ impl<'a> Parser<'a> {
         f: impl FnOnce(&mut Self) -> PResult<'a, R>,
     ) -> PResult<'a, (R, Option<LazyTokenStream>)> {
         let start_token = (self.token.clone(), self.token_spacing);
-        let cursor_snapshot = self.token_cursor.clone();
+        let cursor_snapshot = TokenCursor {
+            frame: self.token_cursor.frame.clone(),
+            // We only ever capture tokens within our current frame,
+            // so we can just use an empty frame stack
+            stack: vec![],
+            desugar_doc_comments: self.token_cursor.desugar_doc_comments,
+            num_next_calls: self.token_cursor.num_next_calls,
+            append_unglued_token: self.token_cursor.append_unglued_token.clone(),
+        };
 
         let ret = f(self)?;
 

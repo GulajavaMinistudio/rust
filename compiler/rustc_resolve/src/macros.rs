@@ -285,7 +285,7 @@ impl<'a> ResolverExpand for Resolver<'a> {
                                 helper_attrs.extend(
                                     ext.helper_attrs.iter().map(|name| Ident::new(*name, span)),
                                 );
-                                if ext.is_derive_copy {
+                                if ext.builtin_name == Some(sym::Copy) {
                                     self.containers_deriving_copy.insert(invoc_id);
                                 }
                                 ext
@@ -618,8 +618,9 @@ impl<'a> Resolver<'a> {
         let break_result = self.visit_scopes(
             scope_set,
             parent_scope,
-            orig_ident,
-            |this, scope, use_prelude, ident| {
+            orig_ident.span.ctxt(),
+            |this, scope, use_prelude, ctxt| {
+                let ident = Ident::new(orig_ident.name, orig_ident.span.with_ctxt(ctxt));
                 let ok = |res, span, arenas| {
                     Ok((
                         (res, ty::Visibility::Public, span, ExpnId::root()).to_name_binding(arenas),
@@ -1089,9 +1090,9 @@ impl<'a> Resolver<'a> {
             edition,
         );
 
-        if result.is_builtin {
+        if let Some(builtin_name) = result.builtin_name {
             // The macro was marked with `#[rustc_builtin_macro]`.
-            if let Some(builtin_macro) = self.builtin_macros.get_mut(&item.ident.name) {
+            if let Some(builtin_macro) = self.builtin_macros.get_mut(&builtin_name) {
                 // The macro is a built-in, replace its expander function
                 // while still taking everything else from the source code.
                 // If we already loaded this builtin macro, give a better error message than 'no such builtin macro'.

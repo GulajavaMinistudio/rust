@@ -50,6 +50,7 @@ use rustc_middle::{bug, span_bug};
 use rustc_session::lint;
 use rustc_session::lint::{BuiltinLintDiagnostics, LintBuffer};
 use rustc_session::Session;
+use rustc_span::edition::Edition;
 use rustc_span::hygiene::{ExpnId, ExpnKind, MacroKind, SyntaxContext, Transparency};
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
@@ -210,7 +211,11 @@ enum ResolutionError<'a> {
     /// Error E0434: can't capture dynamic environment in a fn item.
     CannotCaptureDynamicEnvironmentInFnItem,
     /// Error E0435: attempt to use a non-constant value in a constant.
-    AttemptToUseNonConstantValueInConstant(Ident, String),
+    AttemptToUseNonConstantValueInConstant(
+        Ident,
+        /* suggestion */ &'static str,
+        /* current */ &'static str,
+    ),
     /// Error E0530: `X` bindings cannot shadow `Y`s.
     BindingShadowsSomethingUnacceptable(&'static str, Symbol, &'a NameBinding<'a>),
     /// Error E0128: type parameters with a default cannot use forward-declared identifiers.
@@ -759,10 +764,13 @@ impl<'a> NameBinding<'a> {
     }
 
     fn is_variant(&self) -> bool {
-        matches!(self.kind, NameBindingKind::Res(
+        matches!(
+            self.kind,
+            NameBindingKind::Res(
                 Res::Def(DefKind::Variant | DefKind::Ctor(CtorOf::Variant, ..), _),
                 _,
-            ))
+            )
+        )
     }
 
     fn is_extern_crate(&self) -> bool {
@@ -1443,7 +1451,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn is_builtin_macro(&mut self, res: Res) -> bool {
-        self.get_macro(res).map_or(false, |ext| ext.is_builtin)
+        self.get_macro(res).map_or(false, |ext| ext.builtin_name.is_some())
     }
 
     fn macro_def(&self, mut ctxt: SyntaxContext) -> DefId {
@@ -1626,8 +1634,13 @@ impl<'a> Resolver<'a> {
         &mut self,
         scope_set: ScopeSet,
         parent_scope: &ParentScope<'a>,
-        ident: Ident,
-        mut visitor: impl FnMut(&mut Self, Scope<'a>, /*use_prelude*/ bool, Ident) -> Option<T>,
+        ctxt: SyntaxContext,
+        mut visitor: impl FnMut(
+            &mut Self,
+            Scope<'a>,
+            /*use_prelude*/ bool,
+            SyntaxContext,
+        ) -> Option<T>,
     ) -> Option<T> {
         // General principles:
         // 1. Not controlled (user-defined) names should have higher priority than controlled names
@@ -1670,7 +1683,7 @@ impl<'a> Resolver<'a> {
         // 4c. Standard library prelude (de-facto closed, controlled).
         // 6. Language prelude: builtin attributes (closed, controlled).
 
-        let rust_2015 = ident.span.rust_2015();
+        let rust_2015 = ctxt.edition() == Edition::Edition2015;
         let (ns, macro_kind, is_absolute_path) = match scope_set {
             ScopeSet::All(ns, _) => (ns, None, false),
             ScopeSet::AbsolutePath(ns) => (ns, None, true),
@@ -1683,7 +1696,7 @@ impl<'a> Resolver<'a> {
             TypeNS | ValueNS => Scope::Module(module),
             MacroNS => Scope::DeriveHelpers(parent_scope.expansion),
         };
-        let mut ident = ident.normalize_to_macros_2_0();
+        let mut ctxt = ctxt.normalize_to_macros_2_0();
         let mut use_prelude = !module.no_implicit_prelude;
 
         loop {
@@ -1719,7 +1732,7 @@ impl<'a> Resolver<'a> {
             };
 
             if visit {
-                if let break_result @ Some(..) = visitor(self, scope, use_prelude, ident) {
+                if let break_result @ Some(..) = visitor(self, scope, use_prelude, ctxt) {
                     return break_result;
                 }
             }
@@ -1749,17 +1762,17 @@ impl<'a> Resolver<'a> {
                 },
                 Scope::CrateRoot => match ns {
                     TypeNS => {
-                        ident.span.adjust(ExpnId::root());
+                        ctxt.adjust(ExpnId::root());
                         Scope::ExternPrelude
                     }
                     ValueNS | MacroNS => break,
                 },
                 Scope::Module(module) => {
                     use_prelude = !module.no_implicit_prelude;
-                    match self.hygienic_lexical_parent(module, &mut ident.span) {
+                    match self.hygienic_lexical_parent(module, &mut ctxt) {
                         Some(parent_module) => Scope::Module(parent_module),
                         None => {
-                            ident.span.adjust(ExpnId::root());
+                            ctxt.adjust(ExpnId::root());
                             match ns {
                                 TypeNS => Scope::ExternPrelude,
                                 ValueNS => Scope::StdLibPrelude,
@@ -1884,16 +1897,18 @@ impl<'a> Resolver<'a> {
         ident = normalized_ident;
         let mut poisoned = None;
         loop {
+            let mut span_data = ident.span.data();
             let opt_module = if let Some(node_id) = record_used_id {
                 self.hygienic_lexical_parent_with_compatibility_fallback(
                     module,
-                    &mut ident.span,
+                    &mut span_data.ctxt,
                     node_id,
                     &mut poisoned,
                 )
             } else {
-                self.hygienic_lexical_parent(module, &mut ident.span)
+                self.hygienic_lexical_parent(module, &mut span_data.ctxt)
             };
+            ident.span = span_data.span();
             module = unwrap_or!(opt_module, break);
             let adjusted_parent_scope = &ParentScope { module, ..*parent_scope };
             let result = self.resolve_ident_in_module_unadjusted(
@@ -1967,10 +1982,10 @@ impl<'a> Resolver<'a> {
     fn hygienic_lexical_parent(
         &mut self,
         module: Module<'a>,
-        span: &mut Span,
+        ctxt: &mut SyntaxContext,
     ) -> Option<Module<'a>> {
-        if !module.expansion.outer_expn_is_descendant_of(span.ctxt()) {
-            return Some(self.macro_def_scope(span.remove_mark()));
+        if !module.expansion.outer_expn_is_descendant_of(*ctxt) {
+            return Some(self.macro_def_scope(ctxt.remove_mark()));
         }
 
         if let ModuleKind::Block(..) = module.kind {
@@ -1983,11 +1998,11 @@ impl<'a> Resolver<'a> {
     fn hygienic_lexical_parent_with_compatibility_fallback(
         &mut self,
         module: Module<'a>,
-        span: &mut Span,
+        ctxt: &mut SyntaxContext,
         node_id: NodeId,
         poisoned: &mut Option<NodeId>,
     ) -> Option<Module<'a>> {
-        if let module @ Some(..) = self.hygienic_lexical_parent(module, span) {
+        if let module @ Some(..) = self.hygienic_lexical_parent(module, ctxt) {
             return module;
         }
 
@@ -2010,9 +2025,9 @@ impl<'a> Resolver<'a> {
                 // The macro is a proc macro derive
                 if let Some(def_id) = module.expansion.expn_data().macro_def_id {
                     let ext = self.get_macro_by_def_id(def_id);
-                    if !ext.is_builtin
+                    if ext.builtin_name.is_none()
                         && ext.macro_kind() == MacroKind::Derive
-                        && parent.expansion.outer_expn_is_descendant_of(span.ctxt())
+                        && parent.expansion.outer_expn_is_descendant_of(*ctxt)
                     {
                         *poisoned = Some(node_id);
                         return module.parent;
@@ -2614,18 +2629,19 @@ impl<'a> Resolver<'a> {
                                             ConstantItemKind::Const => "const",
                                             ConstantItemKind::Static => "static",
                                         };
-                                        let sugg = format!(
-                                            "consider using `let` instead of `{}`",
-                                            kind_str
-                                        );
-                                        (span, AttemptToUseNonConstantValueInConstant(ident, sugg))
+                                        (
+                                            span,
+                                            AttemptToUseNonConstantValueInConstant(
+                                                ident, "let", kind_str,
+                                            ),
+                                        )
                                     } else {
-                                        let sugg = "consider using `const` instead of `let`";
                                         (
                                             rib_ident.span,
                                             AttemptToUseNonConstantValueInConstant(
                                                 original_rib_ident_def,
-                                                sugg.to_string(),
+                                                "const",
+                                                "let",
                                             ),
                                         )
                                     };
