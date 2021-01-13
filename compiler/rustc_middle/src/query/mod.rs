@@ -312,6 +312,20 @@ rustc_queries! {
             desc { |tcx| "elaborating drops for `{}`", tcx.def_path_str(key.did.to_def_id()) }
         }
 
+        query mir_for_ctfe(
+            key: DefId
+        ) -> &'tcx mir::Body<'tcx> {
+            desc { |tcx| "caching mir of `{}` for CTFE", tcx.def_path_str(key) }
+            cache_on_disk_if { key.is_local() }
+        }
+
+        query mir_for_ctfe_of_const_arg(key: (LocalDefId, DefId)) -> &'tcx mir::Body<'tcx> {
+            desc {
+                |tcx| "MIR for CTFE of the const argument `{}`",
+                tcx.def_path_str(key.0.to_def_id())
+            }
+        }
+
         query mir_promoted(key: ty::WithOptConstParam<LocalDefId>) ->
             (
                 &'tcx Steal<mir::Body<'tcx>>,
@@ -330,12 +344,6 @@ rustc_queries! {
         query optimized_mir(key: DefId) -> &'tcx mir::Body<'tcx> {
             desc { |tcx| "optimizing MIR for `{}`", tcx.def_path_str(key) }
             cache_on_disk_if { key.is_local() }
-        }
-        query optimized_mir_of_const_arg(key: (LocalDefId, DefId)) -> &'tcx mir::Body<'tcx> {
-            desc {
-                |tcx| "optimizing MIR for the const argument `{}`",
-                tcx.def_path_str(key.0.to_def_id())
-            }
         }
 
         /// Returns coverage summary info for a function, after executing the `InstrumentCoverage`
@@ -927,6 +935,9 @@ rustc_queries! {
     }
 
     Codegen {
+        query is_ctfe_mir_available(key: DefId) -> bool {
+            desc { |tcx| "checking if item has ctfe mir available: `{}`", tcx.def_path_str(key) }
+        }
         query is_mir_available(key: DefId) -> bool {
             desc { |tcx| "checking if item has mir available: `{}`", tcx.def_path_str(key) }
         }
@@ -1307,6 +1318,15 @@ rustc_queries! {
         query visibility(def_id: DefId) -> ty::Visibility {
             eval_always
             desc { |tcx| "computing visibility of `{}`", tcx.def_path_str(def_id) }
+        }
+
+        /// Computes the set of modules from which this type is visibly uninhabited.
+        /// To check whether a type is uninhabited at all (not just from a given module), you could
+        /// check whether the forest is empty.
+        query type_uninhabited_from(
+            key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>
+        ) -> ty::inhabitedness::DefIdForest {
+            desc { "computing the inhabitedness of `{:?}`", key }
         }
     }
 
