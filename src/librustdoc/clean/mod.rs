@@ -1328,7 +1328,7 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &DocContext<'_>) -> Type {
                 let mut ty_substs = FxHashMap::default();
                 let mut lt_substs = FxHashMap::default();
                 let mut ct_substs = FxHashMap::default();
-                let generic_args = provided_params.generic_args();
+                let generic_args = provided_params.args();
                 {
                     let mut indices: GenericParamCount = Default::default();
                     for param in generics.params.iter() {
@@ -1943,7 +1943,7 @@ impl Clean<GenericArgs> for hir::GenericArgs<'_> {
 
 impl Clean<PathSegment> for hir::PathSegment<'_> {
     fn clean(&self, cx: &DocContext<'_>) -> PathSegment {
-        PathSegment { name: self.ident.name, args: self.generic_args().clean(cx) }
+        PathSegment { name: self.ident.name, args: self.args().clean(cx) }
     }
 }
 
@@ -2164,7 +2164,7 @@ fn clean_extern_crate(
     // FIXME: using `from_def_id_and_kind` breaks `rustdoc/masked` for some reason
     vec![Item {
         name: None,
-        attrs: krate.attrs.clean(cx),
+        attrs: box krate.attrs.clean(cx),
         source: krate.span.clean(cx),
         def_id: crate_def_id,
         visibility: krate.vis.clean(cx),
@@ -2246,7 +2246,7 @@ impl Clean<Vec<Item>> for doctree::Import<'_> {
                 ) {
                     items.push(Item {
                         name: None,
-                        attrs: self.attrs.clean(cx),
+                        attrs: box self.attrs.clean(cx),
                         source: self.span.clean(cx),
                         def_id: cx.tcx.hir().local_def_id(self.id).to_def_id(),
                         visibility: self.vis.clean(cx),
@@ -2264,7 +2264,7 @@ impl Clean<Vec<Item>> for doctree::Import<'_> {
 
         vec![Item {
             name: None,
-            attrs: self.attrs.clean(cx),
+            attrs: box self.attrs.clean(cx),
             source: self.span.clean(cx),
             def_id: cx.tcx.hir().local_def_id(self.id).to_def_id(),
             visibility: self.vis.clean(cx),

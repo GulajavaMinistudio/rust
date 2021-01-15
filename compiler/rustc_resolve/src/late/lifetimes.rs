@@ -644,17 +644,17 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                             } else {
                                 bug!();
                             };
-                            if let hir::ParamName::Plain(param_name) = name {
-                                if param_name.name == kw::UnderscoreLifetime {
-                                    // Pick the elided lifetime "definition" if one exists
-                                    // and use it to make an elision scope.
-                                    self.lifetime_uses.insert(def_id, LifetimeUseSet::Many);
-                                    elision = Some(reg);
-                                } else {
-                                    lifetimes.insert(name, reg);
-                                }
+                            // We cannot predict what lifetimes are unused in opaque type.
+                            self.lifetime_uses.insert(def_id, LifetimeUseSet::Many);
+                            if let hir::ParamName::Plain(Ident {
+                                name: kw::UnderscoreLifetime,
+                                ..
+                            }) = name
+                            {
+                                // Pick the elided lifetime "definition" if one exists
+                                // and use it to make an elision scope.
+                                elision = Some(reg);
                             } else {
-                                self.lifetime_uses.insert(def_id, LifetimeUseSet::Many);
                                 lifetimes.insert(name, reg);
                             }
                         }
@@ -1433,7 +1433,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                     hir::TyKind::Path(ref qpath) => {
                         if let QPath::Resolved(_, path) = qpath {
                             let last_segment = &path.segments[path.segments.len() - 1];
-                            let generics = last_segment.generic_args();
+                            let generics = last_segment.args();
                             for arg in generics.args.iter() {
                                 if let GenericArg::Lifetime(lt) = arg {
                                     if lt.name.ident() == name {
