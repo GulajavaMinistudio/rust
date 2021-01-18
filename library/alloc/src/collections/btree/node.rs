@@ -142,8 +142,17 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
 }
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
+    fn new_internal(child: Root<K, V>) -> Self {
+        let mut new_node = Box::new(unsafe { InternalNode::new() });
+        new_node.edges[0].write(child.node);
+        NodeRef::from_new_internal(new_node, child.height + 1)
+    }
+
     fn from_new_internal(internal: Box<InternalNode<K, V>>, height: usize) -> Self {
-        NodeRef { height, node: NonNull::from(Box::leak(internal)).cast(), _marker: PhantomData }
+        let node = NonNull::from(Box::leak(internal)).cast();
+        let mut this = NodeRef { height, node, _marker: PhantomData };
+        this.borrow_mut().correct_all_childrens_parent_links();
+        this
     }
 }
 
@@ -167,11 +176,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     /// make that new node the root node, and return it. This increases the height by 1
     /// and is the opposite of `pop_internal_level`.
     pub fn push_internal_level(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
-        let mut new_node = Box::new(unsafe { InternalNode::new() });
-        new_node.edges[0].write(self.node);
-        let mut new_root = NodeRef::from_new_internal(new_node, self.height + 1);
-        new_root.borrow_mut().first_edge().correct_parent_link();
-        *self = new_root.forget_type();
+        super::mem::take_mut(self, |old_root| NodeRef::new_internal(old_root).forget_type());
 
         // `self.borrow_mut()`, except that we just forgot we're internal now:
         NodeRef { height: self.height, node: self.node, _marker: PhantomData }
@@ -179,7 +184,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
 
     /// Removes the internal root node, using its first child as the new root node.
     /// As it is intended only to be called when the root node has only one child,
-    /// no cleanup is done on any of the other children.
+    /// no cleanup is done on any of the keys, values and other children.
     /// This decreases the height by 1 and is the opposite of `push_internal_level`.
     ///
     /// Requires exclusive access to the `Root` object but not to the root node;
@@ -220,7 +225,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
 ///    - When this is `Owned`, the `NodeRef` acts roughly like `Box<Node>`,
 ///      but does not have a destructor, and must be cleaned up manually.
 ///   Since any `NodeRef` allows navigating through the tree, `BorrowType`
-///   effectively applies to the entire tree, not just the node itself.
+///   effectively applies to the entire tree, not just to the node itself.
 /// - `K` and `V`: These are the types of keys and values stored in the nodes.
 /// - `Type`: This can be `Leaf`, `Internal`, or `LeafOrInternal`. When this is
 ///   `Leaf`, the `NodeRef` points to a leaf node, when this is `Internal` the
@@ -420,7 +425,7 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     /// Similar to `ascend`, gets a reference to a node's parent node, but also
-    /// deallocate the current node in the process. This is unsafe because the
+    /// deallocates the current node in the process. This is unsafe because the
     /// current node will still be accessible despite being deallocated.
     pub unsafe fn deallocate_and_ascend(
         self,
@@ -656,7 +661,10 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
     /// Removes a key-value pair from the end of the node and returns the pair.
     /// Also removes the edge that was to the right of that pair and, if the node
     /// is internal, returns the orphaned subtree that this edge owned.
-    fn pop(&mut self) -> (K, V, Option<Root<K, V>>) {
+    ///
+    /// # Safety
+    /// The node must not be empty.
+    unsafe fn pop(&mut self) -> (K, V, Option<Root<K, V>>) {
         debug_assert!(self.len() > 0);
 
         let idx = self.len() - 1;
@@ -1193,9 +1201,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
             );
 
             let height = self.node.height;
-            let mut right = NodeRef::from_new_internal(new_node, height);
-
-            right.borrow_mut().correct_childrens_parent_links(0..new_len + 1);
+            let right = NodeRef::from_new_internal(new_node, height);
 
             SplitResult { left: self.node, kv, right }
         }
