@@ -31,6 +31,7 @@ impl<'a, 'tcx> Deref for ConfirmContext<'a, 'tcx> {
     }
 }
 
+#[derive(Debug)]
 pub struct ConfirmResult<'tcx> {
     pub callee: MethodCallee<'tcx>,
     pub illegal_sized_bound: Option<Span>,
@@ -507,6 +508,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
                 self.tcx,
                 self.span,
                 Some(self.self_expr.span),
+                self.call_expr.span,
                 trait_def_id,
             ),
             ty::ImplContainer(..) => {}

@@ -592,17 +592,6 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Leaf> {
             self.val_area_mut(idx).write(val);
         }
     }
-
-    /// Adds a key-value pair to the beginning of the node.
-    fn push_front(&mut self, key: K, val: V) {
-        let new_len = self.len() + 1;
-        assert!(new_len <= CAPACITY);
-        unsafe {
-            slice_insert(self.key_area_mut(..new_len), 0, key);
-            slice_insert(self.val_area_mut(..new_len), 0, val);
-            *self.len_mut() = new_len as u16;
-        }
-    }
 }
 
 impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
@@ -636,88 +625,6 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
             self.val_area_mut(idx).write(val);
             self.edge_area_mut(idx + 1).write(edge.node);
             Handle::new_edge(self.reborrow_mut(), idx + 1).correct_parent_link();
-        }
-    }
-
-    /// Adds a key-value pair, and an edge to go to the left of that pair,
-    /// to the beginning of the node.
-    fn push_front(&mut self, key: K, val: V, edge: Root<K, V>) {
-        let new_len = self.len() + 1;
-        assert!(edge.height == self.height - 1);
-        assert!(new_len <= CAPACITY);
-
-        unsafe {
-            slice_insert(self.key_area_mut(..new_len), 0, key);
-            slice_insert(self.val_area_mut(..new_len), 0, val);
-            slice_insert(self.edge_area_mut(..new_len + 1), 0, edge.node);
-            *self.len_mut() = new_len as u16;
-        }
-
-        self.correct_all_childrens_parent_links();
-    }
-}
-
-impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
-    /// Removes a key-value pair from the end of the node and returns the pair.
-    /// Also removes the edge that was to the right of that pair and, if the node
-    /// is internal, returns the orphaned subtree that this edge owned.
-    ///
-    /// # Safety
-    /// The node must not be empty.
-    unsafe fn pop(&mut self) -> (K, V, Option<Root<K, V>>) {
-        debug_assert!(self.len() > 0);
-
-        let idx = self.len() - 1;
-
-        unsafe {
-            let key = self.key_area_mut(idx).assume_init_read();
-            let val = self.val_area_mut(idx).assume_init_read();
-            let edge = match self.reborrow_mut().force() {
-                ForceResult::Leaf(_) => None,
-                ForceResult::Internal(mut internal) => {
-                    let node = internal.edge_area_mut(idx + 1).assume_init_read();
-                    let mut edge = Root { node, height: internal.height - 1, _marker: PhantomData };
-                    // Currently, clearing the parent link is superfluous, because we will
-                    // insert the node elsewhere and set its parent link again.
-                    edge.clear_parent_link();
-                    Some(edge)
-                }
-            };
-
-            *self.len_mut() -= 1;
-            (key, val, edge)
-        }
-    }
-
-    /// Removes a key-value pair from the beginning of the node and returns the pair.
-    /// Also removes the edge that was to the left of that pair and, if the node is
-    /// internal, returns the orphaned subtree that this edge owned.
-    fn pop_front(&mut self) -> (K, V, Option<Root<K, V>>) {
-        debug_assert!(self.len() > 0);
-
-        let old_len = self.len();
-
-        unsafe {
-            let key = slice_remove(self.key_area_mut(..old_len), 0);
-            let val = slice_remove(self.val_area_mut(..old_len), 0);
-            let edge = match self.reborrow_mut().force() {
-                ForceResult::Leaf(_) => None,
-                ForceResult::Internal(mut internal) => {
-                    let node = slice_remove(internal.edge_area_mut(..old_len + 1), 0);
-                    let mut edge = Root { node, height: internal.height - 1, _marker: PhantomData };
-                    // Currently, clearing the parent link is superfluous, because we will
-                    // insert the node elsewhere and set its parent link again.
-                    edge.clear_parent_link();
-
-                    internal.correct_childrens_parent_links(0..old_len);
-
-                    Some(edge)
-                }
-            };
-
-            *self.len_mut() -= 1;
-
-            (key, val, edge)
         }
     }
 }
@@ -1282,25 +1189,25 @@ impl<'a, K, V> BalancingContext<'a, K, V> {
         self.right_child
     }
 
-    /// Returns `true` if it is valid to call `.merge()` in the balancing context,
-    /// i.e., whether there is enough room in a node to hold the combination of
-    /// both adjacent child nodes, along with the key-value pair in the parent.
+    /// Returns whether merging is possible, i.e., whether there is enough room
+    /// in a node to combine the central KV with both adjacent child nodes.
     pub fn can_merge(&self) -> bool {
         self.left_child.len() + 1 + self.right_child.len() <= CAPACITY
     }
 }
 
 impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
-    /// Merges the parent's key-value pair and both adjacent child nodes into
-    /// the left node and returns an edge handle in that expanded left node.
-    /// If `track_edge_idx` is given some value, the returned edge corresponds
-    /// to where the edge in that child node ended up,
-    ///
-    /// Panics unless we `.can_merge()`.
-    pub fn merge(
+    /// Performs a merge and lets a closure decide what to return.
+    fn do_merge<
+        F: FnOnce(
+            NodeRef<marker::Mut<'a>, K, V, marker::Internal>,
+            NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>,
+        ) -> R,
+        R,
+    >(
         self,
-        track_edge_idx: Option<LeftOrRight<usize>>,
-    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
+        result: F,
+    ) -> R {
         let Handle { node: mut parent_node, idx: parent_idx, _marker } = self.parent;
         let old_parent_len = parent_node.len();
         let mut left_node = self.left_child;
@@ -1310,11 +1217,6 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
         let new_left_len = old_left_len + 1 + right_len;
 
         assert!(new_left_len <= CAPACITY);
-        assert!(match track_edge_idx {
-            None => true,
-            Some(LeftOrRight::Left(idx)) => idx <= old_left_len,
-            Some(LeftOrRight::Right(idx)) => idx <= right_len,
-        });
 
         unsafe {
             *left_node.len_mut() = new_left_len as u16;
@@ -1353,14 +1255,47 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             } else {
                 Global.deallocate(right_node.node.cast(), Layout::new::<LeafNode<K, V>>());
             }
-
-            let new_idx = match track_edge_idx {
-                None => 0,
-                Some(LeftOrRight::Left(idx)) => idx,
-                Some(LeftOrRight::Right(idx)) => old_left_len + 1 + idx,
-            };
-            Handle::new_edge(left_node, new_idx)
         }
+        result(parent_node, left_node)
+    }
+
+    /// Merges the parent's key-value pair and both adjacent child nodes into
+    /// the left child node and returns the shrunk parent node.
+    ///
+    /// Panics unless we `.can_merge()`.
+    pub fn merge_tracking_parent(self) -> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+        self.do_merge(|parent, _child| parent)
+    }
+
+    /// Merges the parent's key-value pair and both adjacent child nodes into
+    /// the left child node and returns that child node.
+    ///
+    /// Panics unless we `.can_merge()`.
+    pub fn merge_tracking_child(self) -> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
+        self.do_merge(|_parent, child| child)
+    }
+
+    /// Merges the parent's key-value pair and both adjacent child nodes into
+    /// the left child node and returns the edge handle in that child node
+    /// where the tracked child edge ended up,
+    ///
+    /// Panics unless we `.can_merge()`.
+    pub fn merge_tracking_child_edge(
+        self,
+        track_edge_idx: LeftOrRight<usize>,
+    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
+        let old_left_len = self.left_child.len();
+        let right_len = self.right_child.len();
+        assert!(match track_edge_idx {
+            LeftOrRight::Left(idx) => idx <= old_left_len,
+            LeftOrRight::Right(idx) => idx <= right_len,
+        });
+        let child = self.merge_tracking_child();
+        let new_idx = match track_edge_idx {
+            LeftOrRight::Left(idx) => idx,
+            LeftOrRight::Right(idx) => old_left_len + 1 + idx,
+        };
+        unsafe { Handle::new_edge(child, new_idx) }
     }
 
     /// Removes a key-value pair from the left child and places it in the key-value storage
@@ -1371,18 +1306,8 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
         mut self,
         track_right_edge_idx: usize,
     ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
-        unsafe {
-            let (k, v, edge) = self.left_child.pop();
-
-            let (k, v) = self.parent.replace_kv(k, v);
-
-            match self.right_child.reborrow_mut().force() {
-                ForceResult::Leaf(mut leaf) => leaf.push_front(k, v),
-                ForceResult::Internal(mut internal) => internal.push_front(k, v, edge.unwrap()),
-            }
-
-            Handle::new_edge(self.right_child, 1 + track_right_edge_idx)
-        }
+        self.bulk_steal_left(1);
+        unsafe { Handle::new_edge(self.right_child, 1 + track_right_edge_idx) }
     }
 
     /// Removes a key-value pair from the right child and places it in the key-value storage
@@ -1393,18 +1318,8 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
         mut self,
         track_left_edge_idx: usize,
     ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
-        unsafe {
-            let (k, v, edge) = self.right_child.pop_front();
-
-            let (k, v) = self.parent.replace_kv(k, v);
-
-            match self.left_child.reborrow_mut().force() {
-                ForceResult::Leaf(mut leaf) => leaf.push(k, v),
-                ForceResult::Internal(mut internal) => internal.push(k, v, edge.unwrap()),
-            }
-
-            Handle::new_edge(self.left_child, track_left_edge_idx)
-        }
+        self.bulk_steal_right(1);
+        unsafe { Handle::new_edge(self.left_child, track_left_edge_idx) }
     }
 
     /// This does stealing similar to `steal_left` but steals multiple elements at once.

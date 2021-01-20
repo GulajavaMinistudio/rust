@@ -1163,7 +1163,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 debug!("instantiate_value_path: def_id={:?} container={:?}", def_id, container);
                 match container {
                     ty::TraitContainer(trait_did) => {
-                        callee::check_legal_trait_for_method_call(tcx, span, None, trait_did)
+                        callee::check_legal_trait_for_method_call(tcx, span, None, span, trait_did)
                     }
                     ty::ImplContainer(impl_def_id) => {
                         if segments.len() == 1 {
@@ -1479,7 +1479,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ty
         } else {
             if !self.is_tainted_by_errors() {
-                self.emit_inference_failure_err((**self).body_id, sp, ty.into(), E0282)
+                self.emit_inference_failure_err((**self).body_id, sp, ty.into(), vec![], E0282)
                     .note("type must be known at this point")
                     .emit();
             }
