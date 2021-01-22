@@ -1,4 +1,5 @@
 use rustc_ast as ast;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::Lrc;
 use rustc_errors::{ColorConfig, ErrorReported};
 use rustc_hir as hir;
@@ -16,7 +17,6 @@ use rustc_span::{BytePos, FileName, Pos, Span, DUMMY_SP};
 use rustc_target::spec::TargetTriple;
 use tempfile::Builder as TempFileBuilder;
 
-use std::collections::HashMap;
 use std::env;
 use std::io::{self, Write};
 use std::panic;
@@ -423,6 +423,7 @@ crate fn make_test(
             use rustc_errors::emitter::{Emitter, EmitterWriter};
             use rustc_errors::Handler;
             use rustc_parse::maybe_new_parser_from_source_str;
+            use rustc_parse::parser::ForceCollect;
             use rustc_session::parse::ParseSess;
             use rustc_span::source_map::FilePathMapping;
 
@@ -459,7 +460,7 @@ crate fn make_test(
             };
 
             loop {
-                match parser.parse_item() {
+                match parser.parse_item(ForceCollect::No) {
                     Ok(Some(item)) => {
                         if !found_main {
                             if let ast::ItemKind::Fn(..) = item.kind {
@@ -703,7 +704,7 @@ crate struct Collector {
     position: Span,
     source_map: Option<Lrc<SourceMap>>,
     filename: Option<PathBuf>,
-    visited_tests: HashMap<(String, usize), usize>,
+    visited_tests: FxHashMap<(String, usize), usize>,
 }
 
 impl Collector {
@@ -727,7 +728,7 @@ impl Collector {
             position: DUMMY_SP,
             source_map,
             filename,
-            visited_tests: HashMap::new(),
+            visited_tests: FxHashMap::default(),
         }
     }
 
@@ -1009,7 +1010,7 @@ impl<'a, 'hir, 'tcx> HirCollector<'a, 'hir, 'tcx> {
                 self.codes,
                 self.collector.enable_per_target_ignores,
                 Some(&crate::html::markdown::ExtraInfo::new(
-                    &self.tcx,
+                    self.tcx,
                     hir_id,
                     span_of_attrs(&attrs).unwrap_or(sp),
                 )),

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use rustc_data_structures::fx::FxHashMap;
-use rustc_middle::ty;
+use rustc_middle::ty::TyCtxt;
 use rustc_session::Session;
 use rustc_span::edition::Edition;
 
@@ -26,7 +26,7 @@ use crate::html::render::cache::ExternalLocation;
 
 #[derive(Clone)]
 crate struct JsonRenderer<'tcx> {
-    tcx: ty::TyCtxt<'tcx>,
+    tcx: TyCtxt<'tcx>,
     /// A mapping of IDs that contains all local items for this crate which gets output as a top
     /// level field of the JSON blob.
     index: Rc<RefCell<FxHashMap<types::Id, types::Item>>>,
@@ -131,7 +131,7 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
         _render_info: RenderInfo,
         _edition: Edition,
         _cache: &mut Cache,
-        tcx: ty::TyCtxt<'tcx>,
+        tcx: TyCtxt<'tcx>,
     ) -> Result<(Self, clean::Crate), Error> {
         debug!("Initializing json renderer");
         Ok((
@@ -199,7 +199,12 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
         Ok(())
     }
 
-    fn after_krate(&mut self, krate: &clean::Crate, cache: &Cache) -> Result<(), Error> {
+    fn after_krate(
+        &mut self,
+        krate: &clean::Crate,
+        cache: &Cache,
+        _diag: &rustc_errors::Handler,
+    ) -> Result<(), Error> {
         debug!("Done with crate");
         let mut index = (*self.index).clone().into_inner();
         index.extend(self.get_trait_items(cache));
@@ -236,17 +241,13 @@ impl<'tcx> FormatRenderer<'tcx> for JsonRenderer<'tcx> {
                     )
                 })
                 .collect(),
-            format_version: 1,
+            format_version: 2,
         };
         let mut p = self.out_path.clone();
         p.push(output.index.get(&output.root).unwrap().name.clone().unwrap());
         p.set_extension("json");
         let file = File::create(&p).map_err(|error| Error { error: error.to_string(), file: p })?;
         serde_json::ser::to_writer(&file, &output).unwrap();
-        Ok(())
-    }
-
-    fn after_run(&mut self, _diag: &rustc_errors::Handler) -> Result<(), Error> {
         Ok(())
     }
 }
