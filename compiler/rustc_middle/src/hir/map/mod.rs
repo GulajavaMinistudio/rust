@@ -85,11 +85,13 @@ fn is_body_owner<'hir>(node: Node<'hir>, hir_id: HirId) -> bool {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct HirOwnerData<'hir> {
     pub(super) signature: Option<&'hir Owner<'hir>>,
     pub(super) with_bodies: Option<&'hir mut OwnerNodes<'hir>>,
 }
 
+#[derive(Debug)]
 pub struct IndexedHir<'hir> {
     /// The SVH of the local crate.
     pub crate_hash: Svh,
@@ -562,6 +564,17 @@ impl<'hir> Map<'hir> {
                 | Node::Expr(Expr { kind: ExprKind::Closure(..), .. }),
             )
         )
+    }
+
+    /// Checks if the node is left-hand side of an assignment.
+    pub fn is_lhs(&self, id: HirId) -> bool {
+        match self.find(self.get_parent_node(id)) {
+            Some(Node::Expr(expr)) => match expr.kind {
+                ExprKind::Assign(lhs, _rhs, _span) => lhs.hir_id == id,
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     /// Whether the expression pointed at by `hir_id` belongs to a `const` evaluation context.
