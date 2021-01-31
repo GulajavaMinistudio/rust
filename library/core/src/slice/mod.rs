@@ -543,8 +543,8 @@ impl<T> [T] {
     #[inline]
     pub fn swap(&mut self, a: usize, b: usize) {
         // Can't take two mutable loans from one vector, so instead use raw pointers.
-        let pa = ptr::raw_mut!(self[a]);
-        let pb = ptr::raw_mut!(self[b]);
+        let pa = ptr::addr_of_mut!(self[a]);
+        let pb = ptr::addr_of_mut!(self[b]);
         // SAFETY: `pa` and `pb` have been created from safe mutable references and refer
         // to elements in the slice and therefore are guaranteed to be valid and aligned.
         // Note that accessing the elements behind `a` and `b` is checked and will
@@ -2852,13 +2852,12 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// #![feature(slice_fill_with)]
-    ///
     /// let mut buf = vec![1; 10];
     /// buf.fill_with(Default::default);
     /// assert_eq!(buf, vec![0; 10]);
     /// ```
-    #[unstable(feature = "slice_fill_with", issue = "79221")]
+    #[doc(alias = "memset")]
+    #[stable(feature = "slice_fill_with", since = "1.51.0")]
     pub fn fill_with<F>(&mut self, mut f: F)
     where
         F: FnMut() -> T,
