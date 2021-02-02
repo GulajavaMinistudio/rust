@@ -259,6 +259,7 @@
 #![feature(dropck_eyepatch)]
 #![feature(duration_constants)]
 #![feature(duration_zero)]
+#![feature(edition_panic)]
 #![feature(exact_size_is_empty)]
 #![feature(exhaustive_patterns)]
 #![feature(extend_one)]
@@ -283,6 +284,7 @@
 #![feature(maybe_uninit_extra)]
 #![feature(maybe_uninit_ref)]
 #![feature(maybe_uninit_slice)]
+#![feature(maybe_uninit_uninit_array)]
 #![feature(min_specialization)]
 #![feature(needs_panic_runtime)]
 #![feature(negative_impls)]
@@ -326,6 +328,7 @@
 #![feature(unsafe_cell_raw_get)]
 #![feature(unwind_attributes)]
 #![feature(vec_into_raw_parts)]
+#![feature(vec_spare_capacity)]
 #![feature(wake_trait)]
 // NB: the above list is sorted to minimize merge conflicts.
 #![default_lib_allocator]

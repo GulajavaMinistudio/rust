@@ -1425,7 +1425,7 @@ h4 > .notable-traits {
 		margin-left: 0px;
 	}
 
-	#main {
+	#main, #search {
 		margin-top: 45px;
 		padding: 0;
 	}
@@ -1489,6 +1489,14 @@ h4 > .notable-traits {
 		margin-left: 0;
 		background-color: rgba(0,0,0,0);
 		height: 100%;
+	}
+	/*
+	This allows to prevent the version text to overflow the sidebar title on mobile mode when the
+	sidebar is displayed (after clicking on the "hamburger" button).
+	*/
+	.sidebar.mobile > div.version {
+		overflow: hidden;
+		max-height: 33px;
 	}
 	.sidebar {
 		width: calc(100% + 30px);
@@ -1579,7 +1587,7 @@ h4 > .notable-traits {
 	}
 }
 
-@media (max-width: 416px) {
+@media (max-width: 464px) {
 	#titles, #titles > button {
 		height: 73px;
 	}
