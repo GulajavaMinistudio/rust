@@ -358,7 +358,7 @@ impl GenericArgs<'_> {
             .iter()
             .filter(|arg| !arg.is_synthetic())
             .map(|arg| arg.span())
-            .fold_first(|span1, span2| span1.to(span2))
+            .reduce(|span1, span2| span1.to(span2))
     }
 
     /// Returns span encompassing arguments and their surrounding `<>` or `()`
@@ -2015,6 +2015,7 @@ pub struct TypeBinding<'hir> {
     pub hir_id: HirId,
     #[stable_hasher(project(name))]
     pub ident: Ident,
+    pub gen_args: &'hir GenericArgs<'hir>,
     pub kind: TypeBindingKind<'hir>,
     pub span: Span,
 }
