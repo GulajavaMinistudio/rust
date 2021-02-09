@@ -457,10 +457,7 @@ impl<T> BTreeSet<T> {
     /// assert!(v.is_empty());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn clear(&mut self)
-    where
-        T: Ord,
-    {
+    pub fn clear(&mut self) {
         self.map.clear()
     }
 
@@ -679,7 +676,7 @@ impl<T> BTreeSet<T> {
     /// use std::collections::BTreeSet;
     ///
     /// let mut map = BTreeSet::new();
-    /// assert_eq!(map.first(), None);
+    /// assert_eq!(map.last(), None);
     /// map.insert(1);
     /// assert_eq!(map.last(), Some(&1));
     /// map.insert(2);
