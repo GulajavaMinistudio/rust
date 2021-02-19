@@ -23,6 +23,7 @@ use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 use rustc_trait_selection::traits::Obligation;
 
 use std::cmp::Ordering;
+use std::iter;
 
 use super::probe::Mode;
 use super::{CandidateSource, MethodError, NoMatchData};
@@ -389,7 +390,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             "no {} named `{}` found for {} `{}` in the current scope",
                             item_kind,
                             item_name,
-                            actual.prefix_string(),
+                            actual.prefix_string(self.tcx),
                             ty_str,
                         );
                         if let Mode::MethodCall = mode {
@@ -648,21 +649,25 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             ty::PredicateKind::Projection(pred) => {
                                 let pred = bound_predicate.rebind(pred);
                                 // `<Foo as Iterator>::Item = String`.
-                                let trait_ref =
-                                    pred.skip_binder().projection_ty.trait_ref(self.tcx);
-                                let assoc = self
-                                    .tcx
-                                    .associated_item(pred.skip_binder().projection_ty.item_def_id);
-                                let ty = pred.skip_binder().ty;
-                                let obligation = format!("{}::{} = {}", trait_ref, assoc.ident, ty);
-                                let quiet = format!(
-                                    "<_ as {}>::{} = {}",
-                                    trait_ref.print_only_trait_path(),
-                                    assoc.ident,
-                                    ty
+                                let projection_ty = pred.skip_binder().projection_ty;
+
+                                let substs_with_infer_self = tcx.mk_substs(
+                                    iter::once(tcx.mk_ty_var(ty::TyVid { index: 0 }).into())
+                                        .chain(projection_ty.substs.iter().skip(1)),
                                 );
-                                bound_span_label(trait_ref.self_ty(), &obligation, &quiet);
-                                Some((obligation, trait_ref.self_ty()))
+
+                                let quiet_projection_ty = ty::ProjectionTy {
+                                    substs: substs_with_infer_self,
+                                    item_def_id: projection_ty.item_def_id,
+                                };
+
+                                let ty = pred.skip_binder().ty;
+
+                                let obligation = format!("{} = {}", projection_ty, ty);
+                                let quiet = format!("{} = {}", quiet_projection_ty, ty);
+
+                                bound_span_label(projection_ty.self_ty(), &obligation, &quiet);
+                                Some((obligation, projection_ty.self_ty()))
                             }
                             ty::PredicateKind::Trait(poly_trait_ref, _) => {
                                 let p = poly_trait_ref.trait_ref;
@@ -727,7 +732,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             .map(|(_, path)| path)
                             .collect::<Vec<_>>()
                             .join("\n");
-                        let actual_prefix = actual.prefix_string();
+                        let actual_prefix = actual.prefix_string(self.tcx);
                         err.set_primary_message(&format!(
                             "the {item_kind} `{item_name}` exists for {actual_prefix} `{ty_str}`, but its trait bounds were not satisfied"
                         ));
@@ -1141,7 +1146,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             let trait_def_ids: FxHashSet<DefId> = param
                                 .bounds
                                 .iter()
-                                .filter_map(|bound| Some(bound.trait_ref()?.trait_def_id()?))
+                                .filter_map(|bound| bound.trait_ref()?.trait_def_id())
                                 .collect();
                             if !candidates.iter().any(|t| trait_def_ids.contains(&t.def_id)) {
                                 err.span_suggestions(

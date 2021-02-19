@@ -77,6 +77,12 @@ trait DefIdVisitor<'tcx> {
     fn visit_trait(&mut self, trait_ref: TraitRef<'tcx>) -> ControlFlow<Self::BreakTy> {
         self.skeleton().visit_trait(trait_ref)
     }
+    fn visit_projection_ty(
+        &mut self,
+        projection: ty::ProjectionTy<'tcx>,
+    ) -> ControlFlow<Self::BreakTy> {
+        self.skeleton().visit_projection_ty(projection)
+    }
     fn visit_predicates(
         &mut self,
         predicates: ty::GenericPredicates<'tcx>,
@@ -101,6 +107,20 @@ where
         if self.def_id_visitor.shallow() { ControlFlow::CONTINUE } else { substs.visit_with(self) }
     }
 
+    fn visit_projection_ty(
+        &mut self,
+        projection: ty::ProjectionTy<'tcx>,
+    ) -> ControlFlow<V::BreakTy> {
+        let (trait_ref, assoc_substs) =
+            projection.trait_ref_and_own_substs(self.def_id_visitor.tcx());
+        self.visit_trait(trait_ref)?;
+        if self.def_id_visitor.shallow() {
+            ControlFlow::CONTINUE
+        } else {
+            assoc_substs.iter().try_for_each(|subst| subst.visit_with(self))
+        }
+    }
+
     fn visit_predicate(&mut self, predicate: ty::Predicate<'tcx>) -> ControlFlow<V::BreakTy> {
         match predicate.kind().skip_binder() {
             ty::PredicateKind::Trait(ty::TraitPredicate { trait_ref }, _) => {
@@ -108,7 +128,7 @@ where
             }
             ty::PredicateKind::Projection(ty::ProjectionPredicate { projection_ty, ty }) => {
                 ty.visit_with(self)?;
-                self.visit_trait(projection_ty.trait_ref(self.def_id_visitor.tcx()))
+                self.visit_projection_ty(projection_ty)
             }
             ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(ty, _region)) => {
                 ty.visit_with(self)
@@ -197,7 +217,7 @@ where
                     return ControlFlow::CONTINUE;
                 }
                 // This will also visit substs if necessary, so we don't need to recurse.
-                return self.visit_trait(proj.trait_ref(tcx));
+                return self.visit_projection_ty(proj);
             }
             ty::Dynamic(predicates, ..) => {
                 // All traits in the list are considered the "primary" part of the type
@@ -1203,10 +1223,9 @@ impl<'tcx> Visitor<'tcx> for TypePrivacyVisitor<'tcx> {
             }
 
             for (poly_predicate, _) in bounds.projection_bounds {
-                let tcx = self.tcx;
                 if self.visit(poly_predicate.skip_binder().ty).is_break()
                     || self
-                        .visit_trait(poly_predicate.skip_binder().projection_ty.trait_ref(tcx))
+                        .visit_projection_ty(poly_predicate.skip_binder().projection_ty)
                         .is_break()
                 {
                     return;
@@ -1849,41 +1868,18 @@ impl DefIdVisitor<'tcx> for SearchInterfaceForPrivateItemsVisitor<'tcx> {
     }
 }
 
-struct PrivateItemsInPublicInterfacesVisitor<'a, 'tcx> {
+struct PrivateItemsInPublicInterfacesVisitor<'tcx> {
     tcx: TyCtxt<'tcx>,
     has_pub_restricted: bool,
-    old_error_set: &'a HirIdSet,
+    old_error_set_ancestry: HirIdSet,
 }
 
-impl<'a, 'tcx> PrivateItemsInPublicInterfacesVisitor<'a, 'tcx> {
+impl<'tcx> PrivateItemsInPublicInterfacesVisitor<'tcx> {
     fn check(
         &self,
         item_id: hir::HirId,
         required_visibility: ty::Visibility,
     ) -> SearchInterfaceForPrivateItemsVisitor<'tcx> {
-        let mut has_old_errors = false;
-
-        // Slow path taken only if there any errors in the crate.
-        for &id in self.old_error_set {
-            // Walk up the nodes until we find `item_id` (or we hit a root).
-            let mut id = id;
-            loop {
-                if id == item_id {
-                    has_old_errors = true;
-                    break;
-                }
-                let parent = self.tcx.hir().get_parent_node(id);
-                if parent == id {
-                    break;
-                }
-                id = parent;
-            }
-
-            if has_old_errors {
-                break;
-            }
-        }
-
         SearchInterfaceForPrivateItemsVisitor {
             tcx: self.tcx,
             item_id,
@@ -1891,7 +1887,7 @@ impl<'a, 'tcx> PrivateItemsInPublicInterfacesVisitor<'a, 'tcx> {
             span: self.tcx.hir().span(item_id),
             required_visibility,
             has_pub_restricted: self.has_pub_restricted,
-            has_old_errors,
+            has_old_errors: self.old_error_set_ancestry.contains(&item_id),
             in_assoc_ty: false,
         }
     }
@@ -1917,7 +1913,7 @@ impl<'a, 'tcx> PrivateItemsInPublicInterfacesVisitor<'a, 'tcx> {
     }
 }
 
-impl<'a, 'tcx> Visitor<'tcx> for PrivateItemsInPublicInterfacesVisitor<'a, 'tcx> {
+impl<'tcx> Visitor<'tcx> for PrivateItemsInPublicInterfacesVisitor<'tcx> {
     type Map = Map<'tcx>;
 
     fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
@@ -2137,11 +2133,22 @@ fn check_private_in_public(tcx: TyCtxt<'_>, krate: CrateNum) {
         pub_restricted_visitor.has_pub_restricted
     };
 
+    let mut old_error_set_ancestry = HirIdSet::default();
+    for mut id in visitor.old_error_set.iter().copied() {
+        loop {
+            if !old_error_set_ancestry.insert(id) {
+                break;
+            }
+            let parent = tcx.hir().get_parent_node(id);
+            if parent == id {
+                break;
+            }
+            id = parent;
+        }
+    }
+
     // Check for private types and traits in public interfaces.
-    let mut visitor = PrivateItemsInPublicInterfacesVisitor {
-        tcx,
-        has_pub_restricted,
-        old_error_set: &visitor.old_error_set,
-    };
+    let mut visitor =
+        PrivateItemsInPublicInterfacesVisitor { tcx, has_pub_restricted, old_error_set_ancestry };
     krate.visit_all_item_likes(&mut DeepVisitor::new(&mut visitor));
 }
