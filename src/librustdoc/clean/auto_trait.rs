@@ -21,130 +21,144 @@ struct RegionDeps<'tcx> {
 }
 
 crate struct AutoTraitFinder<'a, 'tcx> {
-    crate cx: &'a core::DocContext<'tcx>,
-    crate f: auto_trait::AutoTraitFinder<'tcx>,
+    crate cx: &'a mut core::DocContext<'tcx>,
 }
 
 impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
-    crate fn new(cx: &'a core::DocContext<'tcx>) -> Self {
-        let f = auto_trait::AutoTraitFinder::new(cx.tcx);
+    crate fn new(cx: &'a mut core::DocContext<'tcx>) -> Self {
+        AutoTraitFinder { cx }
+    }
 
-        AutoTraitFinder { cx, f }
+    fn generate_for_trait(
+        &mut self,
+        ty: Ty<'tcx>,
+        trait_def_id: DefId,
+        param_env: ty::ParamEnv<'tcx>,
+        param_env_def_id: DefId,
+        f: &auto_trait::AutoTraitFinder<'tcx>,
+        // If this is set, show only negative trait implementations, not positive ones.
+        discard_positive_impl: bool,
+    ) -> Option<Item> {
+        let tcx = self.cx.tcx;
+        let trait_ref = ty::TraitRef { def_id: trait_def_id, substs: tcx.mk_substs_trait(ty, &[]) };
+        if !self.cx.generated_synthetics.borrow_mut().insert((ty, trait_def_id)) {
+            debug!("get_auto_trait_impl_for({:?}): already generated, aborting", trait_ref);
+            return None;
+        }
+
+        let result = f.find_auto_trait_generics(ty, param_env, trait_def_id, |infcx, info| {
+            let region_data = info.region_data;
+
+            let names_map = tcx
+                .generics_of(param_env_def_id)
+                .params
+                .iter()
+                .filter_map(|param| match param.kind {
+                    ty::GenericParamDefKind::Lifetime => Some(param.name),
+                    _ => None,
+                })
+                .map(|name| (name, Lifetime(name)))
+                .collect();
+            let lifetime_predicates = Self::handle_lifetimes(&region_data, &names_map);
+            let new_generics = self.param_env_to_generics(
+                infcx.tcx,
+                param_env_def_id,
+                info.full_user_env,
+                lifetime_predicates,
+                info.vid_to_region,
+            );
+
+            debug!(
+                "find_auto_trait_generics(param_env_def_id={:?}, trait_def_id={:?}): \
+                    finished with {:?}",
+                param_env_def_id, trait_def_id, new_generics
+            );
+
+            new_generics
+        });
+
+        let negative_polarity;
+        let new_generics = match result {
+            AutoTraitResult::PositiveImpl(new_generics) => {
+                negative_polarity = false;
+                if discard_positive_impl {
+                    return None;
+                }
+                new_generics
+            }
+            AutoTraitResult::NegativeImpl => {
+                negative_polarity = true;
+
+                // For negative impls, we use the generic params, but *not* the predicates,
+                // from the original type. Otherwise, the displayed impl appears to be a
+                // conditional negative impl, when it's really unconditional.
+                //
+                // For example, consider the struct Foo<T: Copy>(*mut T). Using
+                // the original predicates in our impl would cause us to generate
+                // `impl !Send for Foo<T: Copy>`, which makes it appear that Foo
+                // implements Send where T is not copy.
+                //
+                // Instead, we generate `impl !Send for Foo<T>`, which better
+                // expresses the fact that `Foo<T>` never implements `Send`,
+                // regardless of the choice of `T`.
+                let params = (tcx.generics_of(param_env_def_id), ty::GenericPredicates::default())
+                    .clean(self.cx)
+                    .params;
+
+                Generics { params, where_predicates: Vec::new() }
+            }
+            AutoTraitResult::ExplicitImpl => return None,
+        };
+
+        Some(Item {
+            source: Span::dummy(),
+            name: None,
+            attrs: Default::default(),
+            visibility: Inherited,
+            def_id: self.cx.next_def_id(param_env_def_id.krate),
+            kind: box ImplItem(Impl {
+                unsafety: hir::Unsafety::Normal,
+                generics: new_generics,
+                provided_trait_methods: Default::default(),
+                trait_: Some(trait_ref.clean(self.cx).get_trait_type().unwrap()),
+                for_: ty.clean(self.cx),
+                items: Vec::new(),
+                negative_polarity,
+                synthetic: true,
+                blanket_impl: None,
+            }),
+        })
     }
 
     // FIXME(eddyb) figure out a better way to pass information about
     // parametrization of `ty` than `param_env_def_id`.
-    crate fn get_auto_trait_impls(&self, ty: Ty<'tcx>, param_env_def_id: DefId) -> Vec<Item> {
-        let param_env = self.cx.tcx.param_env(param_env_def_id);
+    crate fn get_auto_trait_impls(&mut self, ty: Ty<'tcx>, param_env_def_id: DefId) -> Vec<Item> {
+        let tcx = self.cx.tcx;
+        let param_env = tcx.param_env(param_env_def_id);
+        let f = auto_trait::AutoTraitFinder::new(self.cx.tcx);
 
         debug!("get_auto_trait_impls({:?})", ty);
-        let auto_traits = self.cx.auto_traits.iter().cloned();
-        auto_traits
+        let auto_traits: Vec<_> = self.cx.auto_traits.iter().cloned().collect();
+        let mut auto_traits: Vec<Item> = auto_traits
+            .into_iter()
             .filter_map(|trait_def_id| {
-                let trait_ref = ty::TraitRef {
-                    def_id: trait_def_id,
-                    substs: self.cx.tcx.mk_substs_trait(ty, &[]),
-                };
-                if !self.cx.generated_synthetics.borrow_mut().insert((ty, trait_def_id)) {
-                    debug!("get_auto_trait_impl_for({:?}): already generated, aborting", trait_ref);
-                    return None;
-                }
-
-                let result =
-                    self.f.find_auto_trait_generics(ty, param_env, trait_def_id, |infcx, info| {
-                        let region_data = info.region_data;
-
-                        let names_map = self
-                            .cx
-                            .tcx
-                            .generics_of(param_env_def_id)
-                            .params
-                            .iter()
-                            .filter_map(|param| match param.kind {
-                                ty::GenericParamDefKind::Lifetime => Some(param.name),
-                                _ => None,
-                            })
-                            .map(|name| (name, Lifetime(name)))
-                            .collect();
-                        let lifetime_predicates = self.handle_lifetimes(&region_data, &names_map);
-                        let new_generics = self.param_env_to_generics(
-                            infcx.tcx,
-                            param_env_def_id,
-                            info.full_user_env,
-                            lifetime_predicates,
-                            info.vid_to_region,
-                        );
-
-                        debug!(
-                            "find_auto_trait_generics(param_env_def_id={:?}, trait_def_id={:?}): \
-                            finished with {:?}",
-                            param_env_def_id, trait_def_id, new_generics
-                        );
-
-                        new_generics
-                    });
-
-                let negative_polarity;
-                let new_generics = match result {
-                    AutoTraitResult::PositiveImpl(new_generics) => {
-                        negative_polarity = false;
-                        new_generics
-                    }
-                    AutoTraitResult::NegativeImpl => {
-                        negative_polarity = true;
-
-                        // For negative impls, we use the generic params, but *not* the predicates,
-                        // from the original type. Otherwise, the displayed impl appears to be a
-                        // conditional negative impl, when it's really unconditional.
-                        //
-                        // For example, consider the struct Foo<T: Copy>(*mut T). Using
-                        // the original predicates in our impl would cause us to generate
-                        // `impl !Send for Foo<T: Copy>`, which makes it appear that Foo
-                        // implements Send where T is not copy.
-                        //
-                        // Instead, we generate `impl !Send for Foo<T>`, which better
-                        // expresses the fact that `Foo<T>` never implements `Send`,
-                        // regardless of the choice of `T`.
-                        let params = (
-                            self.cx.tcx.generics_of(param_env_def_id),
-                            ty::GenericPredicates::default(),
-                        )
-                            .clean(self.cx)
-                            .params;
-
-                        Generics { params, where_predicates: Vec::new() }
-                    }
-                    AutoTraitResult::ExplicitImpl => return None,
-                };
-
-                Some(Item {
-                    source: Span::dummy(),
-                    name: None,
-                    attrs: Default::default(),
-                    visibility: Inherited,
-                    def_id: self.cx.next_def_id(param_env_def_id.krate),
-                    kind: box ImplItem(Impl {
-                        unsafety: hir::Unsafety::Normal,
-                        generics: new_generics,
-                        provided_trait_methods: Default::default(),
-                        trait_: Some(trait_ref.clean(self.cx).get_trait_type().unwrap()),
-                        for_: ty.clean(self.cx),
-                        items: Vec::new(),
-                        negative_polarity,
-                        synthetic: true,
-                        blanket_impl: None,
-                    }),
-                })
+                self.generate_for_trait(ty, trait_def_id, param_env, param_env_def_id, &f, false)
             })
-            .collect()
+            .collect();
+        // We are only interested in case the type *doesn't* implement the Sized trait.
+        if !ty.is_sized(self.cx.tcx.at(rustc_span::DUMMY_SP), param_env) {
+            // In case `#![no_core]` is used, `sized_trait` returns nothing.
+            if let Some(item) = self.cx.tcx.lang_items().sized_trait().and_then(|sized_trait_did| {
+                self.generate_for_trait(ty, sized_trait_did, param_env, param_env_def_id, &f, true)
+            }) {
+                auto_traits.push(item);
+            }
+        }
+        auto_traits
     }
 
-    fn get_lifetime(
-        &self,
-        region: Region<'_>,
-        names_map: &FxHashMap<Symbol, Lifetime>,
-    ) -> Lifetime {
-        self.region_name(region)
+    fn get_lifetime(region: Region<'_>, names_map: &FxHashMap<Symbol, Lifetime>) -> Lifetime {
+        region_name(region)
             .map(|name| {
                 names_map.get(&name).unwrap_or_else(|| {
                     panic!("Missing lifetime with name {:?} for {:?}", name.as_str(), region)
@@ -152,13 +166,6 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
             })
             .unwrap_or(&Lifetime::statik())
             .clone()
-    }
-
-    fn region_name(&self, region: Region<'_>) -> Option<Symbol> {
-        match region {
-            &ty::ReEarlyBound(r) => Some(r.name),
-            _ => None,
-        }
     }
 
     // This method calculates two things: Lifetime constraints of the form 'a: 'b,
@@ -172,7 +179,6 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
     // to perform the calculations we need on our own, rather than trying to make
     // existing inference/solver code do what we want.
     fn handle_lifetimes<'cx>(
-        &self,
         regions: &RegionConstraintData<'cx>,
         names_map: &FxHashMap<Symbol, Lifetime>,
     ) -> Vec<WherePredicate> {
@@ -210,9 +216,9 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
                 &Constraint::RegSubReg(r1, r2) => {
                     // The constraint is already in the form that we want, so we're done with it
                     // Desired order is 'larger, smaller', so flip then
-                    if self.region_name(r1) != self.region_name(r2) {
+                    if region_name(r1) != region_name(r2) {
                         finished
-                            .entry(self.region_name(r2).expect("no region_name found"))
+                            .entry(region_name(r2).expect("no region_name found"))
                             .or_default()
                             .push(r1);
                     }
@@ -245,9 +251,9 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
                 for larger in deps.larger.iter() {
                     match (smaller, larger) {
                         (&RegionTarget::Region(r1), &RegionTarget::Region(r2)) => {
-                            if self.region_name(r1) != self.region_name(r2) {
+                            if region_name(r1) != region_name(r2) {
                                 finished
-                                    .entry(self.region_name(r2).expect("no region name found"))
+                                    .entry(region_name(r2).expect("no region name found"))
                                     .or_default()
                                     .push(r1) // Larger, smaller
                             }
@@ -292,7 +298,7 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
                     .get(name)
                     .unwrap_or(&empty)
                     .iter()
-                    .map(|region| GenericBound::Outlives(self.get_lifetime(region, names_map)))
+                    .map(|region| GenericBound::Outlives(Self::get_lifetime(region, names_map)))
                     .collect();
 
                 if bounds.is_empty() {
@@ -437,7 +443,7 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
     // K', we use the dedicated syntax 'T: Fn() -> K'
     // * We explicitly add a '?Sized' bound if we didn't find any 'Sized' predicates for a type
     fn param_env_to_generics(
-        &self,
+        &mut self,
         tcx: TyCtxt<'tcx>,
         param_env_def_id: DefId,
         param_env: ty::ParamEnv<'tcx>,
@@ -468,10 +474,7 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
                         _ => false,
                     }
             })
-            .map(|p| {
-                let replaced = p.fold_with(&mut replacer);
-                (replaced, replaced.clean(self.cx))
-            });
+            .map(|p| p.fold_with(&mut replacer));
 
         let mut generic_params =
             (tcx.generics_of(param_env_def_id), tcx.explicit_predicates_of(param_env_def_id))
@@ -490,7 +493,8 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
 
         let mut ty_to_fn: FxHashMap<Type, (Option<PolyTrait>, Option<Type>)> = Default::default();
 
-        for (orig_p, p) in clean_where_predicates {
+        for p in clean_where_predicates {
+            let (orig_p, p) = (p, p.clean(self.cx));
             if p.is_none() {
                 continue;
             }
@@ -746,6 +750,13 @@ impl<'a, 'tcx> AutoTraitFinder<'a, 'tcx> {
             }
             _ => false,
         }
+    }
+}
+
+fn region_name(region: Region<'_>) -> Option<Symbol> {
+    match region {
+        &ty::ReEarlyBound(r) => Some(r.name),
+        _ => None,
     }
 }
 
