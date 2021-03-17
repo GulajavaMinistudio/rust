@@ -52,6 +52,7 @@ fn insert_vec_map<K: Idx, V: Clone>(map: &mut IndexVec<K, Option<V>>, k: K, v: V
     if i >= len {
         map.extend(repeat(None).take(i - len + 1));
     }
+    debug_assert!(map[k].is_none());
     map[k] = Some(v);
 }
 
@@ -216,9 +217,7 @@ impl<'a, 'hir> NodeCollector<'a, 'hir> {
             // Overwrite the dummy hash with the real HIR owner hash.
             nodes.hash = hash;
 
-            // FIXME: feature(impl_trait_in_bindings) broken and trigger this assert
-            //assert!(data.signature.is_none());
-
+            debug_assert!(data.signature.is_none());
             data.signature =
                 Some(self.arena.alloc(Owner { parent: entry.parent, node: entry.node }));
 
@@ -554,10 +553,10 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         });
     }
 
-    fn visit_struct_field(&mut self, field: &'hir StructField<'hir>) {
+    fn visit_field_def(&mut self, field: &'hir FieldDef<'hir>) {
         self.insert(field.span, field.hir_id, Node::Field(field));
         self.with_parent(field.hir_id, |this| {
-            intravisit::walk_struct_field(this, field);
+            intravisit::walk_field_def(this, field);
         });
     }
 
