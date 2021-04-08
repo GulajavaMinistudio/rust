@@ -93,7 +93,7 @@ struct LoweringContext<'a, 'hir: 'a> {
 
     /// HACK(Centril): there is a cyclic dependency between the parser and lowering
     /// if we don't have this function pointer. To avoid that dependency so that
-    /// librustc_middle is independent of the parser, we use dynamic dispatch here.
+    /// `rustc_middle` is independent of the parser, we use dynamic dispatch here.
     nt_to_tokenstream: NtToTokenstream,
 
     /// Used to allocate HIR nodes.
@@ -2259,13 +2259,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
                 let kind = hir::GenericParamKind::Type {
                     default: default.as_ref().map(|x| {
-                        self.lower_ty(
-                            x,
-                            ImplTraitContext::OtherOpaqueTy {
-                                capturable_lifetimes: &mut FxHashSet::default(),
-                                origin: hir::OpaqueTyOrigin::Misc,
-                            },
-                        )
+                        self.lower_ty(x, ImplTraitContext::Disallowed(ImplTraitPosition::Other))
                     }),
                     synthetic: param
                         .attrs
