@@ -12,7 +12,7 @@ use rustc_ast::ptr::P;
 use rustc_ast::token;
 use rustc_ast::tokenstream::TokenStream;
 use rustc_ast::visit::{self, AssocCtxt, Visitor};
-use rustc_ast::{AstLike, AttrItem, AttrStyle, Block, Inline, ItemKind, LitKind, MacArgs};
+use rustc_ast::{AstLike, AttrItem, Block, Inline, ItemKind, LitKind, MacArgs};
 use rustc_ast::{MacCallStmt, MacStmtStyle, MetaItemKind, ModKind, NestedMetaItem};
 use rustc_ast::{NodeId, PatKind, Path, StmtKind, Unsafe};
 use rustc_ast_pretty::pprust;
@@ -491,6 +491,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
             let fragment_kind = invoc.fragment_kind;
             let (expanded_fragment, new_invocations) = match self.expand_invoc(invoc, &ext.kind) {
                 ExpandResult::Ready(fragment) => {
+                    let mut derive_invocations = Vec::new();
                     let derive_placeholders = self
                         .cx
                         .resolver
@@ -512,14 +513,14 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                                 _ => unreachable!(),
                             };
 
-                            invocations.reserve(derives.len());
+                            derive_invocations.reserve(derives.len());
                             derives
                                 .into_iter()
                                 .map(|(path, _exts)| {
                                     // FIXME: Consider using the derive resolutions (`_exts`)
                                     // instead of enqueuing the derives to be resolved again later.
                                     let expn_id = ExpnId::fresh(None);
-                                    invocations.push((
+                                    derive_invocations.push((
                                         Invocation {
                                             kind: InvocationKind::Derive {
                                                 path,
@@ -546,7 +547,12 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                         })
                         .unwrap_or_default();
 
-                    self.collect_invocations(fragment, &derive_placeholders)
+                    let (fragment, collected_invocations) =
+                        self.collect_invocations(fragment, &derive_placeholders);
+                    // We choose to expand any derive invocations associated with this macro invocation
+                    // *before* any macro invocations collected from the output fragment
+                    derive_invocations.extend(collected_invocations);
+                    (fragment, derive_invocations)
                 }
                 ExpandResult::Retry(invoc) => {
                     if force {
@@ -605,10 +611,15 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
 
         let invocations = {
             let mut collector = InvocationCollector {
+                // Non-derive macro invocations cannot see the results of cfg expansion - they
+                // will either be removed along with the item, or invoked before the cfg/cfg_attr
+                // attribute is expanded. Therefore, we don't need to configure the tokens
+                // Derive macros *can* see the results of cfg-expansion - they are handled
+                // specially in `fully_expand_fragment`
                 cfg: StripUnconfigured {
                     sess: &self.cx.sess,
                     features: self.cx.ecfg.features,
-                    modified: false,
+                    config_tokens: false,
                 },
                 cx: self.cx,
                 invocations: Vec::new(),
@@ -703,13 +714,26 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
                 SyntaxExtensionKind::Attr(expander) => {
                     self.gate_proc_macro_input(&item);
                     self.gate_proc_macro_attr_item(span, &item);
-                    let tokens = match attr.style {
-                        AttrStyle::Outer => item.into_tokens(&self.cx.sess.parse_sess),
-                        // FIXME: Properly collect tokens for inner attributes
-                        AttrStyle::Inner => rustc_parse::fake_token_stream(
+                    let mut fake_tokens = false;
+                    if let Annotatable::Item(item_inner) = &item {
+                        if let ItemKind::Mod(_, mod_kind) = &item_inner.kind {
+                            // FIXME: Collect tokens and use them instead of generating
+                            // fake ones. These are unstable, so it needs to be
+                            // fixed prior to stabilization
+                            // Fake tokens when we are invoking an inner attribute, and:
+                            fake_tokens = matches!(attr.style, ast::AttrStyle::Inner) &&
+                                // We are invoking an attribute on the crate root, or an outline
+                                // module
+                                (item_inner.ident.name.is_empty() || !matches!(mod_kind, ast::ModKind::Loaded(_, Inline::Yes, _)));
+                        }
+                    }
+                    let tokens = if fake_tokens {
+                        rustc_parse::fake_token_stream(
                             &self.cx.sess.parse_sess,
                             &item.into_nonterminal(),
-                        ),
+                        )
+                    } else {
+                        item.into_tokens(&self.cx.sess.parse_sess)
                     };
                     let attr_item = attr.unwrap_normal_item();
                     if let MacArgs::Eq(..) = attr_item.args {
@@ -891,21 +915,21 @@ pub fn parse_ast_fragment<'a>(
         }
         AstFragmentKind::TraitItems => {
             let mut items = SmallVec::new();
-            while let Some(item) = this.parse_trait_item()? {
+            while let Some(item) = this.parse_trait_item(ForceCollect::No)? {
                 items.extend(item);
             }
             AstFragment::TraitItems(items)
         }
         AstFragmentKind::ImplItems => {
             let mut items = SmallVec::new();
-            while let Some(item) = this.parse_impl_item()? {
+            while let Some(item) = this.parse_impl_item(ForceCollect::No)? {
                 items.extend(item);
             }
             AstFragment::ImplItems(items)
         }
         AstFragmentKind::ForeignItems => {
             let mut items = SmallVec::new();
-            while let Some(item) = this.parse_foreign_item()? {
+            while let Some(item) = this.parse_foreign_item(ForceCollect::No)? {
                 items.extend(item);
             }
             AstFragment::ForeignItems(items)
