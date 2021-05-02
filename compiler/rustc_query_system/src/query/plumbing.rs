@@ -73,12 +73,7 @@ impl<C: QueryCache> QueryCacheStore<C> {
         (QueryLookup { key_hash, shard }, lock)
     }
 
-    pub fn iter_results<R>(
-        &self,
-        f: impl for<'a> FnOnce(
-            &'a mut dyn Iterator<Item = (&'a C::Key, &'a C::Value, DepNodeIndex)>,
-        ) -> R,
-    ) -> R {
+    pub fn iter_results(&self, f: &mut dyn FnMut(&C::Key, &C::Value, DepNodeIndex)) {
         self.cache.iter(&self.shards, f)
     }
 }
@@ -130,18 +125,15 @@ where
         // We use try_lock_shards here since we are called from the
         // deadlock handler, and this shouldn't be locked.
         let shards = self.shards.try_lock_shards()?;
-        let shards = shards.iter().enumerate();
-        jobs.extend(shards.flat_map(|(shard_id, shard)| {
-            shard.active.iter().filter_map(move |(k, v)| {
+        for (shard_id, shard) in shards.iter().enumerate() {
+            for (k, v) in shard.active.iter() {
                 if let QueryResult::Started(ref job) = *v {
                     let id = QueryJobId::new(job.id, shard_id, kind);
                     let info = QueryInfo { span: job.span, query: make_query(tcx, k.clone()) };
-                    Some((id, QueryJobInfo { info, job: job.clone() }))
-                } else {
-                    None
+                    jobs.insert(id, QueryJobInfo { info, job: job.clone() });
                 }
-            })
-        }));
+            }
+        }
 
         Some(())
     }
