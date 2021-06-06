@@ -269,7 +269,9 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
 
     if builder.no_std(target) == Some(true) {
         let mut features = "compiler-builtins-mem".to_string();
-        features.push_str(compiler_builtins_c_feature);
+        if !target.starts_with("bpf") {
+            features.push_str(compiler_builtins_c_feature);
+        }
 
         // for no-std targets we only compile a few no_std crates
         cargo
@@ -326,6 +328,11 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
     if target.contains("riscv") {
         cargo.rustflag("-Cforce-unwind-tables=yes");
     }
+
+    let html_root =
+        format!("-Zcrate-attr=doc(html_root_url=\"{}/\")", builder.doc_rust_lang_org_channel(),);
+    cargo.rustflag(&html_root);
+    cargo.rustdocflag(&html_root);
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
