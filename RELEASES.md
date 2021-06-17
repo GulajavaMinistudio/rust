@@ -109,7 +109,10 @@ Compatibility Notes
   to rejecting hexadecimal IP addresses.][83652] The octal format can lead
   to confusion and potential security vulnerabilities and [is no
   longer recommended][ietf6943].
-
+- [The added `BITS` constant may conflict with external definitions.][85667]
+  In particular, this was known to be a problem in the `lexical-core` crate,
+  but they have published fixes for semantic versions 0.4 through 0.7. To
+  update this dependency alone, use `cargo update -p lexical-core`.
 
 Internal Only
 -------------
@@ -122,6 +125,7 @@ related tools.
 - [rustdoc: Only look at blanket impls in `get_blanket_impls`][83681]
 - [Rework rustdoc const type][82873]
 
+[85667]: https://github.com/rust-lang/rust/pull/85667
 [83386]: https://github.com/rust-lang/rust/pull/83386
 [82771]: https://github.com/rust-lang/rust/pull/82771
 [84147]: https://github.com/rust-lang/rust/pull/84147
@@ -306,6 +310,7 @@ Compatibility Notes
 - [Rustc now catches more cases of `pub_use_of_private_extern_crate`][80763]
 - [Changes in how proc macros handle whitespace may lead to panics when used
   with older `proc-macro-hack` versions. A `cargo update` should be sufficient to fix this in all cases.][84136]
+- [Turn `#[derive]` into a regular macro attribute][79078]
 
 [84136]: https://github.com/rust-lang/rust/issues/84136
 [80763]: https://github.com/rust-lang/rust/pull/80763
@@ -332,6 +337,7 @@ Compatibility Notes
 [78429]: https://github.com/rust-lang/rust/pull/78429
 [82733]: https://github.com/rust-lang/rust/pull/82733
 [82594]: https://github.com/rust-lang/rust/pull/82594
+[79078]: https://github.com/rust-lang/rust/pull/79078
 [cargo/9181]: https://github.com/rust-lang/cargo/pull/9181
 [`char::MAX`]: https://doc.rust-lang.org/std/primitive.char.html#associatedconstant.MAX
 [`char::REPLACEMENT_CHARACTER`]: https://doc.rust-lang.org/std/primitive.char.html#associatedconstant.REPLACEMENT_CHARACTER
