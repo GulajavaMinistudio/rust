@@ -12,7 +12,7 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::impl_stable_hash_via_hash;
 
 use rustc_target::abi::{Align, TargetDataLayout};
-use rustc_target::spec::{SplitDebuginfo, Target, TargetTriple};
+use rustc_target::spec::{SplitDebuginfo, Target, TargetTriple, TargetWarnings};
 
 use rustc_serialize::json;
 
@@ -31,6 +31,7 @@ use std::collections::btree_map::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::hash::Hash;
 use std::iter::{self, FromIterator};
 use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
@@ -325,11 +326,10 @@ impl Default for TrimmedDefPaths {
 
 /// Use tree-based collections to cheaply get a deterministic `Hash` implementation.
 /// *Do not* switch `BTreeMap` out for an unsorted container type! That would break
-/// dependency tracking for command-line arguments.
-#[derive(Clone, Hash, Debug)]
+/// dependency tracking for command-line arguments. Also only hash keys, since tracking
+/// should only depend on the output types, not the paths they're written to.
+#[derive(Clone, Debug, Hash)]
 pub struct OutputTypes(BTreeMap<OutputType, Option<PathBuf>>);
-
-impl_stable_hash_via_hash!(OutputTypes);
 
 impl OutputTypes {
     pub fn new(entries: &[(OutputType, Option<PathBuf>)]) -> OutputTypes {
@@ -899,9 +899,11 @@ pub(super) fn build_target_config(
     target_override: Option<Target>,
     sysroot: &PathBuf,
 ) -> Target {
-    let target_result =
-        target_override.map_or_else(|| Target::search(&opts.target_triple, sysroot), Ok);
-    let target = target_result.unwrap_or_else(|e| {
+    let target_result = target_override.map_or_else(
+        || Target::search(&opts.target_triple, sysroot),
+        |t| Ok((t, TargetWarnings::empty())),
+    );
+    let (target, target_warnings) = target_result.unwrap_or_else(|e| {
         early_error(
             opts.error_format,
             &format!(
@@ -911,6 +913,9 @@ pub(super) fn build_target_config(
             ),
         )
     });
+    for warning in target_warnings.warning_messages() {
+        early_warn(opts.error_format, &warning)
+    }
 
     if !matches!(target.pointer_width, 16 | 32 | 64) {
         early_error(
@@ -2421,8 +2426,8 @@ crate mod dep_tracking {
     use super::LdImpl;
     use super::{
         CFGuard, CrateType, DebugInfo, ErrorOutputType, InstrumentCoverage, LinkerPluginLto,
-        LtoCli, OptLevel, OutputTypes, Passes, SourceFileHashAlgorithm, SwitchWithOptPath,
-        SymbolManglingVersion, TrimmedDefPaths,
+        LtoCli, OptLevel, OutputType, OutputTypes, Passes, SourceFileHashAlgorithm,
+        SwitchWithOptPath, SymbolManglingVersion, TrimmedDefPaths,
     };
     use crate::lint;
     use crate::options::WasiExecModel;
@@ -2438,13 +2443,18 @@ crate mod dep_tracking {
     use std::path::PathBuf;
 
     pub trait DepTrackingHash {
-        fn hash(&self, hasher: &mut DefaultHasher, error_format: ErrorOutputType);
+        fn hash(
+            &self,
+            hasher: &mut DefaultHasher,
+            error_format: ErrorOutputType,
+            for_crate_hash: bool,
+        );
     }
 
     macro_rules! impl_dep_tracking_hash_via_hash {
         ($($t:ty),+ $(,)?) => {$(
             impl DepTrackingHash for $t {
-                fn hash(&self, hasher: &mut DefaultHasher, _: ErrorOutputType) {
+                fn hash(&self, hasher: &mut DefaultHasher, _: ErrorOutputType, _for_crate_hash: bool) {
                     Hash::hash(self, hasher);
                 }
             }
@@ -2452,11 +2462,16 @@ crate mod dep_tracking {
     }
 
     impl<T: DepTrackingHash> DepTrackingHash for Option<T> {
-        fn hash(&self, hasher: &mut DefaultHasher, error_format: ErrorOutputType) {
+        fn hash(
+            &self,
+            hasher: &mut DefaultHasher,
+            error_format: ErrorOutputType,
+            for_crate_hash: bool,
+        ) {
             match self {
                 Some(x) => {
                     Hash::hash(&1, hasher);
-                    DepTrackingHash::hash(x, hasher, error_format);
+                    DepTrackingHash::hash(x, hasher, error_format, for_crate_hash);
                 }
                 None => Hash::hash(&0, hasher),
             }
@@ -2486,7 +2501,6 @@ crate mod dep_tracking {
         LtoCli,
         DebugInfo,
         UnstableFeatures,
-        OutputTypes,
         NativeLib,
         NativeLibKind,
         SanitizerSet,
@@ -2500,6 +2514,7 @@ crate mod dep_tracking {
         SourceFileHashAlgorithm,
         TrimmedDefPaths,
         Option<LdImpl>,
+        OutputType,
     );
 
     impl<T1, T2> DepTrackingHash for (T1, T2)
@@ -2507,11 +2522,16 @@ crate mod dep_tracking {
         T1: DepTrackingHash,
         T2: DepTrackingHash,
     {
-        fn hash(&self, hasher: &mut DefaultHasher, error_format: ErrorOutputType) {
+        fn hash(
+            &self,
+            hasher: &mut DefaultHasher,
+            error_format: ErrorOutputType,
+            for_crate_hash: bool,
+        ) {
             Hash::hash(&0, hasher);
-            DepTrackingHash::hash(&self.0, hasher, error_format);
+            DepTrackingHash::hash(&self.0, hasher, error_format, for_crate_hash);
             Hash::hash(&1, hasher);
-            DepTrackingHash::hash(&self.1, hasher, error_format);
+            DepTrackingHash::hash(&self.1, hasher, error_format, for_crate_hash);
         }
     }
 
@@ -2521,22 +2541,49 @@ crate mod dep_tracking {
         T2: DepTrackingHash,
         T3: DepTrackingHash,
     {
-        fn hash(&self, hasher: &mut DefaultHasher, error_format: ErrorOutputType) {
+        fn hash(
+            &self,
+            hasher: &mut DefaultHasher,
+            error_format: ErrorOutputType,
+            for_crate_hash: bool,
+        ) {
             Hash::hash(&0, hasher);
-            DepTrackingHash::hash(&self.0, hasher, error_format);
+            DepTrackingHash::hash(&self.0, hasher, error_format, for_crate_hash);
             Hash::hash(&1, hasher);
-            DepTrackingHash::hash(&self.1, hasher, error_format);
+            DepTrackingHash::hash(&self.1, hasher, error_format, for_crate_hash);
             Hash::hash(&2, hasher);
-            DepTrackingHash::hash(&self.2, hasher, error_format);
+            DepTrackingHash::hash(&self.2, hasher, error_format, for_crate_hash);
         }
     }
 
     impl<T: DepTrackingHash> DepTrackingHash for Vec<T> {
-        fn hash(&self, hasher: &mut DefaultHasher, error_format: ErrorOutputType) {
+        fn hash(
+            &self,
+            hasher: &mut DefaultHasher,
+            error_format: ErrorOutputType,
+            for_crate_hash: bool,
+        ) {
             Hash::hash(&self.len(), hasher);
             for (index, elem) in self.iter().enumerate() {
                 Hash::hash(&index, hasher);
-                DepTrackingHash::hash(elem, hasher, error_format);
+                DepTrackingHash::hash(elem, hasher, error_format, for_crate_hash);
+            }
+        }
+    }
+
+    impl DepTrackingHash for OutputTypes {
+        fn hash(
+            &self,
+            hasher: &mut DefaultHasher,
+            error_format: ErrorOutputType,
+            for_crate_hash: bool,
+        ) {
+            Hash::hash(&self.0.len(), hasher);
+            for (key, val) in &self.0 {
+                DepTrackingHash::hash(key, hasher, error_format, for_crate_hash);
+                if !for_crate_hash {
+                    DepTrackingHash::hash(val, hasher, error_format, for_crate_hash);
+                }
             }
         }
     }
@@ -2546,13 +2593,14 @@ crate mod dep_tracking {
         sub_hashes: BTreeMap<&'static str, &dyn DepTrackingHash>,
         hasher: &mut DefaultHasher,
         error_format: ErrorOutputType,
+        for_crate_hash: bool,
     ) {
         for (key, sub_hash) in sub_hashes {
             // Using Hash::hash() instead of DepTrackingHash::hash() is fine for
             // the keys, as they are just plain strings
             Hash::hash(&key.len(), hasher);
             Hash::hash(key, hasher);
-            sub_hash.hash(hasher, error_format);
+            sub_hash.hash(hasher, error_format, for_crate_hash);
         }
     }
 }
