@@ -2411,18 +2411,13 @@ impl<T: Clone, A: Allocator + Clone> Clone for Vec<T, A> {
 /// as required by the `core::borrow::Borrow` implementation.
 ///
 /// ```
-/// use std::hash::{BuildHasher, Hash, Hasher};
-///
-/// fn hash_of(x: impl Hash, b: &impl BuildHasher) -> u64 {
-///     let mut h = b.build_hasher();
-///     x.hash(&mut h);
-///     h.finish()
-/// }
+/// #![feature(build_hasher_simple_hash_one)]
+/// use std::hash::BuildHasher;
 ///
 /// let b = std::collections::hash_map::RandomState::new();
 /// let v: Vec<u8> = vec![0xa8, 0x3c, 0x09];
 /// let s: &[u8] = &[0xa8, 0x3c, 0x09];
-/// assert_eq!(hash_of(v, &b), hash_of(s, &b));
+/// assert_eq!(b.hash_one(v), b.hash_one(s));
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: Hash, A: Allocator> Hash for Vec<T, A> {
@@ -2568,6 +2563,8 @@ impl<T, A: Allocator> Vec<T, A> {
             }
             unsafe {
                 ptr::write(self.as_mut_ptr().add(len), element);
+                // Since next() executes user code which can panic we have to bump the length
+                // after each step.
                 // NB can't overflow since we would have had to alloc the address space
                 self.set_len(len + 1);
             }

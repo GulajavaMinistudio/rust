@@ -95,53 +95,7 @@ crate struct IndexItem {
 /// A type used for the search index.
 #[derive(Debug)]
 crate struct RenderType {
-    ty: Option<DefId>,
-    idx: Option<usize>,
     name: Option<String>,
-    generics: Option<Vec<Generic>>,
-}
-
-impl Serialize for RenderType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(name) = &self.name {
-            let mut seq = serializer.serialize_seq(None)?;
-            if let Some(id) = self.idx {
-                seq.serialize_element(&id)?;
-            } else {
-                seq.serialize_element(&name)?;
-            }
-            if let Some(generics) = &self.generics {
-                seq.serialize_element(&generics)?;
-            }
-            seq.end()
-        } else {
-            serializer.serialize_none()
-        }
-    }
-}
-
-/// A type used for the search index.
-#[derive(Debug)]
-crate struct Generic {
-    name: String,
-    defid: Option<DefId>,
-    idx: Option<usize>,
-}
-
-impl Serialize for Generic {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(id) = self.idx {
-            serializer.serialize_some(&id)
-        } else {
-            serializer.serialize_some(&self.name)
-        }
-    }
 }
 
 /// Full type of functions/methods in the search index.
@@ -1716,6 +1670,7 @@ fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Buffer) {
             write!(
                 buffer,
                 "<div class=\"block version\">\
+                     <div class=\"narrow-helper\"></div>\
                      <p>Version {}</p>\
                  </div>",
                 Escape(version),
@@ -1887,6 +1842,14 @@ fn sidebar_assoc_items(cx: &Context<'_>, out: &mut Buffer, it: &clean::Item) {
         }
 
         if v.iter().any(|i| i.inner_impl().trait_.is_some()) {
+            if let Some(impl_) = v
+                .iter()
+                .filter(|i| i.inner_impl().trait_.is_some())
+                .find(|i| i.inner_impl().trait_.def_id_full(cache) == cx.cache.deref_trait_did)
+            {
+                sidebar_deref_methods(cx, out, impl_, v);
+            }
+
             let format_impls = |impls: Vec<&Impl>| {
                 let mut links = FxHashSet::default();
 
@@ -1953,14 +1916,6 @@ fn sidebar_assoc_items(cx: &Context<'_>, out: &mut Buffer, it: &clean::Item) {
                         Blanket Implementations</a>",
                 );
                 write_sidebar_links(out, blanket_format);
-            }
-
-            if let Some(impl_) = v
-                .iter()
-                .filter(|i| i.inner_impl().trait_.is_some())
-                .find(|i| i.inner_impl().trait_.def_id_full(cache) == cx.cache.deref_trait_did)
-            {
-                sidebar_deref_methods(cx, out, impl_, v);
             }
         }
     }

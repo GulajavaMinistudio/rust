@@ -128,7 +128,6 @@ crate struct Cache {
 /// This struct is used to wrap the `cache` and `tcx` in order to run `DocFolder`.
 struct CacheBuilder<'a, 'tcx> {
     cache: &'a mut Cache,
-    empty_cache: Cache,
     tcx: TyCtxt<'tcx>,
 }
 
@@ -173,7 +172,7 @@ impl Cache {
             self.primitive_locations.insert(prim, def_id);
         }
 
-        krate = CacheBuilder { tcx, cache: self, empty_cache: Cache::default() }.fold_crate(krate);
+        krate = CacheBuilder { tcx, cache: self }.fold_crate(krate);
 
         for (trait_did, dids, impl_) in self.orphan_trait_impls.drain(..) {
             if self.traits.contains_key(&trait_did) {
@@ -302,7 +301,7 @@ impl<'a, 'tcx> DocFolder for CacheBuilder<'a, 'tcx> {
                             desc,
                             parent,
                             parent_idx: None,
-                            search_type: get_index_search_type(&item, &self.empty_cache, self.tcx),
+                            search_type: get_index_search_type(&item, self.tcx),
                             aliases: item.attrs.get_doc_aliases(),
                         });
                     }
@@ -403,6 +402,15 @@ impl<'a, 'tcx> DocFolder for CacheBuilder<'a, 'tcx> {
                         self.cache.parent_stack.push(did);
                         true
                     }
+                    clean::DynTrait(ref bounds, _)
+                    | clean::BorrowedRef { type_: box clean::DynTrait(ref bounds, _), .. } => {
+                        if let Some(did) = bounds[0].trait_.def_id() {
+                            self.cache.parent_stack.push(did);
+                            true
+                        } else {
+                            false
+                        }
+                    }
                     ref t => {
                         let prim_did = t
                             .primitive_type()
@@ -432,6 +440,12 @@ impl<'a, 'tcx> DocFolder for CacheBuilder<'a, 'tcx> {
                 clean::ResolvedPath { did, .. }
                 | clean::BorrowedRef { type_: box clean::ResolvedPath { did, .. }, .. } => {
                     dids.insert(did);
+                }
+                clean::DynTrait(ref bounds, _)
+                | clean::BorrowedRef { type_: box clean::DynTrait(ref bounds, _), .. } => {
+                    if let Some(did) = bounds[0].trait_.def_id() {
+                        dids.insert(did);
+                    }
                 }
                 ref t => {
                     let did = t

@@ -528,8 +528,12 @@ fn stderr_isatty() -> bool {
 }
 
 fn handle_explain(registry: Registry, code: &str, output: ErrorOutputType) {
-    let normalised =
-        if code.starts_with('E') { code.to_string() } else { format!("E{0:0>4}", code) };
+    let upper_cased_code = code.to_ascii_uppercase();
+    let normalised = if upper_cased_code.starts_with('E') {
+        upper_cased_code
+    } else {
+        format!("E{0:0>4}", code)
+    };
     match registry.try_find_description(&normalised) {
         Ok(Some(description)) => {
             let mut is_in_code_block = false;
@@ -1163,23 +1167,26 @@ pub fn catch_with_exit_code(f: impl FnOnce() -> interface::Result<()>) -> i32 {
 static DEFAULT_HOOK: SyncLazy<Box<dyn Fn(&panic::PanicInfo<'_>) + Sync + Send + 'static>> =
     SyncLazy::new(|| {
         let hook = panic::take_hook();
-        panic::set_hook(Box::new(|info| report_ice(info, BUG_REPORT_URL)));
+        panic::set_hook(Box::new(|info| {
+            // Invoke the default handler, which prints the actual panic message and optionally a backtrace
+            (*DEFAULT_HOOK)(info);
+
+            // Separate the output with an empty line
+            eprintln!();
+
+            // Print the ICE message
+            report_ice(info, BUG_REPORT_URL);
+        }));
         hook
     });
 
-/// Prints the ICE message, including backtrace and query stack.
+/// Prints the ICE message, including query stack, but without backtrace.
 ///
 /// The message will point the user at `bug_report_url` to report the ICE.
 ///
 /// When `install_ice_hook` is called, this function will be called as the panic
 /// hook.
 pub fn report_ice(info: &panic::PanicInfo<'_>, bug_report_url: &str) {
-    // Invoke the default handler, which prints the actual panic message and optionally a backtrace
-    (*DEFAULT_HOOK)(info);
-
-    // Separate the output with an empty line
-    eprintln!();
-
     let emitter = Box::new(rustc_errors::emitter::EmitterWriter::stderr(
         rustc_errors::ColorConfig::Auto,
         None,
