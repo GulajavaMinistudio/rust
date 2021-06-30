@@ -42,7 +42,9 @@ use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
 use rustc_infer::infer::UpvarRegion;
 use rustc_middle::hir::place::{Place, PlaceBase, PlaceWithHirId, Projection, ProjectionKind};
 use rustc_middle::mir::FakeReadCause;
-use rustc_middle::ty::{self, TraitRef, Ty, TyCtxt, TypeckResults, UpvarSubsts};
+use rustc_middle::ty::{
+    self, ClosureSizeProfileData, TraitRef, Ty, TyCtxt, TypeckResults, UpvarSubsts,
+};
 use rustc_session::lint;
 use rustc_span::sym;
 use rustc_span::{MultiSpan, Span, Symbol};
@@ -175,6 +177,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.perform_2229_migration_anaysis(closure_def_id, body_id, capture_clause, span);
         }
 
+        let after_feature_tys = self.final_upvar_tys(closure_def_id);
+
         // We now fake capture information for all variables that are mentioned within the closure
         // We do this after handling migrations so that min_captures computes before
         if !enable_precise_capture(self.tcx, span) {
@@ -202,6 +206,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // This will update the min captures based on this new fake information.
             self.compute_min_captures(closure_def_id, capture_clause, capture_information);
         }
+
+        let before_feature_tys = self.final_upvar_tys(closure_def_id);
 
         if let Some(closure_substs) = infer_kind {
             // Unify the (as yet unbound) type variable in the closure
@@ -257,6 +263,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .map(|(place, cause, hir_id)| (place, cause, hir_id))
             .collect();
         self.typeck_results.borrow_mut().closure_fake_reads.insert(closure_def_id, fake_reads);
+
+        if self.tcx.sess.opts.debugging_opts.profile_closures {
+            self.typeck_results.borrow_mut().closure_size_eval.insert(
+                closure_def_id,
+                ClosureSizeProfileData {
+                    before_feature_tys: self.tcx.mk_tup(before_feature_tys.into_iter()),
+                    after_feature_tys: self.tcx.mk_tup(after_feature_tys.into_iter()),
+                },
+            );
+        }
 
         // If we are also inferred the closure kind here,
         // process any deferred resolutions.
@@ -495,11 +511,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 |lint| {
                     let mut diagnostics_builder = lint.build(
                         format!(
-                            "{} affected for closure because of `capture_disjoint_fields`",
+                            "{} will change in Rust 2021",
                             reasons
                         )
                         .as_str(),
                     );
+                    diagnostics_builder.note("for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/disjoint-capture-in-closures.html>");
                     let closure_body_span = self.tcx.hir().span(body_id.hir_id);
                     let (sugg, app) =
                         match self.tcx.sess.source_map().span_to_snippet(closure_body_span) {

@@ -146,9 +146,15 @@ h1.fqn > .in-band > a:hover {
 h2, h3, h4 {
 	border-bottom: 1px solid;
 }
-.impl, .impl-items .method,
-.impl-items .type, .impl-items .associatedconstant,
-.impl-items .associatedtype {
+.impl,
+.impl-items .method,
+.methods .method,
+.impl-items .type,
+.methods .type,
+.impl-items .associatedconstant,
+.methods .associatedconstant,
+.impl-items .associatedtype,
+.methods .associatedtype {
 	flex-basis: 100%;
 	font-weight: 600;
 	margin-top: 16px;
@@ -200,10 +206,31 @@ summary {
 	outline: none;
 }
 
-/* FIXME: Remove after normalize.css is either upgraded or removed (#86629) */
+/* Fix some style changes due to normalize.css 8 */
+
+td,
+th {
+	padding: 0;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+button,
+input,
+optgroup,
+select,
+textarea {
+	color: inherit;
+	font: inherit;
+	margin: 0;
+}
+
+/* end tweaks for normalize.css 8 */
+
 details:not(.rustdoc-toggle) summary {
 	margin-bottom: .6em;
-	display: list-item;
 }
 
 code, pre, a.test-arrow {
@@ -923,7 +950,7 @@ body.blur > :not(#help) {
 	font-size: 80%;
 	line-height: 1.2;
 	margin-bottom: 0;
-	margin-right: .3em;
+	margin-left: .3em;
 	padding: 2px;
 	vertical-align: text-bottom;
 }

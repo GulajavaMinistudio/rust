@@ -18,6 +18,7 @@ pub use adt::*;
 pub use assoc::*;
 pub use closure::*;
 pub use generics::*;
+pub use vtable::*;
 
 use crate::hir::exports::ExportMap;
 use crate::ich::StableHashingContext;
@@ -94,6 +95,7 @@ pub mod relate;
 pub mod subst;
 pub mod trait_def;
 pub mod util;
+pub mod vtable;
 pub mod walk;
 
 mod adt;
@@ -171,6 +173,25 @@ pub enum Visibility {
     Restricted(DefId),
     /// Not visible anywhere in the local crate. This is the visibility of private external items.
     Invisible,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Copy,
+    Hash,
+    TyEncodable,
+    TyDecodable,
+    HashStable,
+    TypeFoldable
+)]
+pub struct ClosureSizeProfileData<'tcx> {
+    /// Tuple containing the types of closure captures before the feature `capture_disjoint_fields`
+    pub before_feature_tys: Ty<'tcx>,
+    /// Tuple containing the types of closure captures after the feature `capture_disjoint_fields`
+    pub after_feature_tys: Ty<'tcx>,
 }
 
 pub trait DefIdTree: Copy {
@@ -2009,19 +2030,3 @@ impl<'tcx> fmt::Debug for SymbolName<'tcx> {
         fmt::Display::fmt(&self.name, fmt)
     }
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, HashStable)]
-pub enum VtblEntry<'tcx> {
-    MetadataDropInPlace,
-    MetadataSize,
-    MetadataAlign,
-    Vacant,
-    Method(DefId, SubstsRef<'tcx>),
-}
-
-pub const COMMON_VTABLE_ENTRIES: &[VtblEntry<'_>] =
-    &[VtblEntry::MetadataDropInPlace, VtblEntry::MetadataSize, VtblEntry::MetadataAlign];
-
-pub const COMMON_VTABLE_ENTRIES_DROPINPLACE: usize = 0;
-pub const COMMON_VTABLE_ENTRIES_SIZE: usize = 1;
-pub const COMMON_VTABLE_ENTRIES_ALIGN: usize = 2;
