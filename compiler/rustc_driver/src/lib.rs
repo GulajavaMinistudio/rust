@@ -29,7 +29,7 @@ use rustc_middle::middle::cstore::MetadataLoader;
 use rustc_save_analysis as save;
 use rustc_save_analysis::DumpHandler;
 use rustc_serialize::json::{self, ToJson};
-use rustc_session::config::nightly_options;
+use rustc_session::config::{nightly_options, CG_OPTIONS, DB_OPTIONS};
 use rustc_session::config::{ErrorOutputType, Input, OutputType, PrintRequest, TrimmedDefPaths};
 use rustc_session::getopts;
 use rustc_session::lint::{Lint, LintId};
@@ -46,7 +46,6 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::lazy::SyncLazy;
-use std::mem;
 use std::panic::{self, catch_unwind};
 use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
@@ -316,12 +315,12 @@ fn run_compiler(
 
             if let Some(ppm) = &sess.opts.pretty {
                 if ppm.needs_ast_map() {
+                    let expanded_crate = queries.expansion()?.peek().0.clone();
                     queries.global_ctxt()?.peek_mut().enter(|tcx| {
-                        let expanded_crate = queries.expansion()?.take().0;
                         pretty::print_after_hir_lowering(
                             tcx,
                             compiler.input(),
-                            &expanded_crate,
+                            &*expanded_crate,
                             *ppm,
                             compiler.output_file().as_ref().map(|p| &**p),
                         );
@@ -376,12 +375,6 @@ fn run_compiler(
             }
 
             queries.global_ctxt()?;
-
-            // Drop AST after creating GlobalCtxt to free memory
-            {
-                let _timer = sess.prof.generic_activity("drop_ast");
-                mem::drop(queries.expansion()?.take());
-            }
 
             if sess.opts.debugging_opts.no_analysis || sess.opts.debugging_opts.ast_json {
                 return early_exit();
@@ -1017,9 +1010,18 @@ pub fn handle_options(args: &[String]) -> Option<getopts::Matches> {
     for option in config::rustc_optgroups() {
         (option.apply)(&mut options);
     }
-    let matches = options
-        .parse(args)
-        .unwrap_or_else(|f| early_error(ErrorOutputType::default(), &f.to_string()));
+    let matches = options.parse(args).unwrap_or_else(|e| {
+        let msg = match e {
+            getopts::Fail::UnrecognizedOption(ref opt) => CG_OPTIONS
+                .iter()
+                .map(|&(name, ..)| ('C', name))
+                .chain(DB_OPTIONS.iter().map(|&(name, ..)| ('Z', name)))
+                .find(|&(_, name)| *opt == name.replace("_", "-"))
+                .map(|(flag, _)| format!("{}. Did you mean `-{} {}`?", e, flag, opt)),
+            _ => None,
+        };
+        early_error(ErrorOutputType::default(), &msg.unwrap_or_else(|| e.to_string()));
+    });
 
     // For all options we just parsed, we check a few aspects:
     //
