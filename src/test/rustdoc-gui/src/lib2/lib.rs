@@ -1,3 +1,5 @@
+// ignore-tidy-linelength
+
 pub mod module {
     pub mod sub_module {
         pub mod sub_sub_module {
@@ -32,4 +34,23 @@ impl Trait for Foo {
     const Y: u32 = 0;
 }
 
+
 impl implementors::Whatever for Foo {}
+
+pub mod sub_mod {
+    /// ```txt
+    /// aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    /// ```
+    ///
+    /// ```
+    /// aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    /// ```
+    pub struct Foo;
+}
+
+pub mod long_trait {
+    use std::ops::DerefMut;
+
+    pub trait ALongNameBecauseItHelpsTestingTheCurrentProblem: DerefMut<Target = u32>
+        + From<u128> + Send + Sync + AsRef<str> + 'static {}
+}
