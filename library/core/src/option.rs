@@ -356,7 +356,7 @@
 //! // must have the same concrete type.
 //! fn make_iter(do_insert: bool) -> impl Iterator<Item = i32> {
 //!     // Explicit returns to illustrate return types not matching
-//!     match x {
+//!     match do_insert {
 //!         true => return (0..4).chain(once(42)).chain(4..8),
 //!         false => return (0..4).chain(empty()).chain(4..8),
 //!     }
@@ -1179,6 +1179,7 @@ impl<T> Option<T> {
     /// *val = 3;
     /// assert_eq!(opt.unwrap(), 3);
     /// ```
+    #[must_use = "if you intended to set a value, consider assignment instead"]
     #[inline]
     #[stable(feature = "option_insert", since = "1.53.0")]
     pub fn insert(&mut self, value: T) -> &mut T {

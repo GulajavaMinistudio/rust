@@ -6,12 +6,12 @@ use crate::ty::TyCtxt;
 
 use rustc_ast as ast;
 use rustc_data_structures::sync::{self, MetadataRef};
-use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
+use rustc_hir::def_id::{CrateNum, DefId, StableCrateId, LOCAL_CRATE};
 use rustc_hir::definitions::{DefKey, DefPath, DefPathHash};
 use rustc_macros::HashStable;
 use rustc_session::search_paths::PathKind;
 use rustc_session::utils::NativeLibKind;
-use rustc_session::StableCrateId;
+use rustc_span::hygiene::{ExpnHash, ExpnId};
 use rustc_span::symbol::Symbol;
 use rustc_span::Span;
 use rustc_target::spec::Target;
@@ -64,7 +64,7 @@ pub enum LinkagePreference {
     RequireStatic,
 }
 
-#[derive(Clone, Debug, Encodable, Decodable, HashStable)]
+#[derive(Debug, Encodable, Decodable, HashStable)]
 pub struct NativeLib {
     pub kind: NativeLibKind,
     pub name: Option<Symbol>,
@@ -75,7 +75,7 @@ pub struct NativeLib {
     pub dll_imports: Vec<DllImport>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encodable, Decodable, Hash, HashStable)]
+#[derive(Clone, Debug, Encodable, Decodable, HashStable)]
 pub struct DllImport {
     pub name: Symbol,
     pub ordinal: Option<u16>,
@@ -92,7 +92,7 @@ pub struct DllImport {
 ///
 /// The usize value, where present, indicates the size of the function's argument list
 /// in bytes.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Encodable, Decodable, Hash, HashStable)]
+#[derive(Clone, PartialEq, Debug, Encodable, Decodable, HashStable)]
 pub enum DllCallingConvention {
     C,
     Stdcall(usize),
@@ -207,6 +207,7 @@ pub trait CrateStore: std::fmt::Debug {
         index_guess: u32,
         hash: DefPathHash,
     ) -> Option<DefId>;
+    fn expn_hash_to_expn_id(&self, cnum: CrateNum, index_guess: u32, hash: ExpnHash) -> ExpnId;
 
     // utility functions
     fn encode_metadata(&self, tcx: TyCtxt<'_>) -> EncodedMetadata;

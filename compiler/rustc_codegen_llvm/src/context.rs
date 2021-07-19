@@ -149,11 +149,12 @@ pub unsafe fn create_module(
 
         if !custom_llvm_used && target_data_layout != llvm_data_layout {
             bug!(
-                "data-layout for builtin `{}` target, `{}`, \
-                  differs from LLVM default, `{}`",
-                sess.target.llvm_target,
-                target_data_layout,
-                llvm_data_layout
+                "data-layout for target `{rustc_target}`, `{rustc_layout}`, \
+                  differs from LLVM target's `{llvm_target}` default layout, `{llvm_layout}`",
+                rustc_target = sess.opts.target_triple,
+                rustc_layout = target_data_layout,
+                llvm_target = sess.target.llvm_target,
+                llvm_layout = llvm_data_layout
             );
         }
     }
@@ -385,11 +386,16 @@ impl MiscMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 } else {
                     "rust_eh_personality"
                 };
-                let fty = self.type_variadic_func(&[], self.type_i32());
-                self.declare_cfn(name, llvm::UnnamedAddr::Global, fty)
+                if let Some(llfn) = self.get_declared_value(name) {
+                    llfn
+                } else {
+                    let fty = self.type_variadic_func(&[], self.type_i32());
+                    let llfn = self.declare_cfn(name, llvm::UnnamedAddr::Global, fty);
+                    attributes::apply_target_cpu_attr(self, llfn);
+                    llfn
+                }
             }
         };
-        attributes::apply_target_cpu_attr(self, llfn);
         self.eh_personality.set(Some(llfn));
         llfn
     }
