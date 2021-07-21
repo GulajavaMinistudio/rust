@@ -3747,6 +3747,7 @@ dependencies = [
  "rustc_span",
  "rustc_symbol_mangling",
  "rustc_target",
+ "smallvec",
  "tempfile",
  "tracing",
 ]
@@ -5096,14 +5097,6 @@ dependencies = [
 
 [[package]]
 name = "term"
-version = "0.0.0"
-dependencies = [
- "core",
- "std",
-]
-
-[[package]]
-name = "term"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0863a3345e70f61d613eab32ee046ccd1bcc5f9105fe402c61fcd0c13eeb8b5"
@@ -5154,7 +5147,6 @@ dependencies = [
  "panic_unwind",
  "proc_macro",
  "std",
- "term 0.0.0",
 ]
 
 [[package]]
