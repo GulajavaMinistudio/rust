@@ -64,7 +64,7 @@ impl Level {
         match self {
             Level::Allow => "allow",
             Level::Warn => "warn",
-            Level::ForceWarn => "force-warns",
+            Level::ForceWarn => "force-warn",
             Level::Deny => "deny",
             Level::Forbid => "forbid",
         }
@@ -296,6 +296,7 @@ pub enum BuiltinLintDiagnostics {
     DeprecatedMacro(Option<Symbol>, Span),
     MissingAbi(Span, Abi),
     UnusedDocComment(Span),
+    UnusedBuiltinAttribute { attr_name: Symbol, macro_name: String, invoc_span: Span },
     PatternsInFnsWithoutBody(Span, Ident),
     LegacyDeriveHelpers(Span),
     ExternDepSpec(String, ExternDepSpec),

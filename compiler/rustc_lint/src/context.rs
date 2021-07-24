@@ -370,7 +370,7 @@ impl LintStore {
                 match level {
                     Level::Allow => "-A",
                     Level::Warn => "-W",
-                    Level::ForceWarn => "--force-warns",
+                    Level::ForceWarn => "--force-warn",
                     Level::Deny => "-D",
                     Level::Forbid => "-F",
                 },
@@ -732,6 +732,16 @@ pub trait LintContext: Sized {
                         "insert whitespace here to avoid this being parsed as a prefix in Rust 2021",
                         " ".into(),
                         Applicability::MachineApplicable,
+                    );
+                }
+                BuiltinLintDiagnostics::UnusedBuiltinAttribute {
+                    attr_name,
+                    macro_name,
+                    invoc_span
+                } => {
+                    db.span_note(
+                        invoc_span,
+                        &format!("the built-in attribute `{attr_name}` will be ignored, since it's applied to the macro invocation `{macro_name}`")
                     );
                 }
             }

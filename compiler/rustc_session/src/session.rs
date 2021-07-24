@@ -1,7 +1,7 @@
 use crate::cgu_reuse_tracker::CguReuseTracker;
 use crate::code_stats::CodeStats;
 pub use crate::code_stats::{DataTypeKind, FieldInfo, SizeKind, VariantInfo};
-use crate::config::{self, CrateType, OutputType, PrintRequest, SwitchWithOptPath};
+use crate::config::{self, CrateType, OutputType, SwitchWithOptPath};
 use crate::filesearch;
 use crate::lint::{self, LintId};
 use crate::parse::ParseSess;
@@ -219,7 +219,6 @@ pub struct Session {
     /// Set of enabled features for the current target.
     pub target_features: FxHashSet<Symbol>,
 
-    known_attrs: Lock<MarkedAttrs>,
     used_attrs: Lock<MarkedAttrs>,
 
     /// `Span`s for `if` conditions that we have suggested turning into `if let`.
@@ -1076,14 +1075,6 @@ impl Session {
             == config::InstrumentCoverage::ExceptUnusedFunctions
     }
 
-    pub fn mark_attr_known(&self, attr: &Attribute) {
-        self.known_attrs.lock().mark(attr)
-    }
-
-    pub fn is_attr_known(&self, attr: &Attribute) -> bool {
-        self.known_attrs.lock().is_marked(attr)
-    }
-
     pub fn mark_attr_used(&self, attr: &Attribute) {
         self.used_attrs.lock().mark(attr)
     }
@@ -1389,7 +1380,6 @@ pub fn build_session(
         miri_unleashed_features: Lock::new(Default::default()),
         asm_arch,
         target_features: FxHashSet::default(),
-        known_attrs: Lock::new(MarkedAttrs::new()),
         used_attrs: Lock::new(MarkedAttrs::new()),
         if_let_suggestions: Default::default(),
     };
@@ -1438,25 +1428,6 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
                      `-C force-unwind-tables=no`.",
             );
         }
-    }
-
-    // PGO does not work reliably with panic=unwind on Windows. Let's make it
-    // an error to combine the two for now. It always runs into an assertions
-    // if LLVM is built with assertions, but without assertions it sometimes
-    // does not crash and will probably generate a corrupted binary.
-    // We should only display this error if we're actually going to run PGO.
-    // If we're just supposed to print out some data, don't show the error (#61002).
-    if sess.opts.cg.profile_generate.enabled()
-        && sess.target.is_like_msvc
-        && sess.panic_strategy() == PanicStrategy::Unwind
-        && sess.opts.prints.iter().all(|&p| p == PrintRequest::NativeStaticLibs)
-    {
-        sess.err(
-            "Profile-guided optimization does not yet work in conjunction \
-                  with `-Cpanic=unwind` on Windows when targeting MSVC. \
-                  See issue #61002 <https://github.com/rust-lang/rust/issues/61002> \
-                  for more information.",
-        );
     }
 
     // Sanitizers can only be used on platforms that we know have working sanitizer codegen.
