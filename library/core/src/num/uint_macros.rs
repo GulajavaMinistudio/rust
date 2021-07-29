@@ -15,7 +15,8 @@ macro_rules! uint_impl {
         #[stable(feature = "assoc_int_consts", since = "1.43.0")]
         pub const MIN: Self = 0;
 
-        /// The largest value that can be represented by this integer type.
+        /// The largest value that can be represented by this integer type,
+        #[doc = concat!("2<sup>", $BITS, "</sup> - 1.")]
         ///
         /// # Examples
         ///
@@ -1926,7 +1927,7 @@ macro_rules! uint_impl {
         #[rustc_const_stable(feature = "const_int_conversion", since = "1.44.0")]
         // SAFETY: const sound because integers are plain old datatypes so we can always
         // transmute them to arrays of bytes
-        #[rustc_allow_const_fn_unstable(const_fn_transmute)]
+        #[cfg_attr(bootstrap, rustc_allow_const_fn_unstable(const_fn_transmute))]
         #[inline]
         pub const fn to_ne_bytes(self) -> [u8; mem::size_of::<Self>()] {
             // SAFETY: integers are plain old datatypes so we can always transmute them to
@@ -2032,7 +2033,7 @@ macro_rules! uint_impl {
         #[rustc_const_stable(feature = "const_int_conversion", since = "1.44.0")]
         // SAFETY: const sound because integers are plain old datatypes so we can always
         // transmute to them
-        #[rustc_allow_const_fn_unstable(const_fn_transmute)]
+        #[cfg_attr(bootstrap, rustc_allow_const_fn_unstable(const_fn_transmute))]
         #[inline]
         pub const fn from_ne_bytes(bytes: [u8; mem::size_of::<Self>()]) -> Self {
             // SAFETY: integers are plain old datatypes so we can always transmute to them

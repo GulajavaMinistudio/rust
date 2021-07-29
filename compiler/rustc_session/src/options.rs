@@ -1148,6 +1148,8 @@ options! {
         (default: no)"),
     mir_opt_level: Option<usize> = (None, parse_opt_number, [TRACKED],
         "MIR optimization level (0-4; default: 1 in non optimized builds and 2 in optimized builds)"),
+    move_size_limit: Option<usize> = (None, parse_opt_number, [TRACKED],
+        "the size at which the `large_assignments` lint starts to be emitted"),
     mutable_noalias: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "emit noalias metadata for mutable references (default: yes for LLVM >= 12, otherwise no)"),
     new_llvm_pass_manager: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -1308,7 +1310,7 @@ options! {
         "take the brakes off const evaluation. NOTE: this is unsound (default: no)"),
     unpretty: Option<String> = (None, parse_unpretty, [UNTRACKED],
         "present the input source, unstable (and less-pretty) variants;
-        valid types are any of the types for `--pretty`, as well as:
+        `normal`, `identified`,
         `expanded`, `expanded,identified`,
         `expanded,hygiene` (with internal representations),
         `everybody_loops` (all function bodies replaced with `loop {}`),
