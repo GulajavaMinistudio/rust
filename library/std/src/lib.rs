@@ -247,6 +247,7 @@
 #![feature(const_fn_floating_point_arithmetic)]
 #![feature(const_fn_fn_ptr_basics)]
 #![cfg_attr(bootstrap, feature(const_fn_transmute))]
+#![feature(const_format_args)]
 #![feature(const_io_structs)]
 #![feature(const_ip)]
 #![feature(const_ipv4)]
@@ -304,7 +305,6 @@
 #![feature(pin_static_ref)]
 #![feature(prelude_import)]
 #![feature(ptr_internals)]
-#![feature(ready_macro)]
 #![feature(rustc_attrs)]
 #![feature(rustc_private)]
 #![feature(shrink_to)]
@@ -556,9 +556,9 @@ pub use core::{
 #[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
 #[allow(deprecated)]
 pub use core::{
-    assert, assert_matches, cfg, column, compile_error, concat, concat_idents, env, file,
-    format_args, format_args_nl, include, include_bytes, include_str, line, llvm_asm, log_syntax,
-    module_path, option_env, stringify, trace_macros,
+    assert, assert_matches, cfg, column, compile_error, concat, concat_idents, const_format_args,
+    env, file, format_args, format_args_nl, include, include_bytes, include_str, line, llvm_asm,
+    log_syntax, module_path, option_env, stringify, trace_macros,
 };
 
 #[stable(feature = "core_primitive", since = "1.43.0")]

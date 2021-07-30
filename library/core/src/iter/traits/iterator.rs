@@ -5,7 +5,7 @@
 use crate::cmp::{self, Ordering};
 use crate::ops::{ControlFlow, Try};
 
-use super::super::TrustedRandomAccess;
+use super::super::TrustedRandomAccessNoCoerce;
 use super::super::{Chain, Cloned, Copied, Cycle, Enumerate, Filter, FilterMap, Fuse};
 use super::super::{FlatMap, Flatten};
 use super::super::{FromIterator, Intersperse, IntersperseWith, Product, Sum, Zip};
@@ -2078,7 +2078,7 @@ pub trait Iterator {
     /// to produce a single value from it.
     ///
     /// Note: `fold()`, and similar methods that traverse the entire iterator,
-    /// may not terminate for infinite iterators, even on traits for which a
+    /// might not terminate for infinite iterators, even on traits for which a
     /// result is determinable in finite time.
     ///
     /// Note: [`reduce()`] can be used to use the first element as the initial
@@ -3464,7 +3464,7 @@ pub trait Iterator {
     #[unstable(feature = "trusted_random_access", issue = "none")]
     unsafe fn __iterator_get_unchecked(&mut self, _idx: usize) -> Self::Item
     where
-        Self: TrustedRandomAccess,
+        Self: TrustedRandomAccessNoCoerce,
     {
         unreachable!("Always specialized");
     }

@@ -128,6 +128,7 @@ impl Clean<GenericBound> for hir::GenericBound<'_> {
     fn clean(&self, cx: &mut DocContext<'_>) -> GenericBound {
         match *self {
             hir::GenericBound::Outlives(lt) => GenericBound::Outlives(lt.clean(cx)),
+            hir::GenericBound::Unsized(_) => GenericBound::maybe_sized(cx),
             hir::GenericBound::LangItemTrait(lang_item, span, _, generic_args) => {
                 let def_id = cx.tcx.require_lang_item(lang_item, Some(span));
 
@@ -562,13 +563,19 @@ impl Clean<Generics> for hir::Generics<'_> {
                 WherePredicate::BoundPredicate {
                     ty: Generic(ref name), ref mut bounds, ..
                 } => {
-                    if bounds.is_empty() {
+                    if let [] | [GenericBound::TraitBound(_, hir::TraitBoundModifier::Maybe)] =
+                        &bounds[..]
+                    {
                         for param in &mut generics.params {
                             match param.kind {
                                 GenericParamDefKind::Lifetime => {}
                                 GenericParamDefKind::Type { bounds: ref mut ty_bounds, .. } => {
                                     if &param.name == name {
                                         mem::swap(bounds, ty_bounds);
+                                        // We now keep track of `?Sized` obligations in the HIR.
+                                        // If we don't clear `ty_bounds` we end up with
+                                        // `fn foo<X: ?Sized>(_: X) where X: ?Sized`.
+                                        ty_bounds.clear();
                                         break;
                                     }
                                 }
@@ -1730,9 +1737,13 @@ impl Clean<Variant> for hir::VariantData<'_> {
     fn clean(&self, cx: &mut DocContext<'_>) -> Variant {
         match self {
             hir::VariantData::Struct(..) => Variant::Struct(self.clean(cx)),
-            hir::VariantData::Tuple(..) => {
-                Variant::Tuple(self.fields().iter().map(|x| x.ty.clean(cx)).collect())
-            }
+            // Important note here: `Variant::Tuple` is used on tuple structs which are not in an
+            // enum (so where converting from `ty::VariantDef`). In case we are in an enum, the kind
+            // is provided by the `Variant` wrapper directly, and since we need the fields' name
+            // (even for a tuple struct variant!), it's simpler to just store it as a
+            // `Variant::Struct` instead of a `Variant::Tuple` (otherwise it would force us to make
+            // a lot of changes when rendering them to generate the name as well).
+            hir::VariantData::Tuple(..) => Variant::Struct(self.clean(cx)),
             hir::VariantData::Unit(..) => Variant::CLike,
         }
     }

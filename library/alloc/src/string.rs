@@ -921,7 +921,7 @@ impl String {
     /// assert!(s.capacity() >= 10);
     /// ```
     ///
-    /// This may not actually increase the capacity:
+    /// This might not actually increase the capacity:
     ///
     /// ```
     /// let mut s = String::with_capacity(10);
@@ -969,7 +969,7 @@ impl String {
     /// assert!(s.capacity() >= 10);
     /// ```
     ///
-    /// This may not actually increase the capacity:
+    /// This might not actually increase the capacity:
     ///
     /// ```
     /// let mut s = String::with_capacity(10);
@@ -1350,13 +1350,14 @@ impl String {
     /// assert_eq!(s, "foobar");
     /// ```
     ///
-    /// The exact order may be useful for tracking external state, like an index.
+    /// Because the elements are visited exactly once in the original order,
+    /// external state may be used to decide which elements to keep.
     ///
     /// ```
     /// let mut s = String::from("abcde");
     /// let keep = [false, true, true, false, true];
-    /// let mut i = 0;
-    /// s.retain(|_| (keep[i], i += 1).0);
+    /// let mut iter = keep.iter();
+    /// s.retain(|_| *iter.next().unwrap());
     /// assert_eq!(s, "bce");
     /// ```
     #[inline]
@@ -1517,7 +1518,7 @@ impl String {
     }
 
     /// Returns the length of this `String`, in bytes, not [`char`]s or
-    /// graphemes. In other words, it may not be what a human considers the
+    /// graphemes. In other words, it might not be what a human considers the
     /// length of the string.
     ///
     /// # Examples
