@@ -554,6 +554,7 @@ symbols! {
         expected,
         expf32,
         expf64,
+        explicit_generic_args_with_impl_trait,
         export_name,
         expr,
         extended_key_value_attributes,
@@ -1597,6 +1598,10 @@ impl Symbol {
 
     pub fn as_u32(self) -> u32 {
         self.0.as_u32()
+    }
+
+    pub fn len(self) -> usize {
+        with_interner(|interner| interner.get(self).len())
     }
 
     pub fn is_empty(self) -> bool {
