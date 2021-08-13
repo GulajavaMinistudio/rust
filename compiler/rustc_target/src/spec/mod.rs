@@ -903,6 +903,7 @@ supported_targets! {
 
     ("riscv32i-unknown-none-elf", riscv32i_unknown_none_elf),
     ("riscv32imc-unknown-none-elf", riscv32imc_unknown_none_elf),
+    ("riscv32imc-esp-espidf", riscv32imc_esp_espidf),
     ("riscv32imac-unknown-none-elf", riscv32imac_unknown_none_elf),
     ("riscv32gc-unknown-linux-gnu", riscv32gc_unknown_linux_gnu),
     ("riscv32gc-unknown-linux-musl", riscv32gc_unknown_linux_musl),
@@ -1335,6 +1336,9 @@ pub struct TargetOptions {
 
     /// If present it's a default value to use for adjusting the C ABI.
     pub default_adjusted_cabi: Option<Abi>,
+
+    /// Minimum number of bits in #[repr(C)] enum. Defaults to 32.
+    pub c_enum_min_bits: u64,
 }
 
 impl Default for TargetOptions {
@@ -1439,6 +1443,7 @@ impl Default for TargetOptions {
             split_debuginfo: SplitDebuginfo::Off,
             supported_sanitizers: SanitizerSet::empty(),
             default_adjusted_cabi: None,
+            c_enum_min_bits: 32,
         }
     }
 }
@@ -1600,6 +1605,12 @@ impl Target {
             ($key_name:ident, bool) => ( {
                 let name = (stringify!($key_name)).replace("_", "-");
                 if let Some(s) = obj.remove_key(&name).and_then(|j| Json::as_boolean(&j)) {
+                    base.$key_name = s;
+                }
+            } );
+            ($key_name:ident, u64) => ( {
+                let name = (stringify!($key_name)).replace("_", "-");
+                if let Some(s) = obj.remove_key(&name).and_then(|j| Json::as_u64(&j)) {
                     base.$key_name = s;
                 }
             } );
@@ -2016,6 +2027,7 @@ impl Target {
         key!(split_debuginfo, SplitDebuginfo)?;
         key!(supported_sanitizers, SanitizerSet)?;
         key!(default_adjusted_cabi, Option<Abi>)?;
+        key!(c_enum_min_bits, u64);
 
         if base.is_builtin {
             // This can cause unfortunate ICEs later down the line.
@@ -2254,6 +2266,7 @@ impl ToJson for Target {
         target_option_val!(has_thumb_interworking);
         target_option_val!(split_debuginfo);
         target_option_val!(supported_sanitizers);
+        target_option_val!(c_enum_min_bits);
 
         if let Some(abi) = self.default_adjusted_cabi {
             d.insert("default-adjusted-cabi".to_string(), Abi::name(abi).to_json());
