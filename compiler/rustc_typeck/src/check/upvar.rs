@@ -47,7 +47,7 @@ use rustc_middle::ty::{
 };
 use rustc_session::lint;
 use rustc_span::sym;
-use rustc_span::{MultiSpan, Span, Symbol};
+use rustc_span::{MultiSpan, Span, Symbol, DUMMY_SP};
 use rustc_trait_selection::infer::InferCtxtExt;
 
 use rustc_data_structures::stable_map::FxHashMap;
@@ -611,7 +611,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         for (captured_hir_id, captured_name, reasons) in diagnostics_info.iter() {
                             if let Some(captured_hir_id) = captured_hir_id {
                                 let cause_span = self.tcx.hir().span(*captured_hir_id);
-                                diagnostics_builder.span_label(cause_span, format!("in Rust 2018, closure captures all of `{}`, but in Rust 2021, it only captures `{}`",
+                                diagnostics_builder.span_label(cause_span, format!("in Rust 2018, this closure captures all of `{}`, but in Rust 2021, it will only capture `{}`",
                                     self.tcx.hir().name(*var_hir_id),
                                     captured_name,
                                 ));
@@ -622,7 +622,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             if reasons.contains("drop order") {
                                 let drop_location_span = drop_location_span(self.tcx, &closure_hir_id);
 
-                                diagnostics_builder.span_label(drop_location_span, format!("in Rust 2018, `{}` would be dropped here, but in Rust 2021, only `{}` would be dropped here alongside the closure",
+                                diagnostics_builder.span_label(drop_location_span, format!("in Rust 2018, `{}` is dropped here, but in Rust 2021, only `{}` will be dropped here as part of the closure",
                                     self.tcx.hir().name(*var_hir_id),
                                     captured_name,
                                 ));
@@ -632,7 +632,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             if reasons.contains("trait implementation") {
                                 let missing_trait = &reasons[..reasons.find("trait implementation").unwrap() - 1];
 
-                                diagnostics_builder.span_label(closure_head_span, format!("in Rust 2018, this closure would implement {} as `{}` implements {}, but in Rust 2021, this closure would no longer implement {} as `{}` does not implement {}",
+                                diagnostics_builder.span_label(closure_head_span, format!("in Rust 2018, this closure implements {} as `{}` implements {}, but in Rust 2021, this closure will no longer implement {} as `{}` does not implement {}",
                                     missing_trait,
                                     self.tcx.hir().name(*var_hir_id),
                                     missing_trait,
@@ -644,8 +644,18 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                     diagnostics_builder.note("for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/disjoint-capture-in-closures.html>");
-                    let closure_body_span = self.tcx.hir().span(body_id.hir_id);
-                    let (sugg, app) =
+
+                    let mut closure_body_span = self.tcx.hir().span(body_id.hir_id);
+
+                    // If the body was entirely expanded from a macro
+                    // invocation, i.e. the body is not contained inside the
+                    // closure span, then we walk up the expansion until we
+                    // find the span before the expansion.
+                    while !closure_body_span.is_dummy() && !closure_span.contains(closure_body_span) {
+                        closure_body_span = closure_body_span.parent().unwrap_or(DUMMY_SP);
+                    }
+
+                    let (span, sugg, app) =
                         match self.tcx.sess.source_map().span_to_snippet(closure_body_span) {
                             Ok(s) => {
                                 let trimmed = s.trim_start();
@@ -666,9 +676,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 } else {
                                     format!("{{ {}; {} }}", migration_string, s)
                                 };
-                                (sugg, Applicability::MachineApplicable)
+                                (closure_body_span, sugg, Applicability::MachineApplicable)
                             }
-                            Err(_) => (migration_string.clone(), Applicability::HasPlaceholders),
+                            Err(_) => (closure_span, migration_string.clone(), Applicability::HasPlaceholders),
                         };
 
                     let diagnostic_msg = format!(
@@ -677,7 +687,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     );
 
                     diagnostics_builder.span_suggestion(
-                        closure_body_span,
+                        span,
                         &diagnostic_msg,
                         sugg,
                         app,

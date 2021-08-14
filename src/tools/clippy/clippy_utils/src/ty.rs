@@ -114,7 +114,7 @@ pub fn has_iter_method(cx: &LateContext<'_>, probably_ref_ty: Ty<'_>) -> Option<
 
 /// Checks whether a type implements a trait.
 /// The function returns false in case the type contains an inference variable.
-/// See also `get_trait_def_id`.
+/// See also [`get_trait_def_id`](super::get_trait_def_id).
 pub fn implements_trait<'tcx>(
     cx: &LateContext<'tcx>,
     ty: Ty<'tcx>,
@@ -157,7 +157,7 @@ pub fn is_must_use_ty<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> bool {
         ty::Tuple(substs) => substs.types().any(|ty| is_must_use_ty(cx, ty)),
         ty::Opaque(ref def_id, _) => {
             for (predicate, _) in cx.tcx.explicit_item_bounds(*def_id) {
-                if let ty::PredicateKind::Trait(trait_predicate, _) = predicate.kind().skip_binder() {
+                if let ty::PredicateKind::Trait(trait_predicate) = predicate.kind().skip_binder() {
                     if must_use_attr(cx.tcx.get_attrs(trait_predicate.trait_ref.def_id)).is_some() {
                         return true;
                     }
