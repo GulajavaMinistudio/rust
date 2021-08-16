@@ -1302,7 +1302,9 @@ pub enum ExprKind {
     Type(P<Expr>, P<Ty>),
     /// A `let pat = expr` expression that is only semantically allowed in the condition
     /// of `if` / `while` expressions. (e.g., `if let 0 = x { .. }`).
-    Let(P<Pat>, P<Expr>),
+    ///
+    /// `Span` represents the whole `let pat = expr` statement.
+    Let(P<Pat>, P<Expr>, Span),
     /// An `if` block, with an optional `else` block.
     ///
     /// `if expr { block } else { expr }`
@@ -2027,6 +2029,7 @@ pub enum InlineAsmOperand {
 pub struct InlineAsm {
     pub template: Vec<InlineAsmTemplatePiece>,
     pub operands: Vec<(InlineAsmOperand, Span)>,
+    pub clobber_abi: Option<(Symbol, Span)>,
     pub options: InlineAsmOptions,
     pub line_spans: Vec<Span>,
 }
