@@ -575,7 +575,7 @@ impl EmbargoVisitor<'tcx> {
         }
     }
 
-    /// Given the path segments of a `ItemKind::Use`, then we need
+    /// Given the path segments of an `ItemKind::Use`, then we need
     /// to update the visibility of the intermediate use so that it isn't linted
     /// by `unreachable_pub`.
     ///
@@ -885,9 +885,7 @@ impl Visitor<'tcx> for EmbargoVisitor<'tcx> {
     fn visit_macro_def(&mut self, md: &'tcx hir::MacroDef<'tcx>) {
         // Non-opaque macros cannot make other items more accessible than they already are.
         let attrs = self.tcx.hir().attrs(md.hir_id());
-        if attr::find_transparency(&self.tcx.sess, &attrs, md.ast.macro_rules).0
-            != Transparency::Opaque
-        {
+        if attr::find_transparency(&attrs, md.ast.macro_rules).0 != Transparency::Opaque {
             // `#[macro_export]`-ed `macro_rules!` are `Public` since they
             // ignore their containing path to always appear at the crate root.
             if md.ast.macro_rules {
