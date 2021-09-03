@@ -1059,7 +1059,7 @@ pub fn noop_visit_fn_header<T: MutVisitor>(header: &mut FnHeader, vis: &mut T) {
 // FIXME: Avoid visiting the crate as a `Mod` item, flat map only the inner items if possible,
 // or make crate visiting first class if necessary.
 pub fn noop_visit_crate<T: MutVisitor>(krate: &mut Crate, vis: &mut T) {
-    visit_clobber(krate, |Crate { attrs, items, span, proc_macros }| {
+    visit_clobber(krate, |Crate { attrs, items, span }| {
         let item_vis =
             Visibility { kind: VisibilityKind::Public, span: span.shrink_to_lo(), tokens: None };
         let item = P(Item {
@@ -1075,13 +1075,11 @@ pub fn noop_visit_crate<T: MutVisitor>(krate: &mut Crate, vis: &mut T) {
 
         let len = items.len();
         if len == 0 {
-            Crate { attrs: vec![], items: vec![], span, proc_macros }
+            Crate { attrs: vec![], items: vec![], span }
         } else if len == 1 {
             let Item { attrs, span, kind, .. } = items.into_iter().next().unwrap().into_inner();
             match kind {
-                ItemKind::Mod(_, ModKind::Loaded(items, ..)) => {
-                    Crate { attrs, items, span, proc_macros }
-                }
+                ItemKind::Mod(_, ModKind::Loaded(items, ..)) => Crate { attrs, items, span },
                 _ => panic!("visitor converted a module to not a module"),
             }
         } else {
@@ -1380,7 +1378,17 @@ pub fn noop_flat_map_stmt<T: MutVisitor>(
 ) -> SmallVec<[Stmt; 1]> {
     vis.visit_id(&mut id);
     vis.visit_span(&mut span);
-    noop_flat_map_stmt_kind(kind, vis).into_iter().map(|kind| Stmt { id, kind, span }).collect()
+    let stmts: SmallVec<_> = noop_flat_map_stmt_kind(kind, vis)
+        .into_iter()
+        .map(|kind| Stmt { id, kind, span })
+        .collect();
+    if stmts.len() > 1 {
+        panic!(
+            "cloning statement `NodeId`s is prohibited by default, \
+             the visitor should implement custom statement visiting"
+        );
+    }
+    stmts
 }
 
 pub fn noop_flat_map_stmt_kind<T: MutVisitor>(
