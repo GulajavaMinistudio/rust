@@ -139,7 +139,7 @@ impl FromWithTcx<clean::GenericArg> for GenericArg {
         match arg {
             Lifetime(l) => GenericArg::Lifetime(l.0.to_string()),
             Type(t) => GenericArg::Type(t.into_tcx(tcx)),
-            Const(c) => GenericArg::Const(c.into_tcx(tcx)),
+            Const(box c) => GenericArg::Const(c.into_tcx(tcx)),
             Infer => GenericArg::Infer,
         }
     }
@@ -326,7 +326,9 @@ impl FromWithTcx<clean::GenericParamDefKind> for GenericParamDefKind {
     fn from_tcx(kind: clean::GenericParamDefKind, tcx: TyCtxt<'_>) -> Self {
         use clean::GenericParamDefKind::*;
         match kind {
-            Lifetime => GenericParamDefKind::Lifetime,
+            Lifetime { outlives } => GenericParamDefKind::Lifetime {
+                outlives: outlives.into_iter().map(|lt| lt.0.to_string()).collect(),
+            },
             Type { did: _, bounds, default, synthetic: _ } => GenericParamDefKind::Type {
                 bounds: bounds.into_iter().map(|x| x.into_tcx(tcx)).collect(),
                 default: default.map(|x| x.into_tcx(tcx)),
