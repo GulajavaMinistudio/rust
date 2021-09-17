@@ -253,6 +253,15 @@ pub enum ObligationCauseCode<'tcx> {
 
     DerivedObligation(DerivedObligationCause<'tcx>),
 
+    FunctionArgumentObligation {
+        /// The node of the relevant argument in the function call.
+        arg_hir_id: hir::HirId,
+        /// The node of the function call.
+        call_hir_id: hir::HirId,
+        /// The obligation introduced by this argument.
+        parent_code: Lrc<ObligationCauseCode<'tcx>>,
+    },
+
     /// Error derived when matching traits/impls; see ObligationCause for more details
     CompareImplConstObligation,
 
@@ -368,11 +377,12 @@ impl ObligationCauseCode<'_> {
     // Return the base obligation, ignoring derived obligations.
     pub fn peel_derives(&self) -> &Self {
         let mut base_cause = self;
-        while let BuiltinDerivedObligation(cause)
-        | ImplDerivedObligation(cause)
-        | DerivedObligation(cause) = base_cause
+        while let BuiltinDerivedObligation(DerivedObligationCause { parent_code, .. })
+        | ImplDerivedObligation(DerivedObligationCause { parent_code, .. })
+        | DerivedObligation(DerivedObligationCause { parent_code, .. })
+        | FunctionArgumentObligation { parent_code, .. } = base_cause
         {
-            base_cause = &cause.parent_code;
+            base_cause = &parent_code;
         }
         base_cause
     }
@@ -730,7 +740,7 @@ pub struct ImplSourceTraitAliasData<'tcx, N> {
     pub nested: Vec<N>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, HashStable)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, HashStable, PartialOrd, Ord)]
 pub enum ObjectSafetyViolation {
     /// `Self: Sized` declared on the trait.
     SizedSelf(SmallVec<[Span; 1]>),
@@ -879,7 +889,7 @@ impl ObjectSafetyViolation {
 }
 
 /// Reasons a method might not be object-safe.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, HashStable)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, HashStable, PartialOrd, Ord)]
 pub enum MethodViolationCode {
     /// e.g., `fn foo()`
     StaticMethod(Option<(&'static str, Span)>, Span, bool /* has args */),
