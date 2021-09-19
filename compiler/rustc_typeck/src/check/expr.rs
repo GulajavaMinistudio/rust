@@ -765,7 +765,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if self.ret_coercion_span.get().is_none() {
                 self.ret_coercion_span.set(Some(e.span));
             }
-            self.check_return_expr(e);
+            self.check_return_expr(e, true);
         } else {
             let mut coercion = self.ret_coercion.as_ref().unwrap().borrow_mut();
             if self.ret_coercion_span.get().is_none() {
@@ -794,16 +794,32 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.tcx.types.never
     }
 
-    pub(super) fn check_return_expr(&self, return_expr: &'tcx hir::Expr<'tcx>) {
+    /// `explicit_return` is `true` if we're checkng an explicit `return expr`,
+    /// and `false` if we're checking a trailing expression.
+    pub(super) fn check_return_expr(
+        &self,
+        return_expr: &'tcx hir::Expr<'tcx>,
+        explicit_return: bool,
+    ) {
         let ret_coercion = self.ret_coercion.as_ref().unwrap_or_else(|| {
             span_bug!(return_expr.span, "check_return_expr called outside fn body")
         });
 
         let ret_ty = ret_coercion.borrow().expected_ty();
         let return_expr_ty = self.check_expr_with_hint(return_expr, ret_ty);
+        let mut span = return_expr.span;
+        // Use the span of the trailing expression for our cause,
+        // not the span of the entire function
+        if !explicit_return {
+            if let ExprKind::Block(body, _) = return_expr.kind {
+                if let Some(last_expr) = body.expr {
+                    span = last_expr.span;
+                }
+            }
+        }
         ret_coercion.borrow_mut().coerce(
             self,
-            &self.cause(return_expr.span, ObligationCauseCode::ReturnValue(return_expr.hir_id)),
+            &self.cause(span, ObligationCauseCode::ReturnValue(return_expr.hir_id)),
             return_expr,
             return_expr_ty,
         );
@@ -1844,6 +1860,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 field,
                 expr_t,
                 expr,
+                None,
             );
         }
         err.emit();
@@ -1870,9 +1887,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             };
         let expr_snippet =
             self.tcx.sess.source_map().span_to_snippet(expr.span).unwrap_or(String::new());
-        if expr_is_call && expr_snippet.starts_with("(") && expr_snippet.ends_with(")") {
-            let after_open = expr.span.lo() + rustc_span::BytePos(1);
-            let before_close = expr.span.hi() - rustc_span::BytePos(1);
+        let is_wrapped = expr_snippet.starts_with("(") && expr_snippet.ends_with(")");
+        let after_open = expr.span.lo() + rustc_span::BytePos(1);
+        let before_close = expr.span.hi() - rustc_span::BytePos(1);
+
+        if expr_is_call && is_wrapped {
             err.multipart_suggestion(
                 "remove wrapping parentheses to call the method",
                 vec![
@@ -1882,12 +1901,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 Applicability::MachineApplicable,
             );
         } else if !self.expr_in_place(expr.hir_id) {
+            // Suggest call parentheses inside the wrapping parentheses
+            let span = if is_wrapped {
+                expr.span.with_lo(after_open).with_hi(before_close)
+            } else {
+                expr.span
+            };
             self.suggest_method_call(
                 &mut err,
                 "use parentheses to call the method",
                 field,
                 expr_t,
                 expr,
+                Some(span),
             );
         } else {
             err.help("methods are immutable and cannot be assigned to");
