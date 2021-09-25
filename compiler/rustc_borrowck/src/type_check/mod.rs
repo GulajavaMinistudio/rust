@@ -1080,7 +1080,8 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     }
 
                     self.prove_predicate(
-                        ty::PredicateKind::WellFormed(inferred_ty.into()).to_predicate(self.tcx()),
+                        ty::Binder::dummy(ty::PredicateKind::WellFormed(inferred_ty.into()))
+                            .to_predicate(self.tcx()),
                         Locations::All(span),
                         ConstraintCategory::TypeAnnotation,
                     );
@@ -1316,7 +1317,8 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     obligations.obligations.push(traits::Obligation::new(
                         ObligationCause::dummy(),
                         param_env,
-                        ty::PredicateKind::WellFormed(revealed_ty.into()).to_predicate(infcx.tcx),
+                        ty::Binder::dummy(ty::PredicateKind::WellFormed(revealed_ty.into()))
+                            .to_predicate(infcx.tcx),
                     ));
                     obligations.add(
                         infcx
@@ -1599,7 +1601,9 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 self.check_call_dest(body, term, &sig, destination, term_location);
 
                 self.prove_predicates(
-                    sig.inputs_and_output.iter().map(|ty| ty::PredicateKind::WellFormed(ty.into())),
+                    sig.inputs_and_output
+                        .iter()
+                        .map(|ty| ty::Binder::dummy(ty::PredicateKind::WellFormed(ty.into()))),
                     term_location.to_locations(),
                     ConstraintCategory::Boring,
                 );
@@ -2020,13 +2024,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 }
             }
 
-            Rvalue::NullaryOp(_, ty) => {
-                // Even with unsized locals cannot box an unsized value.
-                if self.unsized_feature_enabled() {
-                    let span = body.source_info(location).span;
-                    self.ensure_place_sized(ty, span);
-                }
-
+            Rvalue::NullaryOp(_, ty) | Rvalue::ShallowInitBox(_, ty) => {
                 let trait_ref = ty::TraitRef {
                     def_id: tcx.require_lang_item(LangItem::Sized, Some(self.last_span)),
                     substs: tcx.mk_substs_trait(ty, &[]),
@@ -2359,6 +2357,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             | Rvalue::AddressOf(..)
             | Rvalue::Len(..)
             | Rvalue::Cast(..)
+            | Rvalue::ShallowInitBox(..)
             | Rvalue::BinaryOp(..)
             | Rvalue::CheckedBinaryOp(..)
             | Rvalue::NullaryOp(..)
