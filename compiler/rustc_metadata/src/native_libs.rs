@@ -3,8 +3,8 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::struct_span_err;
 use rustc_hir as hir;
 use rustc_hir::itemlikevisit::ItemLikeVisitor;
-use rustc_middle::middle::cstore::{DllCallingConvention, DllImport, NativeLib};
 use rustc_middle::ty::{List, ParamEnv, ParamEnvAnd, Ty, TyCtxt};
+use rustc_session::cstore::{DllCallingConvention, DllImport, NativeLib};
 use rustc_session::parse::feature_err;
 use rustc_session::utils::NativeLibKind;
 use rustc_session::Session;
@@ -319,13 +319,13 @@ impl Collector<'tcx> {
                     self.tcx.sess.err(&format!(
                         "renaming of the library `{}` was specified, \
                                                 however this crate contains no `#[link(...)]` \
-                                                attributes referencing this library.",
+                                                attributes referencing this library",
                         lib.name
                     ));
                 } else if !renames.insert(&lib.name) {
                     self.tcx.sess.err(&format!(
                         "multiple renamings were \
-                                                specified for library `{}` .",
+                                                specified for library `{}`",
                         lib.name
                     ));
                 }

@@ -19,7 +19,6 @@ use rustc_metadata::creader::CStore;
 use rustc_metadata::{encode_metadata, EncodedMetadata};
 use rustc_middle::arena::Arena;
 use rustc_middle::dep_graph::DepGraph;
-use rustc_middle::middle::cstore::{MetadataLoader, MetadataLoaderDyn};
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, GlobalCtxt, ResolverOutputs, TyCtxt};
 use rustc_mir_build as mir_build;
@@ -30,6 +29,7 @@ use rustc_query_impl::{OnDiskCache, Queries as TcxQueries};
 use rustc_resolve::{Resolver, ResolverArenas};
 use rustc_serialize::json;
 use rustc_session::config::{CrateType, Input, OutputFilenames, OutputType, PpMode, PpSourceMode};
+use rustc_session::cstore::{MetadataLoader, MetadataLoaderDyn};
 use rustc_session::lint;
 use rustc_session::output::{filename_for_input, filename_for_metadata};
 use rustc_session::search_paths::PathKind;
@@ -437,12 +437,18 @@ pub fn configure_and_expand(
     });
 
     // Add all buffered lints from the `ParseSess` to the `Session`.
-    sess.parse_sess.buffered_lints.with_lock(|buffered_lints| {
-        info!("{} parse sess buffered_lints", buffered_lints.len());
-        for early_lint in buffered_lints.drain(..) {
-            resolver.lint_buffer().add_early_lint(early_lint);
-        }
-    });
+    // The ReplaceBodyWithLoop pass may have deleted some AST nodes, potentially
+    // causing a delay_span_bug later if a buffered lint refers to such a deleted
+    // AST node (issue #87308). Since everybody_loops is for pretty-printing only,
+    // anyway, we simply skip all buffered lints here.
+    if !matches!(sess.opts.pretty, Some(PpMode::Source(PpSourceMode::EveryBodyLoops))) {
+        sess.parse_sess.buffered_lints.with_lock(|buffered_lints| {
+            info!("{} parse sess buffered_lints", buffered_lints.len());
+            for early_lint in buffered_lints.drain(..) {
+                resolver.lint_buffer().add_early_lint(early_lint);
+            }
+        });
+    }
 
     Ok(krate)
 }

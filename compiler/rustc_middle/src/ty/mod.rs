@@ -20,8 +20,6 @@ pub use generics::*;
 pub use vtable::*;
 
 use crate::hir::exports::ExportMap;
-use crate::ich::StableHashingContext;
-use crate::middle::cstore::CrateStoreDyn;
 use crate::mir::{Body, GeneratorLayout};
 use crate::traits::{self, Reveal};
 use crate::ty;
@@ -37,6 +35,8 @@ use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId, LocalDefIdMap, CRATE_DEF_INDEX};
 use rustc_hir::Node;
 use rustc_macros::HashStable;
+use rustc_query_system::ich::StableHashingContext;
+use rustc_session::cstore::CrateStoreDyn;
 use rustc_span::symbol::{kw, Ident, Symbol};
 use rustc_span::Span;
 use rustc_target::abi::Align;
@@ -110,6 +110,7 @@ mod context;
 mod diagnostics;
 mod erase_regions;
 mod generics;
+mod impls_ty;
 mod instance;
 mod list;
 mod structural_impls;
@@ -599,7 +600,7 @@ impl<'tcx> Predicate<'tcx> {
         //   where both `'x` and `'b` would have a DB index of 1.
         //   The substitution from the input trait-ref is therefore going to be
         //   `'a => 'x` (where `'x` has a DB index of 1).
-        // - The super-trait-ref is `for<'b> Bar1<'a,'b>`, where `'a` is an
+        // - The supertrait-ref is `for<'b> Bar1<'a,'b>`, where `'a` is an
         //   early-bound parameter and `'b' is a late-bound parameter with a
         //   DB index of 1.
         // - If we replace `'a` with `'x` from the input, it too will have

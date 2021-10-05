@@ -3,7 +3,6 @@
 use crate::arena::Arena;
 use crate::dep_graph::DepGraph;
 use crate::hir::place::Place as HirPlace;
-use crate::ich::{NodeIdHashingMode, StableHashingContext};
 use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
 use crate::lint::{struct_lint_level, LintDiagnosticBuilder, LintLevelSource};
 use crate::middle;
@@ -45,6 +44,7 @@ use rustc_hir::{
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_macros::HashStable;
 use rustc_middle::mir::FakeReadCause;
+use rustc_query_system::ich::{NodeIdHashingMode, StableHashingContext};
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::{BorrowckMode, CrateType, OutputFilenames};
 use rustc_session::lint::{Level, Lint};
@@ -2117,7 +2117,7 @@ impl<'tcx> TyCtxt<'tcx> {
         })
     }
 
-    /// Computes the def-ids of the transitive super-traits of `trait_def_id`. This (intentionally)
+    /// Computes the def-ids of the transitive supertraits of `trait_def_id`. This (intentionally)
     /// does not compute the full elaborated super-predicates but just the set of def-ids. It is used
     /// to identify which traits may define a given associated type to help avoid cycle errors.
     /// Returns a `DefId` iterator.
