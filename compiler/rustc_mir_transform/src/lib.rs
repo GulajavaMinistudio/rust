@@ -13,6 +13,7 @@
 #![feature(trusted_step)]
 #![feature(try_blocks)]
 #![recursion_limit = "256"]
+#![cfg_attr(not(bootstrap), allow(rustc::potential_query_instability))]
 
 #[macro_use]
 extern crate tracing;
@@ -66,6 +67,7 @@ mod remove_storage_markers;
 mod remove_unneeded_drops;
 mod remove_zsts;
 mod required_consts;
+mod reveal_all;
 mod separate_const_switch;
 mod shim;
 mod simplify;
@@ -490,6 +492,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     // to them. We run some optimizations before that, because they may be harder to do on the state
     // machine than on MIR with async primitives.
     let optimizations_with_generators: &[&dyn MirPass<'tcx>] = &[
+        &reveal_all::RevealAll, // has to be done before inlining, since inlined code is in RevealAll mode.
         &lower_slice_len::LowerSliceLenCalls, // has to be done before inlining, otherwise actual call will be almost always inlined. Also simple, so can just do first
         &normalize_array_len::NormalizeArrayLen, // has to run after `slice::len` lowering
         &unreachable_prop::UnreachablePropagation,
