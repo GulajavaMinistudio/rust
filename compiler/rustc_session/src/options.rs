@@ -351,8 +351,7 @@ mod desc {
     pub const parse_panic_strategy: &str = "either `unwind` or `abort`";
     pub const parse_opt_panic_strategy: &str = parse_panic_strategy;
     pub const parse_relro_level: &str = "one of: `full`, `partial`, or `off`";
-    pub const parse_sanitizers: &str =
-        "comma separated list of sanitizers: `address`, `hwaddress`, `leak`, `memory` or `thread`";
+    pub const parse_sanitizers: &str = "comma separated list of sanitizers: `address`, `cfi`, `hwaddress`, `leak`, `memory` or `thread`";
     pub const parse_sanitizer_memory_track_origins: &str = "0, 1, or 2";
     pub const parse_cfguard: &str =
         "either a boolean (`yes`, `no`, `on`, `off`, etc), `checks`, or `nochecks`";
@@ -605,6 +604,7 @@ mod parse {
             for s in v.split(',') {
                 *slot |= match s {
                     "address" => SanitizerSet::ADDRESS,
+                    "cfi" => SanitizerSet::CFI,
                     "leak" => SanitizerSet::LEAK,
                     "memory" => SanitizerSet::MEMORY,
                     "thread" => SanitizerSet::THREAD,
@@ -1214,6 +1214,8 @@ options! {
         "compile without linking"),
     no_parallel_llvm: bool = (false, parse_no_flag, [UNTRACKED],
         "run LLVM in non-parallel mode (while keeping codegen-units and ThinLTO)"),
+    no_unique_section_names: bool = (false, parse_bool, [TRACKED],
+        "do not use unique names for text and data sections when -Z function-sections is used"),
     no_profiler_runtime: bool = (false, parse_no_flag, [TRACKED],
         "prevent automatic injection of the profiler_builtins crate"),
     normalize_docs: bool = (false, parse_bool, [TRACKED],
