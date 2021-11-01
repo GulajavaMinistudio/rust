@@ -552,6 +552,7 @@ impl String {
     ///
     /// assert_eq!("Hello �World", output);
     /// ```
+    #[must_use]
     #[cfg(not(no_global_oom_handling))]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn from_utf8_lossy(v: &[u8]) -> Cow<'_, str> {
@@ -646,6 +647,7 @@ impl String {
     ///            String::from_utf16_lossy(v));
     /// ```
     #[cfg(not(no_global_oom_handling))]
+    #[must_use]
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn from_utf16_lossy(v: &[u16]) -> String {
@@ -1545,6 +1547,7 @@ impl String {
     /// assert_eq!(fancy_f.chars().count(), 3);
     /// ```
     #[inline]
+    #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn len(&self) -> usize {
         self.vec.len()
@@ -1564,6 +1567,7 @@ impl String {
     /// assert!(!v.is_empty());
     /// ```
     #[inline]
+    #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
