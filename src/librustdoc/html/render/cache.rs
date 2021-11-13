@@ -26,7 +26,6 @@ crate enum ExternalLocation {
 /// Builds the search index from the collected metadata
 crate fn build_index<'tcx>(krate: &clean::Crate, cache: &mut Cache, tcx: TyCtxt<'tcx>) -> String {
     let mut defid_to_pathid = FxHashMap::default();
-    let mut crate_items = Vec::with_capacity(cache.search_index.len());
     let mut crate_paths = vec![];
 
     // Attach all orphan items to the type's definition if the type
@@ -77,34 +76,38 @@ crate fn build_index<'tcx>(krate: &clean::Crate, cache: &mut Cache, tcx: TyCtxt<
 
     // Reduce `DefId` in paths into smaller sequential numbers,
     // and prune the paths that do not appear in the index.
-    let mut lastpath = String::new();
+    let mut lastpath = "";
     let mut lastpathid = 0usize;
 
-    for item in search_index {
-        item.parent_idx = item.parent.and_then(|defid| match defid_to_pathid.entry(defid) {
-            Entry::Occupied(entry) => Some(*entry.get()),
-            Entry::Vacant(entry) => {
-                let pathid = lastpathid;
-                entry.insert(pathid);
-                lastpathid += 1;
+    let crate_items: Vec<&IndexItem> = search_index
+        .iter_mut()
+        .map(|item| {
+            item.parent_idx = item.parent.and_then(|defid| match defid_to_pathid.entry(defid) {
+                Entry::Occupied(entry) => Some(*entry.get()),
+                Entry::Vacant(entry) => {
+                    let pathid = lastpathid;
+                    entry.insert(pathid);
+                    lastpathid += 1;
 
-                if let Some(&(ref fqp, short)) = paths.get(&defid) {
-                    crate_paths.push((short, fqp.last().unwrap().clone()));
-                    Some(pathid)
-                } else {
-                    None
+                    if let Some(&(ref fqp, short)) = paths.get(&defid) {
+                        crate_paths.push((short, fqp.last().unwrap().clone()));
+                        Some(pathid)
+                    } else {
+                        None
+                    }
                 }
-            }
-        });
+            });
 
-        // Omit the parent path if it is same to that of the prior item.
-        if lastpath == item.path {
-            item.path.clear();
-        } else {
-            lastpath = item.path.clone();
-        }
-        crate_items.push(&*item);
-    }
+            // Omit the parent path if it is same to that of the prior item.
+            if lastpath == &item.path {
+                item.path.clear();
+            } else {
+                lastpath = &item.path;
+            }
+
+            &*item
+        })
+        .collect();
 
     struct CrateData<'a> {
         doc: String,
@@ -241,8 +244,10 @@ fn get_index_type_name(clean_type: &clean::Type, accept_generic: bool) -> Option
 /// The point of this function is to replace bounds with types.
 ///
 /// i.e. `[T, U]` when you have the following bounds: `T: Display, U: Option<T>` will return
-/// `[Display, Option]` (we just returns the list of the types, we don't care about the
-/// wrapped types in here).
+/// `[Display, Option]`. If a type parameter has no trait bound, it is discarded.
+///
+/// Important note: It goes through generics recursively. So if you have
+/// `T: Option<Result<(), ()>>`, it'll go into `Option` and then into `Result`.
 crate fn get_real_types<'tcx>(
     generics: &Generics,
     arg: &Type,
@@ -326,7 +331,10 @@ crate fn get_real_types<'tcx>(
         return;
     }
 
+    // If this argument is a type parameter and not a trait bound or a type, we need to look
+    // for its bounds.
     if let Type::Generic(arg_s) = *arg {
+        // First we check if the bounds are in a `where` predicate...
         if let Some(where_pred) = generics.where_predicates.iter().find(|g| match g {
             WherePredicate::BoundPredicate { ty, .. } => {
                 ty.def_id_no_primitives() == arg.def_id_no_primitives()
@@ -349,6 +357,7 @@ crate fn get_real_types<'tcx>(
             }
             insert_ty(res, tcx, arg.clone(), ty_generics);
         }
+        // Otherwise we check if the trait bounds are "inlined" like `T: Option<u32>`...
         if let Some(bound) = generics.params.iter().find(|g| g.is_type() && g.name == arg_s) {
             let mut ty_generics = Vec::new();
             for bound in bound.get_bounds().unwrap_or(&[]) {
@@ -360,6 +369,11 @@ crate fn get_real_types<'tcx>(
             insert_ty(res, tcx, arg.clone(), ty_generics);
         }
     } else {
+        // This is not a type parameter. So for example if we have `T, U: Option<T>`, and we're
+        // looking at `Option`, we enter this "else" condition, otherwise if it's `T`, we don't.
+        //
+        // So in here, we can add it directly and look for its own type parameters (so for `Option`,
+        // we will look for them but not for `T`).
         let mut ty_generics = Vec::new();
         if let Some(arg_generics) = arg.generics() {
             for gen in arg_generics.iter() {
