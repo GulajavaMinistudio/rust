@@ -4,7 +4,6 @@ use crate::early_error;
 use crate::lint;
 use crate::search_paths::SearchPath;
 use crate::utils::NativeLib;
-
 use rustc_target::spec::{CodeModel, LinkerFlavor, MergeFunctions, PanicStrategy, SanitizerSet};
 use rustc_target::spec::{RelocModel, RelroLevel, SplitDebuginfo, TargetTriple, TlsModel};
 
@@ -150,6 +149,7 @@ top_level_options!(
         /// If `Some`, enable incremental compilation, using the given
         /// directory to store intermediate results.
         incremental: Option<PathBuf> [UNTRACKED],
+        assert_incr_state: Option<IncrementalStateAssertion> [UNTRACKED],
 
         debugging_opts: DebuggingOptions [SUBSTRUCT],
         prints: Vec<PrintRequest> [UNTRACKED],
@@ -1046,6 +1046,9 @@ options! {
         "make cfg(version) treat the current version as incomplete (default: no)"),
     asm_comments: bool = (false, parse_bool, [TRACKED],
         "generate comments into the assembly (may change behavior) (default: no)"),
+    assert_incr_state: Option<String> = (None, parse_opt_string, [UNTRACKED],
+        "assert that the incremental cache is in given state: \
+         either `loaded` or `not-loaded`."),
     ast_json: bool = (false, parse_bool, [UNTRACKED],
         "print the AST as JSON and halt (default: no)"),
     ast_json_noexpand: bool = (false, parse_bool, [UNTRACKED],
@@ -1237,6 +1240,8 @@ options! {
         and set the maximum total size of a const allocation for which this is allowed (default: never)"),
     perf_stats: bool = (false, parse_bool, [UNTRACKED],
         "print some performance-related statistics (default: no)"),
+    pick_stable_methods_before_any_unstable: bool = (true, parse_bool, [TRACKED],
+        "try to pick stable methods first before picking any unstable methods (default: yes)"),
     plt: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "whether to use the PLT when calling into shared libraries;
         only has effect for PIC code on systems with ELF binaries
