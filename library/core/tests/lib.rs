@@ -36,6 +36,7 @@
 #![feature(pattern)]
 #![feature(sort_internals)]
 #![feature(slice_partition_at_index)]
+#![feature(slice_take)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(maybe_uninit_extra)]
@@ -58,11 +59,10 @@
 #![feature(const_mut_refs)]
 #![feature(const_pin)]
 #![feature(const_slice_from_raw_parts)]
-#![cfg_attr(bootstrap, feature(const_raw_ptr_deref))]
 #![feature(never_type)]
 #![feature(unwrap_infallible)]
 #![feature(result_into_ok_or_err)]
-#![cfg_attr(not(bootstrap), feature(portable_simd))]
+#![feature(portable_simd)]
 #![feature(ptr_metadata)]
 #![feature(once_cell)]
 #![feature(unsized_tuple_coercion)]
@@ -108,7 +108,6 @@ mod pattern;
 mod pin;
 mod ptr;
 mod result;
-#[cfg(not(bootstrap))]
 mod simd;
 mod slice;
 mod str;
