@@ -21,7 +21,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind, Node};
 use rustc_middle::ty::{
     self, suggest_arbitrary_trait_bound, suggest_constraining_type_param, AdtKind, DefIdTree,
-    Infer, InferTy, ToPredicate, Ty, TyCtxt, TypeFoldable, WithConstness,
+    Infer, InferTy, ToPredicate, Ty, TyCtxt, TypeFoldable,
 };
 use rustc_middle::ty::{TypeAndMut, TypeckResults};
 use rustc_session::Limit;
@@ -2182,6 +2182,16 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             err,
                             &parent_predicate,
                             &data.parent_code,
+                            obligated_types,
+                            seen_requirements,
+                        )
+                    });
+                } else {
+                    ensure_sufficient_stack(|| {
+                        self.note_obligation_cause_code(
+                            err,
+                            &parent_predicate,
+                            &cause_code.peel_derives(),
                             obligated_types,
                             seen_requirements,
                         )

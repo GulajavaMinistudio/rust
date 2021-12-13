@@ -325,13 +325,11 @@ impl GenericArg<'_> {
         }
     }
 
-    pub fn to_ord(&self, feats: &rustc_feature::Features) -> ast::ParamKindOrd {
+    pub fn to_ord(&self) -> ast::ParamKindOrd {
         match self {
             GenericArg::Lifetime(_) => ast::ParamKindOrd::Lifetime,
             GenericArg::Type(_) => ast::ParamKindOrd::Type,
-            GenericArg::Const(_) => {
-                ast::ParamKindOrd::Const { unordered: feats.unordered_const_ty_params() }
-            }
+            GenericArg::Const(_) => ast::ParamKindOrd::Const,
             GenericArg::Infer(_) => ast::ParamKindOrd::Infer,
         }
     }
@@ -3207,59 +3205,6 @@ impl<'hir> Node<'hir> {
             | Node::ImplItem(ImplItem { generics, .. }) => Some(generics),
             Node::Item(item) => item.kind.generics(),
             _ => None,
-        }
-    }
-
-    pub fn hir_id(&self) -> Option<HirId> {
-        match self {
-            Node::Item(Item { def_id, .. })
-            | Node::TraitItem(TraitItem { def_id, .. })
-            | Node::ImplItem(ImplItem { def_id, .. })
-            | Node::ForeignItem(ForeignItem { def_id, .. }) => Some(HirId::make_owner(*def_id)),
-            Node::Field(FieldDef { hir_id, .. })
-            | Node::AnonConst(AnonConst { hir_id, .. })
-            | Node::Expr(Expr { hir_id, .. })
-            | Node::Stmt(Stmt { hir_id, .. })
-            | Node::Ty(Ty { hir_id, .. })
-            | Node::Binding(Pat { hir_id, .. })
-            | Node::Pat(Pat { hir_id, .. })
-            | Node::Arm(Arm { hir_id, .. })
-            | Node::Block(Block { hir_id, .. })
-            | Node::Local(Local { hir_id, .. })
-            | Node::Lifetime(Lifetime { hir_id, .. })
-            | Node::Param(Param { hir_id, .. })
-            | Node::Infer(InferArg { hir_id, .. })
-            | Node::GenericParam(GenericParam { hir_id, .. }) => Some(*hir_id),
-            Node::TraitRef(TraitRef { hir_ref_id, .. }) => Some(*hir_ref_id),
-            Node::PathSegment(PathSegment { hir_id, .. }) => *hir_id,
-            Node::Variant(Variant { id, .. }) => Some(*id),
-            Node::Ctor(variant) => variant.ctor_hir_id(),
-            Node::Crate(_) | Node::Visibility(_) => None,
-        }
-    }
-
-    /// Returns `Constness::Const` when this node is a const fn/impl/item.
-    pub fn constness_for_typeck(&self) -> Constness {
-        match self {
-            Node::Item(Item {
-                kind: ItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
-                ..
-            })
-            | Node::TraitItem(TraitItem {
-                kind: TraitItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
-                ..
-            })
-            | Node::ImplItem(ImplItem {
-                kind: ImplItemKind::Fn(FnSig { header: FnHeader { constness, .. }, .. }, ..),
-                ..
-            })
-            | Node::Item(Item { kind: ItemKind::Impl(Impl { constness, .. }), .. }) => *constness,
-
-            Node::Item(Item { kind: ItemKind::Const(..), .. })
-            | Node::TraitItem(TraitItem { kind: TraitItemKind::Const(..), .. })
-            | Node::ImplItem(ImplItem { kind: ImplItemKind::Const(..), .. }) => Constness::Const,
-
-            _ => Constness::NotConst,
         }
     }
 

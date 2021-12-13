@@ -122,7 +122,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// * The pointer must be properly aligned.
     ///
-    /// * It must be "dereferencable" in the sense defined in [the module documentation].
+    /// * It must be "dereferenceable" in the sense defined in [the module documentation].
     ///
     /// * The pointer must point to an initialized instance of `T`.
     ///
@@ -189,7 +189,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// * The pointer must be properly aligned.
     ///
-    /// * It must be "dereferencable" in the sense defined in [the module documentation].
+    /// * It must be "dereferenceable" in the sense defined in [the module documentation].
     ///
     /// * You must enforce Rust's aliasing rules, since the returned lifetime `'a` is
     ///   arbitrarily chosen and does not necessarily reflect the actual lifetime of the data.
@@ -368,7 +368,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// * The pointer must be properly aligned.
     ///
-    /// * It must be "dereferencable" in the sense defined in [the module documentation].
+    /// * It must be "dereferenceable" in the sense defined in [the module documentation].
     ///
     /// * The pointer must point to an initialized instance of `T`.
     ///
@@ -434,7 +434,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// * The pointer must be properly aligned.
     ///
-    /// * It must be "dereferencable" in the sense defined in [the module documentation].
+    /// * It must be "dereferenceable" in the sense defined in [the module documentation].
     ///
     /// * You must enforce Rust's aliasing rules, since the returned lifetime `'a` is
     ///   arbitrarily chosen and does not necessarily reflect the actual lifetime of the data.
@@ -1069,8 +1069,9 @@ impl<T: ?Sized> *mut T {
     ///
     /// [`ptr::write_bytes`]: crate::ptr::write_bytes()
     #[stable(feature = "pointer_methods", since = "1.26.0")]
+    #[rustc_const_unstable(feature = "const_ptr_write", issue = "86302")]
     #[inline(always)]
-    pub unsafe fn write_bytes(self, val: u8, count: usize)
+    pub const unsafe fn write_bytes(self, val: u8, count: usize)
     where
         T: Sized,
     {
@@ -1266,7 +1267,7 @@ impl<T> *mut [T] {
     /// Returns a raw pointer to an element or subslice, without doing bounds
     /// checking.
     ///
-    /// Calling this method with an out-of-bounds index or when `self` is not dereferencable
+    /// Calling this method with an out-of-bounds index or when `self` is not dereferenceable
     /// is *[undefined behavior]* even if the resulting pointer is not used.
     ///
     /// [undefined behavior]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
@@ -1288,7 +1289,7 @@ impl<T> *mut [T] {
     where
         I: SliceIndex<[T]>,
     {
-        // SAFETY: the caller ensures that `self` is dereferencable and `index` in-bounds.
+        // SAFETY: the caller ensures that `self` is dereferenceable and `index` in-bounds.
         unsafe { index.get_unchecked_mut(self) }
     }
 

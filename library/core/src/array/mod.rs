@@ -162,14 +162,16 @@ impl<T, const N: usize> AsMut<[T]> for [T; N] {
 }
 
 #[stable(feature = "array_borrow", since = "1.4.0")]
-impl<T, const N: usize> Borrow<[T]> for [T; N] {
+#[rustc_const_unstable(feature = "const_borrow", issue = "91522")]
+impl<T, const N: usize> const Borrow<[T]> for [T; N] {
     fn borrow(&self) -> &[T] {
         self
     }
 }
 
 #[stable(feature = "array_borrow", since = "1.4.0")]
-impl<T, const N: usize> BorrowMut<[T]> for [T; N] {
+#[rustc_const_unstable(feature = "const_borrow", issue = "91522")]
+impl<T, const N: usize> const BorrowMut<[T]> for [T; N] {
     fn borrow_mut(&mut self) -> &mut [T] {
         self
     }
@@ -184,6 +186,18 @@ where
 
     fn try_from(slice: &[T]) -> Result<[T; N], TryFromSliceError> {
         <&Self>::try_from(slice).map(|r| *r)
+    }
+}
+
+#[stable(feature = "try_from_mut_slice_to_array", since = "1.59.0")]
+impl<T, const N: usize> TryFrom<&mut [T]> for [T; N]
+where
+    T: Copy,
+{
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &mut [T]) -> Result<[T; N], TryFromSliceError> {
+        <Self>::try_from(&*slice)
     }
 }
 

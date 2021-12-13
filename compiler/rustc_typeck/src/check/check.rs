@@ -730,7 +730,7 @@ pub fn check_item_type<'tcx>(tcx: TyCtxt<'tcx>, it: &'tcx hir::Item<'tcx>) {
                         let abi = sig.header.abi;
                         fn_maybe_err(tcx, item.ident.span, abi);
                     }
-                    hir::TraitItemKind::Type(.., Some(_default)) => {
+                    hir::TraitItemKind::Type(.., Some(default)) => {
                         let assoc_item = tcx.associated_item(item.def_id);
                         let trait_substs =
                             InternalSubsts::identity_for_item(tcx, it.def_id.to_def_id());
@@ -738,7 +738,7 @@ pub fn check_item_type<'tcx>(tcx: TyCtxt<'tcx>, it: &'tcx hir::Item<'tcx>) {
                             tcx,
                             assoc_item,
                             assoc_item,
-                            item.span,
+                            default.span,
                             ty::TraitRef { def_id: it.def_id.to_def_id(), substs: trait_substs },
                         );
                     }
@@ -987,12 +987,12 @@ pub(super) fn check_impl_items_against_trait<'tcx>(
                         opt_trait_span,
                     );
                 }
-                hir::ImplItemKind::TyAlias(_) => {
+                hir::ImplItemKind::TyAlias(impl_ty) => {
                     let opt_trait_span = tcx.hir().span_if_local(ty_trait_item.def_id);
                     compare_ty_impl(
                         tcx,
                         &ty_impl_item,
-                        impl_item.span,
+                        impl_ty.span,
                         &ty_trait_item,
                         impl_trait_ref,
                         opt_trait_span,
@@ -1506,17 +1506,11 @@ pub(super) fn check_mod_item_types(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
     tcx.hir().visit_item_likes_in_module(module_def_id, &mut CheckItemTypesVisitor { tcx });
 }
 
-pub(super) fn check_item_well_formed(tcx: TyCtxt<'_>, def_id: LocalDefId) {
-    wfcheck::check_item_well_formed(tcx, def_id);
-}
+pub(super) use wfcheck::check_item_well_formed;
 
-pub(super) fn check_trait_item_well_formed(tcx: TyCtxt<'_>, def_id: LocalDefId) {
-    wfcheck::check_trait_item(tcx, def_id);
-}
+pub(super) use wfcheck::check_trait_item as check_trait_item_well_formed;
 
-pub(super) fn check_impl_item_well_formed(tcx: TyCtxt<'_>, def_id: LocalDefId) {
-    wfcheck::check_impl_item(tcx, def_id);
-}
+pub(super) use wfcheck::check_impl_item as check_impl_item_well_formed;
 
 fn async_opaque_type_cycle_error(tcx: TyCtxt<'tcx>, span: Span) {
     struct_span_err!(tcx.sess, span, E0733, "recursion in an `async fn` requires boxing")
