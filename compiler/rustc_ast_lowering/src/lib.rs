@@ -32,7 +32,6 @@
 
 #![feature(crate_visibility_modifier)]
 #![feature(box_patterns)]
-#![feature(iter_zip)]
 #![feature(never_type)]
 #![recursion_limit = "256"]
 
@@ -53,7 +52,7 @@ use rustc_hir::def::{DefKind, Namespace, PartialRes, PerNS, Res};
 use rustc_hir::def_id::{DefId, DefPathHash, LocalDefId, CRATE_DEF_ID};
 use rustc_hir::definitions::{DefKey, DefPathData, Definitions};
 use rustc_hir::intravisit;
-use rustc_hir::{ConstArg, GenericArg, InferKind, ParamName};
+use rustc_hir::{ConstArg, GenericArg, ParamName};
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_query_system::ich::StableHashingContext;
 use rustc_session::lint::builtin::BARE_TRAIT_OBJECTS;
@@ -1114,7 +1113,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         return GenericArg::Infer(hir::InferArg {
                             hir_id: self.lower_node_id(ty.id),
                             span: self.lower_span(ty.span),
-                            kind: InferKind::Type,
                         });
                     }
                     // We parse const arguments as path types as we cannot distinguish them during
@@ -2127,21 +2125,21 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
     fn pat_cf_continue(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
         let field = self.single_pat_field(span, pat);
-        self.pat_lang_item_variant(span, hir::LangItem::ControlFlowContinue, field)
+        self.pat_lang_item_variant(span, hir::LangItem::ControlFlowContinue, field, None)
     }
 
     fn pat_cf_break(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
         let field = self.single_pat_field(span, pat);
-        self.pat_lang_item_variant(span, hir::LangItem::ControlFlowBreak, field)
+        self.pat_lang_item_variant(span, hir::LangItem::ControlFlowBreak, field, None)
     }
 
     fn pat_some(&mut self, span: Span, pat: &'hir hir::Pat<'hir>) -> &'hir hir::Pat<'hir> {
         let field = self.single_pat_field(span, pat);
-        self.pat_lang_item_variant(span, hir::LangItem::OptionSome, field)
+        self.pat_lang_item_variant(span, hir::LangItem::OptionSome, field, None)
     }
 
     fn pat_none(&mut self, span: Span) -> &'hir hir::Pat<'hir> {
-        self.pat_lang_item_variant(span, hir::LangItem::OptionNone, &[])
+        self.pat_lang_item_variant(span, hir::LangItem::OptionNone, &[], None)
     }
 
     fn single_pat_field(
@@ -2164,8 +2162,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         span: Span,
         lang_item: hir::LangItem,
         fields: &'hir [hir::PatField<'hir>],
+        hir_id: Option<hir::HirId>,
     ) -> &'hir hir::Pat<'hir> {
-        let qpath = hir::QPath::LangItem(lang_item, self.lower_span(span));
+        let qpath = hir::QPath::LangItem(lang_item, self.lower_span(span), hir_id);
         self.pat(span, hir::PatKind::Struct(qpath, fields, false))
     }
 

@@ -21,10 +21,10 @@ use rustc_hir::Item;
 use rustc_hir::Node;
 use rustc_middle::thir::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::ExpectedFound;
+use rustc_middle::ty::fast_reject::{self, SimplifyParams, StripReferences};
 use rustc_middle::ty::fold::TypeFolder;
 use rustc_middle::ty::{
-    self, fast_reject, AdtKind, SubtypePredicate, ToPolyTraitRef, ToPredicate, Ty, TyCtxt,
-    TypeFoldable,
+    self, AdtKind, SubtypePredicate, ToPolyTraitRef, ToPredicate, Ty, TyCtxt, TypeFoldable,
 };
 use rustc_session::DiagnosticMessageId;
 use rustc_span::symbol::{kw, sym};
@@ -439,6 +439,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                         self.suggest_remove_reference(&obligation, &mut err, trait_ref);
                         self.suggest_semicolon_removal(&obligation, &mut err, span, trait_ref);
                         self.note_version_mismatch(&mut err, &trait_ref);
+                        self.suggest_remove_await(&obligation, &mut err);
 
                         if Some(trait_ref.def_id()) == tcx.lang_items().try_trait() {
                             self.suggest_await_before_try(&mut err, &obligation, trait_ref, span);
@@ -1062,7 +1063,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
     }
 }
 
-trait InferCtxtPrivExt<'tcx> {
+trait InferCtxtPrivExt<'hir, 'tcx> {
     // returns if `cond` not occurring implies that `error` does not occur - i.e., that
     // `error` occurring implies that `cond` occurs.
     fn error_implies(&self, cond: ty::Predicate<'tcx>, error: ty::Predicate<'tcx>) -> bool;
@@ -1173,7 +1174,7 @@ trait InferCtxtPrivExt<'tcx> {
     ) -> bool;
 }
 
-impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
+impl<'a, 'tcx> InferCtxtPrivExt<'a, 'tcx> for InferCtxt<'a, 'tcx> {
     // returns if `cond` not occurring implies that `error` does not occur - i.e., that
     // `error` occurring implies that `cond` occurs.
     fn error_implies(&self, cond: ty::Predicate<'tcx>, error: ty::Predicate<'tcx>) -> bool {
@@ -1439,14 +1440,32 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
         &self,
         trait_ref: ty::PolyTraitRef<'tcx>,
     ) -> Vec<ty::TraitRef<'tcx>> {
-        let simp = fast_reject::simplify_type(self.tcx, trait_ref.skip_binder().self_ty(), true);
+        // We simplify params and strip references here.
+        //
+        // This both removes a lot of unhelpful suggestions, e.g.
+        // when searching for `&Foo: Trait` it doesn't suggestion `impl Trait for &Bar`,
+        // while also suggesting impls for `&Foo` when we're looking for `Foo: Trait`.
+        //
+        // The second thing isn't necessarily always a good thing, but
+        // any other simple setup results in a far worse output, so 🤷
+        let simp = fast_reject::simplify_type(
+            self.tcx,
+            trait_ref.skip_binder().self_ty(),
+            SimplifyParams::Yes,
+            StripReferences::Yes,
+        );
         let all_impls = self.tcx.all_impls(trait_ref.def_id());
 
         match simp {
             Some(simp) => all_impls
                 .filter_map(|def_id| {
                     let imp = self.tcx.impl_trait_ref(def_id).unwrap();
-                    let imp_simp = fast_reject::simplify_type(self.tcx, imp.self_ty(), true);
+                    let imp_simp = fast_reject::simplify_type(
+                        self.tcx,
+                        imp.self_ty(),
+                        SimplifyParams::Yes,
+                        StripReferences::Yes,
+                    );
                     if let Some(imp_simp) = imp_simp {
                         if simp != imp_simp {
                             return None;
@@ -2023,7 +2042,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
         self.maybe_suggest_unsized_generics(err, span, node);
     }
 
-    fn maybe_suggest_unsized_generics(
+    fn maybe_suggest_unsized_generics<'hir>(
         &self,
         err: &mut DiagnosticBuilder<'tcx>,
         span: Span,
@@ -2090,7 +2109,7 @@ impl<'a, 'tcx> InferCtxtPrivExt<'tcx> for InferCtxt<'a, 'tcx> {
         );
     }
 
-    fn maybe_indirection_for_unsized(
+    fn maybe_indirection_for_unsized<'hir>(
         &self,
         err: &mut DiagnosticBuilder<'tcx>,
         item: &'hir Item<'hir>,
@@ -2204,7 +2223,7 @@ impl<'v> Visitor<'v> for FindTypeParam {
 }
 
 pub fn recursive_type_with_infinite_size_error(
-    tcx: TyCtxt<'tcx>,
+    tcx: TyCtxt<'_>,
     type_def_id: DefId,
     spans: Vec<Span>,
 ) {

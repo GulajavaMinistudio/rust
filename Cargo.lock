@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "cargo"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "anyhow",
  "atty",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-util"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -680,9 +680,9 @@ dependencies = [
 
 [[package]]
 name = "compiler_builtins"
-version = "0.1.55"
+version = "0.1.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9ac60765140c97aaf531dae151a287646b0805ec725805da9e2a3ee31cd501c"
+checksum = "191424db7756bbed2c4996959a0fbda94388abcf4f5a2728a8af17481ad9c4f7"
 dependencies = [
  "cc",
  "rustc-std-workspace-core",
@@ -768,7 +768,7 @@ checksum = "8aebca1129a03dc6dc2b127edd729435bbc4a37e1d5f4d7513165089ceb02634"
 
 [[package]]
 name = "crates-io"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "anyhow",
  "curl",
