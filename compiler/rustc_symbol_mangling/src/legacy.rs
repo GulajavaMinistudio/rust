@@ -255,7 +255,7 @@ impl<'tcx> Printer<'tcx> for &mut SymbolPrinter<'tcx> {
     }
 
     fn path_crate(self, cnum: CrateNum) -> Result<Self::Path, Self::Error> {
-        self.write_str(&self.tcx.crate_name(cnum).as_str())?;
+        self.write_str(self.tcx.crate_name(cnum).as_str())?;
         Ok(self)
     }
     fn path_qualified(
@@ -311,8 +311,8 @@ impl<'tcx> Printer<'tcx> for &mut SymbolPrinter<'tcx> {
     ) -> Result<Self::Path, Self::Error> {
         self = print_prefix(self)?;
 
-        // Skip `::{{constructor}}` on tuple/unit structs.
-        if let DefPathData::Ctor = disambiguated_data.data {
+        // Skip `::{{extern}}` blocks and `::{{constructor}}` on tuple/unit structs.
+        if let DefPathData::ForeignMod | DefPathData::Ctor = disambiguated_data.data {
             return Ok(self);
         }
 

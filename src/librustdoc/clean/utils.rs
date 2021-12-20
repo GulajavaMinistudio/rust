@@ -72,7 +72,7 @@ crate fn krate(cx: &mut DocContext<'_>) -> Crate {
         }));
     }
 
-    Crate { module, primitives, external_traits: cx.external_traits.clone(), collapsed: false }
+    Crate { module, primitives, external_traits: cx.external_traits.clone() }
 }
 
 fn external_generic_args(
@@ -162,7 +162,7 @@ crate fn qpath_to_string(p: &hir::QPath<'_>) -> String {
             s.push_str("::");
         }
         if seg.ident.name != kw::PathRoot {
-            s.push_str(&seg.ident.as_str());
+            s.push_str(seg.ident.as_str());
         }
     }
     s

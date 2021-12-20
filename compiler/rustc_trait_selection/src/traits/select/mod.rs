@@ -25,9 +25,10 @@ use super::{ObligationCause, PredicateObligation, TraitObligation};
 
 use crate::infer::{InferCtxt, InferOk, TypeFreshener};
 use crate::traits::error_reporting::InferCtxtExt;
+use crate::traits::project::ProjectionCacheKeyExt;
+use crate::traits::ProjectionCacheKey;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
-use rustc_data_structures::sync::Lrc;
 use rustc_errors::ErrorReported;
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
@@ -550,8 +551,54 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     let project_obligation = obligation.with(data);
                     match project::poly_project_and_unify_type(self, &project_obligation) {
                         Ok(Ok(Some(mut subobligations))) => {
-                            self.add_depth(subobligations.iter_mut(), obligation.recursion_depth);
-                            self.evaluate_predicates_recursively(previous_stack, subobligations)
+                            'compute_res: {
+                                // If we've previously marked this projection as 'complete', thne
+                                // use the final cached result (either `EvaluatedToOk` or
+                                // `EvaluatedToOkModuloRegions`), and skip re-evaluating the
+                                // sub-obligations.
+                                if let Some(key) =
+                                    ProjectionCacheKey::from_poly_projection_predicate(self, data)
+                                {
+                                    if let Some(cached_res) = self
+                                        .infcx
+                                        .inner
+                                        .borrow_mut()
+                                        .projection_cache()
+                                        .is_complete(key)
+                                    {
+                                        break 'compute_res Ok(cached_res);
+                                    }
+                                }
+
+                                self.add_depth(
+                                    subobligations.iter_mut(),
+                                    obligation.recursion_depth,
+                                );
+                                let res = self.evaluate_predicates_recursively(
+                                    previous_stack,
+                                    subobligations,
+                                );
+                                if let Ok(res) = res {
+                                    if res == EvaluatedToOk || res == EvaluatedToOkModuloRegions {
+                                        if let Some(key) =
+                                            ProjectionCacheKey::from_poly_projection_predicate(
+                                                self, data,
+                                            )
+                                        {
+                                            // If the result is something that we can cache, then mark this
+                                            // entry as 'complete'. This will allow us to skip evaluating the
+                                            // suboligations at all the next time we evaluate the projection
+                                            // predicate.
+                                            self.infcx
+                                                .inner
+                                                .borrow_mut()
+                                                .projection_cache()
+                                                .complete(key, res);
+                                        }
+                                    }
+                                }
+                                res
+                            }
                         }
                         Ok(Ok(None)) => Ok(EvaluatedToAmbig),
                         Ok(Err(project::InProgress)) => Ok(EvaluatedToRecur),
@@ -2336,7 +2383,7 @@ impl<'tcx> TraitObligationExt<'tcx> for TraitObligation<'tcx> {
         // by using -Z verbose or just a CLI argument.
         let derived_cause = DerivedObligationCause {
             parent_trait_ref: obligation.predicate.to_poly_trait_ref(),
-            parent_code: Lrc::new(obligation.cause.code.clone()),
+            parent_code: obligation.cause.clone_code(),
         };
         let derived_code = variant(derived_cause);
         ObligationCause::new(obligation.cause.span, obligation.cause.body_id, derived_code)
