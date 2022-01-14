@@ -386,16 +386,6 @@ rustc_queries! {
         storage(ArenaCacheSelector<'tcx>)
     }
 
-    /// Returns the name of the file that contains the function body, if instrumented for coverage.
-    query covered_file_name(key: DefId) -> Option<Symbol> {
-        desc {
-            |tcx| "retrieving the covered file name, if instrumented, for `{}`",
-            tcx.def_path_str(key)
-        }
-        storage(ArenaCacheSelector<'tcx>)
-        cache_on_disk_if { key.is_local() }
-    }
-
     /// Returns the `CodeRegions` for a function that has instrumented coverage, in case the
     /// function was optimized out before codegen, and before being added to the Coverage Map.
     query covered_code_regions(key: DefId) -> Vec<&'tcx mir::coverage::CodeRegion> {
@@ -1569,8 +1559,7 @@ rustc_queries! {
         desc { "calculating the missing lang items in a crate" }
         separate_provide_extern
     }
-    query visible_parent_map(_: ()) -> DefIdMap<DefId> {
-        storage(ArenaCacheSelector<'tcx>)
+    query visible_parent_map(_: ()) -> Lrc<DefIdMap<DefId>> {
         desc { "calculating the visible parent map" }
     }
     query trimmed_def_paths(_: ()) -> FxHashMap<DefId, Symbol> {

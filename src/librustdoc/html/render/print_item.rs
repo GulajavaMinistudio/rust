@@ -32,7 +32,7 @@ use crate::html::highlight;
 use crate::html::layout::Page;
 use crate::html::markdown::{HeadingOffset, MarkdownSummaryLine};
 
-use serde::Serialize;
+use askama::Template;
 
 const ITEM_TABLE_OPEN: &str = "<div class=\"item-table\">";
 const ITEM_TABLE_CLOSE: &str = "</div>";
@@ -40,13 +40,13 @@ const ITEM_TABLE_ROW_OPEN: &str = "<div class=\"item-row\">";
 const ITEM_TABLE_ROW_CLOSE: &str = "</div>";
 
 // A component in a `use` path, like `string` in std::string::ToString
-#[derive(Serialize)]
 struct PathComponent<'a> {
     path: String,
     name: &'a str,
 }
 
-#[derive(Serialize)]
+#[derive(Template)]
+#[template(path = "print_item.html")]
 struct ItemVars<'a> {
     page: &'a Page<'a>,
     static_root_path: &'a str,
@@ -58,13 +58,7 @@ struct ItemVars<'a> {
     src_href: Option<&'a str>,
 }
 
-pub(super) fn print_item(
-    cx: &Context<'_>,
-    templates: &tera::Tera,
-    item: &clean::Item,
-    buf: &mut Buffer,
-    page: &Page<'_>,
-) {
+pub(super) fn print_item(cx: &Context<'_>, item: &clean::Item, buf: &mut Buffer, page: &Page<'_>) {
     debug_assert!(!item.is_stripped());
     let typ = match *item.kind {
         clean::ModuleItem(_) => {
@@ -143,8 +137,7 @@ pub(super) fn print_item(
         src_href: src_href.as_deref(),
     };
 
-    let teractx = tera::Context::from_serialize(item_vars).unwrap();
-    let heading = templates.render("print_item.html", &teractx).unwrap();
+    let heading = item_vars.render().unwrap();
     buf.write_str(&heading);
 
     match *item.kind {
@@ -1133,18 +1126,27 @@ fn item_enum(w: &mut Buffer, cx: &Context<'_>, it: &clean::Item, e: &clean::Enum
             w.write_str("</h3>");
 
             use crate::clean::Variant;
-            if let Some((extra, fields)) = match *variant.kind {
-                clean::VariantItem(Variant::Struct(ref s)) => Some(("", &s.fields)),
-                clean::VariantItem(Variant::Tuple(ref fields)) => Some(("Tuple ", fields)),
+
+            let heading_and_fields = match &*variant.kind {
+                clean::VariantItem(Variant::Struct(s)) => Some(("Fields", &s.fields)),
+                // Documentation on tuple variant fields is rare, so to reduce noise we only emit
+                // the section if at least one field is documented.
+                clean::VariantItem(Variant::Tuple(fields))
+                    if fields.iter().any(|f| f.doc_value().is_some()) =>
+                {
+                    Some(("Tuple Fields", fields))
+                }
                 _ => None,
-            } {
+            };
+
+            if let Some((heading, fields)) = heading_and_fields {
                 let variant_id = cx.derive_id(format!(
                     "{}.{}.fields",
                     ItemType::Variant,
                     variant.name.as_ref().unwrap()
                 ));
                 write!(w, "<div class=\"sub-variant\" id=\"{id}\">", id = variant_id);
-                write!(w, "<h4>{extra}Fields</h4>", extra = extra,);
+                write!(w, "<h4>{heading}</h4>", heading = heading);
                 document_non_exhaustive(w, variant);
                 for field in fields {
                     match *field.kind {
