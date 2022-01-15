@@ -69,8 +69,9 @@ use crate::formats::item_type::ItemType;
 use crate::formats::{AssocItemRender, Impl, RenderMode};
 use crate::html::escape::Escape;
 use crate::html::format::{
-    href, print_abi_with_space, print_constness_with_space, print_default_space,
-    print_generic_bounds, print_where_clause, Buffer, HrefError, PrintWithSpace,
+    href, join_with_double_colon, print_abi_with_space, print_constness_with_space,
+    print_default_space, print_generic_bounds, print_where_clause, Buffer, HrefError,
+    PrintWithSpace,
 };
 use crate::html::highlight;
 use crate::html::markdown::{HeadingOffset, Markdown, MarkdownHtml, MarkdownSummaryLine};
@@ -1190,11 +1191,9 @@ fn render_deref_methods(
             }
         }
         render_assoc_items_inner(w, cx, container_item, did, what, derefs);
-    } else {
-        if let Some(prim) = target.primitive_type() {
-            if let Some(&did) = cache.primitive_locations.get(&prim) {
-                render_assoc_items_inner(w, cx, container_item, did, what, derefs);
-            }
+    } else if let Some(prim) = target.primitive_type() {
+        if let Some(&did) = cache.primitive_locations.get(&prim) {
+            render_assoc_items_inner(w, cx, container_item, did, what, derefs);
         }
     }
 }
@@ -2515,7 +2514,7 @@ fn collect_paths_for_type(first_ty: clean::Type, cache: &Cache) -> Vec<String> {
         let fqp = cache.exact_paths.get(&did).cloned().or_else(get_extern);
 
         if let Some(path) = fqp {
-            out.push(path.join("::"));
+            out.push(join_with_double_colon(&path));
         }
     };
 
