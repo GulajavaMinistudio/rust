@@ -388,7 +388,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     if self.is_object && has_default {
                         let default_ty = tcx.at(self.span).type_of(param.def_id);
                         let self_param = tcx.types.self_param;
-                        if default_ty.walk(tcx).any(|arg| arg == self_param.into()) {
+                        if default_ty.walk().any(|arg| arg == self_param.into()) {
                             // There is no suitable inference default for a type parameter
                             // that references self, in an object type.
                             return true;
@@ -669,6 +669,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             trait_ref.trait_def_id().unwrap_or_else(|| FatalError.raise()),
             self_ty,
             trait_ref.path.segments.last().unwrap(),
+            true,
         )
     }
 
@@ -765,7 +766,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let infer_args = trait_segment.infer_args;
 
         self.prohibit_generics(trait_ref.path.segments.split_last().unwrap().1);
-        self.complain_about_internal_fn_trait(span, trait_def_id, trait_segment);
+        self.complain_about_internal_fn_trait(span, trait_def_id, trait_segment, false);
 
         self.instantiate_poly_trait_ref_inner(
             hir_id,
@@ -822,9 +823,15 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         trait_def_id: DefId,
         self_ty: Ty<'tcx>,
         trait_segment: &hir::PathSegment<'_>,
+        is_impl: bool,
     ) -> ty::TraitRef<'tcx> {
-        let (substs, _) =
-            self.create_substs_for_ast_trait_ref(span, trait_def_id, self_ty, trait_segment);
+        let (substs, _) = self.create_substs_for_ast_trait_ref(
+            span,
+            trait_def_id,
+            self_ty,
+            trait_segment,
+            is_impl,
+        );
         let assoc_bindings = self.create_assoc_bindings_for_generic_args(trait_segment.args());
         if let Some(b) = assoc_bindings.first() {
             Self::prohibit_assoc_ty_binding(self.tcx(), b.span);
@@ -839,8 +846,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         trait_def_id: DefId,
         self_ty: Ty<'tcx>,
         trait_segment: &'a hir::PathSegment<'a>,
+        is_impl: bool,
     ) -> (SubstsRef<'tcx>, GenericArgCountResult) {
-        self.complain_about_internal_fn_trait(span, trait_def_id, trait_segment);
+        self.complain_about_internal_fn_trait(span, trait_def_id, trait_segment, is_impl);
 
         self.create_substs_for_ast_path(
             span,
@@ -1370,7 +1378,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         // A `Self` within the original bound will be substituted with a
                         // `trait_object_dummy_self`, so check for that.
                         let references_self =
-                            pred.skip_binder().ty.walk(tcx).any(|arg| arg == dummy_self.into());
+                            pred.skip_binder().ty.walk().any(|arg| arg == dummy_self.into());
 
                         // If the projection output contains `Self`, force the user to
                         // elaborate it explicitly to avoid a lot of complexity.
@@ -1906,7 +1914,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 .and_then(|def_id| {
                     def_id.as_local().map(|def_id| tcx.hir().local_def_id_to_hir_id(def_id))
                 })
-                .map(|hir_id| tcx.hir().get_parent_did(hir_id).to_def_id());
+                .map(|hir_id| tcx.hir().get_parent_item(hir_id).to_def_id());
 
             debug!("qpath_to_ty: parent_def_id={:?}", parent_def_id);
 
@@ -1932,7 +1940,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         debug!("qpath_to_ty: self_type={:?}", self_ty);
 
-        let trait_ref = self.ast_path_to_mono_trait_ref(span, trait_def_id, self_ty, trait_segment);
+        let trait_ref =
+            self.ast_path_to_mono_trait_ref(span, trait_def_id, self_ty, trait_segment, false);
 
         let item_substs = self.create_substs_for_associated_item(
             tcx,
@@ -2216,7 +2225,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 self.prohibit_generics(path.segments);
                 // Try to evaluate any array length constants.
                 let normalized_ty = self.normalize_ty(span, tcx.at(span).type_of(def_id));
-                if forbid_generic && normalized_ty.definitely_needs_subst(tcx) {
+                if forbid_generic && normalized_ty.needs_subst() {
                     let mut err = tcx.sess.struct_span_err(
                         path.span,
                         "generic `Self` types are currently not permitted in anonymous constants",

@@ -42,9 +42,7 @@ impl<'tcx> Const<'tcx> {
     ) -> &'tcx Self {
         debug!("Const::from_anon_const(def={:?})", def);
 
-        let hir_id = tcx.hir().local_def_id_to_hir_id(def.did);
-
-        let body_id = match tcx.hir().get(hir_id) {
+        let body_id = match tcx.hir().get_by_def_id(def.did) {
             hir::Node::AnonConst(ac) => ac.body,
             _ => span_bug!(
                 tcx.def_span(def.did.to_def_id()),
@@ -61,7 +59,7 @@ impl<'tcx> Const<'tcx> {
             None => tcx.mk_const(ty::Const {
                 val: ty::ConstKind::Unevaluated(ty::Unevaluated {
                     def: def.to_global(),
-                    substs_: None,
+                    substs: InternalSubsts::identity_for_item(tcx, def.did.to_def_id()),
                     promoted: None,
                 }),
                 ty,
@@ -153,14 +151,14 @@ impl<'tcx> Const<'tcx> {
                 tcx.mk_const(ty::Const {
                     val: ty::ConstKind::Unevaluated(ty::Unevaluated {
                         def: ty::WithOptConstParam::unknown(def_id).to_global(),
-                        substs_: Some(substs),
+                        substs,
                         promoted: None,
                     }),
                     ty,
                 })
             }
         };
-        debug_assert!(!ret.has_free_regions(tcx));
+        debug_assert!(!ret.has_free_regions());
         ret
     }
 
@@ -260,8 +258,7 @@ impl<'tcx> Const<'tcx> {
 }
 
 pub fn const_param_default<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> &'tcx Const<'tcx> {
-    let hir_id = tcx.hir().local_def_id_to_hir_id(def_id.expect_local());
-    let default_def_id = match tcx.hir().get(hir_id) {
+    let default_def_id = match tcx.hir().get_by_def_id(def_id.expect_local()) {
         hir::Node::GenericParam(hir::GenericParam {
             kind: hir::GenericParamKind::Const { ty: _, default: Some(ac) },
             ..

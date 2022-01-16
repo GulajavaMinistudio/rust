@@ -342,7 +342,7 @@ fn inner_mir_for_ctfe(tcx: TyCtxt<'_>, def: ty::WithOptConstParam<LocalDefId>) -
         }
     }
 
-    debug_assert!(!body.has_free_regions(tcx), "Free regions in MIR for CTFE");
+    debug_assert!(!body.has_free_regions(), "Free regions in MIR for CTFE");
 
     body
 }
@@ -366,8 +366,7 @@ fn mir_drops_elaborated_and_const_checked<'tcx>(
         tcx.ensure().mir_borrowck(def.did);
     }
 
-    let hir_id = tcx.hir().local_def_id_to_hir_id(def.did);
-    let is_fn_like = tcx.hir().get(hir_id).fn_kind().is_some();
+    let is_fn_like = tcx.hir().get_by_def_id(def.did).fn_kind().is_some();
     if is_fn_like {
         let did = def.did.to_def_id();
         let def = ty::WithOptConstParam::unknown(did);
@@ -530,7 +529,7 @@ fn inner_optimized_mir(tcx: TyCtxt<'_>, did: LocalDefId) -> Body<'_> {
         tcx.mir_drops_elaborated_and_const_checked(ty::WithOptConstParam::unknown(did)).steal();
     run_optimization_passes(tcx, &mut body);
 
-    debug_assert!(!body.has_free_regions(tcx), "Free regions in optimized MIR");
+    debug_assert!(!body.has_free_regions(), "Free regions in optimized MIR");
 
     body
 }
@@ -557,7 +556,7 @@ fn promoted_mir<'tcx>(
         run_post_borrowck_cleanup_passes(tcx, body);
     }
 
-    debug_assert!(!promoted.has_free_regions(tcx), "Free regions in promoted MIR");
+    debug_assert!(!promoted.has_free_regions(), "Free regions in promoted MIR");
 
     tcx.arena.alloc(promoted)
 }
