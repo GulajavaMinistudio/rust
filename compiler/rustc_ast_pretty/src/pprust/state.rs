@@ -103,7 +103,7 @@ pub fn print_crate<'a>(
     edition: Edition,
 ) -> String {
     let mut s =
-        State { s: pp::mk_printer(), comments: Some(Comments::new(sm, filename, input)), ann };
+        State { s: pp::Printer::new(), comments: Some(Comments::new(sm, filename, input)), ann };
 
     if is_expanded && !krate.attrs.iter().any(|attr| attr.has_name(sym::no_core)) {
         // We need to print `#![no_std]` (and its feature gate) so that
@@ -910,7 +910,7 @@ impl<'a> PrintState<'a> for State<'a> {
 
 impl<'a> State<'a> {
     pub fn new() -> State<'a> {
-        State { s: pp::mk_printer(), comments: None, ann: &NoAnn }
+        State { s: pp::Printer::new(), comments: None, ann: &NoAnn }
     }
 
     crate fn commasep_cmnt<T, F, G>(&mut self, b: Breaks, elts: &[T], mut op: F, mut get_span: G)
@@ -1357,9 +1357,7 @@ impl<'a> State<'a> {
                 self.bclose(item.span, empty);
             }
             ast::ItemKind::TraitAlias(ref generics, ref bounds) => {
-                self.head("");
-                self.print_visibility(&item.vis);
-                self.word_nbsp("trait");
+                self.head(visibility_qualified(&item.vis, "trait"));
                 self.print_ident(item.ident);
                 self.print_generic_params(&generics.params);
                 let mut real_bounds = Vec::with_capacity(bounds.len());
@@ -1377,6 +1375,8 @@ impl<'a> State<'a> {
                 self.print_type_bounds("=", &real_bounds);
                 self.print_where_clause(&generics.where_clause);
                 self.word(";");
+                self.end(); // end inner head-block
+                self.end(); // end outer head-block
             }
             ast::ItemKind::MacCall(ref mac) => {
                 self.print_mac(mac);
@@ -2167,62 +2167,6 @@ impl<'a> State<'a> {
             ast::ExprKind::InlineAsm(ref a) => {
                 self.word("asm!");
                 self.print_inline_asm(a);
-            }
-            ast::ExprKind::LlvmInlineAsm(ref a) => {
-                self.word("llvm_asm!");
-                self.popen();
-                self.print_symbol(a.asm, a.asm_str_style);
-                self.word_space(":");
-
-                self.commasep(Inconsistent, &a.outputs, |s, out| {
-                    let constraint = out.constraint.as_str();
-                    let mut ch = constraint.chars();
-                    match ch.next() {
-                        Some('=') if out.is_rw => {
-                            s.print_string(&format!("+{}", ch.as_str()), ast::StrStyle::Cooked)
-                        }
-                        _ => s.print_string(&constraint, ast::StrStyle::Cooked),
-                    }
-                    s.popen();
-                    s.print_expr(&out.expr);
-                    s.pclose();
-                });
-                self.space();
-                self.word_space(":");
-
-                self.commasep(Inconsistent, &a.inputs, |s, &(co, ref o)| {
-                    s.print_symbol(co, ast::StrStyle::Cooked);
-                    s.popen();
-                    s.print_expr(o);
-                    s.pclose();
-                });
-                self.space();
-                self.word_space(":");
-
-                self.commasep(Inconsistent, &a.clobbers, |s, &co| {
-                    s.print_symbol(co, ast::StrStyle::Cooked);
-                });
-
-                let mut options = vec![];
-                if a.volatile {
-                    options.push("volatile");
-                }
-                if a.alignstack {
-                    options.push("alignstack");
-                }
-                if a.dialect == ast::LlvmAsmDialect::Intel {
-                    options.push("intel");
-                }
-
-                if !options.is_empty() {
-                    self.space();
-                    self.word_space(":");
-                    self.commasep(Inconsistent, &options, |s, &co| {
-                        s.print_string(co, ast::StrStyle::Cooked);
-                    });
-                }
-
-                self.pclose();
             }
             ast::ExprKind::MacCall(ref m) => self.print_mac(m),
             ast::ExprKind::Paren(ref e) => {

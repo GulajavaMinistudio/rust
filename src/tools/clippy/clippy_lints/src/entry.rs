@@ -10,7 +10,7 @@ use core::fmt::Write;
 use rustc_errors::Applicability;
 use rustc_hir::{
     hir_id::HirIdSet,
-    intravisit::{walk_expr, ErasedMap, NestedVisitorMap, Visitor},
+    intravisit::{walk_expr, Visitor},
     Block, Expr, ExprKind, Guard, HirId, Pat, Stmt, StmtKind, UnOp,
 };
 use rustc_lint::{LateContext, LateLintPass};
@@ -370,11 +370,6 @@ impl<'tcx> InsertSearcher<'_, 'tcx> {
     }
 }
 impl<'tcx> Visitor<'tcx> for InsertSearcher<'_, 'tcx> {
-    type Map = ErasedMap<'tcx>;
-    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
-        NestedVisitorMap::None
-    }
-
     fn visit_stmt(&mut self, stmt: &'tcx Stmt<'_>) {
         match stmt.kind {
             StmtKind::Semi(e) => {
@@ -504,7 +499,7 @@ impl<'tcx> Visitor<'tcx> for InsertSearcher<'_, 'tcx> {
                     self.loops.pop();
                 },
                 ExprKind::Block(block, _) => self.visit_block(block),
-                ExprKind::InlineAsm(_) | ExprKind::LlvmInlineAsm(_) => {
+                ExprKind::InlineAsm(_) => {
                     self.can_use_entry = false;
                 },
                 _ => {
