@@ -637,6 +637,31 @@ fn missing_items_err(
     err.emit();
 }
 
+fn missing_items_must_implement_one_of_err(
+    tcx: TyCtxt<'_>,
+    impl_span: Span,
+    missing_items: &[Ident],
+    annotation_span: Option<Span>,
+) {
+    let missing_items_msg =
+        missing_items.iter().map(Ident::to_string).collect::<Vec<_>>().join("`, `");
+
+    let mut err = struct_span_err!(
+        tcx.sess,
+        impl_span,
+        E0046,
+        "not all trait items implemented, missing one of: `{}`",
+        missing_items_msg
+    );
+    err.span_label(impl_span, format!("missing one of `{}` in implementation", missing_items_msg));
+
+    if let Some(annotation_span) = annotation_span {
+        err.span_note(annotation_span, "required because of this annotation");
+    }
+
+    err.emit();
+}
+
 /// Resugar `ty::GenericPredicates` in a way suitable to be used in structured suggestions.
 fn bounds_from_generic_predicates<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -691,7 +716,11 @@ fn bounds_from_generic_predicates<'tcx>(
         // insert the associated types where they correspond, but for now let's be "lazy" and
         // propose this instead of the following valid resugaring:
         // `T: Trait, Trait::Assoc = K` → `T: Trait<Assoc = K>`
-        where_clauses.push(format!("{} = {}", tcx.def_path_str(p.projection_ty.item_def_id), p.ty));
+        where_clauses.push(format!(
+            "{} = {}",
+            tcx.def_path_str(p.projection_ty.item_def_id),
+            p.term,
+        ));
     }
     let where_clauses = if where_clauses.is_empty() {
         String::new()
