@@ -831,8 +831,9 @@ impl AttributesExt for [ast::Attribute] {
                 self.iter()
                     .filter(|attr| attr.has_name(sym::cfg))
                     .filter_map(|attr| single(attr.meta_item_list()?))
-                    .filter_map(|attr| Cfg::parse(attr.meta_item()?).ok())
-                    .filter(|cfg| !hidden_cfg.contains(cfg))
+                    .filter_map(|attr| {
+                        Cfg::parse_without(attr.meta_item()?, hidden_cfg).ok().flatten()
+                    })
                     .fold(Cfg::True, |cfg, new_cfg| cfg & new_cfg)
             } else {
                 Cfg::True
@@ -1040,9 +1041,9 @@ impl Attributes {
     ) -> Attributes {
         let mut doc_strings: Vec<DocFragment> = vec![];
         let clean_attr = |(attr, parent_module): (&ast::Attribute, Option<DefId>)| {
-            if let Some(value) = attr.doc_str() {
+            if let Some((value, kind)) = attr.doc_str_and_comment_kind() {
                 trace!("got doc_str={:?}", value);
-                let value = beautify_doc_string(value);
+                let value = beautify_doc_string(value, kind);
                 let kind = if attr.is_doc_comment() {
                     DocFragmentKind::SugaredDoc
                 } else {

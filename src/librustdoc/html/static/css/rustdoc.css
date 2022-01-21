@@ -148,11 +148,11 @@ h1.fqn {
 }
 .main-heading {
 	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	border-bottom: 1px dashed #DDDDDD;
+	padding-bottom: 6px;
 	margin-bottom: 15px;
-
-	/* workaround to keep flex from breaking below 700 px width due to the float: right on the nav
-	   above the h1 */
-	padding-left: 1px;
 }
 .main-heading a:hover {
 	text-decoration: underline;
@@ -623,11 +623,7 @@ nav.sub {
 
 .content .out-of-band {
 	flex-grow: 0;
-	text-align: right;
-	margin-left: auto;
-	margin-right: 0;
 	font-size: 1.15rem;
-	padding: 0 0 0 12px;
 	font-weight: normal;
 	float: right;
 }
@@ -1735,12 +1731,19 @@ details.rustdoc-toggle[open] > summary.hideme::after {
 }
 
 @media (max-width: 700px) {
+	/* When linking to an item with an `id` (for instance, by clicking a link in the sidebar,
+	   or visiting a URL with a fragment like `#method.new`, we don't want the item to be obscured
+	   by the topbar. Anything with an `id` gets scroll-margin-top equal to .mobile-topbar's size.
+	*/
+	*[id] {
+		scroll-margin-top: 45px;
+	}
+
 	.rustdoc {
 		padding-top: 0px;
 		/* Sidebar should overlay main content, rather than pushing main content to the right.
 		   Turn off `display: flex` on the body element. */
 		display: block;
-		scroll-margin-top: 45px;
 	}
 
 	main {
@@ -1748,8 +1751,23 @@ details.rustdoc-toggle[open] > summary.hideme::after {
 		padding-top: 0px;
 	}
 
-	.rustdoc {
+	.rustdoc,
+	.main-heading {
 		flex-direction: column;
+	}
+
+	.content .out-of-band {
+		text-align: left;
+		margin-left: initial;
+		padding: initial;
+	}
+
+	.content .out-of-band .since::before {
+		content: "Since ";
+	}
+
+	#copy-path {
+		display: none;
 	}
 
 	/* Hide the logo and item name from the sidebar. Those are displayed

@@ -1669,13 +1669,13 @@ pub enum ExprKind<'hir> {
     Call(&'hir Expr<'hir>, &'hir [Expr<'hir>]),
     /// A method call (e.g., `x.foo::<'static, Bar, Baz>(a, b, c, d)`).
     ///
-    /// The `PathSegment`/`Span` represent the method name and its generic arguments
+    /// The `PathSegment` represents the method name and its generic arguments
     /// (within the angle brackets).
-    /// The first element of the vector of `Expr`s is the expression that evaluates
+    /// The first element of the `&[Expr]` is the expression that evaluates
     /// to the object on which the method is being called on (the receiver),
     /// and the remaining elements are the rest of the arguments.
     /// Thus, `x.foo::<Bar, Baz>(a, b, c, d)` is represented as
-    /// `ExprKind::MethodCall(PathSegment { foo, [Bar, Baz] }, [x, a, b, c, d])`.
+    /// `ExprKind::MethodCall(PathSegment { foo, [Bar, Baz] }, [x, a, b, c, d], span)`.
     /// The final `Span` represents the span of the function and arguments
     /// (e.g. `foo::<Bar, Baz>(a, b, c, d)` in `x.foo::<Bar, Baz>(a, b, c, d)`
     ///
@@ -1683,7 +1683,7 @@ pub enum ExprKind<'hir> {
     /// the `hir_id` of the `MethodCall` node itself.
     ///
     /// [`type_dependent_def_id`]: ../ty/struct.TypeckResults.html#method.type_dependent_def_id
-    MethodCall(&'hir PathSegment<'hir>, Span, &'hir [Expr<'hir>], Span),
+    MethodCall(&'hir PathSegment<'hir>, &'hir [Expr<'hir>], Span),
     /// A tuple (e.g., `(a, b, c, d)`).
     Tup(&'hir [Expr<'hir>]),
     /// A binary operation (e.g., `a + b`, `a * b`).
@@ -2726,6 +2726,10 @@ pub struct FnHeader {
 }
 
 impl FnHeader {
+    pub fn is_async(&self) -> bool {
+        matches!(&self.asyncness, IsAsync::Async)
+    }
+
     pub fn is_const(&self) -> bool {
         matches!(&self.constness, Constness::Const)
     }
@@ -3169,7 +3173,7 @@ impl<'hir> Node<'hir> {
         }
     }
 
-    pub fn fn_decl(&self) -> Option<&FnDecl<'hir>> {
+    pub fn fn_decl(&self) -> Option<&'hir FnDecl<'hir>> {
         match self {
             Node::TraitItem(TraitItem { kind: TraitItemKind::Fn(fn_sig, _), .. })
             | Node::ImplItem(ImplItem { kind: ImplItemKind::Fn(fn_sig, _), .. })
@@ -3177,6 +3181,15 @@ impl<'hir> Node<'hir> {
             Node::ForeignItem(ForeignItem { kind: ForeignItemKind::Fn(fn_decl, _, _), .. }) => {
                 Some(fn_decl)
             }
+            _ => None,
+        }
+    }
+
+    pub fn fn_sig(&self) -> Option<&'hir FnSig<'hir>> {
+        match self {
+            Node::TraitItem(TraitItem { kind: TraitItemKind::Fn(fn_sig, _), .. })
+            | Node::ImplItem(ImplItem { kind: ImplItemKind::Fn(fn_sig, _), .. })
+            | Node::Item(Item { kind: ItemKind::Fn(fn_sig, _, _), .. }) => Some(fn_sig),
             _ => None,
         }
     }
@@ -3244,7 +3257,7 @@ impl<'hir> Node<'hir> {
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 mod size_asserts {
     rustc_data_structures::static_assert_size!(super::Block<'static>, 48);
-    rustc_data_structures::static_assert_size!(super::Expr<'static>, 64);
+    rustc_data_structures::static_assert_size!(super::Expr<'static>, 56);
     rustc_data_structures::static_assert_size!(super::Pat<'static>, 88);
     rustc_data_structures::static_assert_size!(super::QPath<'static>, 24);
     rustc_data_structures::static_assert_size!(super::Ty<'static>, 80);

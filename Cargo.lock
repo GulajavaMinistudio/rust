@@ -544,9 +544,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chalk-derive"
-version = "0.75.0"
+version = "0.76.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d54e3b5f9e3425e6b119ff07568d8d006bfa5a8d6f78a9cbc3530b1e962e316c"
+checksum = "58c24b8052ea1e3adbb6f9ab7ba5fcc18b9d12591c042de4c833f709ce81e0e0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -556,9 +556,9 @@ dependencies = [
 
 [[package]]
 name = "chalk-engine"
-version = "0.75.0"
+version = "0.76.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdc891073396b167163db77123b0a3c00088edc00466cecc5531f33e3e989523"
+checksum = "0eca186b6ea9af798312f4b568fd094c82e7946ac08be5dc5fea22decc6d2ed8"
 dependencies = [
  "chalk-derive",
  "chalk-ir",
@@ -569,9 +569,9 @@ dependencies = [
 
 [[package]]
 name = "chalk-ir"
-version = "0.75.0"
+version = "0.76.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b79e5a1d04b79311e90c69356a2c62027853906a7e33b3e070b93c055fc3e8a"
+checksum = "f3cad5c3f1edd4b4a2c9bda24ae558ceb4f88336f88f944c2e35d0bfeb13c818"
 dependencies = [
  "bitflags",
  "chalk-derive",
@@ -580,13 +580,14 @@ dependencies = [
 
 [[package]]
 name = "chalk-solve"
-version = "0.75.0"
+version = "0.76.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5d2a1db6605aba70a58820bd80ac422b218913a510f1a40beef9efc5371ea1d"
+checksum = "94533188d3452bc72cbd5618d166f45fc7646b674ad3fe9667d557bc25236dee"
 dependencies = [
  "chalk-derive",
  "chalk-ir",
  "ena",
+ "indexmap",
  "itertools 0.10.1",
  "petgraph",
  "rustc-hash",
@@ -1581,9 +1582,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.11.0"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "362385356d610bd1e5a408ddf8d022041774b683f345a1d2cfcb4f60f8ae2db5"
+checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
 dependencies = [
  "ahash",
  "compiler_builtins",
@@ -2404,23 +2405,12 @@ dependencies = [
 
 [[package]]
 name = "object"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67ac1d3f9a1d3616fd9a60c8d74296f22406a238b6a72f5cc1e6f314df4ffbf9"
-dependencies = [
- "crc32fast",
- "flate2",
- "indexmap",
- "memchr",
-]
-
-[[package]]
-name = "object"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ce8b38d41f9f3618fc23f908faae61510f8d8ce2d99cbe910641e8f1971f084"
 dependencies = [
  "crc32fast",
+ "flate2",
  "hashbrown",
  "indexmap",
  "memchr",
@@ -3439,7 +3429,7 @@ dependencies = [
 name = "rustc_ast_passes"
 version = "0.0.0"
 dependencies = [
- "itertools 0.9.0",
+ "itertools 0.10.1",
  "rustc_ast",
  "rustc_ast_pretty",
  "rustc_attr",
@@ -3482,7 +3472,7 @@ name = "rustc_borrowck"
 version = "0.0.0"
 dependencies = [
  "either",
- "itertools 0.9.0",
+ "itertools 0.10.1",
  "polonius-engine",
  "rustc_const_eval",
  "rustc_data_structures",
@@ -3563,7 +3553,7 @@ version = "0.0.0"
 dependencies = [
  "bitflags",
  "cc",
- "itertools 0.9.0",
+ "itertools 0.10.1",
  "jobserver",
  "libc",
  "object 0.28.1",
@@ -3771,7 +3761,7 @@ dependencies = [
 name = "rustc_incremental"
 version = "0.0.0"
 dependencies = [
- "rand 0.7.3",
+ "rand 0.8.4",
  "rustc_ast",
  "rustc_data_structures",
  "rustc_errors",
@@ -4047,7 +4037,7 @@ name = "rustc_mir_transform"
 version = "0.0.0"
 dependencies = [
  "coverage_test_macros",
- "itertools 0.9.0",
+ "itertools 0.10.1",
  "rustc_ast",
  "rustc_attr",
  "rustc_const_eval",
@@ -4413,6 +4403,7 @@ dependencies = [
  "rustc_attr",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_graphviz",
  "rustc_hir",
  "rustc_hir_pretty",
  "rustc_index",
@@ -4420,6 +4411,7 @@ dependencies = [
  "rustc_lint",
  "rustc_macros",
  "rustc_middle",
+ "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -5110,13 +5102,13 @@ dependencies = [
 
 [[package]]
 name = "thorin-dwp"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "039d1fc0bfdb73910c2702893515580e38c192f47a987bc98ddd38a36f2d953a"
+checksum = "dd95b4559c196987c8451b4e14d08a4c796c2844f9adf4d2a2dbc9b3142843be"
 dependencies = [
  "gimli 0.26.1",
- "indexmap",
- "object 0.27.1",
+ "hashbrown",
+ "object 0.28.1",
  "tracing",
 ]
 
