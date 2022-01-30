@@ -182,7 +182,7 @@ impl StylePath {
 
 fn write_srclink(cx: &Context<'_>, item: &clean::Item, buf: &mut Buffer) {
     if let Some(l) = cx.src_href(item) {
-        write!(buf, "<a class=\"srclink\" href=\"{}\" title=\"goto source code\">source</a>", l)
+        write!(buf, "<a class=\"srclink\" href=\"{}\">source</a>", l)
     }
 }
 
@@ -1676,11 +1676,12 @@ fn render_rightside(
         containing_item.stable_since(tcx),
         const_stable_since,
     );
-    if has_stability {
+    let mut tmp_buf = Buffer::empty_from(w);
+    write_srclink(cx, item, &mut tmp_buf);
+    if has_stability && !tmp_buf.is_empty() {
         w.write_str(" · ");
     }
-
-    write_srclink(cx, item, w);
+    w.push_buffer(tmp_buf);
     w.write_str("</div>");
 }
 
