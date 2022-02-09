@@ -297,6 +297,7 @@ impl<'a> Clean<Option<WherePredicate>> for ty::Predicate<'a> {
             | ty::PredicateKind::ObjectSafe(..)
             | ty::PredicateKind::ClosureKind(..)
             | ty::PredicateKind::ConstEquate(..)
+            | ty::PredicateKind::OpaqueType(..)
             | ty::PredicateKind::TypeWellFormedFromEnv(..) => panic!("not user writable"),
         }
     }
@@ -1014,7 +1015,8 @@ impl Clean<Item> for hir::ImplItem<'_> {
                     {
                         m.header.constness = hir::Constness::NotConst;
                     }
-                    MethodItem(m, Some(self.defaultness))
+                    let defaultness = cx.tcx.associated_item(self.def_id).defaultness;
+                    MethodItem(m, Some(defaultness))
                 }
                 hir::ImplItemKind::TyAlias(ref hir_ty) => {
                     let type_ = hir_ty.clean(cx);

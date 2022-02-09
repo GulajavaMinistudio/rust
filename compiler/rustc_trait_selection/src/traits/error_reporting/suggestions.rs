@@ -1328,6 +1328,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             ty::Generator(..) => "generator",
             _ => "function",
         };
+        let span = self.tcx.sess.source_map().guess_head_span(span);
         let mut err = struct_span_err!(
             self.tcx.sess,
             span,
@@ -1680,6 +1681,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             ));
 
             let original_span = err.span.primary_span().unwrap();
+            let original_span = self.tcx.sess.source_map().guess_head_span(original_span);
             let mut span = MultiSpan::from_span(original_span);
 
             let message = outer_generator
@@ -2471,7 +2473,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     // `T`
                     substs: self.tcx.mk_substs_trait(
                         trait_pred.self_ty().skip_binder(),
-                        self.fresh_substs_for_item(span, item_def_id),
+                        &self.fresh_substs_for_item(span, item_def_id)[1..],
                     ),
                     // `Future::Output`
                     item_def_id,
