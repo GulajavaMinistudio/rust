@@ -26,12 +26,10 @@ const GATED_CFGS: &[GatedCfg] = &[
     // (name in cfg, feature, function to check if the feature is enabled)
     (sym::target_abi, sym::cfg_target_abi, cfg_fn!(cfg_target_abi)),
     (sym::target_thread_local, sym::cfg_target_thread_local, cfg_fn!(cfg_target_thread_local)),
-    (sym::target_has_atomic, sym::cfg_target_has_atomic, cfg_fn!(cfg_target_has_atomic)),
-    (sym::target_has_atomic_load_store, sym::cfg_target_has_atomic, cfg_fn!(cfg_target_has_atomic)),
     (
         sym::target_has_atomic_equal_alignment,
-        sym::cfg_target_has_atomic,
-        cfg_fn!(cfg_target_has_atomic),
+        sym::cfg_target_has_atomic_equal_alignment,
+        cfg_fn!(cfg_target_has_atomic_equal_alignment),
     ),
     (sym::sanitize, sym::cfg_sanitize, cfg_fn!(cfg_sanitize)),
     (sym::version, sym::cfg_version, cfg_fn!(cfg_version)),
@@ -324,7 +322,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     ungated!(export_name, Normal, template!(NameValueStr: "name"), FutureWarnPreceding),
     ungated!(link_section, Normal, template!(NameValueStr: "name"), FutureWarnPreceding),
     ungated!(no_mangle, Normal, template!(Word), WarnFollowing),
-    ungated!(used, Normal, template!(Word), WarnFollowing),
+    ungated!(used, Normal, template!(Word, List: "compiler|linker"), WarnFollowing),
 
     // Limits:
     ungated!(recursion_limit, CrateLevel, template!(NameValueStr: "N"), FutureWarnFollowing),
@@ -339,7 +337,6 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     ),
 
     // Entry point:
-    ungated!(main, Normal, template!(Word), WarnFollowing),
     ungated!(start, Normal, template!(Word), WarnFollowing),
     ungated!(no_start, CrateLevel, template!(Word), WarnFollowing),
     ungated!(no_main, CrateLevel, template!(Word), WarnFollowing),

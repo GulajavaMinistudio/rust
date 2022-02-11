@@ -1,3 +1,4 @@
+// ignore-tidy-filelength
 //! "Collection" is the process of determining the type and other external
 //! details of each item in Rust. Collection is specifically concerned
 //! with *inter-procedural* things -- for example, for a function
@@ -1695,7 +1696,7 @@ fn generics_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::Generics {
         kind: ty::GenericParamDefKind::Lifetime,
     }));
 
-    let object_lifetime_defaults = tcx.object_lifetime_defaults(hir_id);
+    let object_lifetime_defaults = tcx.object_lifetime_defaults(hir_id.owner);
 
     // Now create the real type and const parameters.
     let type_start = own_start - has_self as u32 + params.len() as u32;
@@ -2856,7 +2857,42 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, id: DefId) -> CodegenFnAttrs {
         } else if attr.has_name(sym::rustc_std_internal_symbol) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::RUSTC_STD_INTERNAL_SYMBOL;
         } else if attr.has_name(sym::used) {
-            codegen_fn_attrs.flags |= CodegenFnAttrFlags::USED;
+            let inner = attr.meta_item_list();
+            match inner.as_deref() {
+                Some([item]) if item.has_name(sym::linker) => {
+                    if !tcx.features().used_with_arg {
+                        feature_err(
+                            &tcx.sess.parse_sess,
+                            sym::used_with_arg,
+                            attr.span,
+                            "`#[used(linker)]` is currently unstable",
+                        )
+                        .emit();
+                    }
+                    codegen_fn_attrs.flags |= CodegenFnAttrFlags::USED_LINKER;
+                }
+                Some([item]) if item.has_name(sym::compiler) => {
+                    if !tcx.features().used_with_arg {
+                        feature_err(
+                            &tcx.sess.parse_sess,
+                            sym::used_with_arg,
+                            attr.span,
+                            "`#[used(compiler)]` is currently unstable",
+                        )
+                        .emit();
+                    }
+                    codegen_fn_attrs.flags |= CodegenFnAttrFlags::USED;
+                }
+                Some(_) => {
+                    tcx.sess
+                        .struct_span_err(
+                            attr.span,
+                            "expected `used`, `used(compiler)` or `used(linker)`",
+                        )
+                        .emit();
+                }
+                None => codegen_fn_attrs.flags |= CodegenFnAttrFlags::USED,
+            }
         } else if attr.has_name(sym::cmse_nonsecure_entry) {
             if !matches!(tcx.fn_sig(id).abi(), abi::Abi::C { .. }) {
                 struct_span_err!(

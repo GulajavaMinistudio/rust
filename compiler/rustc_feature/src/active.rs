@@ -309,8 +309,8 @@ declare_features! (
     (active, cfg_sanitize, "1.41.0", Some(39699), None),
     /// Allows `cfg(target_abi = "...")`.
     (active, cfg_target_abi, "1.55.0", Some(80970), None),
-    /// Allows `cfg(target_has_atomic = "...")`.
-    (active, cfg_target_has_atomic, "1.9.0", Some(32976), None),
+    /// Allows `cfg(target_has_atomic_equal_alignment = "...")`.
+    (active, cfg_target_has_atomic_equal_alignment, "1.60.0", Some(93822), None),
     /// Allows `cfg(target_thread_local)`.
     (active, cfg_target_thread_local, "1.7.0", Some(29594), None),
     /// Allow conditional compilation depending on rust version
@@ -531,6 +531,8 @@ declare_features! (
     ///
     /// NOTE: A limited form of `union U { ... }` was accepted in 1.19.0.
     (active, untagged_unions, "1.13.0", Some(55149), None),
+    /// Allows using the `#[used(linker)]` (or `#[used(compiler)]`) attribute.
+    (active, used_with_arg, "1.60.0", Some(93798), None),
     /// Allows `extern "wasm" fn`
     (active, wasm_abi, "1.53.0", Some(83788), None),
     // !!!!    !!!!    !!!!    !!!!   !!!!    !!!!    !!!!    !!!!    !!!!    !!!!    !!!!
