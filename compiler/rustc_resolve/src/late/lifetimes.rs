@@ -41,9 +41,9 @@ pub enum LifetimeUseSet<'tcx> {
 }
 
 trait RegionExt {
-    fn early(hir_map: &Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region);
+    fn early(hir_map: Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region);
 
-    fn late(index: u32, hir_map: &Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region);
+    fn late(index: u32, hir_map: Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region);
 
     fn late_anon(named_late_bound_vars: u32, index: &Cell<u32>) -> Region;
 
@@ -59,7 +59,7 @@ trait RegionExt {
 }
 
 impl RegionExt for Region {
-    fn early(hir_map: &Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region) {
+    fn early(hir_map: Map<'_>, index: &mut u32, param: &GenericParam<'_>) -> (ParamName, Region) {
         let i = *index;
         *index += 1;
         let def_id = hir_map.local_def_id(param.hir_id);
@@ -68,7 +68,7 @@ impl RegionExt for Region {
         (param.name.normalize_to_macros_2_0(), Region::EarlyBound(i, def_id.to_def_id(), origin))
     }
 
-    fn late(idx: u32, hir_map: &Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region) {
+    fn late(idx: u32, hir_map: Map<'_>, param: &GenericParam<'_>) -> (ParamName, Region) {
         let depth = ty::INNERMOST;
         let def_id = hir_map.local_def_id(param.hir_id);
         let origin = LifetimeDefOrigin::from_param(param);
@@ -729,9 +729,16 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
         match item.kind {
             hir::ItemKind::Fn(ref sig, ref generics, _) => {
                 self.missing_named_lifetime_spots.push(generics.into());
-                self.visit_early_late(None, item.hir_id(), &sig.decl, generics, |this| {
-                    intravisit::walk_item(this, item);
-                });
+                self.visit_early_late(
+                    None,
+                    item.hir_id(),
+                    &sig.decl,
+                    generics,
+                    sig.header.asyncness,
+                    |this| {
+                        intravisit::walk_item(this, item);
+                    },
+                );
                 self.missing_named_lifetime_spots.pop();
             }
 
@@ -817,7 +824,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .iter()
                     .filter_map(|param| match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            Some(Region::early(&self.tcx.hir(), &mut index, param))
+                            Some(Region::early(self.tcx.hir(), &mut index, param))
                         }
                         GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
                             non_lifetime_count += 1;
@@ -849,11 +856,16 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
 
     fn visit_foreign_item(&mut self, item: &'tcx hir::ForeignItem<'tcx>) {
         match item.kind {
-            hir::ForeignItemKind::Fn(ref decl, _, ref generics) => {
-                self.visit_early_late(None, item.hir_id(), decl, generics, |this| {
+            hir::ForeignItemKind::Fn(ref decl, _, ref generics) => self.visit_early_late(
+                None,
+                item.hir_id(),
+                decl,
+                generics,
+                hir::IsAsync::NotAsync,
+                |this| {
                     intravisit::walk_foreign_item(this, item);
-                })
-            }
+                },
+            ),
             hir::ForeignItemKind::Static(..) => {
                 intravisit::walk_foreign_item(self, item);
             }
@@ -888,7 +900,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .filter(|param| matches!(param.kind, GenericParamKind::Lifetime { .. }))
                     .enumerate()
                     .map(|(late_bound_idx, param)| {
-                        let pair = Region::late(late_bound_idx as u32, &self.tcx.hir(), param);
+                        let pair = Region::late(late_bound_idx as u32, self.tcx.hir(), param);
                         let r = late_region_as_bound_region(self.tcx, &pair.1);
                         (pair, r)
                     })
@@ -1045,7 +1057,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                 for param in generics.params {
                     match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            let (name, reg) = Region::early(&self.tcx.hir(), &mut index, &param);
+                            let (name, reg) = Region::early(self.tcx.hir(), &mut index, &param);
                             let Region::EarlyBound(_, def_id, _) = reg else {
                                 bug!();
                             };
@@ -1130,6 +1142,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     trait_item.hir_id(),
                     &sig.decl,
                     &trait_item.generics,
+                    sig.header.asyncness,
                     |this| intravisit::walk_trait_item(this, trait_item),
                 );
                 self.missing_named_lifetime_spots.pop();
@@ -1145,7 +1158,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .iter()
                     .filter_map(|param| match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            Some(Region::early(&self.tcx.hir(), &mut index, param))
+                            Some(Region::early(self.tcx.hir(), &mut index, param))
                         }
                         GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
                             non_lifetime_count += 1;
@@ -1199,6 +1212,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     impl_item.hir_id(),
                     &sig.decl,
                     &impl_item.generics,
+                    sig.header.asyncness,
                     |this| intravisit::walk_impl_item(this, impl_item),
                 );
                 self.missing_named_lifetime_spots.pop();
@@ -1214,7 +1228,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                     .iter()
                     .filter_map(|param| match param.kind {
                         GenericParamKind::Lifetime { .. } => {
-                            Some(Region::early(&self.tcx.hir(), &mut index, param))
+                            Some(Region::early(self.tcx.hir(), &mut index, param))
                         }
                         GenericParamKind::Const { .. } | GenericParamKind::Type { .. } => {
                             non_lifetime_count += 1;
@@ -1368,7 +1382,7 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
                                 .enumerate()
                                 .map(|(late_bound_idx, param)| {
                                     let pair =
-                                        Region::late(late_bound_idx as u32, &this.tcx.hir(), param);
+                                        Region::late(late_bound_idx as u32, this.tcx.hir(), param);
                                     let r = late_region_as_bound_region(this.tcx, &pair.1);
                                     (pair, r)
                                 })
@@ -1463,11 +1477,8 @@ impl<'a, 'tcx> Visitor<'tcx> for LifetimeContext<'a, 'tcx> {
             .filter(|param| matches!(param.kind, GenericParamKind::Lifetime { .. }))
             .enumerate()
             .map(|(late_bound_idx, param)| {
-                let pair = Region::late(
-                    initial_bound_vars + late_bound_idx as u32,
-                    &self.tcx.hir(),
-                    param,
-                );
+                let pair =
+                    Region::late(initial_bound_vars + late_bound_idx as u32, self.tcx.hir(), param);
                 let r = late_region_as_bound_region(self.tcx, &pair.1);
                 lifetimes.insert(pair.0, pair.1);
                 r
@@ -2162,11 +2173,15 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
         hir_id: hir::HirId,
         decl: &'tcx hir::FnDecl<'tcx>,
         generics: &'tcx hir::Generics<'tcx>,
+        asyncness: hir::IsAsync,
         walk: F,
     ) where
         F: for<'b, 'c> FnOnce(&'b mut LifetimeContext<'c, 'tcx>),
     {
-        insert_late_bound_lifetimes(self.map, decl, generics);
+        // Async fns need all their lifetime parameters to be early bound.
+        if asyncness != hir::IsAsync::Async {
+            insert_late_bound_lifetimes(self.map, decl, generics);
+        }
 
         // Find the start of nested early scopes, e.g., in methods.
         let mut next_early_index = 0;
@@ -2194,9 +2209,9 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
                     if self.map.late_bound.contains(&param.hir_id) {
                         let late_bound_idx = named_late_bound_vars;
                         named_late_bound_vars += 1;
-                        Some(Region::late(late_bound_idx, &self.tcx.hir(), param))
+                        Some(Region::late(late_bound_idx, self.tcx.hir(), param))
                     } else {
-                        Some(Region::early(&self.tcx.hir(), &mut next_early_index, param))
+                        Some(Region::early(self.tcx.hir(), &mut next_early_index, param))
                     }
                 }
                 GenericParamKind::Type { .. } | GenericParamKind::Const { .. } => {
@@ -2216,7 +2231,7 @@ impl<'a, 'tcx> LifetimeContext<'a, 'tcx> {
             })
             .enumerate()
             .map(|(late_bound_idx, param)| {
-                let pair = Region::late(late_bound_idx as u32, &self.tcx.hir(), param);
+                let pair = Region::late(late_bound_idx as u32, self.tcx.hir(), param);
                 late_region_as_bound_region(self.tcx, &pair.1)
             })
             .collect();
