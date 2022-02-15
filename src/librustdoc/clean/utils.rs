@@ -89,7 +89,7 @@ fn external_generic_args(
     let args: Vec<_> = substs
         .iter()
         .filter_map(|kind| match kind.unpack() {
-            GenericArgKind::Lifetime(lt) => match lt {
+            GenericArgKind::Lifetime(lt) => match *lt {
                 ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrAnon(_), .. }) => {
                     Some(GenericArg::Lifetime(Lifetime::elided()))
                 }
@@ -226,8 +226,8 @@ crate fn name_from_pat(p: &hir::Pat<'_>) -> Symbol {
     })
 }
 
-crate fn print_const(cx: &DocContext<'_>, n: &ty::Const<'_>) -> String {
-    match n.val {
+crate fn print_const(cx: &DocContext<'_>, n: ty::Const<'_>) -> String {
+    match n.val() {
         ty::ConstKind::Unevaluated(ty::Unevaluated { def, substs: _, promoted }) => {
             let mut s = if let Some(def) = def.as_local() {
                 let hir_id = cx.tcx.hir().local_def_id_to_hir_id(def.did);
@@ -297,15 +297,15 @@ fn format_integer_with_underscore_sep(num: &str) -> String {
         .collect()
 }
 
-fn print_const_with_custom_print_scalar(tcx: TyCtxt<'_>, ct: &ty::Const<'_>) -> String {
+fn print_const_with_custom_print_scalar(tcx: TyCtxt<'_>, ct: ty::Const<'_>) -> String {
     // Use a slightly different format for integer types which always shows the actual value.
     // For all other types, fallback to the original `pretty_print_const`.
-    match (ct.val, ct.ty.kind()) {
+    match (ct.val(), ct.ty().kind()) {
         (ty::ConstKind::Value(ConstValue::Scalar(int)), ty::Uint(ui)) => {
             format!("{}{}", format_integer_with_underscore_sep(&int.to_string()), ui.name_str())
         }
         (ty::ConstKind::Value(ConstValue::Scalar(int)), ty::Int(i)) => {
-            let ty = tcx.lift(ct.ty).unwrap();
+            let ty = tcx.lift(ct.ty()).unwrap();
             let size = tcx.layout_of(ty::ParamEnv::empty().and(ty)).unwrap().size;
             let data = int.assert_bits(size);
             let sign_extended_data = size.sign_extend(data) as i128;
@@ -355,7 +355,7 @@ crate fn resolve_type(cx: &mut DocContext<'_>, path: Path) -> Type {
 
     match path.res {
         Res::PrimTy(p) => Primitive(PrimitiveType::from(p)),
-        Res::SelfTy(..) if path.segments.len() == 1 => Generic(kw::SelfUpper),
+        Res::SelfTy { .. } if path.segments.len() == 1 => Generic(kw::SelfUpper),
         Res::Def(DefKind::TyParam, _) if path.segments.len() == 1 => Generic(path.segments[0].name),
         _ => {
             let _ = register_res(cx, path.res);
@@ -397,11 +397,11 @@ crate fn register_res(cx: &mut DocContext<'_>, res: Res) -> DefId {
             | Union | Mod | ForeignTy | Const | Static | Macro(..) | TraitAlias),
             i,
         ) => (i, kind.into()),
-        // This is part of a trait definition; document the trait.
-        Res::SelfTy(Some(trait_def_id), _) => (trait_def_id, ItemType::Trait),
-        // This is an inherent impl; it doesn't have its own page.
-        Res::SelfTy(None, Some((impl_def_id, _))) => return impl_def_id,
-        Res::SelfTy(None, None)
+        // This is part of a trait definition or trait impl; document the trait.
+        Res::SelfTy { trait_: Some(trait_def_id), alias_to: _ } => (trait_def_id, ItemType::Trait),
+        // This is an inherent impl or a type definition; it doesn't have its own page.
+        Res::SelfTy { trait_: None, alias_to: Some((item_def_id, _)) } => return item_def_id,
+        Res::SelfTy { trait_: None, alias_to: None }
         | Res::PrimTy(_)
         | Res::ToolMod
         | Res::SelfCtor(_)

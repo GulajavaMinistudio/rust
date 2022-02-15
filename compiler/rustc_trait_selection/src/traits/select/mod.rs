@@ -36,7 +36,7 @@ use rustc_infer::infer::LateBoundRegionConversionTime;
 use rustc_middle::dep_graph::{DepKind, DepNodeIndex};
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::thir::abstract_const::NotConstEvaluatable;
-use rustc_middle::ty::fast_reject::{self, SimplifyParams, StripReferences};
+use rustc_middle::ty::fast_reject::{self, SimplifyParams};
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::relate::TypeRelation;
 use rustc_middle::ty::subst::{GenericArgKind, Subst, SubstsRef};
@@ -643,7 +643,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         //
                         // Let's just see where this breaks :shrug:
                         if let (ty::ConstKind::Unevaluated(a), ty::ConstKind::Unevaluated(b)) =
-                            (c1.val, c2.val)
+                            (c1.val(), c2.val())
                         {
                             if self.infcx.try_unify_abstract_consts(a.shrink(), b.shrink()) {
                                 return Ok(EvaluatedToOk);
@@ -651,15 +651,15 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         }
                     }
 
-                    let evaluate = |c: &'tcx ty::Const<'tcx>| {
-                        if let ty::ConstKind::Unevaluated(unevaluated) = c.val {
+                    let evaluate = |c: ty::Const<'tcx>| {
+                        if let ty::ConstKind::Unevaluated(unevaluated) = c.val() {
                             self.infcx
                                 .const_eval_resolve(
                                     obligation.param_env,
                                     unevaluated,
                                     Some(obligation.cause.span),
                                 )
-                                .map(|val| ty::Const::from_value(self.tcx(), val, c.ty))
+                                .map(|val| ty::Const::from_value(self.tcx(), val, c.ty()))
                         } else {
                             Ok(c)
                         }
@@ -2033,7 +2033,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             .skip_binder() // binder moved -\
             .iter()
             .flat_map(|ty| {
-                let ty: ty::Binder<'tcx, Ty<'tcx>> = types.rebind(ty); // <----/
+                let ty: ty::Binder<'tcx, Ty<'tcx>> = types.rebind(*ty); // <----/
 
                 self.infcx.commit_unconditionally(|_| {
                     let placeholder_ty = self.infcx.replace_bound_vars_with_placeholders(ty);
@@ -2172,14 +2172,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             self.tcx(),
                             obligation_ty,
                             SimplifyParams::Yes,
-                            StripReferences::No,
                         );
-                        let simplified_impl_ty = fast_reject::simplify_type(
-                            self.tcx(),
-                            impl_ty,
-                            SimplifyParams::No,
-                            StripReferences::No,
-                        );
+                        let simplified_impl_ty =
+                            fast_reject::simplify_type(self.tcx(), impl_ty, SimplifyParams::No);
 
                         simplified_obligation_ty.is_some()
                             && simplified_impl_ty.is_some()

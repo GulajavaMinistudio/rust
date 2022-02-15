@@ -56,7 +56,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     trait_ref.substs.types().skip(1),
                     impl_trait_ref.substs.types().skip(1),
                 )
-                .all(|(u, v)| self.fuzzy_match_tys(u, v))
+                .all(|(u, v)| self.fuzzy_match_tys(u, v, false).is_some())
                 {
                     fuzzy_match_impls.push(def_id);
                 }
@@ -211,7 +211,8 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     let type_string = self.tcx.type_of(def.did).to_string();
                     flags.push((sym::_Self, Some(format!("[{}]", type_string))));
 
-                    let len = len.val.try_to_value().and_then(|v| v.try_to_machine_usize(self.tcx));
+                    let len =
+                        len.val().try_to_value().and_then(|v| v.try_to_machine_usize(self.tcx));
                     let string = match len {
                         Some(n) => format!("[{}; {}]", type_string, n),
                         None => format!("[{}; _]", type_string),
