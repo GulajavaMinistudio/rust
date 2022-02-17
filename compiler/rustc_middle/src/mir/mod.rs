@@ -2270,11 +2270,13 @@ pub enum BinOp {
     Mul,
     /// The `/` operator (division)
     ///
-    /// Division by zero is UB.
+    /// Division by zero is UB, because the compiler should have inserted checks
+    /// prior to this.
     Div,
     /// The `%` operator (modulus)
     ///
-    /// Using zero as the modulus (second operand) is UB.
+    /// Using zero as the modulus (second operand) is UB, because the compiler
+    /// should have inserted checks prior to this.
     Rem,
     /// The `^` operator (bitwise xor)
     BitXor,
@@ -2522,7 +2524,7 @@ pub enum ConstantKind<'tcx> {
 
 impl<'tcx> Constant<'tcx> {
     pub fn check_static_ptr(&self, tcx: TyCtxt<'_>) -> Option<DefId> {
-        match self.literal.const_for_ty()?.val().try_to_scalar() {
+        match self.literal.try_to_scalar() {
             Some(Scalar::Ptr(ptr, _size)) => match tcx.global_alloc(ptr.provenance) {
                 GlobalAlloc::Static(def_id) => {
                     assert!(!tcx.is_thread_local_static(def_id));
