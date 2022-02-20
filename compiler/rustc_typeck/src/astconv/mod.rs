@@ -1808,12 +1808,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             (_, Res::SelfTy { trait_: Some(_), alias_to: Some((impl_def_id, _)) }) => {
                 // `Self` in an impl of a trait -- we have a concrete self type and a
                 // trait reference.
-                let trait_ref = match tcx.impl_trait_ref(impl_def_id) {
-                    Some(trait_ref) => trait_ref,
-                    None => {
-                        // A cycle error occurred, most likely.
-                        return Err(ErrorReported);
-                    }
+                let Some(trait_ref) = tcx.impl_trait_ref(impl_def_id) else {
+                    // A cycle error occurred, most likely.
+                    return Err(ErrorReported);
                 };
 
                 self.one_bound_for_assoc_type(
@@ -2409,11 +2406,16 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let def_id = item_id.def_id.to_def_id();
 
                 match opaque_ty.kind {
-                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => {
-                        let replace_parent_lifetimes =
-                            matches!(origin, hir::OpaqueTyOrigin::FnReturn(..));
-                        self.impl_trait_ty_to_ty(def_id, lifetimes, replace_parent_lifetimes)
-                    }
+                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => self
+                        .impl_trait_ty_to_ty(
+                            def_id,
+                            lifetimes,
+                            matches!(
+                                origin,
+                                hir::OpaqueTyOrigin::FnReturn(..)
+                                    | hir::OpaqueTyOrigin::AsyncFn(..)
+                            ),
+                        ),
                     ref i => bug!("`impl Trait` pointed to non-opaque type?? {:#?}", i),
                 }
             }

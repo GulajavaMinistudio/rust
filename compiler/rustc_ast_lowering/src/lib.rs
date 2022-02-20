@@ -256,19 +256,28 @@ enum ImplTraitContext<'b, 'a> {
 /// Position in which `impl Trait` is disallowed.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum ImplTraitPosition {
-    /// Disallowed in `let` / `const` / `static` bindings.
-    Binding,
-
-    /// All other positions.
-    Other,
+    Path,
+    Variable,
+    Type,
+    Trait,
+    AsyncBlock,
+    Bound,
+    Generic,
+    ExternFnParam,
+    ClosureParam,
+    PointerParam,
+    FnTraitParam,
+    TraitParam,
+    ImplParam,
+    ExternFnReturn,
+    ClosureReturn,
+    PointerReturn,
+    FnTraitReturn,
+    TraitReturn,
+    ImplReturn,
 }
 
 impl<'a> ImplTraitContext<'_, 'a> {
-    #[inline]
-    fn disallowed() -> Self {
-        ImplTraitContext::Disallowed(ImplTraitPosition::Other)
-    }
-
     fn reborrow<'this>(&'this mut self) -> ImplTraitContext<'this, 'a> {
         use self::ImplTraitContext::*;
         match self {
@@ -280,6 +289,54 @@ impl<'a> ImplTraitContext<'_, 'a> {
                 TypeAliasesOpaqueTy { capturable_lifetimes }
             }
             Disallowed(pos) => Disallowed(*pos),
+        }
+    }
+}
+
+impl std::fmt::Display for ImplTraitPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            ImplTraitPosition::Path => "path",
+            ImplTraitPosition::Variable => "variable binding",
+            ImplTraitPosition::Type => "type",
+            ImplTraitPosition::Trait => "trait",
+            ImplTraitPosition::AsyncBlock => "async block",
+            ImplTraitPosition::Bound => "bound",
+            ImplTraitPosition::Generic => "generic",
+            ImplTraitPosition::ExternFnParam => "`extern fn` param",
+            ImplTraitPosition::ClosureParam => "closure param",
+            ImplTraitPosition::PointerParam => "`fn` pointer param",
+            ImplTraitPosition::FnTraitParam => "`Fn` trait param",
+            ImplTraitPosition::TraitParam => "trait method param",
+            ImplTraitPosition::ImplParam => "`impl` method param",
+            ImplTraitPosition::ExternFnReturn => "`extern fn` return",
+            ImplTraitPosition::ClosureReturn => "closure return",
+            ImplTraitPosition::PointerReturn => "`fn` pointer return",
+            ImplTraitPosition::FnTraitReturn => "`Fn` trait return",
+            ImplTraitPosition::TraitReturn => "trait method return",
+            ImplTraitPosition::ImplReturn => "`impl` method return",
+        };
+
+        write!(f, "{}", name)
+    }
+}
+
+#[derive(Debug)]
+enum FnDeclKind {
+    Fn,
+    Inherent,
+    ExternFn,
+    Closure,
+    Pointer,
+    Trait,
+    Impl,
+}
+
+impl FnDeclKind {
+    fn impl_trait_return_allowed(&self) -> bool {
+        match self {
+            FnDeclKind::Fn | FnDeclKind::Inherent => true,
+            _ => false,
         }
     }
 }
@@ -1232,11 +1289,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     hir::TyKind::BareFn(this.arena.alloc(hir::BareFnTy {
                         generic_params: this.lower_generic_params(
                             &f.generic_params,
-                            ImplTraitContext::disallowed(),
+                            ImplTraitContext::Disallowed(ImplTraitPosition::Generic),
                         ),
                         unsafety: this.lower_unsafety(f.unsafety),
                         abi: this.lower_extern(f.ext),
-                        decl: this.lower_fn_decl(&f.decl, None, false, None),
+                        decl: this.lower_fn_decl(&f.decl, None, FnDeclKind::Pointer, None),
                         param_names: this.lower_fn_params_to_names(&f.decl),
                     }))
                 })
@@ -1357,13 +1414,13 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                             }),
                         ))
                     }
-                    ImplTraitContext::Disallowed(_) => {
+                    ImplTraitContext::Disallowed(position) => {
                         let mut err = struct_span_err!(
                             self.sess,
                             t.span,
                             E0562,
-                            "`impl Trait` not allowed outside of {}",
-                            "function and method return types",
+                            "`impl Trait` only allowed in function and inherent method return types, not in {}",
+                            position
                         );
                         err.emit();
                         hir::TyKind::Err
@@ -1528,16 +1585,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         &mut self,
         decl: &FnDecl,
         mut in_band_ty_params: Option<(LocalDefId, &mut Vec<hir::GenericParam<'hir>>)>,
-        impl_trait_return_allow: bool,
+        kind: FnDeclKind,
         make_ret_async: Option<NodeId>,
     ) -> &'hir hir::FnDecl<'hir> {
         debug!(
             "lower_fn_decl(\
             fn_decl: {:?}, \
             in_band_ty_params: {:?}, \
-            impl_trait_return_allow: {}, \
+            kind: {:?}, \
             make_ret_async: {:?})",
-            decl, in_band_ty_params, impl_trait_return_allow, make_ret_async,
+            decl, in_band_ty_params, kind, make_ret_async,
         );
         let lt_mode = if make_ret_async.is_some() {
             // In `async fn`, argument-position elided lifetimes
@@ -1567,7 +1624,19 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         ImplTraitContext::Universal(ibty, this.current_hir_id_owner),
                     )
                 } else {
-                    this.lower_ty_direct(&param.ty, ImplTraitContext::disallowed())
+                    this.lower_ty_direct(
+                        &param.ty,
+                        ImplTraitContext::Disallowed(match kind {
+                            FnDeclKind::Fn | FnDeclKind::Inherent => {
+                                unreachable!("fn should allow in-band lifetimes")
+                            }
+                            FnDeclKind::ExternFn => ImplTraitPosition::ExternFnParam,
+                            FnDeclKind::Closure => ImplTraitPosition::ClosureParam,
+                            FnDeclKind::Pointer => ImplTraitPosition::PointerParam,
+                            FnDeclKind::Trait => ImplTraitPosition::TraitParam,
+                            FnDeclKind::Impl => ImplTraitPosition::ImplParam,
+                        }),
+                    )
                 }
             }))
         });
@@ -1582,13 +1651,22 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             match decl.output {
                 FnRetTy::Ty(ref ty) => {
                     let context = match in_band_ty_params {
-                        Some((def_id, _)) if impl_trait_return_allow => {
+                        Some((def_id, _)) if kind.impl_trait_return_allowed() => {
                             ImplTraitContext::ReturnPositionOpaqueTy {
                                 fn_def_id: def_id,
                                 origin: hir::OpaqueTyOrigin::FnReturn(def_id),
                             }
                         }
-                        _ => ImplTraitContext::disallowed(),
+                        _ => ImplTraitContext::Disallowed(match kind {
+                            FnDeclKind::Fn | FnDeclKind::Inherent => {
+                                unreachable!("fn should allow in-band lifetimes")
+                            }
+                            FnDeclKind::ExternFn => ImplTraitPosition::ExternFnReturn,
+                            FnDeclKind::Closure => ImplTraitPosition::ClosureReturn,
+                            FnDeclKind::Pointer => ImplTraitPosition::PointerReturn,
+                            FnDeclKind::Trait => ImplTraitPosition::TraitReturn,
+                            FnDeclKind::Impl => ImplTraitPosition::ImplReturn,
+                        }),
                     };
                     hir::FnRetTy::Return(self.lower_ty(ty, context))
                 }
@@ -1659,12 +1737,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
         // When we create the opaque type for this async fn, it is going to have
         // to capture all the lifetimes involved in the signature (including in the
-        // return type). This is done by:
+        // return type). This is done by introducing lifetime parameters for:
         //
-        // - making the opaque type inherit all lifetime parameters from its parent;
-        // - make all the elided lifetimes in the fn arguments into parameters;
-        // - manually introducing parameters on the opaque type for elided
-        //   lifetimes in the return type.
+        // - all the explicitly declared lifetimes from the impl and function itself;
+        // - all the elided lifetimes in the fn arguments;
+        // - all the elided lifetimes in the return type.
         //
         // So for example in this snippet:
         //
@@ -1680,14 +1757,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // we would create an opaque type like:
         //
         // ```
-        // type Foo<'a>::bar<'b, '0, '1>::Bar<'2> = impl Future<Output = &'2 u32>;
+        // type Bar<'a, 'b, '0, '1, '2> = impl Future<Output = &'2 u32>;
         // ```
         //
         // and we would then desugar `bar` to the equivalent of:
         //
         // ```rust
         // impl<'a> Foo<'a> {
-        //   fn bar<'b, '0, '1>(&'0 self, x: &'b Vec<f64>, y: &'1 str) -> Bar<'_>
+        //   fn bar<'b, '0, '1>(&'0 self, x: &'b Vec<f64>, y: &'1 str) -> Bar<'a, 'b, '0, '1, '_>
         // }
         // ```
         //
@@ -1695,7 +1772,29 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // this is because the elided lifetimes from the return type
         // should be figured out using the ordinary elision rules, and
         // this desugaring achieves that.
-        let mut lifetime_params = Vec::new();
+
+        debug!("lower_async_fn_ret_ty: in_scope_lifetimes={:#?}", self.in_scope_lifetimes);
+        debug!("lower_async_fn_ret_ty: lifetimes_to_define={:#?}", self.lifetimes_to_define);
+
+        // Calculate all the lifetimes that should be captured
+        // by the opaque type. This should include all in-scope
+        // lifetime parameters, including those defined in-band.
+        //
+        // `lifetime_params` is a vector of tuple (span, parameter name, lifetime name).
+
+        // Input lifetime like `'a` or `'1`:
+        let mut lifetime_params: Vec<_> = self
+            .in_scope_lifetimes
+            .iter()
+            .cloned()
+            .map(|name| (name.ident().span, name, hir::LifetimeName::Param(name)))
+            .chain(
+                self.lifetimes_to_define
+                    .iter()
+                    .map(|&(span, name)| (span, name, hir::LifetimeName::Param(name))),
+            )
+            .collect();
+
         self.with_hir_id_owner(opaque_ty_node_id, |this| {
             // We have to be careful to get elision right here. The
             // idea is that we create a lifetime parameter for each
@@ -1714,12 +1813,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             debug!("lower_async_fn_ret_ty: future_bound={:#?}", future_bound);
             debug!("lower_async_fn_ret_ty: lifetimes_to_define={:#?}", lifetimes_to_define);
 
-            // Output lifetime like `'_`:
-            lifetime_params = lifetimes_to_define;
+            lifetime_params.extend(
+                // Output lifetime like `'_`:
+                lifetimes_to_define
+                    .into_iter()
+                    .map(|(span, name)| (span, name, hir::LifetimeName::Implicit(false))),
+            );
             debug!("lower_async_fn_ret_ty: lifetime_params={:#?}", lifetime_params);
 
             let generic_params =
-                this.arena.alloc_from_iter(lifetime_params.iter().map(|&(span, hir_name)| {
+                this.arena.alloc_from_iter(lifetime_params.iter().map(|&(span, hir_name, _)| {
                     this.lifetime_to_generic_param(span, hir_name, opaque_ty_def_id)
                 }));
 
@@ -1737,22 +1840,28 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             this.generate_opaque_type(opaque_ty_def_id, opaque_ty_item, span, opaque_ty_span)
         });
 
-        // We need to create the lifetime arguments to our opaque type.
-        // Continuing with our example, we're creating the type arguments
-        // for the return type:
+        // As documented above on the variable
+        // `input_lifetimes_count`, we need to create the lifetime
+        // arguments to our opaque type. Continuing with our example,
+        // we're creating the type arguments for the return type:
         //
         // ```
-        // For<'a>::bar<'b, '0, '1>::Bar<'_>
+        // Bar<'a, 'b, '0, '1, '_>
         // ```
         //
-        // For the "input" lifetime parameters are inherited automatically.
-        // For the "output" lifetime parameters, we just want to generate `'_`.
+        // For the "input" lifetime parameters, we wish to create
+        // references to the parameters themselves, including the
+        // "implicit" ones created from parameter types (`'a`, `'b`,
+        // '`0`, `'1`).
+        //
+        // For the "output" lifetime parameters, we just want to
+        // generate `'_`.
         let generic_args =
-            self.arena.alloc_from_iter(lifetime_params.into_iter().map(|(span, _)| {
+            self.arena.alloc_from_iter(lifetime_params.into_iter().map(|(span, _, name)| {
                 GenericArg::Lifetime(hir::Lifetime {
                     hir_id: self.next_id(),
                     span: self.lower_span(span),
-                    name: hir::LifetimeName::Implicit(false),
+                    name,
                 })
             }));
 
@@ -1915,7 +2024,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             GenericParamKind::Type { ref default, .. } => {
                 let kind = hir::GenericParamKind::Type {
                     default: default.as_ref().map(|x| {
-                        self.lower_ty(x, ImplTraitContext::Disallowed(ImplTraitPosition::Other))
+                        self.lower_ty(x, ImplTraitContext::Disallowed(ImplTraitPosition::Type))
                     }),
                     synthetic: false,
                 };
@@ -1923,9 +2032,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 (hir::ParamName::Plain(self.lower_ident(param.ident)), kind)
             }
             GenericParamKind::Const { ref ty, kw_span: _, ref default } => {
-                let ty = self
-                    .with_anonymous_lifetime_mode(AnonymousLifetimeMode::ReportError, |this| {
-                        this.lower_ty(&ty, ImplTraitContext::disallowed())
+                let ty =
+                    self.with_anonymous_lifetime_mode(AnonymousLifetimeMode::ReportError, |this| {
+                        this.lower_ty(&ty, ImplTraitContext::Disallowed(ImplTraitPosition::Type))
                     });
                 let default = default.as_ref().map(|def| self.lower_anon_const(def));
                 (

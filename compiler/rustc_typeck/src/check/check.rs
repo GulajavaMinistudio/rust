@@ -392,7 +392,7 @@ fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> b
                     "when the type does not implement `Copy`, \
                     wrap it inside a `ManuallyDrop<_>` and ensure it is manually dropped",
                     vec![
-                        (ty_span.shrink_to_lo(), format!("std::mem::ManuallyDrop<")),
+                        (ty_span.shrink_to_lo(), "std::mem::ManuallyDrop<".into()),
                         (ty_span.shrink_to_hi(), ">".into()),
                     ],
                     Applicability::MaybeIncorrect,
@@ -415,13 +415,10 @@ fn check_static_inhabited<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId, span: Spa
     // have UB during initialization if they are uninhabited, but there also seems to be no good
     // reason to allow any statics to be uninhabited.
     let ty = tcx.type_of(def_id);
-    let layout = match tcx.layout_of(ParamEnv::reveal_all().and(ty)) {
-        Ok(l) => l,
-        Err(_) => {
-            // Generic statics are rejected, but we still reach this case.
-            tcx.sess.delay_span_bug(span, "generic static must be rejected");
-            return;
-        }
+    let Ok(layout) = tcx.layout_of(ParamEnv::reveal_all().and(ty)) else {
+        // Generic statics are rejected, but we still reach this case.
+        tcx.sess.delay_span_bug(span, "generic static must be rejected");
+        return;
     };
     if layout.abi.is_uninhabited() {
         tcx.struct_span_lint_hir(
@@ -545,8 +542,10 @@ pub(super) fn check_opaque_for_inheriting_lifetimes<'tcx>(
         }
     }
 
-    if let ItemKind::OpaqueTy(hir::OpaqueTy { origin: hir::OpaqueTyOrigin::FnReturn(..), .. }) =
-        item.kind
+    if let ItemKind::OpaqueTy(hir::OpaqueTy {
+        origin: hir::OpaqueTyOrigin::AsyncFn(..) | hir::OpaqueTyOrigin::FnReturn(..),
+        ..
+    }) = item.kind
     {
         let mut visitor = ProhibitOpaqueVisitor {
             opaque_identity_ty: tcx.mk_opaque(
@@ -568,13 +567,20 @@ pub(super) fn check_opaque_for_inheriting_lifetimes<'tcx>(
 
         if let Some(ty) = prohibit_opaque.break_value() {
             visitor.visit_item(&item);
+            let is_async = match item.kind {
+                ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => {
+                    matches!(origin, hir::OpaqueTyOrigin::AsyncFn(..))
+                }
+                _ => unreachable!(),
+            };
 
             let mut err = struct_span_err!(
                 tcx.sess,
                 span,
                 E0760,
-                "`impl Trait` return type cannot contain a projection or `Self` that references lifetimes from \
+                "`{}` return type cannot contain a projection or `Self` that references lifetimes from \
                  a parent scope",
+                if is_async { "async fn" } else { "impl Trait" },
             );
 
             for (span, name) in visitor.selftys {
@@ -843,10 +849,7 @@ pub(super) fn check_specialization_validity<'tcx>(
     impl_id: DefId,
     impl_item: &hir::ImplItemRef,
 ) {
-    let ancestors = match trait_def.ancestors(tcx, impl_id) {
-        Ok(ancestors) => ancestors,
-        Err(_) => return,
-    };
+    let Ok(ancestors) = trait_def.ancestors(tcx, impl_id) else { return };
     let mut ancestor_impls = ancestors.skip(1).filter_map(|parent| {
         if parent.is_from_trait() {
             None

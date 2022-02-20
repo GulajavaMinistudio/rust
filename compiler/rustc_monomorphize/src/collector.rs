@@ -847,14 +847,13 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirNeighborCollector<'a, 'tcx> {
                 debug!(?source_info);
                 let lint_root = source_info.scope.lint_root(&self.body.source_scopes);
                 debug!(?lint_root);
-                let lint_root = match lint_root {
-                    Some(lint_root) => lint_root,
+                let Some(lint_root) = lint_root else {
                     // This happens when the issue is in a function from a foreign crate that
                     // we monomorphized in the current crate. We can't get a `HirId` for things
                     // in other crates.
                     // FIXME: Find out where to report the lint on. Maybe simply crate-level lint root
                     // but correct span? This would make the lint at least accept crate-level lint attributes.
-                    None => return,
+                    return;
                 };
                 self.tcx.struct_span_lint_hir(
                     LARGE_ASSIGNMENTS,
@@ -947,9 +946,7 @@ fn visit_instance_use<'tcx>(
 /// Returns `true` if we should codegen an instance in the local crate, or returns `false` if we
 /// can just link to the upstream crate and therefore don't need a mono item.
 fn should_codegen_locally<'tcx>(tcx: TyCtxt<'tcx>, instance: &Instance<'tcx>) -> bool {
-    let def_id = if let Some(def_id) = instance.def.def_id_if_not_guaranteed_local_codegen() {
-        def_id
-    } else {
+    let Some(def_id) = instance.def.def_id_if_not_guaranteed_local_codegen() else {
         return true;
     };
 
@@ -1258,9 +1255,8 @@ impl<'v> RootCollector<'_, 'v> {
     /// the return type of `main`. This is not needed when
     /// the user writes their own `start` manually.
     fn push_extra_entry_roots(&mut self) {
-        let main_def_id = match self.entry_fn {
-            Some((def_id, EntryFnType::Main)) => def_id,
-            _ => return,
+        let Some((main_def_id, EntryFnType::Main)) = self.entry_fn else {
+            return;
         };
 
         let start_def_id = match self.tcx.lang_items().require(LangItem::Start) {

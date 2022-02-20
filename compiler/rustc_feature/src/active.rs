@@ -285,13 +285,13 @@ declare_features! (
     /// Allows trait methods with arbitrary self types.
     (active, arbitrary_self_types, "1.23.0", Some(44874), None),
     /// Allows using `const` operands in inline assembly.
-    (active, asm_const, "1.58.0", Some(72016), None),
+    (active, asm_const, "1.58.0", Some(93332), None),
     /// Enables experimental inline assembly support for additional architectures.
-    (active, asm_experimental_arch, "1.58.0", Some(72016), None),
+    (active, asm_experimental_arch, "1.58.0", Some(93335), None),
     /// Allows using `sym` operands in inline assembly.
-    (active, asm_sym, "1.58.0", Some(72016), None),
+    (active, asm_sym, "1.58.0", Some(93333), None),
     /// Allows the `may_unwind` option in inline assembly.
-    (active, asm_unwind, "1.58.0", Some(72016), None),
+    (active, asm_unwind, "1.58.0", Some(93334), None),
     /// Allows users to enforce equality of associated constants `TraitImpl<AssocConst=3>`.
     (active, associated_const_equality, "1.58.0", Some(92827), None),
     /// Allows the user of associated type bounds.
@@ -306,8 +306,6 @@ declare_features! (
     (active, c_variadic, "1.34.0", Some(44930), None),
     /// Allows capturing disjoint fields in a closure/generator (RFC 2229).
     (incomplete, capture_disjoint_fields, "1.49.0", Some(53488), None),
-    /// Enables `#[cfg(panic = "...")]` config key.
-    (active, cfg_panic, "1.49.0", Some(77443), None),
     /// Allows the use of `#[cfg(sanitize = "option")]`; set when -Zsanitizer is used.
     (active, cfg_sanitize, "1.41.0", Some(39699), None),
     /// Allows `cfg(target_abi = "...")`.
