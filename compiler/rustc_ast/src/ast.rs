@@ -285,7 +285,7 @@ impl ParenthesizedArgs {
 
 pub use crate::node_id::{NodeId, CRATE_NODE_ID, DUMMY_NODE_ID};
 
-/// A modifier on a bound, e.g., `?Sized` or `~const Trait`.
+/// A modifier on a bound, e.g., `?Trait` or `~const Trait`.
 ///
 /// Negative bounds should also be handled here.
 #[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug)]
@@ -2418,8 +2418,7 @@ impl<S: Encoder> rustc_serialize::Encodable<S> for AttrId {
 }
 
 impl<D: Decoder> rustc_serialize::Decodable<D> for AttrId {
-    fn decode(d: &mut D) -> AttrId {
-        d.read_unit();
+    fn decode(_: &mut D) -> AttrId {
         crate::attr::mk_attr_id()
     }
 }
