@@ -109,11 +109,11 @@ rustc_data_structures::static_assert_size!(ImmTy<'_>, 72);
 impl<Tag: Provenance> std::fmt::Display for ImmTy<'_, Tag> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         /// Helper function for printing a scalar to a FmtPrinter
-        fn p<'a, 'tcx, F: std::fmt::Write, Tag: Provenance>(
-            cx: FmtPrinter<'a, 'tcx, F>,
+        fn p<'a, 'tcx, Tag: Provenance>(
+            cx: FmtPrinter<'a, 'tcx>,
             s: ScalarMaybeUninit<Tag>,
             ty: Ty<'tcx>,
-        ) -> Result<FmtPrinter<'a, 'tcx, F>, std::fmt::Error> {
+        ) -> Result<FmtPrinter<'a, 'tcx>, std::fmt::Error> {
             match s {
                 ScalarMaybeUninit::Scalar(Scalar::Int(int)) => {
                     cx.pretty_print_const_scalar_int(int, ty, true)
@@ -138,8 +138,8 @@ impl<Tag: Provenance> std::fmt::Display for ImmTy<'_, Tag> {
             match self.imm {
                 Immediate::Scalar(s) => {
                     if let Some(ty) = tcx.lift(self.layout.ty) {
-                        let cx = FmtPrinter::new(tcx, f, Namespace::ValueNS);
-                        p(cx, s, ty)?;
+                        let cx = FmtPrinter::new(tcx, Namespace::ValueNS);
+                        f.write_str(&p(cx, s, ty)?.into_buffer())?;
                         return Ok(());
                     }
                     write!(f, "{:x}: {}", s, self.layout.ty)
@@ -720,12 +720,11 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                     Err(dbg_val) => {
                         // So this is a pointer then, and casting to an int failed.
                         // Can only happen during CTFE.
-                        let ptr = self.scalar_to_ptr(tag_val);
                         // The niche must be just 0, and the ptr not null, then we know this is
                         // okay. Everything else, we conservatively reject.
                         let ptr_valid = niche_start == 0
                             && variants_start == variants_end
-                            && !self.memory.ptr_may_be_null(ptr);
+                            && !self.scalar_may_be_null(tag_val);
                         if !ptr_valid {
                             throw_ub!(InvalidTag(dbg_val))
                         }
