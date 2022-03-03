@@ -1,7 +1,7 @@
 use rustc_ast as ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::{ColorConfig, ErrorReported, FatalError};
+use rustc_errors::{ColorConfig, ErrorGuaranteed, FatalError};
 use rustc_hir as hir;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_hir::intravisit;
@@ -44,7 +44,7 @@ crate struct GlobalTestOptions {
     crate attrs: Vec<String>,
 }
 
-crate fn run(options: RustdocOptions) -> Result<(), ErrorReported> {
+crate fn run(options: RustdocOptions) -> Result<(), ErrorGuaranteed> {
     let input = config::Input::File(options.input.clone());
 
     let invalid_codeblock_attributes_name = crate::lint::INVALID_CODEBLOCK_ATTRIBUTES.name;
@@ -111,58 +111,55 @@ crate fn run(options: RustdocOptions) -> Result<(), ErrorReported> {
     let externs = options.externs.clone();
     let json_unused_externs = options.json_unused_externs;
 
-    let res = interface::run_compiler(config, |compiler| {
-        compiler.enter(|queries| {
-            let mut global_ctxt = queries.global_ctxt()?.take();
+    let (tests, unused_extern_reports, compiling_test_count) =
+        interface::run_compiler(config, |compiler| {
+            compiler.enter(|queries| {
+                let mut global_ctxt = queries.global_ctxt()?.take();
 
-            let collector = global_ctxt.enter(|tcx| {
-                let crate_attrs = tcx.hir().attrs(CRATE_HIR_ID);
+                let collector = global_ctxt.enter(|tcx| {
+                    let crate_attrs = tcx.hir().attrs(CRATE_HIR_ID);
 
-                let opts = scrape_test_config(crate_attrs);
-                let enable_per_target_ignores = options.enable_per_target_ignores;
-                let mut collector = Collector::new(
-                    tcx.crate_name(LOCAL_CRATE),
-                    options,
-                    false,
-                    opts,
-                    Some(compiler.session().parse_sess.clone_source_map()),
-                    None,
-                    enable_per_target_ignores,
-                );
+                    let opts = scrape_test_config(crate_attrs);
+                    let enable_per_target_ignores = options.enable_per_target_ignores;
+                    let mut collector = Collector::new(
+                        tcx.crate_name(LOCAL_CRATE),
+                        options,
+                        false,
+                        opts,
+                        Some(compiler.session().parse_sess.clone_source_map()),
+                        None,
+                        enable_per_target_ignores,
+                    );
 
-                let mut hir_collector = HirCollector {
-                    sess: compiler.session(),
-                    collector: &mut collector,
-                    map: tcx.hir(),
-                    codes: ErrorCodes::from(
-                        compiler.session().opts.unstable_features.is_nightly_build(),
-                    ),
-                    tcx,
-                };
-                hir_collector.visit_testable(
-                    "".to_string(),
-                    CRATE_HIR_ID,
-                    tcx.hir().span(CRATE_HIR_ID),
-                    |this| tcx.hir().walk_toplevel_module(this),
-                );
+                    let mut hir_collector = HirCollector {
+                        sess: compiler.session(),
+                        collector: &mut collector,
+                        map: tcx.hir(),
+                        codes: ErrorCodes::from(
+                            compiler.session().opts.unstable_features.is_nightly_build(),
+                        ),
+                        tcx,
+                    };
+                    hir_collector.visit_testable(
+                        "".to_string(),
+                        CRATE_HIR_ID,
+                        tcx.hir().span(CRATE_HIR_ID),
+                        |this| tcx.hir().walk_toplevel_module(this),
+                    );
 
-                collector
-            });
-            if compiler.session().diagnostic().has_errors_or_lint_errors() {
-                FatalError.raise();
-            }
+                    collector
+                });
+                if compiler.session().diagnostic().has_errors_or_lint_errors() {
+                    FatalError.raise();
+                }
 
-            let unused_extern_reports = collector.unused_extern_reports.clone();
-            let compiling_test_count = collector.compiling_test_count.load(Ordering::SeqCst);
-            let ret: Result<_, ErrorReported> =
-                Ok((collector.tests, unused_extern_reports, compiling_test_count));
-            ret
-        })
-    });
-    let (tests, unused_extern_reports, compiling_test_count) = match res {
-        Ok(res) => res,
-        Err(ErrorReported) => return Err(ErrorReported),
-    };
+                let unused_extern_reports = collector.unused_extern_reports.clone();
+                let compiling_test_count = collector.compiling_test_count.load(Ordering::SeqCst);
+                let ret: Result<_, ErrorGuaranteed> =
+                    Ok((collector.tests, unused_extern_reports, compiling_test_count));
+                ret
+            })
+        })?;
 
     run_tests(test_args, nocapture, tests);
 
@@ -619,7 +616,7 @@ crate fn make_test(
     });
     let (already_has_main, already_has_extern_crate, found_macro) = match result {
         Ok(result) => result,
-        Err(ErrorReported) => {
+        Err(ErrorGuaranteed) => {
             // If the parser panicked due to a fatal error, pass the test code through unchanged.
             // The error will be reported during compilation.
             return (s.to_owned(), 0, false);

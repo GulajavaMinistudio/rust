@@ -576,12 +576,12 @@ pub enum PassKind {
     Module,
 }
 
-/// LLVMRustThinLTOData
+// LLVMRustThinLTOData
 extern "C" {
     pub type ThinLTOData;
 }
 
-/// LLVMRustThinLTOBuffer
+// LLVMRustThinLTOBuffer
 extern "C" {
     pub type ThinLTOBuffer;
 }
@@ -1200,12 +1200,6 @@ extern "C" {
         Fn: &'a Value,
         index: c_uint,
         Attrs: *const &'a Attribute,
-        AttrsLen: size_t,
-    );
-    pub fn LLVMRustRemoveFunctionAttributes(
-        Fn: &Value,
-        index: c_uint,
-        Attrs: *const AttributeKind,
         AttrsLen: size_t,
     );
 

@@ -1,20 +1,25 @@
 use either::Either;
 use rustc_const_eval::util::{CallDesugaringKind, CallKind};
 use rustc_data_structures::fx::FxHashSet;
-use rustc_errors::{Applicability, Diagnostic, DiagnosticBuilder, ErrorReported};
+use rustc_errors::{Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind};
+use rustc_infer::infer::TyCtxtInferExt;
+use rustc_infer::traits::ObligationCause;
 use rustc_middle::mir::{
     self, AggregateKind, BindingForm, BorrowKind, ClearCrossCrate, ConstraintCategory,
     FakeReadCause, LocalDecl, LocalInfo, LocalKind, Location, Operand, Place, PlaceRef,
     ProjectionElem, Rvalue, Statement, StatementKind, Terminator, TerminatorKind, VarBindingForm,
 };
-use rustc_middle::ty::{self, suggest_constraining_type_param, Ty};
+use rustc_middle::ty::{
+    self, suggest_constraining_type_param, suggest_constraining_type_params, PredicateKind, Ty,
+};
 use rustc_mir_dataflow::move_paths::{InitKind, MoveOutIndex, MovePathIndex};
 use rustc_span::symbol::sym;
 use rustc_span::{BytePos, MultiSpan, Span, DUMMY_SP};
 use rustc_trait_selection::infer::InferCtxtExt;
+use rustc_trait_selection::traits::TraitEngineExt as _;
 
 use crate::borrow_set::TwoPhaseActivation;
 use crate::borrowck_errors;
@@ -423,7 +428,63 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                             None,
                         );
                     }
+                } else {
+                    // Try to find predicates on *generic params* that would allow copying `ty`
+
+                    let tcx = self.infcx.tcx;
+                    let generics = tcx.generics_of(self.mir_def_id());
+                    if let Some(hir_generics) = tcx
+                        .typeck_root_def_id(self.mir_def_id().to_def_id())
+                        .as_local()
+                        .and_then(|def_id| tcx.hir().get_generics(def_id))
+                    {
+                        let predicates: Result<Vec<_>, _> = tcx.infer_ctxt().enter(|infcx| {
+                            let mut fulfill_cx =
+                                <dyn rustc_infer::traits::TraitEngine<'_>>::new(infcx.tcx);
+
+                            let copy_did = infcx.tcx.lang_items().copy_trait().unwrap();
+                            let cause = ObligationCause::new(
+                                span,
+                                self.mir_hir_id(),
+                                rustc_infer::traits::ObligationCauseCode::MiscObligation,
+                            );
+                            fulfill_cx.register_bound(&infcx, self.param_env, ty, copy_did, cause);
+                            let errors = fulfill_cx.select_where_possible(&infcx);
+
+                            // Only emit suggestion if all required predicates are on generic
+                            errors
+                                .into_iter()
+                                .map(|err| match err.obligation.predicate.kind().skip_binder() {
+                                    PredicateKind::Trait(predicate) => {
+                                        match predicate.self_ty().kind() {
+                                            ty::Param(param_ty) => Ok((
+                                                generics.type_param(param_ty, tcx),
+                                                predicate
+                                                    .trait_ref
+                                                    .print_only_trait_path()
+                                                    .to_string(),
+                                            )),
+                                            _ => Err(()),
+                                        }
+                                    }
+                                    _ => Err(()),
+                                })
+                                .collect()
+                        });
+
+                        if let Ok(predicates) = predicates {
+                            suggest_constraining_type_params(
+                                tcx,
+                                hir_generics,
+                                &mut err,
+                                predicates.iter().map(|(param, constraint)| {
+                                    (param.name.as_str(), &**constraint, None)
+                                }),
+                            );
+                        }
+                    }
                 }
+
                 let span = if let Some(local) = place.as_local() {
                     let decl = &self.body.local_decls[local];
                     Some(decl.source_info.span)
@@ -507,7 +568,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         location: Location,
         (place, _span): (Place<'tcx>, Span),
         borrow: &BorrowData<'tcx>,
-    ) -> DiagnosticBuilder<'cx, ErrorReported> {
+    ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         let borrow_spans = self.retrieve_borrow_spans(borrow);
         let borrow_span = borrow_spans.args_or_use();
 
@@ -554,7 +615,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         (place, span): (Place<'tcx>, Span),
         gen_borrow_kind: BorrowKind,
         issued_borrow: &BorrowData<'tcx>,
-    ) -> DiagnosticBuilder<'cx, ErrorReported> {
+    ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         let issued_spans = self.retrieve_borrow_spans(issued_borrow);
         let issued_span = issued_spans.args_or_use();
 
@@ -1120,7 +1181,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         drop_span: Span,
         borrow_spans: UseSpans<'tcx>,
         explanation: BorrowExplanation,
-    ) -> DiagnosticBuilder<'cx, ErrorReported> {
+    ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         debug!(
             "report_local_value_does_not_live_long_enough(\
              {:?}, {:?}, {:?}, {:?}, {:?}\
@@ -1298,7 +1359,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         &mut self,
         drop_span: Span,
         borrow_span: Span,
-    ) -> DiagnosticBuilder<'cx, ErrorReported> {
+    ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         debug!(
             "report_thread_local_value_does_not_live_long_enough(\
              {:?}, {:?}\
@@ -1325,7 +1386,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         borrow_spans: UseSpans<'tcx>,
         proper_span: Span,
         explanation: BorrowExplanation,
-    ) -> DiagnosticBuilder<'cx, ErrorReported> {
+    ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         debug!(
             "report_temporary_value_does_not_live_long_enough(\
              {:?}, {:?}, {:?}, {:?}\
@@ -1384,7 +1445,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         return_span: Span,
         category: ConstraintCategory,
         opt_place_desc: Option<&String>,
-    ) -> Option<DiagnosticBuilder<'cx, ErrorReported>> {
+    ) -> Option<DiagnosticBuilder<'cx, ErrorGuaranteed>> {
         let return_kind = match category {
             ConstraintCategory::Return(_) => "return",
             ConstraintCategory::Yield => "yield",
@@ -1483,7 +1544,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         category: ConstraintCategory,
         constraint_span: Span,
         captured_var: &str,
-    ) -> DiagnosticBuilder<'cx, ErrorReported> {
+    ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         let tcx = self.infcx.tcx;
         let args_span = use_span.args_or_use();
 
@@ -1560,7 +1621,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         upvar_span: Span,
         upvar_name: &str,
         escape_span: Span,
-    ) -> DiagnosticBuilder<'cx, ErrorReported> {
+    ) -> DiagnosticBuilder<'cx, ErrorGuaranteed> {
         let tcx = self.infcx.tcx;
 
         let (_, escapes_from) = tcx.article_and_description(self.mir_def_id().to_def_id());

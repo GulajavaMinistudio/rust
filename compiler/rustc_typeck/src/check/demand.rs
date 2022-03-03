@@ -4,7 +4,7 @@ use rustc_trait_selection::infer::InferCtxtExt as _;
 use rustc_trait_selection::traits::ObligationCause;
 
 use rustc_ast::util::parser::PREC_POSTFIX;
-use rustc_errors::{Applicability, Diagnostic, DiagnosticBuilder, ErrorReported};
+use rustc_errors::{Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed};
 use rustc_hir as hir;
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{is_range_literal, Node};
@@ -57,7 +57,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         sp: Span,
         expected: Ty<'tcx>,
         actual: Ty<'tcx>,
-    ) -> Option<DiagnosticBuilder<'tcx, ErrorReported>> {
+    ) -> Option<DiagnosticBuilder<'tcx, ErrorGuaranteed>> {
         self.demand_suptype_with_origin(&self.misc(sp), expected, actual)
     }
 
@@ -67,7 +67,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         cause: &ObligationCause<'tcx>,
         expected: Ty<'tcx>,
         actual: Ty<'tcx>,
-    ) -> Option<DiagnosticBuilder<'tcx, ErrorReported>> {
+    ) -> Option<DiagnosticBuilder<'tcx, ErrorGuaranteed>> {
         match self.at(cause, self.param_env).sup(expected, actual) {
             Ok(InferOk { obligations, value: () }) => {
                 self.register_predicates(obligations);
@@ -88,7 +88,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         sp: Span,
         expected: Ty<'tcx>,
         actual: Ty<'tcx>,
-    ) -> Option<DiagnosticBuilder<'tcx, ErrorReported>> {
+    ) -> Option<DiagnosticBuilder<'tcx, ErrorGuaranteed>> {
         self.demand_eqtype_with_origin(&self.misc(sp), expected, actual)
     }
 
@@ -97,7 +97,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         cause: &ObligationCause<'tcx>,
         expected: Ty<'tcx>,
         actual: Ty<'tcx>,
-    ) -> Option<DiagnosticBuilder<'tcx, ErrorReported>> {
+    ) -> Option<DiagnosticBuilder<'tcx, ErrorGuaranteed>> {
         match self.at(cause, self.param_env).eq(expected, actual) {
             Ok(InferOk { obligations, value: () }) => {
                 self.register_predicates(obligations);
@@ -134,7 +134,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Ty<'tcx>,
         expected_ty_expr: Option<&'tcx hir::Expr<'tcx>>,
         allow_two_phase: AllowTwoPhase,
-    ) -> (Ty<'tcx>, Option<DiagnosticBuilder<'tcx, ErrorReported>>) {
+    ) -> (Ty<'tcx>, Option<DiagnosticBuilder<'tcx, ErrorGuaranteed>>) {
         let expected = self.resolve_vars_with_obligations(expected);
 
         let e = match self.try_coerce(expr, checked_ty, expected, allow_two_phase, None) {
@@ -276,11 +276,28 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // we suggest adding a separate return expression instead.
             // (To avoid things like suggesting `Ok(while .. { .. })`.)
             if expr_ty.is_unit() {
+                let mut id = expr.hir_id;
+                let mut parent;
+
+                // Unroll desugaring, to make sure this works for `for` loops etc.
+                loop {
+                    parent = self.tcx.hir().get_parent_node(id);
+                    if let Some(parent_span) = self.tcx.hir().opt_span(parent) {
+                        if parent_span.find_ancestor_inside(expr.span).is_some() {
+                            // The parent node is part of the same span, so is the result of the
+                            // same expansion/desugaring and not the 'real' parent node.
+                            id = parent;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
                 if let Some(hir::Node::Block(&hir::Block {
                     span: block_span, expr: Some(e), ..
-                })) = self.tcx.hir().find(self.tcx.hir().get_parent_node(expr.hir_id))
+                })) = self.tcx.hir().find(parent)
                 {
-                    if e.hir_id == expr.hir_id {
+                    if e.hir_id == id {
                         if let Some(span) = expr.span.find_ancestor_inside(block_span) {
                             let return_suggestions =
                                 if self.tcx.is_diagnostic_item(sym::Result, expected_adt.did) {

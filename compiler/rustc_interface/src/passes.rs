@@ -2,6 +2,7 @@ use crate::interface::{Compiler, Result};
 use crate::proc_macro_decls;
 use crate::util;
 
+use ast::CRATE_NODE_ID;
 use rustc_ast::mut_visit::MutVisitor;
 use rustc_ast::{self as ast, visit};
 use rustc_borrowck as mir_borrowck;
@@ -10,7 +11,7 @@ use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_data_structures::parallel;
 use rustc_data_structures::sync::{Lrc, OnceCell, WorkerLocal};
 use rustc_data_structures::temp_dir::MaybeTempDir;
-use rustc_errors::{Applicability, ErrorReported, PResult};
+use rustc_errors::{Applicability, ErrorGuaranteed, PResult};
 use rustc_expand::base::{ExtCtxt, LintStoreExpand, ResolverExpand};
 use rustc_hir::def_id::{StableCrateId, LOCAL_CRATE};
 use rustc_hir::Crate;
@@ -188,7 +189,7 @@ pub fn register_plugins<'a>(
         )
     });
 
-    let (krate, features) = rustc_expand::config::features(sess, krate);
+    let (krate, features) = rustc_expand::config::features(sess, krate, CRATE_NODE_ID);
     // these need to be set "early" so that expansion sees `quote` if enabled.
     sess.init_features(features);
 
@@ -373,7 +374,7 @@ pub fn configure_and_expand(
         if recursion_limit_hit {
             // If we hit a recursion limit, exit early to avoid later passes getting overwhelmed
             // with a large AST
-            Err(ErrorReported)
+            Err(ErrorGuaranteed)
         } else {
             Ok(krate)
         }
@@ -758,7 +759,7 @@ pub fn prepare_outputs(
                         executable",
                     input_path.display()
                 ));
-                return Err(ErrorReported);
+                return Err(ErrorGuaranteed);
             }
             if let Some(dir_path) = output_conflicts_with_dir(&output_paths) {
                 sess.err(&format!(
@@ -767,7 +768,7 @@ pub fn prepare_outputs(
                     input_path.display(),
                     dir_path.display()
                 ));
-                return Err(ErrorReported);
+                return Err(ErrorGuaranteed);
             }
         }
     }
@@ -775,7 +776,7 @@ pub fn prepare_outputs(
     if let Some(ref dir) = compiler.temps_dir {
         if fs::create_dir_all(dir).is_err() {
             sess.err("failed to find or create the directory specified by `--temps-dir`");
-            return Err(ErrorReported);
+            return Err(ErrorGuaranteed);
         }
     }
 
@@ -788,7 +789,7 @@ pub fn prepare_outputs(
         if let Some(ref dir) = compiler.output_dir {
             if fs::create_dir_all(dir).is_err() {
                 sess.err("failed to find or create the directory specified by `--out-dir`");
-                return Err(ErrorReported);
+                return Err(ErrorGuaranteed);
             }
         }
     }
@@ -993,7 +994,7 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
     // lint warnings and so on -- kindck used to do this abort, but
     // kindck is gone now). -nmatsakis
     if sess.has_errors() {
-        return Err(ErrorReported);
+        return Err(ErrorGuaranteed);
     }
 
     sess.time("misc_checking_3", || {
