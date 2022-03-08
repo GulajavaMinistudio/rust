@@ -7,7 +7,7 @@ use crate::infer::canonical::{Canonical, CanonicalVarInfo, CanonicalVarInfos};
 use crate::lint::{struct_lint_level, LintDiagnosticBuilder, LintLevelSource};
 use crate::middle::resolve_lifetime::{self, LifetimeScopeForPath};
 use crate::middle::stability;
-use crate::mir::interpret::{self, Allocation, ConstValue, Scalar};
+use crate::mir::interpret::{self, Allocation, ConstAllocation, ConstValue, Scalar};
 use crate::mir::{
     Body, BorrowCheckResult, Field, Local, Place, PlaceElem, ProjectionKind, Promoted,
 };
@@ -56,7 +56,7 @@ use rustc_span::def_id::{DefPathHash, StableCrateId};
 use rustc_span::source_map::{MultiSpan, SourceMap};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
-use rustc_target::abi::{Layout, TargetDataLayout, VariantIdx};
+use rustc_target::abi::{Layout, LayoutS, TargetDataLayout, VariantIdx};
 use rustc_target::spec::abi;
 
 use rustc_type_ir::TypeFlags;
@@ -114,7 +114,7 @@ pub struct CtxtInterners<'tcx> {
     const_: InternedSet<'tcx, ConstS<'tcx>>,
     const_allocation: InternedSet<'tcx, Allocation>,
     bound_variable_kinds: InternedSet<'tcx, List<ty::BoundVariableKind>>,
-    layout: InternedSet<'tcx, Layout>,
+    layout: InternedSet<'tcx, LayoutS<'tcx>>,
     adt_def: InternedSet<'tcx, AdtDef>,
 }
 
@@ -1653,22 +1653,6 @@ pub trait Lift<'tcx>: fmt::Debug {
     fn lift_to_tcx(self, tcx: TyCtxt<'tcx>) -> Option<Self::Lifted>;
 }
 
-// Deprecated: we are in the process of converting all uses to `nop_lift`.
-macro_rules! nop_lift_old {
-    ($set:ident; $ty:ty => $lifted:ty) => {
-        impl<'a, 'tcx> Lift<'tcx> for $ty {
-            type Lifted = $lifted;
-            fn lift_to_tcx(self, tcx: TyCtxt<'tcx>) -> Option<Self::Lifted> {
-                if tcx.interners.$set.contains_pointer_to(&InternedInSet(self)) {
-                    Some(unsafe { mem::transmute(self) })
-                } else {
-                    None
-                }
-            }
-        }
-    };
-}
-
 macro_rules! nop_lift {
     ($set:ident; $ty:ty => $lifted:ty) => {
         impl<'a, 'tcx> Lift<'tcx> for $ty {
@@ -1726,7 +1710,7 @@ macro_rules! nop_list_lift {
 nop_lift! {type_; Ty<'a> => Ty<'tcx>}
 nop_lift! {region; Region<'a> => Region<'tcx>}
 nop_lift! {const_; Const<'a> => Const<'tcx>}
-nop_lift_old! {const_allocation; &'a Allocation => &'tcx Allocation}
+nop_lift! {const_allocation; ConstAllocation<'a> => ConstAllocation<'tcx>}
 nop_lift! {predicate; Predicate<'a> => Predicate<'tcx>}
 
 nop_list_lift! {poly_existential_predicates; ty::Binder<'a, ExistentialPredicate<'a>> => ty::Binder<'tcx, ExistentialPredicate<'tcx>>}
@@ -2161,6 +2145,8 @@ macro_rules! direct_interners {
 direct_interners! {
     region: mk_region(RegionKind): Region -> Region<'tcx>,
     const_: mk_const(ConstS<'tcx>): Const -> Const<'tcx>,
+    const_allocation: intern_const_alloc(Allocation): ConstAllocation -> ConstAllocation<'tcx>,
+    layout: intern_layout(LayoutS<'tcx>): Layout -> Layout<'tcx>,
 }
 
 macro_rules! direct_interners_old {
@@ -2201,8 +2187,6 @@ macro_rules! direct_interners_old {
 
 // FIXME: eventually these should all be converted to `direct_interners`.
 direct_interners_old! {
-    const_allocation: intern_const_alloc(Allocation),
-    layout: intern_layout(Layout),
     adt_def: intern_adt_def(AdtDef),
 }
 
