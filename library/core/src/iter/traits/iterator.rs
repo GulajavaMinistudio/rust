@@ -35,6 +35,11 @@ fn _assert_is_object_safe(_: &dyn Iterator<Item = ()>) {}
               to have a bounded `RangeInclusive`: `0..=end`"
     ),
     on(
+        _Self = "[]",
+        label = "`{Self}` is not an iterator; try calling `.into_iter()` or `.iter()`"
+    ),
+    on(_Self = "&[]", label = "`{Self}` is not an iterator; try calling `.iter()`"),
+    on(
         _Self = "&str",
         label = "`{Self}` is not an iterator; try calling `.chars()` or `.bytes()`"
     ),
@@ -1857,6 +1862,77 @@ pub trait Iterator {
         B: FromIterator<<Self::Item as Try>::Output>,
     {
         try_process(self, |i| i.collect())
+    }
+
+    /// Collects all the items from an iterator into a collection.
+    ///
+    /// This method consumes the iterator and adds all its items to the
+    /// passed collection. The collection is then returned, so the call chain
+    /// can be continued.
+    ///
+    /// This is useful when you already have a collection and wants to add
+    /// the iterator items to it.
+    ///
+    /// This method is a convenience method to call [Extend::extend](trait.Extend.html),
+    /// but instead of being called on a collection, it's called on an iterator.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// #![feature(iter_collect_into)]
+    ///
+    /// let a = [1, 2, 3];
+    /// let mut vec: Vec::<i32> = vec![0, 1];
+    ///
+    /// a.iter().map(|&x| x * 2).collect_into(&mut vec);
+    /// a.iter().map(|&x| x * 10).collect_into(&mut vec);
+    ///
+    /// assert_eq!(vec![0, 1, 2, 4, 6, 10, 20, 30], vec);
+    /// ```
+    ///
+    /// `Vec` can have a manual set capacity to avoid reallocating it:
+    ///
+    /// ```
+    /// #![feature(iter_collect_into)]
+    ///
+    /// let a = [1, 2, 3];
+    /// let mut vec: Vec::<i32> = Vec::with_capacity(6);
+    ///
+    /// a.iter().map(|&x| x * 2).collect_into(&mut vec);
+    /// a.iter().map(|&x| x * 10).collect_into(&mut vec);
+    ///
+    /// assert_eq!(6, vec.capacity());
+    /// println!("{:?}", vec);
+    /// ```
+    ///
+    /// The returned mutable reference can be used to continue the call chain:
+    ///
+    /// ```
+    /// #![feature(iter_collect_into)]
+    ///
+    /// let a = [1, 2, 3];
+    /// let mut vec: Vec::<i32> = Vec::with_capacity(6);
+    ///
+    /// let count = a.iter().collect_into(&mut vec).iter().count();
+    ///
+    /// assert_eq!(count, vec.len());
+    /// println!("Vec len is {}", count);
+    ///
+    /// let count = a.iter().collect_into(&mut vec).iter().count();
+    ///
+    /// assert_eq!(count, vec.len());
+    /// println!("Vec len now is {}", count);
+    /// ```
+    #[inline]
+    #[unstable(feature = "iter_collect_into", reason = "new API", issue = "94780")]
+    fn collect_into<E: Extend<Self::Item>>(self, collection: &mut E) -> &mut E
+    where
+        Self: Sized,
+    {
+        collection.extend(self);
+        collection
     }
 
     /// Consumes an iterator, creating two collections from it.

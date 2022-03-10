@@ -263,6 +263,7 @@
 #![feature(doc_cfg)]
 #![feature(doc_cfg_hide)]
 #![feature(rustdoc_internals)]
+#![cfg_attr(not(bootstrap), feature(deprecated_suggestion))]
 #![feature(doc_masked)]
 #![feature(doc_notable_trait)]
 #![feature(dropck_eyepatch)]
@@ -362,6 +363,11 @@ extern crate std as realstd;
 // The standard macros that are not built-in to the compiler.
 #[macro_use]
 mod macros;
+
+// The runtime entry point and a few unstable public functions used by the
+// compiler
+#[macro_use]
+pub mod rt;
 
 // The Rust prelude
 pub mod prelude;
@@ -546,11 +552,6 @@ pub mod arch {
 // This was stabilized in the crate root so we have to keep it there.
 #[stable(feature = "simd_x86", since = "1.27.0")]
 pub use std_detect::is_x86_feature_detected;
-
-// The runtime entry point and a few unstable public functions used by the
-// compiler
-#[macro_use]
-pub mod rt;
 
 // Platform-abstraction modules
 mod sys;

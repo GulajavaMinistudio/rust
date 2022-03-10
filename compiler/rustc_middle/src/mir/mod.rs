@@ -1292,6 +1292,8 @@ pub enum InlineAsmOperand<'tcx> {
 /// Type for MIR `Assert` terminator error messages.
 pub type AssertMessage<'tcx> = AssertKind<Operand<'tcx>>;
 
+// FIXME: Change `Successors` to `impl Iterator<Item = BasicBlock>`.
+#[allow(rustc::pass_by_value)]
 pub type Successors<'a> =
     iter::Chain<option::IntoIter<&'a BasicBlock>, slice::Iter<'a, BasicBlock>>;
 pub type SuccessorsMut<'a> =
@@ -1832,7 +1834,8 @@ impl<V, T> ProjectionElem<V, T> {
 /// and the index is a local.
 pub type PlaceElem<'tcx> = ProjectionElem<Local, Ty<'tcx>>;
 
-// At least on 64 bit systems, `PlaceElem` should not be larger than two pointers.
+// This type is fairly frequently used, so we shouldn't unintentionally increase
+// its size.
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 static_assert_size!(PlaceElem<'_>, 24);
 
@@ -2554,7 +2557,14 @@ impl<'tcx> Constant<'tcx> {
 impl<'tcx> From<ty::Const<'tcx>> for ConstantKind<'tcx> {
     #[inline]
     fn from(ct: ty::Const<'tcx>) -> Self {
-        Self::Ty(ct)
+        match ct.val() {
+            ty::ConstKind::Value(cv) => {
+                // FIXME Once valtrees are introduced we need to convert those
+                // into `ConstValue` instances here
+                Self::Val(cv, ct.ty())
+            }
+            _ => Self::Ty(ct),
+        }
     }
 }
 
@@ -2634,6 +2644,27 @@ impl<'tcx> ConstantKind<'tcx> {
             Self::Ty(ct) => ct.try_eval_usize(tcx, param_env),
             Self::Val(val, _) => val.try_to_machine_usize(tcx),
         }
+    }
+
+    pub fn from_bool(tcx: TyCtxt<'tcx>, v: bool) -> Self {
+        let cv = ConstValue::from_bool(v);
+        Self::Val(cv, tcx.types.bool)
+    }
+
+    pub fn from_zero_sized(ty: Ty<'tcx>) -> Self {
+        let cv = ConstValue::Scalar(Scalar::ZST);
+        Self::Val(cv, ty)
+    }
+
+    pub fn from_usize(tcx: TyCtxt<'tcx>, n: u64) -> Self {
+        let ty = tcx.types.usize;
+        let size = tcx
+            .layout_of(ty::ParamEnv::empty().and(ty))
+            .unwrap_or_else(|e| bug!("could not compute layout for {:?}: {:?}", ty, e))
+            .size;
+        let cv = ConstValue::Scalar(Scalar::from_uint(n as u128, size));
+
+        Self::Val(cv, ty)
     }
 }
 
