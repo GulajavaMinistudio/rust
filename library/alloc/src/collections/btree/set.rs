@@ -60,7 +60,7 @@ use super::Recover;
 ///
 /// // Iterate over everything.
 /// for book in &books {
-///     println!("{}", book);
+///     println!("{book}");
 /// }
 /// ```
 ///
@@ -284,7 +284,7 @@ impl<T> BTreeSet<T> {
     /// set.insert(5);
     /// set.insert(8);
     /// for &elem in set.range((Included(&4), Included(&8))) {
-    ///     println!("{}", elem);
+    ///     println!("{elem}");
     /// }
     /// assert_eq!(Some(&5), set.range(4..).next());
     /// ```
@@ -873,7 +873,7 @@ impl<T> BTreeSet<T> {
 
     /// Retains only the elements specified by the predicate.
     ///
-    /// In other words, remove all elements `e` such that `f(&e)` returns `false`.
+    /// In other words, remove all elements `e` for which `f(&e)` returns `false`.
     /// The elements are visited in ascending order.
     ///
     /// # Examples

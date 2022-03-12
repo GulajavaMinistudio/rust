@@ -109,7 +109,7 @@ pub enum TyKind<'tcx> {
     ///
     /// Note that generic parameters in fields only get lazily substituted
     /// by using something like `adt_def.all_fields().map(|field| field.ty(tcx, substs))`.
-    Adt(&'tcx AdtDef, SubstsRef<'tcx>),
+    Adt(AdtDef<'tcx>, SubstsRef<'tcx>),
 
     /// An unsized FFI type that is opaque to Rust. Written as `extern type T`.
     Foreign(DefId),
@@ -1903,7 +1903,7 @@ impl<'tcx> Ty<'tcx> {
     #[inline]
     pub fn is_simd(self) -> bool {
         match self.kind() {
-            Adt(def, _) => def.repr.simd(),
+            Adt(def, _) => def.repr().simd(),
             _ => false,
         }
     }
@@ -1919,7 +1919,7 @@ impl<'tcx> Ty<'tcx> {
     pub fn simd_size_and_type(self, tcx: TyCtxt<'tcx>) -> (u64, Ty<'tcx>) {
         match self.kind() {
             Adt(def, substs) => {
-                assert!(def.repr.simd(), "`simd_size_and_type` called on non-SIMD type");
+                assert!(def.repr().simd(), "`simd_size_and_type` called on non-SIMD type");
                 let variant = def.non_enum_variant();
                 let f0_ty = variant.fields[0].ty(tcx, substs);
 
@@ -2153,9 +2153,9 @@ impl<'tcx> Ty<'tcx> {
     }
 
     #[inline]
-    pub fn ty_adt_def(self) -> Option<&'tcx AdtDef> {
+    pub fn ty_adt_def(self) -> Option<AdtDef<'tcx>> {
         match self.kind() {
-            Adt(adt, _) => Some(adt),
+            Adt(adt, _) => Some(*adt),
             _ => None,
         }
     }
@@ -2194,7 +2194,7 @@ impl<'tcx> Ty<'tcx> {
         variant_index: VariantIdx,
     ) -> Option<Discr<'tcx>> {
         match self.kind() {
-            TyKind::Adt(adt, _) if adt.variants.is_empty() => {
+            TyKind::Adt(adt, _) if adt.variants().is_empty() => {
                 // This can actually happen during CTFE, see
                 // https://github.com/rust-lang/rust/issues/89765.
                 None
@@ -2212,7 +2212,7 @@ impl<'tcx> Ty<'tcx> {
     /// Returns the type of the discriminant of this type.
     pub fn discriminant_ty(self, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
         match self.kind() {
-            ty::Adt(adt, _) if adt.is_enum() => adt.repr.discr_type().to_ty(tcx),
+            ty::Adt(adt, _) if adt.is_enum() => adt.repr().discr_type().to_ty(tcx),
             ty::Generator(_, substs, _) => substs.as_generator().discr_ty(tcx),
 
             ty::Param(_) | ty::Projection(_) | ty::Opaque(..) | ty::Infer(ty::TyVar(_)) => {
@@ -2377,6 +2377,57 @@ impl<'tcx> Ty<'tcx> {
             | ty::Placeholder(..)
             | ty::Infer(ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_)) => {
                 bug!("`is_trivially_sized` applied to unexpected type: {:?}", self)
+            }
+        }
+    }
+
+    /// Fast path helper for primitives which are always `Copy` and which
+    /// have a side-effect-free `Clone` impl.
+    ///
+    /// Returning true means the type is known to be pure and `Copy+Clone`.
+    /// Returning `false` means nothing -- could be `Copy`, might not be.
+    ///
+    /// This is mostly useful for optimizations, as there are the types
+    /// on which we can replace cloning with dereferencing.
+    pub fn is_trivially_pure_clone_copy(self) -> bool {
+        match self.kind() {
+            ty::Bool | ty::Char | ty::Never => true,
+
+            // These aren't even `Clone`
+            ty::Str | ty::Slice(..) | ty::Foreign(..) | ty::Dynamic(..) => false,
+
+            ty::Int(..) | ty::Uint(..) | ty::Float(..) => true,
+
+            // The voldemort ZSTs are fine.
+            ty::FnDef(..) => true,
+
+            ty::Array(element_ty, _len) => element_ty.is_trivially_pure_clone_copy(),
+
+            // A 100-tuple isn't "trivial", so doing this only for reasonable sizes.
+            ty::Tuple(field_tys) => {
+                field_tys.len() <= 3 && field_tys.iter().all(Self::is_trivially_pure_clone_copy)
+            }
+
+            // Sometimes traits aren't implemented for every ABI or arity,
+            // because we can't be generic over everything yet.
+            ty::FnPtr(..) => false,
+
+            // Definitely absolutely not copy.
+            ty::Ref(_, _, hir::Mutability::Mut) => false,
+
+            // Thin pointers & thin shared references are pure-clone-copy, but for
+            // anything with custom metadata it might be more complicated.
+            ty::Ref(_, _, hir::Mutability::Not) | ty::RawPtr(..) => false,
+
+            ty::Generator(..) | ty::GeneratorWitness(..) => false,
+
+            // Might be, but not "trivial" so just giving the safe answer.
+            ty::Adt(..) | ty::Closure(..) | ty::Opaque(..) => false,
+
+            ty::Projection(..) | ty::Param(..) | ty::Infer(..) | ty::Error(..) => false,
+
+            ty::Bound(..) | ty::Placeholder(..) => {
+                bug!("`is_trivially_pure_clone_copy` applied to unexpected type: {:?}", self);
             }
         }
     }

@@ -1915,6 +1915,27 @@ impl<'tcx> Place<'tcx> {
             (base, proj)
         })
     }
+
+    /// Generates a new place by appending `more_projections` to the existing ones
+    /// and interning the result.
+    pub fn project_deeper(self, more_projections: &[PlaceElem<'tcx>], tcx: TyCtxt<'tcx>) -> Self {
+        if more_projections.is_empty() {
+            return self;
+        }
+
+        let mut v: Vec<PlaceElem<'tcx>>;
+
+        let new_projections = if self.projection.is_empty() {
+            more_projections
+        } else {
+            v = Vec::with_capacity(self.projection.len() + more_projections.len());
+            v.extend(self.projection);
+            v.extend(more_projections);
+            &v
+        };
+
+        Place { local: self.local, projection: tcx.intern_place_elems(new_projections) }
+    }
 }
 
 impl From<Local> for Place<'_> {
@@ -2187,6 +2208,15 @@ impl<'tcx> Operand<'tcx> {
             Operand::Copy(_) | Operand::Move(_) => None,
         }
     }
+
+    /// Gets the `ty::FnDef` from an operand if it's a constant function item.
+    ///
+    /// While this is unlikely in general, it's the normal case of what you'll
+    /// find as the `func` in a [`TerminatorKind::Call`].
+    pub fn const_fn_def(&self) -> Option<(DefId, SubstsRef<'tcx>)> {
+        let const_ty = self.constant()?.literal.ty();
+        if let ty::FnDef(def_id, substs) = *const_ty.kind() { Some((def_id, substs)) } else { None }
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -2425,7 +2455,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
 
                     AggregateKind::Adt(adt_did, variant, substs, _user_ty, _) => {
                         ty::tls::with(|tcx| {
-                            let variant_def = &tcx.adt_def(adt_did).variants[variant];
+                            let variant_def = &tcx.adt_def(adt_did).variant(variant);
                             let substs = tcx.lift(substs).expect("could not lift for printing");
                             let name = FmtPrinter::new(tcx, Namespace::ValueNS)
                                 .print_def_path(variant_def.def_id, substs)?
@@ -2753,7 +2783,7 @@ impl<'tcx> UserTypeProjections {
         self.map_projections(|pat_ty_proj| pat_ty_proj.leaf(field))
     }
 
-    pub fn variant(self, adt_def: &'tcx AdtDef, variant_index: VariantIdx, field: Field) -> Self {
+    pub fn variant(self, adt_def: AdtDef<'tcx>, variant_index: VariantIdx, field: Field) -> Self {
         self.map_projections(|pat_ty_proj| pat_ty_proj.variant(adt_def, variant_index, field))
     }
 }
@@ -2804,12 +2834,12 @@ impl UserTypeProjection {
 
     pub(crate) fn variant(
         mut self,
-        adt_def: &AdtDef,
+        adt_def: AdtDef<'_>,
         variant_index: VariantIdx,
         field: Field,
     ) -> Self {
         self.projs.push(ProjectionElem::Downcast(
-            Some(adt_def.variants[variant_index].name),
+            Some(adt_def.variant(variant_index).name),
             variant_index,
         ));
         self.projs.push(ProjectionElem::Field(field, ()));

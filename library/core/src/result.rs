@@ -35,8 +35,8 @@
 //!
 //! let version = parse_version(&[1, 2, 3, 4]);
 //! match version {
-//!     Ok(v) => println!("working with version: {:?}", v),
-//!     Err(e) => println!("error parsing header: {:?}", e),
+//!     Ok(v) => println!("working with version: {v:?}"),
+//!     Err(e) => println!("error parsing header: {e:?}"),
 //! }
 //! ```
 //!
@@ -447,9 +447,9 @@
 //!    .collect();
 //! assert_eq!(errs.len(), 3);
 //! assert_eq!(nums, [17, 99]);
-//! println!("results {:?}", results);
-//! println!("errs {:?}", errs);
-//! println!("nums {:?}", nums);
+//! println!("results {results:?}");
+//! println!("errs {errs:?}");
+//! println!("nums {nums:?}");
 //! ```
 //!
 //! ## Collecting into `Result`
@@ -542,7 +542,7 @@ impl<T, E> Result<T, E> {
         matches!(*self, Ok(_))
     }
 
-    /// Returns `true` if the result is [`Ok`] wrapping a value matching the predicate.
+    /// Returns `true` if the result is [`Ok`] and the value inside of it matches a predicate.
     ///
     /// # Examples
     ///
@@ -550,18 +550,18 @@ impl<T, E> Result<T, E> {
     /// #![feature(is_some_with)]
     ///
     /// let x: Result<u32, &str> = Ok(2);
-    /// assert_eq!(x.is_ok_with(|&x| x > 1), true);
+    /// assert_eq!(x.is_ok_and(|&x| x > 1), true);
     ///
     /// let x: Result<u32, &str> = Ok(0);
-    /// assert_eq!(x.is_ok_with(|&x| x > 1), false);
+    /// assert_eq!(x.is_ok_and(|&x| x > 1), false);
     ///
     /// let x: Result<u32, &str> = Err("hey");
-    /// assert_eq!(x.is_ok_with(|&x| x > 1), false);
+    /// assert_eq!(x.is_ok_and(|&x| x > 1), false);
     /// ```
     #[must_use]
     #[inline]
     #[unstable(feature = "is_some_with", issue = "93050")]
-    pub fn is_ok_with(&self, f: impl FnOnce(&T) -> bool) -> bool {
+    pub fn is_ok_and(&self, f: impl FnOnce(&T) -> bool) -> bool {
         matches!(self, Ok(x) if f(x))
     }
 
@@ -586,7 +586,7 @@ impl<T, E> Result<T, E> {
         !self.is_ok()
     }
 
-    /// Returns `true` if the result is [`Err`] wrapping a value matching the predicate.
+    /// Returns `true` if the result is [`Err`] and the value inside of it matches a predicate.
     ///
     /// # Examples
     ///
@@ -595,18 +595,18 @@ impl<T, E> Result<T, E> {
     /// use std::io::{Error, ErrorKind};
     ///
     /// let x: Result<u32, Error> = Err(Error::new(ErrorKind::NotFound, "!"));
-    /// assert_eq!(x.is_err_with(|x| x.kind() == ErrorKind::NotFound), true);
+    /// assert_eq!(x.is_err_and(|x| x.kind() == ErrorKind::NotFound), true);
     ///
     /// let x: Result<u32, Error> = Err(Error::new(ErrorKind::PermissionDenied, "!"));
-    /// assert_eq!(x.is_err_with(|x| x.kind() == ErrorKind::NotFound), false);
+    /// assert_eq!(x.is_err_and(|x| x.kind() == ErrorKind::NotFound), false);
     ///
     /// let x: Result<u32, Error> = Ok(123);
-    /// assert_eq!(x.is_err_with(|x| x.kind() == ErrorKind::NotFound), false);
+    /// assert_eq!(x.is_err_and(|x| x.kind() == ErrorKind::NotFound), false);
     /// ```
     #[must_use]
     #[inline]
     #[unstable(feature = "is_some_with", issue = "93050")]
-    pub fn is_err_with(&self, f: impl FnOnce(&E) -> bool) -> bool {
+    pub fn is_err_and(&self, f: impl FnOnce(&E) -> bool) -> bool {
         matches!(self, Err(x) if f(x))
     }
 
@@ -756,7 +756,7 @@ impl<T, E> Result<T, E> {
     ///
     /// for num in line.lines() {
     ///     match num.parse::<i32>().map(|i| i * 2) {
-    ///         Ok(n) => println!("{}", n),
+    ///         Ok(n) => println!("{n}"),
     ///         Err(..) => {}
     ///     }
     /// }
@@ -838,7 +838,7 @@ impl<T, E> Result<T, E> {
     /// Basic usage:
     ///
     /// ```
-    /// fn stringify(x: u32) -> String { format!("error code: {}", x) }
+    /// fn stringify(x: u32) -> String { format!("error code: {x}") }
     ///
     /// let x: Result<u32, u32> = Ok(2);
     /// assert_eq!(x.map_err(stringify), Ok(2));
@@ -864,7 +864,7 @@ impl<T, E> Result<T, E> {
     ///
     /// let x: u8 = "4"
     ///     .parse::<u8>()
-    ///     .inspect(|x| println!("original: {}", x))
+    ///     .inspect(|x| println!("original: {x}"))
     ///     .map(|x| x.pow(3))
     ///     .expect("failed to parse number");
     /// ```
@@ -889,7 +889,7 @@ impl<T, E> Result<T, E> {
     ///
     /// fn read() -> io::Result<String> {
     ///     fs::read_to_string("address.txt")
-    ///         .inspect_err(|e| eprintln!("failed to read file: {}", e))
+    ///         .inspect_err(|e| eprintln!("failed to read file: {e}"))
     /// }
     /// ```
     #[inline]
@@ -1198,7 +1198,7 @@ impl<T, E> Result<T, E> {
     /// }
     ///
     /// let s: String = only_good_news().into_ok();
-    /// println!("{}", s);
+    /// println!("{s}");
     /// ```
     #[unstable(feature = "unwrap_infallible", reason = "newly added", issue = "61695")]
     #[inline]
@@ -1235,7 +1235,7 @@ impl<T, E> Result<T, E> {
     /// }
     ///
     /// let error: String = only_bad_news().into_err();
-    /// println!("{}", error);
+    /// println!("{error}");
     /// ```
     #[unstable(feature = "unwrap_infallible", reason = "newly added", issue = "61695")]
     #[inline]
@@ -1781,7 +1781,7 @@ impl<T> Result<T, T> {
 #[cold]
 #[track_caller]
 fn unwrap_failed(msg: &str, error: &dyn fmt::Debug) -> ! {
-    panic!("{}: {:?}", msg, error)
+    panic!("{msg}: {error:?}")
 }
 
 // This is a separate function to avoid constructing a `dyn Debug`
