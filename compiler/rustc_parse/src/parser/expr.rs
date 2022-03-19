@@ -1,9 +1,10 @@
+use super::diagnostics::SnapshotParser;
 use super::pat::{CommaRecoveryMode, RecoverColon, RecoverComma, PARAM_EXPECTED};
 use super::ty::{AllowPlus, RecoverQPath, RecoverReturnSign};
 use super::{
-    AttrWrapper, BlockMode, ClosureSpans, ForceCollect, Parser, PathStyle, Restrictions, TokenType,
+    AttrWrapper, BlockMode, ClosureSpans, ForceCollect, Parser, PathStyle, Restrictions,
+    SemiColonMode, SeqSep, TokenExpectType, TokenType, TrailingToken,
 };
-use super::{SemiColonMode, SeqSep, TokenExpectType, TrailingToken};
 use crate::maybe_recover_from_interpolated_ty_qpath;
 
 use ast::token::DelimToken;
@@ -703,7 +704,7 @@ impl<'a> Parser<'a> {
                         ExprKind::Path(None, ast::Path { segments, .. }),
                         TokenKind::Ident(kw::For | kw::Loop | kw::While, false),
                     ) if segments.len() == 1 => {
-                        let snapshot = self.clone();
+                        let snapshot = self.create_snapshot_for_diagnostic();
                         let label = Label {
                             ident: Ident::from_str_and_span(
                                 &format!("'{}", segments[0].ident),
@@ -725,7 +726,7 @@ impl<'a> Parser<'a> {
                             }
                             Err(err) => {
                                 err.cancel();
-                                *self = snapshot;
+                                self.restore_snapshot(snapshot);
                             }
                         }
                     }
@@ -1105,7 +1106,7 @@ impl<'a> Parser<'a> {
         let snapshot = if self.token.kind == token::OpenDelim(token::Paren)
             && self.look_ahead_type_ascription_as_field()
         {
-            Some((self.clone(), fun.kind.clone()))
+            Some((self.create_snapshot_for_diagnostic(), fun.kind.clone()))
         } else {
             None
         };
@@ -1130,7 +1131,7 @@ impl<'a> Parser<'a> {
         lo: Span,
         open_paren: Span,
         seq: &mut PResult<'a, P<Expr>>,
-        snapshot: Option<(Self, ExprKind)>,
+        snapshot: Option<(SnapshotParser<'a>, ExprKind)>,
     ) -> Option<P<Expr>> {
         match (seq.as_mut(), snapshot) {
             (Err(err), Some((mut snapshot, ExprKind::Path(None, path)))) => {
@@ -1140,7 +1141,7 @@ impl<'a> Parser<'a> {
                     Ok((fields, ..)) if snapshot.eat(&token::CloseDelim(token::Paren)) => {
                         // We are certain we have `Enum::Foo(a: 3, b: 4)`, suggest
                         // `Enum::Foo { a: 3, b: 4 }` or `Enum::Foo(3, 4)`.
-                        *self = snapshot;
+                        self.restore_snapshot(snapshot);
                         let close_paren = self.prev_token.span;
                         let span = lo.to(self.prev_token.span);
                         if !fields.is_empty() {
@@ -1885,7 +1886,7 @@ impl<'a> Parser<'a> {
         lo: Span,
         attrs: AttrVec,
     ) -> Option<P<Expr>> {
-        let mut snapshot = self.clone();
+        let mut snapshot = self.create_snapshot_for_diagnostic();
         match snapshot.parse_array_or_repeat_expr(attrs, token::Brace) {
             Ok(arr) => {
                 let hi = snapshot.prev_token.span;
@@ -1901,7 +1902,7 @@ impl<'a> Parser<'a> {
                 .note("to define an array, one would use square brackets instead of curly braces")
                 .emit();
 
-                *self = snapshot;
+                self.restore_snapshot(snapshot);
                 Some(self.mk_expr_err(arr.span))
             }
             Err(e) => {
@@ -2369,7 +2370,7 @@ impl<'a> Parser<'a> {
         if self.token.kind != token::Semi {
             return None;
         }
-        let start_snapshot = self.clone();
+        let start_snapshot = self.create_snapshot_for_diagnostic();
         let semi_sp = self.token.span;
         self.bump(); // `;`
         let mut stmts =
@@ -2417,15 +2418,15 @@ impl<'a> Parser<'a> {
                 return Some(err(self, stmts));
             }
             if self.token.kind == token::Comma {
-                *self = start_snapshot;
+                self.restore_snapshot(start_snapshot);
                 return None;
             }
-            let pre_pat_snapshot = self.clone();
+            let pre_pat_snapshot = self.create_snapshot_for_diagnostic();
             match self.parse_pat_no_top_alt(None) {
                 Ok(_pat) => {
                     if self.token.kind == token::FatArrow {
                         // Reached arm end.
-                        *self = pre_pat_snapshot;
+                        self.restore_snapshot(pre_pat_snapshot);
                         return Some(err(self, stmts));
                     }
                 }
@@ -2434,21 +2435,21 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            *self = pre_pat_snapshot;
+            self.restore_snapshot(pre_pat_snapshot);
             match self.parse_stmt_without_recovery(true, ForceCollect::No) {
                 // Consume statements for as long as possible.
                 Ok(Some(stmt)) => {
                     stmts.push(stmt);
                 }
                 Ok(None) => {
-                    *self = start_snapshot;
+                    self.restore_snapshot(start_snapshot);
                     break;
                 }
                 // We couldn't parse either yet another statement missing it's
                 // enclosing block nor the next arm's pattern or closing brace.
                 Err(stmt_err) => {
                     stmt_err.cancel();
-                    *self = start_snapshot;
+                    self.restore_snapshot(start_snapshot);
                     break;
                 }
             }

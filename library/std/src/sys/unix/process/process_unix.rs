@@ -27,7 +27,10 @@ use crate::sys::weak::weak;
 use libc::RTP_ID as pid_t;
 
 #[cfg(not(target_os = "vxworks"))]
-use libc::{c_int, gid_t, pid_t, uid_t};
+use libc::{c_int, pid_t};
+
+#[cfg(not(any(target_os = "vxworks", target_os = "l4re")))]
+use libc::{gid_t, uid_t};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Command
@@ -648,11 +651,11 @@ impl ExitStatus {
     }
 
     pub fn code(&self) -> Option<i32> {
-        if self.exited() { Some(libc::WEXITSTATUS(self.0)) } else { None }
+        self.exited().then(|| libc::WEXITSTATUS(self.0))
     }
 
     pub fn signal(&self) -> Option<i32> {
-        if libc::WIFSIGNALED(self.0) { Some(libc::WTERMSIG(self.0)) } else { None }
+        libc::WIFSIGNALED(self.0).then(|| libc::WTERMSIG(self.0))
     }
 
     pub fn core_dumped(&self) -> bool {
@@ -660,7 +663,7 @@ impl ExitStatus {
     }
 
     pub fn stopped_signal(&self) -> Option<i32> {
-        if libc::WIFSTOPPED(self.0) { Some(libc::WSTOPSIG(self.0)) } else { None }
+        libc::WIFSTOPPED(self.0).then(|| libc::WSTOPSIG(self.0))
     }
 
     pub fn continued(&self) -> bool {
