@@ -230,7 +230,7 @@ fn suggest_restriction<'tcx>(
     {
         // We know we have an `impl Trait` that doesn't satisfy a required projection.
 
-        // Find all of the ocurrences of `impl Trait` for `Trait` in the function arguments'
+        // Find all of the occurrences of `impl Trait` for `Trait` in the function arguments'
         // types. There should be at least one, but there might be *more* than one. In that
         // case we could just ignore it and try to identify which one needs the restriction,
         // but instead we choose to suggest replacing all instances of `impl Trait` with `T`
@@ -1294,6 +1294,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             ty::Generator(..) => "generator",
             _ => "function",
         };
+        let span = self.tcx.sess.source_map().guess_head_span(span);
         let mut err = struct_span_err!(
             self.tcx.sess,
             span,
@@ -1673,6 +1674,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
             ));
 
             let original_span = err.span.primary_span().unwrap();
+            let original_span = self.tcx.sess.source_map().guess_head_span(original_span);
             let mut span = MultiSpan::from_span(original_span);
 
             let message = outer_generator

@@ -590,7 +590,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let opt_coerce_to = {
                     // We should release `enclosing_breakables` before the `check_expr_with_hint`
                     // below, so can't move this block of code to the enclosing scope and share
-                    // `ctxt` with the second `encloding_breakables` borrow below.
+                    // `ctxt` with the second `enclosing_breakables` borrow below.
                     let mut enclosing_breakables = self.enclosing_breakables.borrow_mut();
                     match enclosing_breakables.opt_find_breakable(target_id) {
                         Some(ctxt) => ctxt.coerce.as_ref().map(|coerce| coerce.expected_ty()),
@@ -793,7 +793,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self.tcx.types.never
     }
 
-    /// `explicit_return` is `true` if we're checkng an explicit `return expr`,
+    /// `explicit_return` is `true` if we're checking an explicit `return expr`,
     /// and `false` if we're checking a trailing expression.
     pub(super) fn check_return_expr(
         &self,
@@ -965,8 +965,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             };
             let else_diverges = self.diverges.get();
 
-            let opt_suggest_box_span =
-                self.opt_suggest_box_span(else_expr.span, else_ty, orig_expected);
+            let opt_suggest_box_span = self.opt_suggest_box_span(else_ty, orig_expected);
             let if_cause =
                 self.if_cause(sp, then_expr, else_expr, then_ty, else_ty, opt_suggest_box_span);
 
@@ -1127,7 +1126,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let method = match self.lookup_method(rcvr_t, segment, span, expr, rcvr, args) {
             Ok(method) => {
                 // We could add a "consider `foo::<params>`" suggestion here, but I wasn't able to
-                // trigger this codepath causing `structuraly_resolved_type` to emit an error.
+                // trigger this codepath causing `structurally_resolved_type` to emit an error.
 
                 self.write_method_call(expr.hir_id, method);
                 Ok(method)

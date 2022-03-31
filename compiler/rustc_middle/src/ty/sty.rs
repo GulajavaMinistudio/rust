@@ -1889,10 +1889,7 @@ impl<'tcx> Ty<'tcx> {
 
     #[inline]
     pub fn is_slice(self) -> bool {
-        match self.kind() {
-            RawPtr(TypeAndMut { ty, .. }) | Ref(_, ty, _) => matches!(ty.kind(), Slice(_) | Str),
-            _ => false,
-        }
+        matches!(self.kind(), Slice(_))
     }
 
     #[inline]
@@ -1922,6 +1919,13 @@ impl<'tcx> Ty<'tcx> {
             Array(ty, _) | Slice(ty) => *ty,
             Str => tcx.types.u8,
             _ => bug!("`sequence_element_type` called on non-sequence value: {}", self),
+        }
+    }
+
+    pub fn expect_opaque_type(self) -> ty::OpaqueTypeKey<'tcx> {
+        match *self.kind() {
+            Opaque(def_id, substs) => ty::OpaqueTypeKey { def_id, substs },
+            _ => bug!("`expect_opaque_type` called on non-opaque type: {}", self),
         }
     }
 

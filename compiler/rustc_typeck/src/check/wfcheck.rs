@@ -510,7 +510,7 @@ fn gather_gat_bounds<'tcx, T: TypeFoldable<'tcx>>(
 
     for (region_a, region_a_idx) in &regions {
         // Ignore `'static` lifetimes for the purpose of this lint: it's
-        // because we know it outlives everything and so doesn't give meaninful
+        // because we know it outlives everything and so doesn't give meaningful
         // clues
         if let ty::ReStatic = **region_a {
             continue;
@@ -677,9 +677,9 @@ fn resolve_regions_with_wf_tys<'tcx>(
 struct GATSubstCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
     gat: DefId,
-    // Which region appears and which parameter index its subsituted for
+    // Which region appears and which parameter index its substituted for
     regions: FxHashSet<(ty::Region<'tcx>, usize)>,
-    // Which params appears and which parameter index its subsituted for
+    // Which params appears and which parameter index its substituted for
     types: FxHashSet<(Ty<'tcx>, usize)>,
 }
 
@@ -968,7 +968,7 @@ fn for_item<'tcx>(tcx: TyCtxt<'tcx>, item: &hir::Item<'_>) -> CheckWfFcxBuilder<
 
 fn for_id(tcx: TyCtxt<'_>, def_id: LocalDefId, span: Span) -> CheckWfFcxBuilder<'_> {
     CheckWfFcxBuilder {
-        inherited: Inherited::build(tcx, def_id),
+        inherited: Inherited::build(tcx, def_id).reveal_defining_opaque_types(),
         id: hir::HirId::make_owner(def_id),
         span,
         param_env: tcx.param_env(def_id),

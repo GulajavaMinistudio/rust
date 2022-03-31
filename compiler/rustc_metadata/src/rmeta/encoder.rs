@@ -2,8 +2,9 @@ use crate::rmeta::def_path_hash_map::DefPathHashMapRef;
 use crate::rmeta::table::{FixedSizeEncoding, TableBuilder};
 use crate::rmeta::*;
 
+use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
-use rustc_data_structures::stable_hasher::StableHasher;
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::{join, par_iter, Lrc, ParallelIterator};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
@@ -270,7 +271,7 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for Span {
         // from. We use `TAG_VALID_SPAN_FOREIGN` to indicate that a `CrateNum` should
         // be deserialized after the rest of the span data, which tells the deserializer
         // which crate contains the source map information.
-        // 2. This span comes from our own crate. No special hamdling is needed - we just
+        // 2. This span comes from our own crate. No special handling is needed - we just
         // write `TAG_VALID_SPAN_LOCAL` to let the deserializer know that it should use
         // our own source map information.
         //
@@ -578,6 +579,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
     }
 
     fn encode_crate_root(&mut self) -> Lazy<CrateRoot<'tcx>> {
+        let tcx = self.tcx;
         let mut i = self.position();
 
         // Encode the crate deps
@@ -623,8 +625,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let impls = self.encode_impls();
         let impls_bytes = self.position() - i;
 
-        let tcx = self.tcx;
-
+        i = self.position();
+        let incoherent_impls = self.encode_incoherent_impls();
+        let incoherent_impls_bytes = self.position() - i;
         // Encode MIR.
         i = self.position();
         self.encode_mir();
@@ -734,6 +737,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             source_map,
             traits,
             impls,
+            incoherent_impls,
             exported_symbols,
             interpret_alloc_index,
             tables,
@@ -762,6 +766,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             eprintln!("      source_map bytes: {}", source_map_bytes);
             eprintln!("          traits bytes: {}", traits_bytes);
             eprintln!("           impls bytes: {}", impls_bytes);
+            eprintln!("incoherent_impls bytes: {}", incoherent_impls_bytes);
             eprintln!("    exp. symbols bytes: {}", exported_symbols_bytes);
             eprintln!("  def-path table bytes: {}", def_path_table_bytes);
             eprintln!(" def-path hashes bytes: {}", def_path_hash_map_bytes);
@@ -792,7 +797,7 @@ fn should_encode_visibility(def_kind: DefKind) -> bool {
         | DefKind::AssocTy
         | DefKind::Fn
         | DefKind::Const
-        | DefKind::Static
+        | DefKind::Static(..)
         | DefKind::Ctor(..)
         | DefKind::AssocFn
         | DefKind::AssocConst
@@ -826,7 +831,7 @@ fn should_encode_stability(def_kind: DefKind) -> bool {
         | DefKind::AssocConst
         | DefKind::TyParam
         | DefKind::ConstParam
-        | DefKind::Static
+        | DefKind::Static(..)
         | DefKind::Const
         | DefKind::Fn
         | DefKind::ForeignMod
@@ -870,7 +875,7 @@ fn should_encode_mir(tcx: TyCtxt<'_>, def_id: LocalDefId) -> (bool, bool) {
         DefKind::AnonConst
         | DefKind::InlineConst
         | DefKind::AssocConst
-        | DefKind::Static
+        | DefKind::Static(..)
         | DefKind::Const => (true, false),
         // Full-fledged functions
         DefKind::AssocFn | DefKind::Fn => {
@@ -915,7 +920,7 @@ fn should_encode_variances(def_kind: DefKind) -> bool {
         | DefKind::AssocConst
         | DefKind::TyParam
         | DefKind::ConstParam
-        | DefKind::Static
+        | DefKind::Static(..)
         | DefKind::Const
         | DefKind::ForeignMod
         | DefKind::TyAlias
@@ -949,7 +954,7 @@ fn should_encode_generics(def_kind: DefKind) -> bool {
         | DefKind::AssocTy
         | DefKind::Fn
         | DefKind::Const
-        | DefKind::Static
+        | DefKind::Static(..)
         | DefKind::Ctor(..)
         | DefKind::AssocFn
         | DefKind::AssocConst
@@ -1385,8 +1390,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         self.encode_ident_span(def_id, item.ident);
 
         let entry_kind = match item.kind {
-            hir::ItemKind::Static(_, hir::Mutability::Mut, _) => EntryKind::MutStatic,
-            hir::ItemKind::Static(_, hir::Mutability::Not, _) => EntryKind::ImmStatic,
+            hir::ItemKind::Static(..) => EntryKind::Static,
             hir::ItemKind::Const(_, body_id) => {
                 let qualifs = self.tcx.at(item.span).mir_const_qualif(def_id);
                 let const_data = self.encode_rendered_const_for_body(body_id);
@@ -1813,6 +1817,33 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         self.lazy(&all_impls)
     }
 
+    fn encode_incoherent_impls(&mut self) -> Lazy<[IncoherentImpls]> {
+        debug!("EncodeContext::encode_traits_and_impls()");
+        empty_proc_macro!(self);
+        let tcx = self.tcx;
+        let mut ctx = tcx.create_stable_hashing_context();
+        let mut all_impls: Vec<_> = tcx.crate_inherent_impls(()).incoherent_impls.iter().collect();
+        all_impls.sort_by_cached_key(|&(&simp, _)| {
+            let mut hasher = StableHasher::new();
+            simp.hash_stable(&mut ctx, &mut hasher);
+            hasher.finish::<Fingerprint>();
+        });
+        let all_impls: Vec<_> = all_impls
+            .into_iter()
+            .map(|(&simp, impls)| {
+                let mut impls: Vec<_> =
+                    impls.into_iter().map(|def_id| def_id.local_def_index).collect();
+                impls.sort_by_cached_key(|&local_def_index| {
+                    tcx.hir().def_path_hash(LocalDefId { local_def_index })
+                });
+
+                IncoherentImpls { self_ty: simp, impls: self.lazy(impls) }
+            })
+            .collect();
+
+        self.lazy(&all_impls)
+    }
+
     // Encodes all symbols exported from this crate into the metadata.
     //
     // This pass is seeded off the reachability list calculated in the
@@ -1874,11 +1905,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 };
                 record!(self.tables.kind[def_id] <- EntryKind::ForeignFn(self.lazy(data)));
             }
-            hir::ForeignItemKind::Static(_, hir::Mutability::Mut) => {
-                record!(self.tables.kind[def_id] <- EntryKind::ForeignMutStatic);
-            }
-            hir::ForeignItemKind::Static(_, hir::Mutability::Not) => {
-                record!(self.tables.kind[def_id] <- EntryKind::ForeignImmStatic);
+            hir::ForeignItemKind::Static(..) => {
+                record!(self.tables.kind[def_id] <- EntryKind::ForeignStatic);
             }
             hir::ForeignItemKind::Type => {
                 record!(self.tables.kind[def_id] <- EntryKind::ForeignType);

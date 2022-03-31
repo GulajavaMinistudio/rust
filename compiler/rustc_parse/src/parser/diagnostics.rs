@@ -203,7 +203,7 @@ impl<'a> Parser<'a> {
         &self.sess.span_diagnostic
     }
 
-    /// Relace `self` with `snapshot.parser` and extend `unclosed_delims` with `snapshot.unclosed_delims`.
+    /// Replace `self` with `snapshot.parser` and extend `unclosed_delims` with `snapshot.unclosed_delims`.
     /// This is to avoid losing unclosed delims errors `create_snapshot_for_diagnostic` clears.
     pub(super) fn restore_snapshot(&mut self, snapshot: SnapshotParser<'a>) {
         *self = snapshot.parser;
@@ -2367,6 +2367,34 @@ impl<'a> Parser<'a> {
             }
         }
         Err(err)
+    }
+
+    crate fn maybe_recover_bounds_doubled_colon(&mut self, ty: &Ty) -> PResult<'a, ()> {
+        let TyKind::Path(qself, path) = &ty.kind else { return Ok(()) };
+        let qself_position = qself.as_ref().map(|qself| qself.position);
+        for (i, segments) in path.segments.windows(2).enumerate() {
+            if qself_position.map(|pos| i < pos).unwrap_or(false) {
+                continue;
+            }
+            if let [a, b] = segments {
+                let (a_span, b_span) = (a.span(), b.span());
+                let between_span = a_span.shrink_to_hi().to(b_span.shrink_to_lo());
+                if self.span_to_snippet(between_span).as_ref().map(|a| &a[..]) == Ok(":: ") {
+                    let mut err = self.struct_span_err(
+                        path.span.shrink_to_hi(),
+                        "expected `:` followed by trait or lifetime",
+                    );
+                    err.span_suggestion(
+                        between_span,
+                        "use single colon",
+                        ": ".to_owned(),
+                        Applicability::MachineApplicable,
+                    );
+                    return Err(err);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Parse and throw away a parenthesized comma separated

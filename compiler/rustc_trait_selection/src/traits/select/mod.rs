@@ -21,6 +21,7 @@ use super::{
 
 use crate::infer::{InferCtxt, InferOk, TypeFreshener};
 use crate::traits::error_reporting::InferCtxtExt;
+use crate::traits::project::ProjectAndUnifyResult;
 use crate::traits::project::ProjectionCacheKeyExt;
 use crate::traits::ProjectionCacheKey;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -33,6 +34,7 @@ use rustc_middle::dep_graph::{DepKind, DepNodeIndex};
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::thir::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::fast_reject::{self, TreatParams};
+use rustc_middle::ty::fold::BottomUpFolder;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::relate::TypeRelation;
 use rustc_middle::ty::subst::{GenericArgKind, Subst, SubstsRef};
@@ -524,7 +526,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     let data = bound_predicate.rebind(data);
                     let project_obligation = obligation.with(data);
                     match project::poly_project_and_unify_type(self, &project_obligation) {
-                        Ok(Ok(Some(mut subobligations))) => {
+                        ProjectAndUnifyResult::Holds(mut subobligations) => {
                             'compute_res: {
                                 // If we've previously marked this projection as 'complete', then
                                 // use the final cached result (either `EvaluatedToOk` or
@@ -561,7 +563,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                 {
                                     // If the result is something that we can cache, then mark this
                                     // entry as 'complete'. This will allow us to skip evaluating the
-                                    // suboligations at all the next time we evaluate the projection
+                                    // subobligations at all the next time we evaluate the projection
                                     // predicate.
                                     self.infcx
                                         .inner
@@ -572,9 +574,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                 res
                             }
                         }
-                        Ok(Ok(None)) => Ok(EvaluatedToAmbig),
-                        Ok(Err(project::InProgress)) => Ok(EvaluatedToRecur),
-                        Err(_) => Ok(EvaluatedToErr),
+                        ProjectAndUnifyResult::FailedNormalization => Ok(EvaluatedToAmbig),
+                        ProjectAndUnifyResult::Recursive => Ok(EvaluatedToRecur),
+                        ProjectAndUnifyResult::MismatchedProjectionTypes(_) => Ok(EvaluatedToErr),
                     }
                 }
 
@@ -750,7 +752,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     // provisional caches entries and inserting them into the evaluation cache
                     //
                     // This ensures that when a query reads this entry from the evaluation cache,
-                    // it will end up (transitively) dependening on all of the incr-comp dependencies
+                    // it will end up (transitively) depending on all of the incr-comp dependencies
                     // created during the evaluation of this trait. For example, evaluating a trait
                     // will usually require us to invoke `type_of(field_def_id)` to determine the
                     // constituent types, and we want any queries reading from this evaluation
@@ -1313,6 +1315,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
     }
 
+    #[instrument(skip(self, param_env, cache_fresh_trait_pred, dep_node), level = "debug")]
     fn insert_candidate_cache(
         &mut self,
         mut param_env: ty::ParamEnv<'tcx>,
@@ -1353,6 +1356,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     /// a projection, look at the bounds of `T::Bar`, see if we can find a
     /// `Baz` bound. We return indexes into the list returned by
     /// `tcx.item_bounds` for any applicable bounds.
+    #[instrument(level = "debug", skip(self))]
     fn match_projection_obligation_against_definition_bounds(
         &mut self,
         obligation: &TraitObligation<'tcx>,
@@ -1360,10 +1364,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let poly_trait_predicate = self.infcx().resolve_vars_if_possible(obligation.predicate);
         let placeholder_trait_predicate =
             self.infcx().replace_bound_vars_with_placeholders(poly_trait_predicate);
-        debug!(
-            ?placeholder_trait_predicate,
-            "match_projection_obligation_against_definition_bounds"
-        );
+        debug!(?placeholder_trait_predicate);
 
         let tcx = self.infcx.tcx;
         let (def_id, substs) = match *placeholder_trait_predicate.trait_ref.self_ty().kind() {
@@ -1414,7 +1415,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             })
             .collect();
 
-        debug!(?matching_bounds, "match_projection_obligation_against_definition_bounds");
+        debug!(?matching_bounds);
         matching_bounds
     }
 
@@ -1444,6 +1445,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         });
         self.infcx
             .at(&obligation.cause, obligation.param_env)
+            .define_opaque_types(false)
             .sup(ty::Binder::dummy(placeholder_trait_ref), trait_bound)
             .map(|InferOk { obligations: _, value: () }| {
                 // This method is called within a probe, so we can't have
@@ -1474,7 +1476,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     /// `No` if it does not. Return `Ambiguous` in the case that the projection type is a GAT,
     /// and applying this env_predicate constrains any of the obligation's GAT substitutions.
     ///
-    /// This behavior is a somewhat of a hack to prevent overconstraining inference variables
+    /// This behavior is a somewhat of a hack to prevent over-constraining inference variables
     /// in cases like #91762.
     pub(super) fn match_projection_projections(
         &mut self,
@@ -1506,6 +1508,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let is_match = self
             .infcx
             .at(&obligation.cause, obligation.param_env)
+            .define_opaque_types(false)
             .sup(obligation.predicate, infer_projection)
             .map_or(false, |InferOk { obligations, value: () }| {
                 self.evaluate_predicates_recursively(
@@ -1727,7 +1730,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             // marker trait impls.
                             //
                             // Without this restriction, we could end up accidentally
-                            // constrainting inference variables based on an arbitrarily
+                            // constraining inference variables based on an arbitrarily
                             // chosen trait impl.
                             //
                             // Imagine we have the following code:
@@ -1756,7 +1759,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             // some other means (e.g. type-checking of a function). We will
                             // then be in a position to drop marker trait candidates
                             // without constraining inference variables (since there are
-                            // none left to constrin)
+                            // none left to constrain)
                             // 2) Be left with some unconstrained inference variables. We
                             // will then correctly report an inference error, since the
                             // existence of multiple marker trait impls tells us nothing
@@ -2081,11 +2084,22 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         match self.match_impl(impl_def_id, obligation) {
             Ok(substs) => substs,
             Err(()) => {
-                bug!(
-                    "Impl {:?} was matchable against {:?} but now is not",
-                    impl_def_id,
-                    obligation
+                self.infcx.tcx.sess.delay_span_bug(
+                    obligation.cause.span,
+                    &format!(
+                        "Impl {:?} was matchable against {:?} but now is not",
+                        impl_def_id, obligation
+                    ),
                 );
+                let value = self.infcx.fresh_substs_for_item(obligation.cause.span, impl_def_id);
+                let err = self.tcx().ty_error();
+                let value = value.fold_with(&mut BottomUpFolder {
+                    tcx: self.tcx(),
+                    ty_op: |_| err,
+                    lt_op: |l| l,
+                    ct_op: |c| c,
+                });
+                Normalized { value, obligations: vec![] }
             }
         }
     }
@@ -2137,6 +2151,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let InferOk { obligations, .. } = self
             .infcx
             .at(&cause, obligation.param_env)
+            .define_opaque_types(false)
             .eq(placeholder_obligation_trait_ref, impl_trait_ref)
             .map_err(|e| debug!("match_impl: failed eq_trait_refs due to `{}`", e))?;
         nested_obligations.extend(obligations);
@@ -2220,6 +2235,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     ) -> Result<Vec<PredicateObligation<'tcx>>, ()> {
         self.infcx
             .at(&obligation.cause, obligation.param_env)
+            // We don't want predicates for opaque types to just match all other types,
+            // if there is an obligation on the opaque type, then that obligation must be met
+            // opaquely. Otherwise we'd match any obligation to the opaque type and then error
+            // out later.
+            .define_opaque_types(false)
             .sup(obligation.predicate.to_poly_trait_ref(), poly_trait_ref)
             .map(|InferOk { obligations, .. }| obligations)
             .map_err(|_| ())
@@ -2499,7 +2519,7 @@ struct ProvisionalEvaluationCache<'tcx> {
     /// - `A B C` and we add a cache for the result of C (DFN 2)
     /// - Then we have a stack `A B D` where `D` has DFN 3
     /// - We try to solve D by evaluating E: `A B D E` (DFN 4)
-    /// - `E` generates various cache entries which have cyclic dependices on `B`
+    /// - `E` generates various cache entries which have cyclic dependencies on `B`
     ///   - `A B D E F` and so forth
     ///   - the DFN of `F` for example would be 5
     /// - then we determine that `E` is in error -- we will then clear

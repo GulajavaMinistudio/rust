@@ -1467,8 +1467,6 @@ impl<T, A: Allocator> Vec<T, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(vec_retain_mut)]
-    ///
     /// let mut vec = vec![1, 2, 3, 4];
     /// vec.retain_mut(|x| if *x > 3 {
     ///     false
@@ -1478,7 +1476,7 @@ impl<T, A: Allocator> Vec<T, A> {
     /// });
     /// assert_eq!(vec, [2, 3, 4]);
     /// ```
-    #[unstable(feature = "vec_retain_mut", issue = "90829")]
+    #[stable(feature = "vec_retain_mut", since = "1.61.0")]
     pub fn retain_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut T) -> bool,
@@ -2579,7 +2577,7 @@ impl<T, A: Allocator> IntoIterator for Vec<T, A> {
     fn into_iter(self) -> IntoIter<T, A> {
         unsafe {
             let mut me = ManuallyDrop::new(self);
-            let alloc = ptr::read(me.allocator());
+            let alloc = ManuallyDrop::new(ptr::read(me.allocator()));
             let begin = me.as_mut_ptr();
             let end = if mem::size_of::<T>() == 0 {
                 arith_offset(begin as *const i8, me.len() as isize) as *const T
