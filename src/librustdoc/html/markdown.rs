@@ -1255,7 +1255,7 @@ crate struct MarkdownLink {
     pub range: Range<usize>,
 }
 
-crate fn markdown_links(md: &str) -> Vec<MarkdownLink> {
+crate fn markdown_links<R>(md: &str, filter_map: impl Fn(MarkdownLink) -> Option<R>) -> Vec<R> {
     if md.is_empty() {
         return vec![];
     }
@@ -1295,11 +1295,12 @@ crate fn markdown_links(md: &str) -> Vec<MarkdownLink> {
 
     let mut push = |link: BrokenLink<'_>| {
         let span = span_for_link(&link.reference, link.span);
-        links.borrow_mut().push(MarkdownLink {
+        filter_map(MarkdownLink {
             kind: LinkType::ShortcutUnknown,
             link: link.reference.to_string(),
             range: span,
-        });
+        })
+        .map(|link| links.borrow_mut().push(link));
         None
     };
     let p = Parser::new_with_broken_link_callback(md, main_body_opts(), Some(&mut push))
@@ -1311,10 +1312,23 @@ crate fn markdown_links(md: &str) -> Vec<MarkdownLink> {
     let iter = Footnotes::new(HeadingLinks::new(p, None, &mut ids, HeadingOffset::H1));
 
     for ev in iter {
-        if let Event::Start(Tag::Link(kind, dest, _)) = ev.0 {
+        if let Event::Start(Tag::Link(
+            // `<>` links cannot be intra-doc links so we skip them.
+            kind @ (LinkType::Inline
+            | LinkType::Reference
+            | LinkType::ReferenceUnknown
+            | LinkType::Collapsed
+            | LinkType::CollapsedUnknown
+            | LinkType::Shortcut
+            | LinkType::ShortcutUnknown),
+            dest,
+            _,
+        )) = ev.0
+        {
             debug!("found link: {dest}");
             let span = span_for_link(&dest, ev.1);
-            links.borrow_mut().push(MarkdownLink { kind, link: dest.into_string(), range: span });
+            filter_map(MarkdownLink { kind, link: dest.into_string(), range: span })
+                .map(|link| links.borrow_mut().push(link));
         }
     }
 
