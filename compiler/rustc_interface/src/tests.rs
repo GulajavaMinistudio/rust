@@ -66,6 +66,7 @@ where
         location: ExternLocation::ExactPaths(locations),
         is_private_dep: false,
         add_prelude: true,
+        nounused_dep: false,
     }
 }
 
@@ -751,6 +752,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(location_detail, LocationDetail { file: true, line: false, column: false });
     tracked!(merge_functions, Some(MergeFunctions::Disabled));
     tracked!(mir_emit_retag, true);
+    tracked!(mir_enable_passes, vec![("DestProp".to_string(), false)]);
     tracked!(mir_opt_level, Some(4));
     tracked!(move_size_limit, Some(4096));
     tracked!(mutable_noalias, Some(true));
