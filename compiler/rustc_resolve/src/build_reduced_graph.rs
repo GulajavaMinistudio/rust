@@ -298,7 +298,7 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                     &segments,
                     Some(TypeNS),
                     parent_scope,
-                    if finalize { Finalize::SimplePath(id, path.span) } else { Finalize::No },
+                    finalize.then(|| Finalize::new(id, path.span)),
                     None,
                 ) {
                     PathResult::Module(ModuleOrUniformRoot::Module(module)) => {
@@ -1267,13 +1267,15 @@ impl<'a, 'b> BuildReducedGraphVisitor<'a, 'b> {
                 self.insert_unused_macro(ident, def_id, item.id);
             }
             self.r.visibilities.insert(def_id, vis);
-            self.r.arenas.alloc_macro_rules_scope(MacroRulesScope::Binding(
+            let scope = self.r.arenas.alloc_macro_rules_scope(MacroRulesScope::Binding(
                 self.r.arenas.alloc_macro_rules_binding(MacroRulesBinding {
                     parent_macro_rules_scope: parent_scope.macro_rules,
                     binding,
                     ident,
                 }),
-            ))
+            ));
+            self.r.macro_rules_scopes.insert(def_id, scope);
+            scope
         } else {
             let module = parent_scope.module;
             let vis = match item.kind {
@@ -1388,7 +1390,7 @@ impl<'a, 'b> Visitor<'b> for BuildReducedGraphVisitor<'a, 'b> {
             && self
                 .r
                 .trait_impl_items
-                .contains(&ty::DefIdTree::parent(&*self.r, def_id).unwrap().expect_local()))
+                .contains(&ty::DefIdTree::local_parent(&*self.r, local_def_id)))
         {
             // Trait impl item visibility is inherited from its trait when not specified
             // explicitly. In that case we cannot determine it here in early resolve,

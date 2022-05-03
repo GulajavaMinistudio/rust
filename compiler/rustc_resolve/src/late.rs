@@ -94,6 +94,12 @@ crate enum HasGenericParams {
     No,
 }
 
+impl HasGenericParams {
+    fn force_yes_if(self, b: bool) -> Self {
+        if b { Self::Yes } else { self }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 crate enum ConstantItemKind {
     Const,
@@ -125,9 +131,9 @@ crate enum RibKind<'a> {
 
     /// We're in a constant item. Can't refer to dynamic stuff.
     ///
-    /// The `bool` indicates if this constant may reference generic parameters
-    /// and is used to only allow generic parameters to be used in trivial constant expressions.
-    ConstantItemRibKind(bool, Option<(Ident, ConstantItemKind)>),
+    /// The item may reference generic parameters in trivial constant expressions.
+    /// All other constants aren't allowed to use generic params at all.
+    ConstantItemRibKind(HasGenericParams, Option<(Ident, ConstantItemKind)>),
 
     /// We passed through a module.
     ModuleRibKind(Module<'a>),
@@ -578,7 +584,7 @@ impl<'a: 'ast, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
                     .resolve_ident_in_lexical_scope(
                         self_ty,
                         TypeNS,
-                        Finalize::SimplePath(ty.id, ty.span),
+                        Some(Finalize::new(ty.id, ty.span)),
                         None,
                     )
                     .map_or(Res::Err, |d| d.res());
@@ -826,19 +832,24 @@ impl<'a: 'ast, 'ast> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast> {
                             // Note that we might not be inside of an repeat expression here,
                             // but considering that `IsRepeatExpr` is only relevant for
                             // non-trivial constants this is doesn't matter.
-                            self.with_constant_rib(IsRepeatExpr::No, true, None, |this| {
-                                this.smart_resolve_path(
-                                    ty.id,
-                                    qself.as_ref(),
-                                    path,
-                                    PathSource::Expr(None),
-                                );
+                            self.with_constant_rib(
+                                IsRepeatExpr::No,
+                                HasGenericParams::Yes,
+                                None,
+                                |this| {
+                                    this.smart_resolve_path(
+                                        ty.id,
+                                        qself.as_ref(),
+                                        path,
+                                        PathSource::Expr(None),
+                                    );
 
-                                if let Some(ref qself) = *qself {
-                                    this.visit_ty(&qself.ty);
-                                }
-                                this.visit_path(path, ty.id);
-                            });
+                                    if let Some(ref qself) = *qself {
+                                        this.visit_ty(&qself.ty);
+                                    }
+                                    this.visit_path(path, ty.id);
+                                },
+                            );
 
                             self.diagnostic_metadata.currently_processing_generics = prev;
                             return;
@@ -958,7 +969,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             ident,
             ns,
             &self.parent_scope,
-            Finalize::No,
+            None,
             &self.ribs[ns],
             None,
         )
@@ -968,8 +979,8 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         &mut self,
         ident: Ident,
         ns: Namespace,
-        finalize: Finalize,
-        unusable_binding: Option<&'a NameBinding<'a>>,
+        finalize: Option<Finalize>,
+        ignore_binding: Option<&'a NameBinding<'a>>,
     ) -> Option<LexicalScopeBinding<'a>> {
         self.r.resolve_ident_in_lexical_scope(
             ident,
@@ -977,7 +988,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             &self.parent_scope,
             finalize,
             &self.ribs[ns],
-            unusable_binding,
+            ignore_binding,
         )
     }
 
@@ -985,7 +996,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         &mut self,
         path: &[Segment],
         opt_ns: Option<Namespace>, // `None` indicates a module path in import
-        finalize: Finalize,
+        finalize: Option<Finalize>,
     ) -> PathResult<'a> {
         self.r.resolve_path_with_ribs(
             path,
@@ -1299,11 +1310,8 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         partial_res: PartialRes,
         path: &[Segment],
         source: PathSource<'_>,
-        finalize: Finalize,
+        path_span: Span,
     ) {
-        let Some(path_span) = finalize.path_span() else {
-            return;
-        };
         let proj_start = path.len() - partial_res.unresolved_segments();
         for (i, segment) in path.iter().enumerate() {
             if segment.has_lifetime_args {
@@ -1316,12 +1324,8 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             // Figure out if this is a type/trait segment,
             // which may need lifetime elision performed.
             let type_def_id = match partial_res.base_res() {
-                Res::Def(DefKind::AssocTy, def_id) if i + 2 == proj_start => {
-                    self.r.parent(def_id).unwrap()
-                }
-                Res::Def(DefKind::Variant, def_id) if i + 1 == proj_start => {
-                    self.r.parent(def_id).unwrap()
-                }
+                Res::Def(DefKind::AssocTy, def_id) if i + 2 == proj_start => self.r.parent(def_id),
+                Res::Def(DefKind::Variant, def_id) if i + 1 == proj_start => self.r.parent(def_id),
                 Res::Def(DefKind::Struct, def_id)
                 | Res::Def(DefKind::Union, def_id)
                 | Res::Def(DefKind::Enum, def_id)
@@ -1576,8 +1580,8 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                         report_error(self, ns);
                     }
                     Some(LexicalScopeBinding::Item(binding)) => {
-                        if let Some(LexicalScopeBinding::Res(..)) = self
-                            .resolve_ident_in_lexical_scope(ident, ns, Finalize::No, Some(binding))
+                        if let Some(LexicalScopeBinding::Res(..)) =
+                            self.resolve_ident_in_lexical_scope(ident, ns, None, Some(binding))
                         {
                             report_error(self, ns);
                         }
@@ -1691,7 +1695,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                                                     // not used as part of the type system, this is far less surprising.
                                                     this.with_constant_rib(
                                                         IsRepeatExpr::No,
-                                                        true,
+                                                        HasGenericParams::Yes,
                                                         None,
                                                         |this| this.visit_expr(expr),
                                                     );
@@ -1770,7 +1774,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                         // so it doesn't matter whether this is a trivial constant.
                         this.with_constant_rib(
                             IsRepeatExpr::No,
-                            true,
+                            HasGenericParams::Yes,
                             Some((item.ident, constant_item_kind)),
                             |this| this.visit_expr(expr),
                         );
@@ -1916,20 +1920,23 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
     // Note that we intentionally still forbid `[0; N + 1]` during
     // name resolution so that we don't extend the future
     // compat lint to new cases.
+    #[instrument(level = "debug", skip(self, f))]
     fn with_constant_rib(
         &mut self,
         is_repeat: IsRepeatExpr,
-        is_trivial: bool,
+        may_use_generics: HasGenericParams,
         item: Option<(Ident, ConstantItemKind)>,
         f: impl FnOnce(&mut Self),
     ) {
-        debug!("with_constant_rib: is_repeat={:?} is_trivial={}", is_repeat, is_trivial);
-        self.with_rib(ValueNS, ConstantItemRibKind(is_trivial, item), |this| {
+        self.with_rib(ValueNS, ConstantItemRibKind(may_use_generics, item), |this| {
             this.with_rib(
                 TypeNS,
-                ConstantItemRibKind(is_repeat == IsRepeatExpr::Yes || is_trivial, item),
+                ConstantItemRibKind(
+                    may_use_generics.force_yes_if(is_repeat == IsRepeatExpr::Yes),
+                    item,
+                ),
                 |this| {
-                    this.with_label_rib(ConstantItemRibKind(is_trivial, item), f);
+                    this.with_label_rib(ConstantItemRibKind(may_use_generics, item), f);
                 },
             )
         });
@@ -1979,7 +1986,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 None,
                 &path,
                 PathSource::Trait(AliasPossibility::No),
-                Finalize::SimplePath(trait_ref.ref_id, trait_ref.path.span),
+                Finalize::new(trait_ref.ref_id, trait_ref.path.span),
             );
             if let Some(def_id) = res.base_res().opt_def_id() {
                 new_id = Some(def_id);
@@ -2071,7 +2078,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                                                         // not used as part of the type system, this is far less surprising.
                                                         this.with_constant_rib(
                                                             IsRepeatExpr::No,
-                                                            true,
+                                                            HasGenericParams::Yes,
                                                             None,
                                                             |this| {
                                                                 visit::walk_assoc_item(
@@ -2653,7 +2660,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             qself,
             &Segment::from_path(path),
             source,
-            Finalize::SimplePath(id, path.span),
+            Finalize::new(id, path.span),
         );
     }
 
@@ -2672,8 +2679,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         );
         let ns = source.namespace();
 
-        let (id, path_span) =
-            finalize.node_id_and_path_span().expect("unexpected speculative resolution");
+        let Finalize { node_id, path_span, .. } = finalize;
         let report_errors = |this: &mut Self, res: Option<Res>| {
             if this.should_report_errs() {
                 let (err, candidates) =
@@ -2787,7 +2793,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 if ns == ValueNS {
                     let item_name = path.last().unwrap().ident;
                     let traits = self.traits_in_scope(item_name, ns);
-                    self.r.trait_map.insert(id, traits);
+                    self.r.trait_map.insert(node_id, traits);
                 }
 
                 if PrimTy::from_name(path[0].ident.name).is_some() {
@@ -2796,7 +2802,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                     std_path.push(Segment::from_ident(Ident::with_dummy_span(sym::std)));
                     std_path.extend(path);
                     if let PathResult::Module(_) | PathResult::NonModule(_) =
-                        self.resolve_path(&std_path, Some(ns), Finalize::No)
+                        self.resolve_path(&std_path, Some(ns), None)
                     {
                         // Check if we wrote `str::from_utf8` instead of `std::str::from_utf8`
                         let item_span =
@@ -2823,8 +2829,8 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
 
         if !matches!(source, PathSource::TraitItem(..)) {
             // Avoid recording definition of `A::B` in `<T as A>::B::C`.
-            self.r.record_partial_res(id, partial_res);
-            self.resolve_elided_lifetimes_in_path(id, partial_res, path, source, finalize);
+            self.r.record_partial_res(node_id, partial_res);
+            self.resolve_elided_lifetimes_in_path(node_id, partial_res, path, source, path_span);
         }
 
         partial_res
@@ -2932,21 +2938,12 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             // the trait (the slice upto and including
             // `qself.position`). And then we recursively resolve that,
             // but with `qself` set to `None`.
-            //
-            // However, setting `qself` to none (but not changing the
-            // span) loses the information about where this path
-            // *actually* appears, so for the purposes of the crate
-            // lint we pass along information that this is the trait
-            // name from a fully qualified path, and this also
-            // contains the full span (the `Finalize::QPathTrait`).
             let ns = if qself.position + 1 == path.len() { ns } else { TypeNS };
             let partial_res = self.smart_resolve_path_fragment(
                 None,
                 &path[..=qself.position],
                 PathSource::TraitItem(ns),
-                finalize.node_id_and_path_span().map_or(Finalize::No, |(qpath_id, path_span)| {
-                    Finalize::QPathTrait { qpath_id, qpath_span: qself.path_span, path_span }
-                }),
+                Finalize::with_root_span(finalize.node_id, finalize.path_span, qself.path_span),
             );
 
             // The remaining segments (the `C` in our example) will
@@ -2958,7 +2955,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             )));
         }
 
-        let result = match self.resolve_path(&path, Some(ns), finalize) {
+        let result = match self.resolve_path(&path, Some(ns), Some(finalize)) {
             PathResult::NonModule(path_res) => path_res,
             PathResult::Module(ModuleOrUniformRoot::Module(module)) if !module.is_normal() => {
                 PartialRes::new(module.res().unwrap())
@@ -2996,10 +2993,9 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             && result.base_res() != Res::Err
             && path[0].ident.name != kw::PathRoot
             && path[0].ident.name != kw::DollarCrate
-            && let Some((id, path_span)) = finalize.node_id_and_path_span()
         {
             let unqualified_result = {
-                match self.resolve_path(&[*path.last().unwrap()], Some(ns), Finalize::No) {
+                match self.resolve_path(&[*path.last().unwrap()], Some(ns), None) {
                     PathResult::NonModule(path_res) => path_res.base_res(),
                     PathResult::Module(ModuleOrUniformRoot::Module(module)) => {
                         module.res().unwrap()
@@ -3009,7 +3005,12 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
             };
             if result.base_res() == unqualified_result {
                 let lint = lint::builtin::UNUSED_QUALIFICATIONS;
-                self.r.lint_buffer.buffer_lint(lint, id, path_span, "unnecessary qualification")
+                self.r.lint_buffer.buffer_lint(
+                    lint,
+                    finalize.node_id,
+                    finalize.path_span,
+                    "unnecessary qualification",
+                )
             }
         }
 
@@ -3090,7 +3091,11 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
         debug!("resolve_anon_const {:?} is_repeat: {:?}", constant, is_repeat);
         self.with_constant_rib(
             is_repeat,
-            constant.value.is_potential_trivial_const_param(),
+            if constant.value.is_potential_trivial_const_param() {
+                HasGenericParams::Yes
+            } else {
+                HasGenericParams::No
+            },
             None,
             |this| visit::walk_anon_const(this, constant),
         );
@@ -3193,7 +3198,11 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                     if const_args.contains(&idx) {
                         self.with_constant_rib(
                             IsRepeatExpr::No,
-                            argument.is_potential_trivial_const_param(),
+                            if argument.is_potential_trivial_const_param() {
+                                HasGenericParams::Yes
+                            } else {
+                                HasGenericParams::No
+                            },
                             None,
                             |this| {
                                 this.resolve_expr(argument, None);

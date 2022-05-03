@@ -12,6 +12,7 @@ use rustc_hir::def_id::{DefId, CRATE_DEF_ID};
 use rustc_hir::Mutability;
 use rustc_middle::ty::{DefIdTree, Ty, TyCtxt};
 use rustc_middle::{bug, span_bug, ty};
+use rustc_resolve::ParentScope;
 use rustc_session::lint::Lint;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{sym, Ident, Symbol};
@@ -333,7 +334,7 @@ impl ItemFragment {
                     FragmentKind::StructField => write!(s, "structfield.{}", name),
                     FragmentKind::Variant => write!(s, "variant.{}", name),
                     FragmentKind::VariantField => {
-                        let variant = tcx.item_name(tcx.parent(def_id).unwrap());
+                        let variant = tcx.item_name(tcx.parent(def_id));
                         write!(s, "variant.{}.field.{}", variant, name)
                     }
                 }
@@ -508,10 +509,10 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                 | DefKind::AssocTy
                 | DefKind::Variant
                 | DefKind::Field) => {
-                    let parent_def_id = tcx.parent(def_id).expect("nested item has no parent");
+                    let parent_def_id = tcx.parent(def_id);
                     if def_kind == DefKind::Field && tcx.def_kind(parent_def_id) == DefKind::Variant
                     {
-                        tcx.parent(parent_def_id).expect("variant has no parent")
+                        tcx.parent(parent_def_id)
                     } else {
                         parent_def_id
                     }
@@ -564,7 +565,9 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             .copied()
             .unwrap_or_else(|| {
                 self.cx.enter_resolver(|resolver| {
-                    resolver.resolve_rustdoc_path(path_str, ns, module_id)
+                    let parent_scope =
+                        ParentScope::module(resolver.expect_module(module_id), resolver);
+                    resolver.resolve_rustdoc_path(path_str, ns, parent_scope)
                 })
             })
             .and_then(|res| res.try_into().ok())
@@ -2333,14 +2336,10 @@ fn handle_variant(
     cx: &DocContext<'_>,
     res: Res,
 ) -> Result<(Res, Option<ItemFragment>), ErrorKind<'static>> {
-    cx.tcx
-        .parent(res.def_id(cx.tcx))
-        .map(|parent| {
-            let parent_def = Res::Def(DefKind::Enum, parent);
-            let variant = cx.tcx.expect_variant_res(res.as_hir_res().unwrap());
-            (parent_def, Some(ItemFragment(FragmentKind::Variant, variant.def_id)))
-        })
-        .ok_or_else(|| ResolutionFailure::NoParentItem.into())
+    let parent = cx.tcx.parent(res.def_id(cx.tcx));
+    let parent_def = Res::Def(DefKind::Enum, parent);
+    let variant = cx.tcx.expect_variant_res(res.as_hir_res().unwrap());
+    Ok((parent_def, Some(ItemFragment(FragmentKind::Variant, variant.def_id))))
 }
 
 /// Resolve a primitive type or value.
