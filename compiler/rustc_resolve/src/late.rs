@@ -396,13 +396,10 @@ impl<'a> PathSource<'a> {
                 ) | Res::Local(..)
                     | Res::SelfCtor(..)
             ),
-            PathSource::Pat => matches!(
-                res,
-                Res::Def(
-                    DefKind::Ctor(_, CtorKind::Const) | DefKind::Const | DefKind::AssocConst,
-                    _,
-                ) | Res::SelfCtor(..)
-            ),
+            PathSource::Pat => {
+                res.expected_in_unit_struct_pat()
+                    || matches!(res, Res::Def(DefKind::Const | DefKind::AssocConst, _))
+            }
             PathSource::TupleStruct(..) => res.expected_in_tuple_struct_pat(),
             PathSource::Struct => matches!(
                 res,
@@ -2696,6 +2693,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                     def_id,
                     instead,
                     suggestion,
+                    path: path.into(),
                 });
             }
 
@@ -2759,6 +2757,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                     def_id,
                     instead: false,
                     suggestion: None,
+                    path: path.into(),
                 });
             } else {
                 err.cancel();
