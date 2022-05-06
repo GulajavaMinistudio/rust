@@ -7,6 +7,8 @@
 /* global onEach, onEachLazy, removeClass */
 /* global switchTheme, useSystemTheme */
 
+"use strict";
+
 if (!String.prototype.startsWith) {
     String.prototype.startsWith = function(searchString, position) {
         position = position || 0;
@@ -292,17 +294,18 @@ function loadCss(cssFileName) {
 }
 
 (function() {
-    "use strict";
-
     function loadScript(url) {
         const script = document.createElement('script');
         script.src = url;
         document.head.append(script);
     }
 
-
     getSettingsButton().onclick = event => {
+        addClass(getSettingsButton(), "rotate");
         event.preventDefault();
+        // Sending request for the CSS and the JS files at the same time so it will
+        // hopefully be loaded when the JS will generate the settings content.
+        loadCss("settings");
         loadScript(window.settingsJS);
     };
 

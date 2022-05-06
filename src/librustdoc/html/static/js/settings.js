@@ -3,9 +3,11 @@
 /* eslint prefer-const: "error" */
 /* eslint prefer-arrow-callback: "error" */
 // Local js definitions:
-/* global getSettingValue, getVirtualKey, updateLocalStorage, updateSystemTheme, loadCss */
+/* global getSettingValue, getVirtualKey, updateLocalStorage, updateSystemTheme */
 /* global addClass, removeClass, onEach, onEachLazy, NOT_DISPLAYED_ID */
 /* global MAIN_ID, getVar, getSettingsButton, switchDisplayedElement, getNotDisplayedElem */
+
+"use strict";
 
 (function () {
     const isSettingsPage = window.location.pathname.endsWith("/settings.html");
@@ -207,9 +209,6 @@
             },
         ];
 
-        // First, we add the settings.css file.
-        loadCss("settings");
-
         // Then we build the DOM.
         const el = document.createElement("section");
         el.id = "settings";
@@ -272,5 +271,6 @@
         if (!isSettingsPage) {
             switchDisplayedElement(settingsMenu);
         }
+        removeClass(getSettingsButton(), "rotate");
     }, 0);
 })();
