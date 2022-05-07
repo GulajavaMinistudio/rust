@@ -14,6 +14,7 @@ use rustc_span::{Span, DUMMY_SP};
 
 use super::ItemCtxt;
 use super::{bad_placeholder, is_suggestable_infer_ty};
+use crate::errors::UnconstrainedOpaqueType;
 
 /// Computes the relevant generic parameter for a potential generic const argument.
 ///
@@ -531,7 +532,7 @@ pub(super) fn type_of(tcx: TyCtxt<'_>, def_id: DefId) -> Ty<'_> {
 /// In particular, definitions of opaque types can only use other generics as arguments,
 /// and they cannot repeat an argument. Example:
 ///
-/// ```rust
+/// ```ignore (illustrative)
 /// type Foo<A, B> = impl Bar<A, B>;
 ///
 /// // Okay -- `Foo` is applied to two distinct, generic types.
@@ -682,13 +683,10 @@ fn find_opaque_ty_constraints(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Ty<'_> {
     match locator.found {
         Some(hidden) => hidden.ty,
         None => {
-            let span = tcx.def_span(def_id);
-            let name = tcx.item_name(tcx.local_parent(def_id).to_def_id());
-            let label = format!(
-                "`{}` must be used in combination with a concrete type within the same module",
-                name
-            );
-            tcx.sess.struct_span_err(span, "unconstrained opaque type").note(&label).emit();
+            tcx.sess.emit_err(UnconstrainedOpaqueType {
+                span: tcx.def_span(def_id),
+                name: tcx.item_name(tcx.local_parent(def_id).to_def_id()),
+            });
             tcx.ty_error()
         }
     }
