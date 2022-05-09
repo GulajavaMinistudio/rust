@@ -664,8 +664,6 @@ impl Step for Clippy {
             &[],
         );
 
-        // clippy tests need to know about the stage sysroot
-        cargo.env("SYSROOT", builder.sysroot(compiler));
         cargo.env("RUSTC_TEST_SUITE", builder.rustc(compiler));
         cargo.env("RUSTC_LIB_PATH", builder.rustc_libdir(compiler));
         let host_libs = builder.stage_out(compiler, Mode::ToolRustc).join(builder.cargo_dir());
@@ -2353,6 +2351,10 @@ impl Step for Bootstrap {
 
     /// Tests the build system itself.
     fn run(self, builder: &Builder<'_>) {
+        let mut check_bootstrap = Command::new(&builder.python());
+        check_bootstrap.arg("bootstrap_test.py").current_dir(builder.src.join("src/bootstrap/"));
+        try_run(builder, &mut check_bootstrap);
+
         let mut cmd = Command::new(&builder.initial_cargo);
         cmd.arg("test")
             .current_dir(builder.src.join("src/bootstrap"))

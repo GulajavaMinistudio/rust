@@ -53,6 +53,7 @@ use crate::time;
 /// high-level module to provide its own errors while also revealing some of the
 /// implementation for debugging via `source` chains.
 #[stable(feature = "rust1", since = "1.0.0")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "Error")]
 pub trait Error: Debug + Display {
     /// The lower-level source of this error, if any.
     ///
@@ -144,15 +145,15 @@ pub trait Error: Debug + Display {
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_deprecated(since = "1.42.0", reason = "use the Display impl or to_string()")]
+    #[deprecated(since = "1.42.0", note = "use the Display impl or to_string()")]
     fn description(&self) -> &str {
         "description() is deprecated; use Display"
     }
 
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_deprecated(
+    #[deprecated(
         since = "1.33.0",
-        reason = "replaced by Error::source, which can support downcasting"
+        note = "replaced by Error::source, which can support downcasting"
     )]
     #[allow(missing_docs)]
     fn cause(&self) -> Option<&dyn Error> {

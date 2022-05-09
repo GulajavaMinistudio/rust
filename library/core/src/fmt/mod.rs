@@ -19,6 +19,7 @@ mod nofloat;
 mod num;
 
 #[stable(feature = "fmt_flags_align", since = "1.28.0")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "Alignment")]
 /// Possible alignments returned by `Formatter::align`
 #[derive(Debug)]
 pub enum Alignment {
@@ -462,6 +463,7 @@ impl<'a> Arguments<'a> {
 ///
 /// [`format()`]: ../../std/fmt/fn.format.html
 #[stable(feature = "rust1", since = "1.0.0")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "Arguments")]
 #[derive(Copy, Clone)]
 pub struct Arguments<'a> {
     // Format string pieces to print.
@@ -1651,10 +1653,10 @@ impl<'a> Formatter<'a> {
     /// Flags for formatting
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_deprecated(
+    #[deprecated(
         since = "1.24.0",
-        reason = "use the `sign_plus`, `sign_minus`, `alternate`, \
-                  or `sign_aware_zero_pad` methods instead"
+        note = "use the `sign_plus`, `sign_minus`, `alternate`, \
+                or `sign_aware_zero_pad` methods instead"
     )]
     pub fn flags(&self) -> u32 {
         self.flags
