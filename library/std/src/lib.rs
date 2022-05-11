@@ -241,7 +241,6 @@
 #![feature(intra_doc_pointers)]
 #![feature(lang_items)]
 #![feature(let_chains)]
-#![feature(let_else)]
 #![feature(linkage)]
 #![feature(min_specialization)]
 #![feature(must_not_suspend)]
@@ -302,7 +301,6 @@
 #![feature(toowned_clone_into)]
 #![feature(try_reserve_kind)]
 #![feature(vec_into_raw_parts)]
-#![feature(slice_concat_trait)]
 //
 // Library features (unwind):
 #![feature(panic_unwind)]
@@ -345,7 +343,7 @@
 // to import the prelude implicitly when building crates that depend on std.
 #[prelude_import]
 #[allow(unused)]
-use prelude::v1::*;
+use prelude::rust_2021::*;
 
 // Access to Bencher, etc.
 #[cfg(test)]

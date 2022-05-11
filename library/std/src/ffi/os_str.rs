@@ -6,7 +6,7 @@ use crate::cmp;
 use crate::collections::TryReserveError;
 use crate::fmt;
 use crate::hash::{Hash, Hasher};
-use crate::iter::{Extend, FromIterator};
+use crate::iter::Extend;
 use crate::ops;
 use crate::rc::Rc;
 use crate::str::FromStr;
@@ -1219,23 +1219,6 @@ impl fmt::Debug for OsStr {
 impl OsStr {
     pub(crate) fn display(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.inner, formatter)
-    }
-}
-
-#[unstable(feature = "slice_concat_ext", issue = "27747")]
-impl<S: Borrow<OsStr>> alloc::slice::Join<&OsStr> for [S] {
-    type Output = OsString;
-
-    fn join(slice: &Self, sep: &OsStr) -> OsString {
-        let Some(first) = slice.first() else {
-            return OsString::new();
-        };
-        let first = first.borrow().to_owned();
-        slice[1..].iter().fold(first, |mut a, b| {
-            a.push(sep);
-            a.push(b.borrow());
-            a
-        })
     }
 }
 

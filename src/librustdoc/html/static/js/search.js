@@ -1089,7 +1089,7 @@ window.initSearch = rawSearchIndex => {
             return parsedQuery.literalSearch ? MAX_LEV_DISTANCE + 1 : lev;
         }
 
-        function checkPath(contains, lastElem, ty) {
+        function checkPath(contains, ty) {
             if (contains.length === 0) {
                 return 0;
             }
@@ -1306,7 +1306,7 @@ window.initSearch = rawSearchIndex => {
             }
 
             if (elem.fullPath.length > 1) {
-                lev = checkPath(elem.pathWithoutLast, elem.pathLast, row);
+                lev = checkPath(elem.pathWithoutLast, row);
                 if (lev > MAX_LEV_DISTANCE || (parsedQuery.literalSearch && lev !== 0)) {
                     return;
                 } else if (lev > 0) {
@@ -1323,7 +1323,6 @@ window.initSearch = rawSearchIndex => {
                 }
             }
             lev = levenshtein(searchWord, elem.pathLast);
-            lev += lev_add;
             if (lev > 0 && elem.pathLast.length > 2 && searchWord.indexOf(elem.pathLast) > -1)
             {
                 if (elem.pathLast.length < 6) {
@@ -1332,6 +1331,7 @@ window.initSearch = rawSearchIndex => {
                     lev = 0;
                 }
             }
+            lev += lev_add;
             if (lev > MAX_LEV_DISTANCE) {
                 return;
             } else if (index !== -1 && elem.fullPath.length < 2) {
