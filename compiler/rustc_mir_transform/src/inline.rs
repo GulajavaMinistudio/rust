@@ -418,8 +418,7 @@ impl<'tcx> Inliner<'tcx> {
                             }
                         }
                         // Don't give intrinsics the extra penalty for calls
-                        let f = tcx.fn_sig(def_id);
-                        if f.abi() == Abi::RustIntrinsic || f.abi() == Abi::PlatformIntrinsic {
+                        if tcx.is_intrinsic(def_id) {
                             cost += INSTR_COST;
                         } else {
                             cost += CALL_PENALTY;
@@ -450,7 +449,7 @@ impl<'tcx> Inliner<'tcx> {
             }
 
             if !is_drop {
-                for &succ in term.successors() {
+                for succ in term.successors() {
                     work_list.push(succ);
                 }
             }
