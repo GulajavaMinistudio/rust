@@ -1105,7 +1105,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
     }
 
-    fn check_expr_let(&self, let_expr: &'tcx hir::Let<'tcx>) -> Ty<'tcx> {
+    pub(super) fn check_expr_let(&self, let_expr: &'tcx hir::Let<'tcx>) -> Ty<'tcx> {
         // for let statements, this is done in check_stmt
         let init = let_expr.init;
         self.warn_if_unreachable(init.hir_id, init.span, "block in `let` expression");
@@ -2641,10 +2641,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         self.check_expr_asm_operand(out_expr, false);
                     }
                 }
-                hir::InlineAsmOperand::Const { anon_const }
-                | hir::InlineAsmOperand::SymFn { anon_const } => {
-                    self.to_const(anon_const);
-                }
+                // `AnonConst`s have their own body and is type-checked separately.
+                // As they don't flow into the type system we don't need them to
+                // be well-formed.
+                hir::InlineAsmOperand::Const { .. } | hir::InlineAsmOperand::SymFn { .. } => {}
                 hir::InlineAsmOperand::SymStatic { .. } => {}
             }
         }
