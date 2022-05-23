@@ -420,7 +420,7 @@ fn projection_to_path_segment(ty: ty::ProjectionTy<'_>, cx: &mut DocContext<'_>)
     PathSegment {
         name: item.name,
         args: GenericArgs::AngleBracketed {
-            args: substs_to_args(cx, &ty.substs[generics.parent_count..], false),
+            args: substs_to_args(cx, &ty.substs[generics.parent_count..], false).into(),
             bindings: Default::default(),
         },
     }
@@ -1205,7 +1205,7 @@ impl Clean<Item> for ty::AssocItem {
                                             || generics
                                                 .params
                                                 .iter()
-                                                .zip(args)
+                                                .zip(args.iter())
                                                 .any(|(param, arg)| !param_eq_arg(param, arg))
                                         {
                                             return false;
@@ -1784,7 +1784,6 @@ impl Clean<VariantStruct> for rustc_hir::VariantData<'_> {
         VariantStruct {
             struct_type: CtorKind::from_hir(self),
             fields: self.fields().iter().map(|x| x.clean(cx)).collect(),
-            fields_stripped: false,
         }
     }
 }
@@ -1804,7 +1803,6 @@ impl Clean<Item> for ty::VariantDef {
             }
             CtorKind::Fictive => Variant::Struct(VariantStruct {
                 struct_type: CtorKind::Fictive,
-                fields_stripped: false,
                 fields: self.fields.iter().map(|field| field.clean(cx)).collect(),
             }),
         };
@@ -1837,7 +1835,7 @@ impl Clean<GenericArgs> for hir::GenericArgs<'_> {
             let output = self.bindings[0].ty().clean(cx);
             let output =
                 if output != Type::Tuple(Vec::new()) { Some(Box::new(output)) } else { None };
-            let inputs = self.inputs().iter().map(|x| x.clean(cx)).collect();
+            let inputs = self.inputs().iter().map(|x| x.clean(cx)).collect::<Vec<_>>().into();
             GenericArgs::Parenthesized { inputs, output }
         } else {
             let args = self
@@ -1852,8 +1850,9 @@ impl Clean<GenericArgs> for hir::GenericArgs<'_> {
                     hir::GenericArg::Const(ct) => GenericArg::Const(Box::new(ct.clean(cx))),
                     hir::GenericArg::Infer(_inf) => GenericArg::Infer,
                 })
-                .collect();
-            let bindings = self.bindings.iter().map(|x| x.clean(cx)).collect();
+                .collect::<Vec<_>>()
+                .into();
+            let bindings = self.bindings.iter().map(|x| x.clean(cx)).collect::<Vec<_>>().into();
             GenericArgs::AngleBracketed { args, bindings }
         }
     }
@@ -1913,7 +1912,6 @@ fn clean_maybe_renamed_item(
             ItemKind::Enum(ref def, ref generics) => EnumItem(Enum {
                 variants: def.variants.iter().map(|v| v.clean(cx)).collect(),
                 generics: generics.clean(cx),
-                variants_stripped: false,
             }),
             ItemKind::TraitAlias(ref generics, bounds) => TraitAliasItem(TraitAlias {
                 generics: generics.clean(cx),
@@ -1922,13 +1920,11 @@ fn clean_maybe_renamed_item(
             ItemKind::Union(ref variant_data, ref generics) => UnionItem(Union {
                 generics: generics.clean(cx),
                 fields: variant_data.fields().iter().map(|x| x.clean(cx)).collect(),
-                fields_stripped: false,
             }),
             ItemKind::Struct(ref variant_data, ref generics) => StructItem(Struct {
                 struct_type: CtorKind::from_hir(variant_data),
                 generics: generics.clean(cx),
                 fields: variant_data.fields().iter().map(|x| x.clean(cx)).collect(),
-                fields_stripped: false,
             }),
             ItemKind::Impl(ref impl_) => return clean_impl(impl_, item.hir_id(), cx),
             // proc macros can have a name set by attributes
