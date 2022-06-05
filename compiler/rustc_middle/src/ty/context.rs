@@ -2803,6 +2803,13 @@ impl<'tcx> TyCtxt<'tcx> {
         self.named_region_map(id.owner).and_then(|map| map.get(&id.local_id).cloned())
     }
 
+    pub fn is_late_bound(self, id: HirId) -> bool {
+        self.is_late_bound_map(id.owner).map_or(false, |set| {
+            let def_id = self.hir().local_def_id(id);
+            set.contains(&def_id)
+        })
+    }
+
     pub fn late_bound_vars(self, id: HirId) -> &'tcx List<ty::BoundVariableKind> {
         self.mk_bound_variable_kinds(
             self.late_bound_vars_map(id.owner)
@@ -2886,8 +2893,8 @@ pub fn provide(providers: &mut ty::query::Providers) {
         assert_eq!(id, LOCAL_CRATE);
         tcx.crate_name
     };
-    providers.maybe_unused_trait_import =
-        |tcx, id| tcx.resolutions(()).maybe_unused_trait_imports.contains(&id);
+    providers.maybe_unused_trait_imports =
+        |tcx, ()| &tcx.resolutions(()).maybe_unused_trait_imports;
     providers.maybe_unused_extern_crates =
         |tcx, ()| &tcx.resolutions(()).maybe_unused_extern_crates[..];
     providers.names_imported_by_glob_use = |tcx, id| {
