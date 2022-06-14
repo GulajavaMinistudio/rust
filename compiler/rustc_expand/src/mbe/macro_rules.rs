@@ -102,7 +102,7 @@ fn emit_frag_parse_err(
                 e.span_suggestion_verbose(
                     site_span.shrink_to_hi(),
                     "add `;` to interpret the expansion as a statement",
-                    ";".to_string(),
+                    ";",
                     Applicability::MaybeIncorrect,
                 );
             }
@@ -123,7 +123,7 @@ impl<'a> ParserAnyMacro<'a> {
             is_trailing_mac,
             is_local,
         } = *self;
-        let snapshot = &mut parser.clone();
+        let snapshot = &mut parser.create_snapshot_for_diagnostic();
         let fragment = match parse_ast_fragment(parser, kind) {
             Ok(f) => f,
             Err(err) => {
@@ -357,7 +357,7 @@ fn expand_macro<'cx>(
                     err.span_suggestion_short(
                         comma_span,
                         "missing comma here",
-                        ", ".to_string(),
+                        ", ",
                         Applicability::MachineApplicable,
                     );
                 }

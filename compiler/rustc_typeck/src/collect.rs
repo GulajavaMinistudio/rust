@@ -806,8 +806,7 @@ fn convert_item(tcx: TyCtxt<'_>, item_id: hir::ItemId) {
                 hir::ItemKind::Fn(..) => tcx.ensure().fn_sig(def_id),
                 hir::ItemKind::OpaqueTy(..) => tcx.ensure().item_bounds(def_id),
                 hir::ItemKind::Const(ty, ..) | hir::ItemKind::Static(ty, ..) => {
-                    // (#75889): Account for `const C: dyn Fn() -> _ = "";`
-                    if let hir::TyKind::TraitObject(..) = ty.kind {
+                    if !is_suggestable_infer_ty(ty) {
                         let mut visitor = HirPlaceholderCollector::default();
                         visitor.visit_item(it);
                         placeholder_type_error(tcx, None, visitor.0, false, None, it.kind.descr());
@@ -1930,7 +1929,7 @@ fn infer_return_ty_for_fn_sig<'tcx>(
                 diag.span_suggestion(
                     ty.span,
                     "replace with the correct return type",
-                    ret_ty.to_string(),
+                    ret_ty,
                     Applicability::MachineApplicable,
                 );
             } else if matches!(ret_ty.kind(), ty::FnDef(..)) {
@@ -1939,7 +1938,7 @@ fn infer_return_ty_for_fn_sig<'tcx>(
                     diag.span_suggestion(
                         ty.span,
                         "replace with the correct return type",
-                        fn_sig.to_string(),
+                        fn_sig,
                         Applicability::MachineApplicable,
                     );
                 }
@@ -2584,7 +2583,7 @@ fn from_target_feature(
     let Some(list) = attr.meta_item_list() else { return };
     let bad_item = |span| {
         let msg = "malformed `target_feature` attribute input";
-        let code = "enable = \"..\"".to_owned();
+        let code = "enable = \"..\"";
         tcx.sess
             .struct_span_err(span, msg)
             .span_suggestion(span, "must be of the form", code, Applicability::HasPlaceholders)
