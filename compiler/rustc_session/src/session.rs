@@ -209,6 +209,7 @@ pub struct PerfStats {
 
 /// Trait implemented by error types. This should not be implemented manually. Instead, use
 /// `#[derive(SessionDiagnostic)]` -- see [rustc_macros::SessionDiagnostic].
+#[rustc_diagnostic_item = "SessionDiagnostic"]
 pub trait SessionDiagnostic<'a, T: EmissionGuarantee = ErrorGuaranteed> {
     /// Write out as a diagnostic out of `sess`.
     #[must_use]
@@ -1252,7 +1253,8 @@ pub fn build_session(
         let profiler = SelfProfiler::new(
             directory,
             sopts.crate_name.as_deref(),
-            &sopts.debugging_opts.self_profile_events,
+            sopts.debugging_opts.self_profile_events.as_ref().map(|xs| &xs[..]),
+            &sopts.debugging_opts.self_profile_counter,
         );
         match profiler {
             Ok(profiler) => Some(Arc::new(profiler)),
@@ -1431,13 +1433,13 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         );
     }
 
-    // LLVM CFI requires LTO.
-    if sess.is_sanitizer_cfi_enabled() {
-        if sess.opts.cg.lto == config::LtoCli::Unspecified
-            || sess.opts.cg.lto == config::LtoCli::No
-            || sess.opts.cg.lto == config::LtoCli::Thin
-        {
+    // LLVM CFI and VFE both require LTO.
+    if sess.lto() != config::Lto::Fat {
+        if sess.is_sanitizer_cfi_enabled() {
             sess.err("`-Zsanitizer=cfi` requires `-Clto`");
+        }
+        if sess.opts.debugging_opts.virtual_function_elimination {
+            sess.err("`-Zvirtual-function-elimination` requires `-Clto`");
         }
     }
 
