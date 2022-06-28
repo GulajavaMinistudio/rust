@@ -252,8 +252,11 @@ fn from_clean_item(item: clean::Item, tcx: TyCtxt<'_>) -> ItemEnum {
             bounds: b.into_iter().map(|x| x.into_tcx(tcx)).collect(),
             default: None,
         },
-        // FIXME: do not map to Typedef but to a custom variant
-        AssocTypeItem(t, _) => ItemEnum::Typedef(t.into_tcx(tcx)),
+        AssocTypeItem(t, b) => ItemEnum::AssocType {
+            generics: t.generics.into_tcx(tcx),
+            bounds: b.into_iter().map(|x| x.into_tcx(tcx)).collect(),
+            default: t.item_type.map(|ty| ty.into_tcx(tcx)),
+        },
         // `convert_item` early returns `None` for striped items and keywords.
         StrippedItem(_) | KeywordItem(_) => unreachable!(),
         ExternCrateItem { ref src } => ItemEnum::ExternCrate {
@@ -663,7 +666,12 @@ impl FromWithTcx<clean::Import> for Import {
             },
             Glob => Import {
                 source: import.source.path.whole_name(),
-                name: import.source.path.last().to_string(),
+                name: import
+                    .source
+                    .path
+                    .last_opt()
+                    .unwrap_or_else(|| Symbol::intern("*"))
+                    .to_string(),
                 id: import.source.did.map(ItemId::from).map(|i| from_item_id(i, tcx)),
                 glob: true,
             },
