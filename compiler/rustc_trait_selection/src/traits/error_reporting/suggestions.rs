@@ -2204,8 +2204,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             _ => true,
                         };
                     if !ident.span.overlaps(span) && !same_line {
-                        multispan
-                            .push_span_label(ident.span, "required by a bound in this".to_string());
+                        multispan.push_span_label(ident.span, "required by a bound in this");
                     }
                 }
                 let descr = format!("required by a bound in `{}`", item_name);
@@ -2217,9 +2216,10 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     err.span_note(tcx.def_span(item_def_id), &descr);
                 }
             }
-            ObligationCauseCode::ObjectCastObligation(object_ty) => {
+            ObligationCauseCode::ObjectCastObligation(concrete_ty, object_ty) => {
                 err.note(&format!(
-                    "required for the cast to the object type `{}`",
+                    "required for the cast from `{}` to the object type `{}`",
+                    self.ty_to_string(concrete_ty),
                     self.ty_to_string(object_ty)
                 ));
             }
