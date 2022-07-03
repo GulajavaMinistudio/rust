@@ -210,6 +210,8 @@
 #![allow(unused_lifetimes)]
 // Tell the compiler to link to either panic_abort or panic_unwind
 #![needs_panic_runtime]
+// Ensure that std can be linked against panic_abort despite compiled with `-C panic=unwind`
+#![cfg_attr(not(bootstrap), deny(ffi_unwind_calls))]
 // std may use features in a platform-specific way
 #![allow(unused_features)]
 #![cfg_attr(test, feature(internal_output_capture, print_internals, update_panic_count))]
@@ -270,6 +272,7 @@
 #![feature(duration_checked_float)]
 #![feature(duration_constants)]
 #![feature(exact_size_is_empty)]
+#![feature(exclusive_wrapper)]
 #![feature(extend_one)]
 #![feature(float_minimum_maximum)]
 #![feature(hasher_prefixfree_extras)]
