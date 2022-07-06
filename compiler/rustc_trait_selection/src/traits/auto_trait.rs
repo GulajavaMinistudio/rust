@@ -8,6 +8,7 @@ use crate::infer::InferCtxt;
 use crate::traits::project::ProjectAndUnifyResult;
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::ty::fold::{TypeFolder, TypeSuperFoldable};
+use rustc_middle::ty::visit::TypeVisitable;
 use rustc_middle::ty::{Region, RegionVid, Term};
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -212,15 +213,7 @@ impl<'tcx> AutoTraitFinder<'tcx> {
                 panic!("Unable to fulfill trait {:?} for '{:?}': {:?}", trait_did, ty, errors);
             }
 
-            let body_id_map: FxHashMap<_, _> = infcx
-                .inner
-                .borrow()
-                .region_obligations()
-                .iter()
-                .map(|&(id, _)| (id, vec![]))
-                .collect();
-
-            infcx.process_registered_region_obligations(&body_id_map, full_env);
+            infcx.process_registered_region_obligations(&Default::default(), full_env);
 
             let region_data = infcx
                 .inner

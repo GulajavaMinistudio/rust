@@ -75,7 +75,7 @@ use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};
 use rustc_infer::traits::specialization_graph::Node;
 use rustc_middle::ty::subst::{GenericArg, InternalSubsts, SubstsRef};
 use rustc_middle::ty::trait_def::TraitSpecializationKind;
-use rustc_middle::ty::{self, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{self, TyCtxt, TypeVisitable};
 use rustc_span::Span;
 use rustc_trait_selection::traits::{self, translate_substs, wf};
 
@@ -150,7 +150,7 @@ fn get_impl_substs<'tcx>(
 
     // Conservatively use an empty `ParamEnv`.
     let outlives_env = OutlivesEnvironment::new(ty::ParamEnv::empty());
-    infcx.resolve_regions_and_report_errors(impl1_def_id.to_def_id(), &outlives_env);
+    infcx.resolve_regions_and_report_errors(&outlives_env);
     let Ok(impl2_substs) = infcx.fully_resolve(impl2_substs) else {
         let span = tcx.def_span(impl1_def_id);
         tcx.sess.emit_err(SubstsOnOverriddenImpl { span });

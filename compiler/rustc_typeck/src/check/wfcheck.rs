@@ -18,7 +18,7 @@ use rustc_middle::ty::subst::{GenericArgKind, InternalSubsts, Subst};
 use rustc_middle::ty::trait_def::TraitSpecializationKind;
 use rustc_middle::ty::{
     self, AdtKind, DefIdTree, EarlyBinder, GenericParamDefKind, ToPredicate, Ty, TyCtxt,
-    TypeFoldable, TypeSuperFoldable, TypeVisitor,
+    TypeFoldable, TypeSuperVisitable, TypeVisitable, TypeVisitor,
 };
 use rustc_session::parse::feature_err;
 use rustc_span::symbol::{sym, Ident, Symbol};
@@ -62,7 +62,10 @@ impl<'tcx> CheckWfFcxBuilder<'tcx> {
             }
             let wf_tys = f(&fcx);
             fcx.select_all_obligations_or_error();
-            fcx.regionck_item(id, span, wf_tys);
+
+            let mut outlives_environment = OutlivesEnvironment::new(param_env);
+            outlives_environment.add_implied_bounds(&fcx.infcx, wf_tys, id);
+            fcx.infcx.check_region_obligations_and_report_errors(&outlives_environment);
         });
     }
 }
@@ -655,13 +658,12 @@ fn resolve_regions_with_wf_tys<'tcx>(
     // call individually.
     tcx.infer_ctxt().enter(|infcx| {
         let mut outlives_environment = OutlivesEnvironment::new(param_env);
-        outlives_environment.add_implied_bounds(&infcx, wf_tys.clone(), id, DUMMY_SP);
-        outlives_environment.save_implied_bounds(id);
-        let region_bound_pairs = outlives_environment.region_bound_pairs_map().get(&id).unwrap();
+        outlives_environment.add_implied_bounds(&infcx, wf_tys.clone(), id);
+        let region_bound_pairs = outlives_environment.region_bound_pairs();
 
         add_constraints(&infcx, region_bound_pairs);
 
-        let errors = infcx.resolve_regions(id.expect_owner().to_def_id(), &outlives_environment);
+        let errors = infcx.resolve_regions(&outlives_environment);
 
         debug!(?errors, "errors");
 
@@ -1367,7 +1369,7 @@ fn check_where_clauses<'tcx, 'fcx>(
             struct CountParams {
                 params: FxHashSet<u32>,
             }
-            impl<'tcx> ty::fold::TypeVisitor<'tcx> for CountParams {
+            impl<'tcx> ty::visit::TypeVisitor<'tcx> for CountParams {
                 type BreakTy = ();
 
                 fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {

@@ -13,6 +13,7 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{ItemKind, Node, PathSegment};
+use rustc_infer::infer::outlives::env::OutlivesEnvironment;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::{RegionVariableOrigin, TyCtxtInferExt};
 use rustc_infer::traits::Obligation;
@@ -20,7 +21,9 @@ use rustc_middle::hir::nested_filter;
 use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::subst::GenericArgKind;
 use rustc_middle::ty::util::{Discr, IntTypeExt};
-use rustc_middle::ty::{self, ParamEnv, ToPredicate, Ty, TyCtxt, TypeFoldable, TypeSuperFoldable};
+use rustc_middle::ty::{
+    self, ParamEnv, ToPredicate, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable,
+};
 use rustc_session::lint::builtin::{UNINHABITED_STATIC, UNSUPPORTED_CALLING_CONVENTIONS};
 use rustc_span::symbol::sym;
 use rustc_span::{self, Span};
@@ -521,7 +524,7 @@ pub(super) fn check_opaque_for_inheriting_lifetimes<'tcx>(
 
     struct FoundParentLifetime;
     struct FindParentLifetimeVisitor<'tcx>(&'tcx ty::Generics);
-    impl<'tcx> ty::fold::TypeVisitor<'tcx> for FindParentLifetimeVisitor<'tcx> {
+    impl<'tcx> ty::visit::TypeVisitor<'tcx> for FindParentLifetimeVisitor<'tcx> {
         type BreakTy = FoundParentLifetime;
 
         fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
@@ -555,7 +558,7 @@ pub(super) fn check_opaque_for_inheriting_lifetimes<'tcx>(
         selftys: Vec<(Span, Option<String>)>,
     }
 
-    impl<'tcx> ty::fold::TypeVisitor<'tcx> for ProhibitOpaqueVisitor<'tcx> {
+    impl<'tcx> ty::visit::TypeVisitor<'tcx> for ProhibitOpaqueVisitor<'tcx> {
         type BreakTy = Ty<'tcx>;
 
         fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
@@ -736,10 +739,8 @@ fn check_opaque_meets_bounds<'tcx>(
             hir::OpaqueTyOrigin::FnReturn(..) | hir::OpaqueTyOrigin::AsyncFn(..) => {}
             // Can have different predicates to their defining use
             hir::OpaqueTyOrigin::TyAlias => {
-                // Finally, resolve all regions. This catches wily misuses of
-                // lifetime parameters.
-                let fcx = FnCtxt::new(&inh, param_env, hir_id);
-                fcx.regionck_item(hir_id, span, FxHashSet::default());
+                let outlives_environment = OutlivesEnvironment::new(param_env);
+                infcx.check_region_obligations_and_report_errors(&outlives_environment);
             }
         }
 
@@ -1596,7 +1597,7 @@ fn opaque_type_cycle_error(tcx: TyCtxt<'_>, def_id: LocalDefId, span: Span) -> E
                 .filter(|(_, ty)| !matches!(ty.kind(), ty::Never))
             {
                 struct OpaqueTypeCollector(Vec<DefId>);
-                impl<'tcx> ty::fold::TypeVisitor<'tcx> for OpaqueTypeCollector {
+                impl<'tcx> ty::visit::TypeVisitor<'tcx> for OpaqueTypeCollector {
                     fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
                         match *t.kind() {
                             ty::Opaque(def, _) => {

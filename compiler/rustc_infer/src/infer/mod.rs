@@ -15,7 +15,6 @@ use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::undo_log::Rollback;
 use rustc_data_structures::unify as ut;
 use rustc_errors::{DiagnosticBuilder, ErrorGuaranteed};
-use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::infer::canonical::{Canonical, CanonicalVarValues};
 use rustc_middle::infer::unify_key::{ConstVarValue, ConstVariableValue};
@@ -26,6 +25,7 @@ use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 use rustc_middle::ty::relate::RelateResult;
 use rustc_middle::ty::subst::{GenericArg, GenericArgKind, InternalSubsts, SubstsRef};
+use rustc_middle::ty::visit::TypeVisitable;
 pub use rustc_middle::ty::IntVarValue;
 use rustc_middle::ty::{self, GenericParamDefKind, InferConst, Ty, TyCtxt};
 use rustc_middle::ty::{ConstVid, FloatVid, IntVid, TyVid};
@@ -147,7 +147,7 @@ pub struct InferCtxtInner<'tcx> {
     /// for each body-id in this map, which will process the
     /// obligations within. This is expected to be done 'late enough'
     /// that all type inference variables have been bound and so forth.
-    region_obligations: Vec<(hir::HirId, RegionObligation<'tcx>)>,
+    region_obligations: Vec<RegionObligation<'tcx>>,
 
     undo_log: InferCtxtUndoLogs<'tcx>,
 
@@ -171,7 +171,7 @@ impl<'tcx> InferCtxtInner<'tcx> {
     }
 
     #[inline]
-    pub fn region_obligations(&self) -> &[(hir::HirId, RegionObligation<'tcx>)] {
+    pub fn region_obligations(&self) -> &[RegionObligation<'tcx>] {
         &self.region_obligations
     }
 
@@ -319,7 +319,7 @@ pub struct InferCtxt<'a, 'tcx> {
 }
 
 /// See the `error_reporting` module for more details.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, TypeFoldable)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TypeFoldable, TypeVisitable)]
 pub enum ValuePairs<'tcx> {
     Regions(ExpectedFound<ty::Region<'tcx>>),
     Terms(ExpectedFound<ty::Term<'tcx>>),
@@ -1267,7 +1267,6 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// `resolve_vars_if_possible` as well as `fully_resolve`.
     pub fn resolve_regions(
         &self,
-        region_context: DefId,
         outlives_env: &OutlivesEnvironment<'tcx>,
     ) -> Vec<RegionResolutionError<'tcx>> {
         let (var_infos, data) = {
@@ -1286,8 +1285,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 .into_infos_and_data()
         };
 
-        let region_rels =
-            &RegionRelations::new(self.tcx, region_context, outlives_env.free_region_map());
+        let region_rels = &RegionRelations::new(self.tcx, outlives_env.free_region_map());
 
         let (lexical_region_resolutions, errors) =
             lexical_region_resolve::resolve(outlives_env.param_env, region_rels, var_infos, data);
@@ -1302,12 +1300,8 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// result. After this, no more unification operations should be
     /// done -- or the compiler will panic -- but it is legal to use
     /// `resolve_vars_if_possible` as well as `fully_resolve`.
-    pub fn resolve_regions_and_report_errors(
-        &self,
-        region_context: DefId,
-        outlives_env: &OutlivesEnvironment<'tcx>,
-    ) {
-        let errors = self.resolve_regions(region_context, outlives_env);
+    pub fn resolve_regions_and_report_errors(&self, outlives_env: &OutlivesEnvironment<'tcx>) {
+        let errors = self.resolve_regions(outlives_env);
 
         if !self.is_tainted_by_errors() {
             // As a heuristic, just skip reporting region errors
@@ -1445,7 +1439,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
     /// `resolve_vars_if_possible()`.
     pub fn unresolved_type_vars<T>(&self, value: &T) -> Option<(Ty<'tcx>, Option<Span>)>
     where
-        T: TypeFoldable<'tcx>,
+        T: TypeVisitable<'tcx>,
     {
         value.visit_with(&mut resolve::UnresolvedTypeFinder::new(self)).break_value()
     }

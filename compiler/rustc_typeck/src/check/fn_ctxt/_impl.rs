@@ -23,6 +23,7 @@ use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::subst::{
     self, GenericArgKind, InternalSubsts, Subst, SubstsRef, UserSelfTy, UserSubsts,
 };
+use rustc_middle::ty::visit::TypeVisitable;
 use rustc_middle::ty::{
     self, AdtKind, CanonicalUserType, DefIdTree, EarlyBinder, GenericParamDefKind, ToPolyTraitRef,
     ToPredicate, Ty, UserType,
@@ -557,7 +558,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     // sufficiently enforced with erased regions. =)
     fn can_contain_user_lifetime_bounds<T>(t: T) -> bool
     where
-        T: TypeFoldable<'tcx>,
+        T: TypeVisitable<'tcx>,
     {
         t.has_free_regions() || t.has_projections() || t.has_infer_types()
     }
@@ -1538,15 +1539,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ty
         } else {
             if !self.is_tainted_by_errors() {
-                self.emit_inference_failure_err(
-                    (**self).body_id,
-                    sp,
-                    ty.into(),
-                    vec![],
-                    E0282,
-                    true,
-                )
-                .emit();
+                self.emit_inference_failure_err((**self).body_id, sp, ty.into(), E0282, true)
+                    .emit();
             }
             let err = self.tcx.ty_error();
             self.demand_suptype(sp, err, ty);

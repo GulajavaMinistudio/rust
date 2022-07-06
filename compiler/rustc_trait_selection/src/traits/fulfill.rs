@@ -10,7 +10,7 @@ use rustc_middle::thir::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::subst::SubstsRef;
 use rustc_middle::ty::ToPredicate;
-use rustc_middle::ty::{self, Binder, Const, Ty, TypeFoldable};
+use rustc_middle::ty::{self, Binder, Const, Ty, TypeVisitable};
 use std::marker::PhantomData;
 
 use super::const_evaluatable;
@@ -131,8 +131,6 @@ impl<'a, 'tcx> FulfillmentContext<'tcx> {
         let span = debug_span!("select", obligation_forest_size = ?self.predicates.len());
         let _enter = span.enter();
 
-        let mut errors = Vec::new();
-
         // Process pending obligations.
         let outcome: Outcome<_, _> = self.predicates.process_obligations(&mut FulfillProcessor {
             selcx,
@@ -142,7 +140,8 @@ impl<'a, 'tcx> FulfillmentContext<'tcx> {
         // FIXME: if we kept the original cache key, we could mark projection
         // obligations as complete for the projection cache here.
 
-        errors.extend(outcome.errors.into_iter().map(to_fulfillment_error));
+        let errors: Vec<FulfillmentError<'tcx>> =
+            outcome.errors.into_iter().map(to_fulfillment_error).collect();
 
         debug!(
             "select({} predicates remaining, {} errors) done",
@@ -728,7 +727,7 @@ impl<'a, 'b, 'tcx> FulfillProcessor<'a, 'b, 'tcx> {
                 }
                 return ProcessResult::Changed(vec![]);
             } else {
-                tracing::debug!("Does NOT hold: {:?}", obligation);
+                debug!("Does NOT hold: {:?}", obligation);
             }
         }
 
