@@ -14,8 +14,7 @@ use rustc_target::spec::abi::Abi;
 
 use super::{
     AllocId, AllocRange, Allocation, ConstAllocation, Frame, ImmTy, InterpCx, InterpResult,
-    LocalValue, MemPlace, MemoryKind, OpTy, Operand, PlaceTy, Pointer, Provenance, Scalar,
-    StackPopUnwind,
+    MemoryKind, OpTy, Operand, PlaceTy, Pointer, Provenance, Scalar, StackPopUnwind,
 };
 
 /// Data returned by Machine::stack_pop,
@@ -145,7 +144,7 @@ pub trait Machine<'mir, 'tcx>: Sized {
     }
 
     /// Whether CheckedBinOp MIR statements should actually check for overflow.
-    fn check_binop_checks_overflow(_ecx: &InterpCx<'mir, 'tcx, Self>) -> bool;
+    fn checked_binop_checks_overflow(_ecx: &InterpCx<'mir, 'tcx, Self>) -> bool;
 
     /// Entry point for obtaining the MIR of anything that should get evaluated.
     /// So not just functions and shims, but also const/static initializers, anonymous
@@ -226,11 +225,13 @@ pub trait Machine<'mir, 'tcx>: Sized {
     /// Since reading a ZST is not actually accessing memory or locals, this is never invoked
     /// for ZST reads.
     #[inline]
-    fn access_local(
-        _ecx: &InterpCx<'mir, 'tcx, Self>,
-        frame: &Frame<'mir, 'tcx, Self::PointerTag, Self::FrameExtra>,
+    fn access_local<'a>(
+        frame: &'a Frame<'mir, 'tcx, Self::PointerTag, Self::FrameExtra>,
         local: mir::Local,
-    ) -> InterpResult<'tcx, Operand<Self::PointerTag>> {
+    ) -> InterpResult<'tcx, &'a Operand<Self::PointerTag>>
+    where
+        'tcx: 'mir,
+    {
         frame.locals[local].access()
     }
 
@@ -242,7 +243,7 @@ pub trait Machine<'mir, 'tcx>: Sized {
         ecx: &'a mut InterpCx<'mir, 'tcx, Self>,
         frame: usize,
         local: mir::Local,
-    ) -> InterpResult<'tcx, Result<&'a mut LocalValue<Self::PointerTag>, MemPlace<Self::PointerTag>>>
+    ) -> InterpResult<'tcx, &'a mut Operand<Self::PointerTag>>
     where
         'tcx: 'mir,
     {
@@ -418,12 +419,14 @@ pub trait Machine<'mir, 'tcx>: Sized {
     }
 
     /// Called immediately after a stack frame got popped, but before jumping back to the caller.
+    /// The `locals` have already been destroyed!
     fn after_stack_pop(
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         _frame: Frame<'mir, 'tcx, Self::PointerTag, Self::FrameExtra>,
-        _unwinding: bool,
+        unwinding: bool,
     ) -> InterpResult<'tcx, StackPopJump> {
         // By default, we do not support unwinding from panics
+        assert!(!unwinding);
         Ok(StackPopJump::Normal)
     }
 }
@@ -472,7 +475,7 @@ pub macro compile_time_machine(<$mir: lifetime, $tcx: lifetime>) {
     }
 
     #[inline(always)]
-    fn check_binop_checks_overflow(_ecx: &InterpCx<$mir, $tcx, Self>) -> bool {
+    fn checked_binop_checks_overflow(_ecx: &InterpCx<$mir, $tcx, Self>) -> bool {
         true
     }
 

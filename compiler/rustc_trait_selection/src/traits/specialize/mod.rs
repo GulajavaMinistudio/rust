@@ -16,9 +16,8 @@ use crate::infer::{InferCtxt, InferOk, TyCtxtInferExt};
 use crate::traits::select::IntercrateAmbiguityCause;
 use crate::traits::{self, coherence, FutureCompatOverlapErrorKind, ObligationCause, TraitEngine};
 use rustc_data_structures::fx::FxHashSet;
-use rustc_errors::{struct_span_err, EmissionGuarantee};
+use rustc_errors::{struct_span_err, EmissionGuarantee, LintDiagnosticBuilder};
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_middle::lint::LintDiagnosticBuilder;
 use rustc_middle::ty::subst::{InternalSubsts, Subst, SubstsRef};
 use rustc_middle::ty::{self, ImplSubject, TyCtxt};
 use rustc_session::lint::builtin::COHERENCE_LEAK_CHECK;
@@ -341,10 +340,7 @@ fn report_negative_positive_conflict(
     positive_impl_def_id: DefId,
     sg: &mut specialization_graph::Graph,
 ) {
-    let impl_span = tcx
-        .sess
-        .source_map()
-        .guess_head_span(tcx.span_of_impl(local_impl_def_id.to_def_id()).unwrap());
+    let impl_span = tcx.def_span(local_impl_def_id);
 
     let mut err = struct_span_err!(
         tcx.sess,
@@ -357,10 +353,7 @@ fn report_negative_positive_conflict(
 
     match tcx.span_of_impl(negative_impl_def_id) {
         Ok(span) => {
-            err.span_label(
-                tcx.sess.source_map().guess_head_span(span),
-                "negative implementation here".to_string(),
-            );
+            err.span_label(span, "negative implementation here");
         }
         Err(cname) => {
             err.note(&format!("negative implementation in crate `{}`", cname));
@@ -369,10 +362,7 @@ fn report_negative_positive_conflict(
 
     match tcx.span_of_impl(positive_impl_def_id) {
         Ok(span) => {
-            err.span_label(
-                tcx.sess.source_map().guess_head_span(span),
-                "positive implementation here".to_string(),
-            );
+            err.span_label(span, "positive implementation here");
         }
         Err(cname) => {
             err.note(&format!("positive implementation in crate `{}`", cname));
@@ -389,8 +379,7 @@ fn report_conflicting_impls(
     used_to_be_allowed: Option<FutureCompatOverlapErrorKind>,
     sg: &mut specialization_graph::Graph,
 ) {
-    let impl_span =
-        tcx.sess.source_map().guess_head_span(tcx.span_of_impl(impl_def_id.to_def_id()).unwrap());
+    let impl_span = tcx.def_span(impl_def_id);
 
     // Work to be done after we've built the DiagnosticBuilder. We have to define it
     // now because the struct_lint methods don't return back the DiagnosticBuilder
@@ -417,10 +406,7 @@ fn report_conflicting_impls(
         let mut err = err.build(&msg);
         match tcx.span_of_impl(overlap.with_impl) {
             Ok(span) => {
-                err.span_label(
-                    tcx.sess.source_map().guess_head_span(span),
-                    "first implementation here".to_string(),
-                );
+                err.span_label(span, "first implementation here".to_string());
 
                 err.span_label(
                     impl_span,

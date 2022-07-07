@@ -3869,6 +3869,7 @@ name = "rustc_hir"
 version = "0.0.0"
 dependencies = [
  "odht",
+ "rustc_arena",
  "rustc_ast",
  "rustc_data_structures",
  "rustc_error_messages",
@@ -4009,6 +4010,7 @@ dependencies = [
  "rustc_hir",
  "rustc_index",
  "rustc_infer",
+ "rustc_macros",
  "rustc_middle",
  "rustc_parse_format",
  "rustc_session",

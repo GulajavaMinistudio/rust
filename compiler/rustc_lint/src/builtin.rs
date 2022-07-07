@@ -32,7 +32,8 @@ use rustc_ast_pretty::pprust::{self, expr_to_string};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{
-    fluent, Applicability, Diagnostic, DiagnosticMessage, DiagnosticStyledString, MultiSpan,
+    fluent, Applicability, Diagnostic, DiagnosticMessage, DiagnosticStyledString,
+    LintDiagnosticBuilder, MultiSpan,
 };
 use rustc_feature::{deprecated_attributes, AttributeGate, BuiltinAttribute, GateIssue, Stability};
 use rustc_hir as hir;
@@ -40,7 +41,7 @@ use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId, LocalDefIdSet, CRATE_DEF_ID};
 use rustc_hir::{ForeignItemKind, GenericParamKind, HirId, PatKind, PredicateOrigin};
 use rustc_index::vec::Idx;
-use rustc_middle::lint::{in_external_macro, LintDiagnosticBuilder};
+use rustc_middle::lint::in_external_macro;
 use rustc_middle::ty::layout::{LayoutError, LayoutOf};
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::subst::GenericArgKind;
@@ -551,7 +552,6 @@ impl MissingDoc {
         &self,
         cx: &LateContext<'_>,
         def_id: LocalDefId,
-        sp: Span,
         article: &'static str,
         desc: &'static str,
     ) {
@@ -578,16 +578,12 @@ impl MissingDoc {
         let attrs = cx.tcx.hir().attrs(cx.tcx.hir().local_def_id_to_hir_id(def_id));
         let has_doc = attrs.iter().any(has_doc);
         if !has_doc {
-            cx.struct_span_lint(
-                MISSING_DOCS,
-                cx.tcx.sess.source_map().guess_head_span(sp),
-                |lint| {
-                    lint.build(fluent::lint::builtin_missing_doc)
-                        .set_arg("article", article)
-                        .set_arg("desc", desc)
-                        .emit();
-                },
-            );
+            cx.struct_span_lint(MISSING_DOCS, cx.tcx.def_span(def_id), |lint| {
+                lint.build(fluent::lint::builtin_missing_doc)
+                    .set_arg("article", article)
+                    .set_arg("desc", desc)
+                    .emit();
+            });
         }
     }
 }
@@ -610,13 +606,7 @@ impl<'tcx> LateLintPass<'tcx> for MissingDoc {
     }
 
     fn check_crate(&mut self, cx: &LateContext<'_>) {
-        self.check_missing_docs_attrs(
-            cx,
-            CRATE_DEF_ID,
-            cx.tcx.def_span(CRATE_DEF_ID),
-            "the",
-            "crate",
-        );
+        self.check_missing_docs_attrs(cx, CRATE_DEF_ID, "the", "crate");
     }
 
     fn check_item(&mut self, cx: &LateContext<'_>, it: &hir::Item<'_>) {
@@ -646,13 +636,13 @@ impl<'tcx> LateLintPass<'tcx> for MissingDoc {
 
         let (article, desc) = cx.tcx.article_and_description(it.def_id.to_def_id());
 
-        self.check_missing_docs_attrs(cx, it.def_id, it.span, article, desc);
+        self.check_missing_docs_attrs(cx, it.def_id, article, desc);
     }
 
     fn check_trait_item(&mut self, cx: &LateContext<'_>, trait_item: &hir::TraitItem<'_>) {
         let (article, desc) = cx.tcx.article_and_description(trait_item.def_id.to_def_id());
 
-        self.check_missing_docs_attrs(cx, trait_item.def_id, trait_item.span, article, desc);
+        self.check_missing_docs_attrs(cx, trait_item.def_id, article, desc);
     }
 
     fn check_impl_item(&mut self, cx: &LateContext<'_>, impl_item: &hir::ImplItem<'_>) {
@@ -680,23 +670,23 @@ impl<'tcx> LateLintPass<'tcx> for MissingDoc {
         }
 
         let (article, desc) = cx.tcx.article_and_description(impl_item.def_id.to_def_id());
-        self.check_missing_docs_attrs(cx, impl_item.def_id, impl_item.span, article, desc);
+        self.check_missing_docs_attrs(cx, impl_item.def_id, article, desc);
     }
 
     fn check_foreign_item(&mut self, cx: &LateContext<'_>, foreign_item: &hir::ForeignItem<'_>) {
         let (article, desc) = cx.tcx.article_and_description(foreign_item.def_id.to_def_id());
-        self.check_missing_docs_attrs(cx, foreign_item.def_id, foreign_item.span, article, desc);
+        self.check_missing_docs_attrs(cx, foreign_item.def_id, article, desc);
     }
 
     fn check_field_def(&mut self, cx: &LateContext<'_>, sf: &hir::FieldDef<'_>) {
         if !sf.is_positional() {
             let def_id = cx.tcx.hir().local_def_id(sf.hir_id);
-            self.check_missing_docs_attrs(cx, def_id, sf.span, "a", "struct field")
+            self.check_missing_docs_attrs(cx, def_id, "a", "struct field")
         }
     }
 
     fn check_variant(&mut self, cx: &LateContext<'_>, v: &hir::Variant<'_>) {
-        self.check_missing_docs_attrs(cx, cx.tcx.hir().local_def_id(v.id), v.span, "a", "variant");
+        self.check_missing_docs_attrs(cx, cx.tcx.hir().local_def_id(v.id), "a", "variant");
     }
 }
 
