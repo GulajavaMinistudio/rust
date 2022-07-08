@@ -2,7 +2,7 @@ use crate::cgu_reuse_tracker::CguReuseTracker;
 use crate::code_stats::CodeStats;
 pub use crate::code_stats::{DataTypeKind, FieldInfo, SizeKind, VariantInfo};
 use crate::config::{self, CrateType, OutputType, SwitchWithOptPath};
-use crate::parse::ParseSess;
+use crate::parse::{add_feature_diagnostics, ParseSess};
 use crate::search_paths::{PathKind, SearchPath};
 use crate::{filesearch, lint};
 
@@ -457,6 +457,15 @@ impl Session {
         err: impl SessionDiagnostic<'a>,
     ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
         self.parse_sess.create_err(err)
+    }
+    pub fn create_feature_err<'a>(
+        &'a self,
+        err: impl SessionDiagnostic<'a>,
+        feature: Symbol,
+    ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
+        let mut err = self.parse_sess.create_err(err);
+        add_feature_diagnostics(&mut err, &self.parse_sess, feature);
+        err
     }
     pub fn emit_err<'a>(&'a self, err: impl SessionDiagnostic<'a>) -> ErrorGuaranteed {
         self.parse_sess.emit_err(err)
@@ -1162,7 +1171,7 @@ fn default_emitter(
                         fallback_bundle,
                         short,
                         sopts.debugging_opts.teach,
-                        sopts.debugging_opts.terminal_width,
+                        sopts.diagnostic_width,
                         macro_backtrace,
                     ),
                     Some(dst) => EmitterWriter::new(
@@ -1173,7 +1182,7 @@ fn default_emitter(
                         short,
                         false, // no teach messages when writing to a buffer
                         false, // no colors when writing to a buffer
-                        None,  // no terminal width
+                        None,  // no diagnostic width
                         macro_backtrace,
                     ),
                 };
@@ -1188,7 +1197,7 @@ fn default_emitter(
                 fallback_bundle,
                 pretty,
                 json_rendered,
-                sopts.debugging_opts.terminal_width,
+                sopts.diagnostic_width,
                 macro_backtrace,
             )
             .ui_testing(sopts.debugging_opts.ui_testing),
@@ -1202,7 +1211,7 @@ fn default_emitter(
                 fallback_bundle,
                 pretty,
                 json_rendered,
-                sopts.debugging_opts.terminal_width,
+                sopts.diagnostic_width,
                 macro_backtrace,
             )
             .ui_testing(sopts.debugging_opts.ui_testing),
