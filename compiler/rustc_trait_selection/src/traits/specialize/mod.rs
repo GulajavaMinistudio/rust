@@ -15,7 +15,7 @@ use specialization_graph::GraphExt;
 use crate::infer::{InferCtxt, InferOk, TyCtxtInferExt};
 use crate::traits::select::IntercrateAmbiguityCause;
 use crate::traits::{self, coherence, FutureCompatOverlapErrorKind, ObligationCause, TraitEngine};
-use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::fx::{FxHashSet, FxIndexSet};
 use rustc_errors::{struct_span_err, EmissionGuarantee, LintDiagnosticBuilder};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::subst::{InternalSubsts, Subst, SubstsRef};
@@ -33,7 +33,7 @@ pub struct OverlapError {
     pub with_impl: DefId,
     pub trait_desc: String,
     pub self_desc: Option<String>,
-    pub intercrate_ambiguity_causes: Vec<IntercrateAmbiguityCause>,
+    pub intercrate_ambiguity_causes: FxIndexSet<IntercrateAmbiguityCause>,
     pub involves_placeholder: bool,
 }
 
@@ -406,7 +406,7 @@ fn report_conflicting_impls(
         let mut err = err.build(&msg);
         match tcx.span_of_impl(overlap.with_impl) {
             Ok(span) => {
-                err.span_label(span, "first implementation here".to_string());
+                err.span_label(span, "first implementation here");
 
                 err.span_label(
                     impl_span,

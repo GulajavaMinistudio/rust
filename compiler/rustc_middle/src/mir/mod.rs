@@ -1711,7 +1711,7 @@ impl<'tcx> Operand<'tcx> {
         Operand::Constant(Box::new(Constant {
             span,
             user_ty: None,
-            literal: ConstantKind::Val(ConstValue::zst(), ty),
+            literal: ConstantKind::Val(ConstValue::ZeroSized, ty),
         }))
     }
 
@@ -1824,12 +1824,10 @@ impl BorrowKind {
         }
     }
 
-    pub fn describe_mutability(&self) -> String {
+    pub fn describe_mutability(&self) -> &str {
         match *self {
-            BorrowKind::Shared | BorrowKind::Shallow | BorrowKind::Unique => {
-                "immutable".to_string()
-            }
-            BorrowKind::Mut { .. } => "mutable".to_string(),
+            BorrowKind::Shared | BorrowKind::Shallow | BorrowKind::Unique => "immutable",
+            BorrowKind::Mut { .. } => "mutable",
         }
     }
 }
@@ -2196,7 +2194,7 @@ impl<'tcx> ConstantKind<'tcx> {
 
     #[inline]
     pub fn zero_sized(ty: Ty<'tcx>) -> Self {
-        let cv = ConstValue::Scalar(Scalar::ZST);
+        let cv = ConstValue::ZeroSized;
         Self::Val(cv, ty)
     }
 
@@ -2769,6 +2767,13 @@ fn pretty_print_const_value<'tcx>(
                 cx.print_alloc_ids = true;
                 let ty = tcx.lift(ty).unwrap();
                 cx = cx.pretty_print_const_scalar(scalar, ty, print_ty)?;
+                fmt.write_str(&cx.into_buffer())?;
+                return Ok(());
+            }
+            (ConstValue::ZeroSized, ty::FnDef(d, s)) => {
+                let mut cx = FmtPrinter::new(tcx, Namespace::ValueNS);
+                cx.print_alloc_ids = true;
+                let cx = cx.print_value_path(*d, s)?;
                 fmt.write_str(&cx.into_buffer())?;
                 return Ok(());
             }
