@@ -17,6 +17,7 @@ use rustc_infer::infer::outlives::env::OutlivesEnvironment;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::{RegionVariableOrigin, TyCtxtInferExt};
 use rustc_infer::traits::Obligation;
+use rustc_lint::builtin::REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS;
 use rustc_middle::hir::nested_filter;
 use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::subst::GenericArgKind;
@@ -401,11 +402,37 @@ fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> b
     let item_type = tcx.type_of(item_def_id);
     if let ty::Adt(def, substs) = item_type.kind() {
         assert!(def.is_union());
-        let fields = &def.non_enum_variant().fields;
+
+        fn allowed_union_field<'tcx>(
+            ty: Ty<'tcx>,
+            tcx: TyCtxt<'tcx>,
+            param_env: ty::ParamEnv<'tcx>,
+            span: Span,
+        ) -> bool {
+            // We don't just accept all !needs_drop fields, due to semver concerns.
+            match ty.kind() {
+                ty::Ref(..) => true, // references never drop (even mutable refs, which are non-Copy and hence fail the later check)
+                ty::Tuple(tys) => {
+                    // allow tuples of allowed types
+                    tys.iter().all(|ty| allowed_union_field(ty, tcx, param_env, span))
+                }
+                ty::Array(elem, _len) => {
+                    // Like `Copy`, we do *not* special-case length 0.
+                    allowed_union_field(*elem, tcx, param_env, span)
+                }
+                _ => {
+                    // Fallback case: allow `ManuallyDrop` and things that are `Copy`.
+                    ty.ty_adt_def().is_some_and(|adt_def| adt_def.is_manually_drop())
+                        || ty.is_copy_modulo_regions(tcx.at(span), param_env)
+                }
+            }
+        }
+
         let param_env = tcx.param_env(item_def_id);
-        for field in fields {
+        for field in &def.non_enum_variant().fields {
             let field_ty = field.ty(tcx, substs);
-            if field_ty.needs_drop(tcx, param_env) {
+
+            if !allowed_union_field(field_ty, tcx, param_env, span) {
                 let (field_span, ty_span) = match tcx.hir().get_if_local(field.did) {
                     // We are currently checking the type this field came from, so it must be local.
                     Some(Node::Field(field)) => (field.span, field.ty.span),
@@ -432,6 +459,9 @@ fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> b
                 )
                 .emit();
                 return false;
+            } else if field_ty.needs_drop(tcx, param_env) {
+                // This should never happen. But we can get here e.g. in case of name resolution errors.
+                tcx.sess.delay_span_bug(span, "we should never accept maybe-dropping union fields");
             }
         }
     } else {
@@ -1318,7 +1348,8 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, sp: Span, adt: ty::AdtD
         }
     }
 
-    // For each field, figure out if it's known to be a ZST and align(1)
+    // For each field, figure out if it's known to be a ZST and align(1), with "known"
+    // respecting #[non_exhaustive] attributes.
     let field_infos = adt.all_fields().map(|field| {
         let ty = field.ty(tcx, InternalSubsts::identity_for_item(tcx, field.did));
         let param_env = tcx.param_env(field.did);
@@ -1327,16 +1358,56 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, sp: Span, adt: ty::AdtD
         let span = tcx.hir().span_if_local(field.did).unwrap();
         let zst = layout.map_or(false, |layout| layout.is_zst());
         let align1 = layout.map_or(false, |layout| layout.align.abi.bytes() == 1);
-        (span, zst, align1)
+        if !zst {
+            return (span, zst, align1, None);
+        }
+
+        fn check_non_exhaustive<'tcx>(
+            tcx: TyCtxt<'tcx>,
+            t: Ty<'tcx>,
+        ) -> ControlFlow<(&'static str, DefId, SubstsRef<'tcx>, bool)> {
+            match t.kind() {
+                ty::Tuple(list) => list.iter().try_for_each(|t| check_non_exhaustive(tcx, t)),
+                ty::Array(ty, _) => check_non_exhaustive(tcx, *ty),
+                ty::Adt(def, subst) => {
+                    if !def.did().is_local() {
+                        let non_exhaustive = def.is_variant_list_non_exhaustive()
+                            || def
+                                .variants()
+                                .iter()
+                                .any(ty::VariantDef::is_field_list_non_exhaustive);
+                        let has_priv = def.all_fields().any(|f| !f.vis.is_public());
+                        if non_exhaustive || has_priv {
+                            return ControlFlow::Break((
+                                def.descr(),
+                                def.did(),
+                                subst,
+                                non_exhaustive,
+                            ));
+                        }
+                    }
+                    def.all_fields()
+                        .map(|field| field.ty(tcx, subst))
+                        .try_for_each(|t| check_non_exhaustive(tcx, t))
+                }
+                _ => ControlFlow::Continue(()),
+            }
+        }
+
+        (span, zst, align1, check_non_exhaustive(tcx, ty).break_value())
     });
 
-    let non_zst_fields =
-        field_infos.clone().filter_map(|(span, zst, _align1)| if !zst { Some(span) } else { None });
+    let non_zst_fields = field_infos
+        .clone()
+        .filter_map(|(span, zst, _align1, _non_exhaustive)| if !zst { Some(span) } else { None });
     let non_zst_count = non_zst_fields.clone().count();
     if non_zst_count >= 2 {
         bad_non_zero_sized_fields(tcx, adt, non_zst_count, non_zst_fields, sp);
     }
-    for (span, zst, align1) in field_infos {
+    let incompatible_zst_fields =
+        field_infos.clone().filter(|(_, _, _, opt)| opt.is_some()).count();
+    let incompat = incompatible_zst_fields + non_zst_count >= 2 && non_zst_count < 2;
+    for (span, zst, align1, non_exhaustive) in field_infos {
         if zst && !align1 {
             struct_span_err!(
                 tcx.sess,
@@ -1347,6 +1418,25 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, sp: Span, adt: ty::AdtD
             )
             .span_label(span, "has alignment larger than 1")
             .emit();
+        }
+        if incompat && let Some((descr, def_id, substs, non_exhaustive)) = non_exhaustive {
+            tcx.struct_span_lint_hir(
+                REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS,
+                tcx.hir().local_def_id_to_hir_id(adt.did().expect_local()),
+                span,
+                |lint| {
+                    let note = if non_exhaustive {
+                        "is marked with `#[non_exhaustive]`"
+                    } else {
+                        "contains private fields"
+                    };
+                    let field_ty = tcx.def_path_str_with_substs(def_id, substs);
+                    lint.build("zero-sized fields in repr(transparent) cannot contain external non-exhaustive types")
+                        .note(format!("this {descr} contains `{field_ty}`, which {note}, \
+                            and makes it not a breaking change to become non-zero-sized in the future."))
+                        .emit();
+                },
+            )
         }
     }
 }
