@@ -665,6 +665,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                             self.suggest_restricting_param_bound(
                                 &mut err,
                                 trait_predicate,
+                                None,
                                 obligation.cause.body_id,
                             );
                         } else if !suggested {
@@ -823,10 +824,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
 
                     ty::PredicateKind::ClosureKind(closure_def_id, closure_substs, kind) => {
                         let found_kind = self.closure_kind(closure_substs).unwrap();
-                        let closure_span =
-                            self.tcx.sess.source_map().guess_head_span(
-                                self.tcx.hir().span_if_local(closure_def_id).unwrap(),
-                            );
+                        let closure_span = self.tcx.def_span(closure_def_id);
                         let mut err = struct_span_err!(
                             self.tcx.sess,
                             closure_span,
@@ -951,9 +949,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                     _ => None,
                 };
 
-                let found_span = found_did
-                    .and_then(|did| self.tcx.hir().span_if_local(did))
-                    .map(|sp| self.tcx.sess.source_map().guess_head_span(sp)); // the sp could be an fn def
+                let found_span = found_did.and_then(|did| self.tcx.hir().span_if_local(did));
 
                 if self.reported_closure_mismatch.borrow().contains(&(span, found_span)) {
                     // We check closures twice, with obligations flowing in different directions,
@@ -1089,7 +1085,7 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 kind: hir::ExprKind::Closure(&hir::Closure { body, fn_decl_span, .. }),
                 ..
             }) => (
-                sm.guess_head_span(fn_decl_span),
+                fn_decl_span,
                 hir.body(body)
                     .params
                     .iter()
