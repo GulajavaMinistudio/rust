@@ -544,7 +544,7 @@ fn compare_self_type<'tcx>(
             if let Some(span) = tcx.hir().span_if_local(trait_m.def_id) {
                 err.span_label(span, format!("trait method declared without `{self_descr}`"));
             } else {
-                err.note_trait_signature(trait_m.name.to_string(), trait_m.signature(tcx));
+                err.note_trait_signature(trait_m.name, trait_m.signature(tcx));
             }
             let reported = err.emit();
             return Err(reported);
@@ -564,7 +564,7 @@ fn compare_self_type<'tcx>(
             if let Some(span) = tcx.hir().span_if_local(trait_m.def_id) {
                 err.span_label(span, format!("`{self_descr}` used in trait"));
             } else {
-                err.note_trait_signature(trait_m.name.to_string(), trait_m.signature(tcx));
+                err.note_trait_signature(trait_m.name, trait_m.signature(tcx));
             }
             let reported = err.emit();
             return Err(reported);
@@ -803,7 +803,7 @@ fn compare_number_of_method_arguments<'tcx>(
                 ),
             );
         } else {
-            err.note_trait_signature(trait_m.name.to_string(), trait_m.signature(tcx));
+            err.note_trait_signature(trait_m.name, trait_m.signature(tcx));
         }
         err.span_label(
             impl_span,
@@ -1504,6 +1504,21 @@ pub fn check_type_bounds<'tcx>(
             impl_ty.def_id.expect_local(),
             &outlives_environment,
         );
+
+        let constraints = infcx.inner.borrow_mut().opaque_type_storage.take_opaque_types();
+        for (key, value) in constraints {
+            infcx
+                .report_mismatched_types(
+                    &ObligationCause::misc(
+                        value.hidden_type.span,
+                        tcx.hir().local_def_id_to_hir_id(impl_ty.def_id.expect_local()),
+                    ),
+                    tcx.mk_opaque(key.def_id, key.substs),
+                    value.hidden_type.ty,
+                    TypeError::Mismatch,
+                )
+                .emit();
+        }
 
         Ok(())
     })

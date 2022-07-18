@@ -25,7 +25,7 @@ can be broken down into several distinct phases:
 
 - regionck: after main is complete, the regionck pass goes over all
   types looking for regions and making sure that they did not escape
-  into places they are not in scope.  This may also influence the
+  into places where they are not in scope.  This may also influence the
   final assignments of the various region variables if there is some
   flexibility.
 
@@ -863,17 +863,14 @@ fn bad_non_zero_sized_fields<'tcx>(
     err.emit();
 }
 
-fn report_unexpected_variant_res(tcx: TyCtxt<'_>, res: Res, span: Span) {
+fn report_unexpected_variant_res(tcx: TyCtxt<'_>, res: Res, qpath: &hir::QPath<'_>, span: Span) {
     struct_span_err!(
         tcx.sess,
         span,
         E0533,
-        "expected unit struct, unit variant or constant, found {}{}",
+        "expected unit struct, unit variant or constant, found {} `{}`",
         res.descr(),
-        tcx.sess
-            .source_map()
-            .span_to_snippet(span)
-            .map_or_else(|_| String::new(), |s| format!(" `{s}`",)),
+        rustc_hir_pretty::qpath_to_string(qpath),
     )
     .emit();
 }
