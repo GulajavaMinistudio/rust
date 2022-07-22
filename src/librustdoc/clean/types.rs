@@ -496,8 +496,7 @@ impl Item {
         // Primitives and Keywords are written in the source code as private modules.
         // The modules need to be private so that nobody actually uses them, but the
         // keywords and primitives that they are documenting are public.
-        let visibility = if matches!(&kind, ItemKind::KeywordItem(..) | ItemKind::PrimitiveItem(..))
-        {
+        let visibility = if matches!(&kind, ItemKind::KeywordItem | ItemKind::PrimitiveItem(..)) {
             Visibility::Public
         } else {
             cx.tcx.visibility(def_id).clean(cx)
@@ -769,7 +768,7 @@ pub(crate) enum ItemKind {
     AssocTypeItem(Typedef, Vec<GenericBound>),
     /// An item that has been stripped by a rustdoc pass
     StrippedItem(Box<ItemKind>),
-    KeywordItem(Symbol),
+    KeywordItem,
 }
 
 impl ItemKind {
@@ -808,7 +807,7 @@ impl ItemKind {
             | TyAssocTypeItem(..)
             | AssocTypeItem(..)
             | StrippedItem(_)
-            | KeywordItem(_) => [].iter(),
+            | KeywordItem => [].iter(),
         }
     }
 }
@@ -1841,7 +1840,7 @@ impl PrimitiveType {
                 Reference => [RefSimplifiedType(Mutability::Not), RefSimplifiedType(Mutability::Mut)].into_iter().collect(),
                 // FIXME: This will be wrong if we ever add inherent impls
                 // for function pointers.
-                Fn => ArrayVec::new(),
+                Fn => single(FunctionSimplifiedType(1)),
                 Never => single(NeverSimplifiedType),
             }
         })
@@ -2394,7 +2393,7 @@ impl Impl {
 pub(crate) enum ImplKind {
     Normal,
     Auto,
-    TupleVaradic,
+    FakeVaradic,
     Blanket(Box<Type>),
 }
 
@@ -2407,8 +2406,8 @@ impl ImplKind {
         matches!(self, ImplKind::Blanket(_))
     }
 
-    pub(crate) fn is_tuple_variadic(&self) -> bool {
-        matches!(self, ImplKind::TupleVaradic)
+    pub(crate) fn is_fake_variadic(&self) -> bool {
+        matches!(self, ImplKind::FakeVaradic)
     }
 
     pub(crate) fn as_blanket_ty(&self) -> Option<&Type> {
