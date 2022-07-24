@@ -96,11 +96,13 @@ impl<T: ?Sized> *mut T {
     /// refactored.
     ///
     /// While not strictly required (`*mut T` coerces to `*const T`), this is provided for symmetry
-    /// with `as_mut()` on `*const T` and may have documentation value if used instead of implicit
+    /// with [`cast_mut`] on `*const T` and may have documentation value if used instead of implicit
     /// coercion.
+    ///
+    /// [`cast_mut`]: #method.cast_mut
     #[unstable(feature = "ptr_const_cast", issue = "92675")]
     #[rustc_const_unstable(feature = "ptr_const_cast", issue = "92675")]
-    pub const fn as_const(self) -> *const T {
+    pub const fn cast_const(self) -> *const T {
         self as _
     }
 
@@ -289,7 +291,7 @@ impl<T: ?Sized> *mut T {
     /// For the mutable counterpart see [`as_mut`].
     ///
     /// [`as_uninit_ref`]: #method.as_uninit_ref-1
-    /// [`as_mut`]: #method.as_mut-1
+    /// [`as_mut`]: #method.as_mut
     ///
     /// # Safety
     ///
@@ -1256,6 +1258,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[rustc_const_unstable(feature = "const_ptr_read", issue = "80377")]
     #[inline(always)]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn read(self) -> T
     where
         T: Sized,
@@ -1276,6 +1279,7 @@ impl<T: ?Sized> *mut T {
     /// [`ptr::read_volatile`]: crate::ptr::read_volatile()
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[inline(always)]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub unsafe fn read_volatile(self) -> T
     where
         T: Sized,
@@ -1295,6 +1299,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[rustc_const_unstable(feature = "const_ptr_read", issue = "80377")]
     #[inline(always)]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn read_unaligned(self) -> T
     where
         T: Sized,
@@ -1400,6 +1405,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[rustc_const_unstable(feature = "const_ptr_write", issue = "86302")]
     #[inline(always)]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn write(self, val: T)
     where
         T: Sized,
@@ -1418,6 +1424,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[rustc_const_unstable(feature = "const_ptr_write", issue = "86302")]
     #[inline(always)]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn write_bytes(self, val: u8, count: usize)
     where
         T: Sized,
@@ -1438,6 +1445,7 @@ impl<T: ?Sized> *mut T {
     /// [`ptr::write_volatile`]: crate::ptr::write_volatile()
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[inline(always)]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub unsafe fn write_volatile(self, val: T)
     where
         T: Sized,
@@ -1457,6 +1465,7 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[rustc_const_unstable(feature = "const_ptr_write", issue = "86302")]
     #[inline(always)]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn write_unaligned(self, val: T)
     where
         T: Sized,

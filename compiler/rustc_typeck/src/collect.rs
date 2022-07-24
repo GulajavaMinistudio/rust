@@ -1929,7 +1929,7 @@ fn infer_return_ty_for_fn_sig<'tcx>(
             visitor.visit_ty(ty);
             let mut diag = bad_placeholder(tcx, visitor.0, "return type");
             let ret_ty = fn_sig.skip_binder().output();
-            if ret_ty.is_suggestable(tcx) {
+            if ret_ty.is_suggestable(tcx, false) {
                 diag.span_suggestion(
                     ty.span,
                     "replace with the correct return type",
@@ -1938,7 +1938,12 @@ fn infer_return_ty_for_fn_sig<'tcx>(
                 );
             } else if matches!(ret_ty.kind(), ty::FnDef(..)) {
                 let fn_sig = ret_ty.fn_sig(tcx);
-                if fn_sig.skip_binder().inputs_and_output.iter().all(|t| t.is_suggestable(tcx)) {
+                if fn_sig
+                    .skip_binder()
+                    .inputs_and_output
+                    .iter()
+                    .all(|t| t.is_suggestable(tcx, false))
+                {
                     diag.span_suggestion(
                         ty.span,
                         "replace with the correct return type",
@@ -2969,6 +2974,8 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
                         codegen_fn_attrs.no_sanitize |= SanitizerSet::MEMORY;
                     } else if item.has_name(sym::memtag) {
                         codegen_fn_attrs.no_sanitize |= SanitizerSet::MEMTAG;
+                    } else if item.has_name(sym::shadow_call_stack) {
+                        codegen_fn_attrs.no_sanitize |= SanitizerSet::SHADOWCALLSTACK;
                     } else if item.has_name(sym::thread) {
                         codegen_fn_attrs.no_sanitize |= SanitizerSet::THREAD;
                     } else if item.has_name(sym::hwaddress) {
@@ -2976,7 +2983,7 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
                     } else {
                         tcx.sess
                             .struct_span_err(item.span(), "invalid argument for `no_sanitize`")
-                            .note("expected one of: `address`, `cfi`, `hwaddress`, `memory`, `memtag`, or `thread`")
+                            .note("expected one of: `address`, `cfi`, `hwaddress`, `memory`, `memtag`, `shadow-call-stack`, or `thread`")
                             .emit();
                     }
                 }
