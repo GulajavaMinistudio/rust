@@ -224,6 +224,7 @@ TrivialTypeTraversalAndLiftImpls! {
     // general `Region`.
     crate::ty::BoundRegionKind,
     crate::ty::AssocItem,
+    crate::ty::AssocKind,
     crate::ty::Placeholder<crate::ty::BoundRegionKind>,
     crate::ty::ClosureKind,
     crate::ty::FreeRegion,
@@ -1122,6 +1123,7 @@ impl<'tcx> TypeVisitable<'tcx> for ty::Predicate<'tcx> {
         visitor.visit_predicate(*self)
     }
 
+    #[inline]
     fn has_vars_bound_at_or_above(&self, binder: ty::DebruijnIndex) -> bool {
         self.outer_exclusive_binder() > binder
     }

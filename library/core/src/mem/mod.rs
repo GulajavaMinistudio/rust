@@ -1000,7 +1000,7 @@ pub fn copy<T: Copy>(x: &T) -> T {
 ///
 /// This function will unsafely assume the pointer `src` is valid for [`size_of::<U>`][size_of]
 /// bytes by transmuting `&T` to `&U` and then reading the `&U` (except that this is done in a way
-/// that is correct even when `&U` makes stricter alignment requirements than `&T`). It will also
+/// that is correct even when `&U` has stricter alignment requirements than `&T`). It will also
 /// unsafely create a copy of the contained value instead of moving out of `src`.
 ///
 /// It is not a compile-time error if `T` and `U` have different sizes, but it
@@ -1124,6 +1124,7 @@ impl<T> fmt::Debug for Discriminant<T> {
 #[stable(feature = "discriminant_value", since = "1.21.0")]
 #[rustc_const_unstable(feature = "const_discriminant", issue = "69821")]
 #[cfg_attr(not(test), rustc_diagnostic_item = "mem_discriminant")]
+#[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
 pub const fn discriminant<T>(v: &T) -> Discriminant<T> {
     Discriminant(intrinsics::discriminant_value(v))
 }

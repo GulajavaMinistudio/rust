@@ -1202,6 +1202,7 @@ symbols! {
         rustc,
         rustc_allocator,
         rustc_allocator_nounwind,
+        rustc_allocator_zeroed,
         rustc_allow_const_fn_unstable,
         rustc_allow_incoherent_impl,
         rustc_allowed_through_unstable_modules,
@@ -1214,6 +1215,7 @@ symbols! {
         rustc_const_stable,
         rustc_const_unstable,
         rustc_conversion_suggestion,
+        rustc_deallocator,
         rustc_def_path,
         rustc_diagnostic_item,
         rustc_diagnostic_macros,
@@ -1258,6 +1260,7 @@ symbols! {
         rustc_private,
         rustc_proc_macro_decls,
         rustc_promotable,
+        rustc_reallocator,
         rustc_regions,
         rustc_reservation_impl,
         rustc_serialize,
@@ -1528,6 +1531,9 @@ symbols! {
         unsized_locals,
         unsized_tuple_coercion,
         unstable,
+        unstable_location_reason_default: "this crate is being loaded from the sysroot, an \
+                          unstable location; did you mean to load this crate \
+                          from crates.io via `Cargo.toml` instead?",
         untagged_unions,
         unused_imports,
         unused_qualifications,

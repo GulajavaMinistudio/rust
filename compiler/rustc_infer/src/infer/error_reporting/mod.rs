@@ -237,12 +237,14 @@ pub fn unexpected_hidden_region_diagnostic<'tcx>(
     span: Span,
     hidden_ty: Ty<'tcx>,
     hidden_region: ty::Region<'tcx>,
+    opaque_ty: ty::OpaqueTypeKey<'tcx>,
 ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
+    let opaque_ty = tcx.mk_opaque(opaque_ty.def_id.to_def_id(), opaque_ty.substs);
     let mut err = struct_span_err!(
         tcx.sess,
         span,
         E0700,
-        "hidden type for `impl Trait` captures lifetime that does not appear in bounds",
+        "hidden type for `{opaque_ty}` captures lifetime that does not appear in bounds",
     );
 
     // Explain the region we are capturing.
@@ -1883,7 +1885,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             exp_span, exp_found.expected, exp_found.found,
         );
 
-        if let ObligationCauseCode::CompareImplMethodObligation { .. } = cause.code() {
+        if let ObligationCauseCode::CompareImplItemObligation { .. } = cause.code() {
             return;
         }
 
@@ -2351,7 +2353,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
             GenericKind::Projection(ref p) => format!("the associated type `{}`", p),
         };
 
-        if let Some(SubregionOrigin::CompareImplMethodObligation {
+        if let Some(SubregionOrigin::CompareImplItemObligation {
             span,
             impl_item_def_id,
             trait_item_def_id,
@@ -2410,9 +2412,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
         #[derive(Debug)]
         enum SubOrigin<'hir> {
             GAT(&'hir hir::Generics<'hir>),
-            Impl(&'hir hir::Generics<'hir>),
-            Trait(&'hir hir::Generics<'hir>),
-            Fn(&'hir hir::Generics<'hir>),
+            Impl,
+            Trait,
+            Fn,
             Unknown,
         }
         let sub_origin = 'origin: {
@@ -2427,34 +2429,30 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                                         kind: hir::ImplItemKind::TyAlias(..),
                                         generics,
                                         ..
-                                    }) => SubOrigin::GAT(generics),
-                                    Node::ImplItem(hir::ImplItem {
-                                        kind: hir::ImplItemKind::Fn(..),
-                                        generics,
-                                        ..
-                                    }) => SubOrigin::Fn(generics),
-                                    Node::TraitItem(hir::TraitItem {
+                                    })
+                                    | Node::TraitItem(hir::TraitItem {
                                         kind: hir::TraitItemKind::Type(..),
                                         generics,
                                         ..
                                     }) => SubOrigin::GAT(generics),
-                                    Node::TraitItem(hir::TraitItem {
+                                    Node::ImplItem(hir::ImplItem {
+                                        kind: hir::ImplItemKind::Fn(..),
+                                        ..
+                                    })
+                                    | Node::TraitItem(hir::TraitItem {
                                         kind: hir::TraitItemKind::Fn(..),
-                                        generics,
                                         ..
-                                    }) => SubOrigin::Fn(generics),
+                                    })
+                                    | Node::Item(hir::Item {
+                                        kind: hir::ItemKind::Fn(..), ..
+                                    }) => SubOrigin::Fn,
                                     Node::Item(hir::Item {
-                                        kind: hir::ItemKind::Trait(_, _, generics, _, _),
+                                        kind: hir::ItemKind::Trait(..),
                                         ..
-                                    }) => SubOrigin::Trait(generics),
+                                    }) => SubOrigin::Trait,
                                     Node::Item(hir::Item {
-                                        kind: hir::ItemKind::Impl(hir::Impl { generics, .. }),
-                                        ..
-                                    }) => SubOrigin::Impl(generics),
-                                    Node::Item(hir::Item {
-                                        kind: hir::ItemKind::Fn(_, generics, _),
-                                        ..
-                                    }) => SubOrigin::Fn(generics),
+                                        kind: hir::ItemKind::Impl(..), ..
+                                    }) => SubOrigin::Impl,
                                     _ => continue,
                                 };
                             }
@@ -2788,8 +2786,15 @@ impl<'tcx> ObligationCauseExt<'tcx> for ObligationCause<'tcx> {
         use self::FailureCode::*;
         use crate::traits::ObligationCauseCode::*;
         match self.code() {
-            CompareImplMethodObligation { .. } => Error0308("method not compatible with trait"),
-            CompareImplTypeObligation { .. } => Error0308("type not compatible with trait"),
+            CompareImplItemObligation { kind: ty::AssocKind::Fn, .. } => {
+                Error0308("method not compatible with trait")
+            }
+            CompareImplItemObligation { kind: ty::AssocKind::Type, .. } => {
+                Error0308("type not compatible with trait")
+            }
+            CompareImplItemObligation { kind: ty::AssocKind::Const, .. } => {
+                Error0308("const not compatible with trait")
+            }
             MatchExpressionArm(box MatchExpressionArmCause { source, .. }) => {
                 Error0308(match source {
                     hir::MatchSource::TryDesugar => "`?` operator has incompatible types",
@@ -2823,8 +2828,15 @@ impl<'tcx> ObligationCauseExt<'tcx> for ObligationCause<'tcx> {
     fn as_requirement_str(&self) -> &'static str {
         use crate::traits::ObligationCauseCode::*;
         match self.code() {
-            CompareImplMethodObligation { .. } => "method type is compatible with trait",
-            CompareImplTypeObligation { .. } => "associated type is compatible with trait",
+            CompareImplItemObligation { kind: ty::AssocKind::Fn, .. } => {
+                "method type is compatible with trait"
+            }
+            CompareImplItemObligation { kind: ty::AssocKind::Type, .. } => {
+                "associated type is compatible with trait"
+            }
+            CompareImplItemObligation { kind: ty::AssocKind::Const, .. } => {
+                "const is compatible with trait"
+            }
             ExprAssignable => "expression is assignable",
             IfExpression { .. } => "`if` and `else` have incompatible types",
             IfExpressionWithNoElse => "`if` missing an `else` returns `()`",

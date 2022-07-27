@@ -2775,6 +2775,12 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
             }
         } else if attr.has_name(sym::rustc_allocator_nounwind) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::NEVER_UNWIND;
+        } else if attr.has_name(sym::rustc_reallocator) {
+            codegen_fn_attrs.flags |= CodegenFnAttrFlags::REALLOCATOR;
+        } else if attr.has_name(sym::rustc_deallocator) {
+            codegen_fn_attrs.flags |= CodegenFnAttrFlags::DEALLOCATOR;
+        } else if attr.has_name(sym::rustc_allocator_zeroed) {
+            codegen_fn_attrs.flags |= CodegenFnAttrFlags::ALLOCATOR_ZEROED;
         } else if attr.has_name(sym::naked) {
             codegen_fn_attrs.flags |= CodegenFnAttrFlags::NAKED;
         } else if attr.has_name(sym::no_mangle) {
@@ -2843,7 +2849,7 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: DefId) -> CodegenFnAttrs {
                     let is_like_elf = !(tcx.sess.target.is_like_osx
                         || tcx.sess.target.is_like_windows
                         || tcx.sess.target.is_like_wasm);
-                    codegen_fn_attrs.flags = if is_like_elf {
+                    codegen_fn_attrs.flags |= if is_like_elf {
                         CodegenFnAttrFlags::USED
                     } else {
                         CodegenFnAttrFlags::USED_LINKER
