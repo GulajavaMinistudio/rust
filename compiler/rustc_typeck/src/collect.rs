@@ -1346,16 +1346,8 @@ fn has_late_bound_regions<'tcx>(tcx: TyCtxt<'tcx>, node: Node<'tcx>) -> Option<S
 
             match self.tcx.named_region(lt.hir_id) {
                 Some(rl::Region::Static | rl::Region::EarlyBound(..)) => {}
-                Some(
-                    rl::Region::LateBound(debruijn, _, _)
-                    | rl::Region::LateBoundAnon(debruijn, _, _),
-                ) if debruijn < self.outer_index => {}
-                Some(
-                    rl::Region::LateBound(..)
-                    | rl::Region::LateBoundAnon(..)
-                    | rl::Region::Free(..),
-                )
-                | None => {
+                Some(rl::Region::LateBound(debruijn, _, _)) if debruijn < self.outer_index => {}
+                Some(rl::Region::LateBound(..) | rl::Region::Free(..)) | None => {
                     self.has_late_bound_regions = Some(lt.span);
                 }
             }
@@ -2090,10 +2082,17 @@ fn predicates_of(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
         // from the trait itself that *shouldn't* be shown as the source of
         // an obligation and instead be skipped. Otherwise we'd use
         // `tcx.def_span(def_id);`
+
+        let constness = if tcx.has_attr(def_id, sym::const_trait) {
+            ty::BoundConstness::ConstIfConst
+        } else {
+            ty::BoundConstness::NotConst
+        };
+
         let span = rustc_span::DUMMY_SP;
         result.predicates =
             tcx.arena.alloc_from_iter(result.predicates.iter().copied().chain(std::iter::once((
-                ty::TraitRef::identity(tcx, def_id).without_const().to_predicate(tcx),
+                ty::TraitRef::identity(tcx, def_id).with_constness(constness).to_predicate(tcx),
                 span,
             ))));
     }

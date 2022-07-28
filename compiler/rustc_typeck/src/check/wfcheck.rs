@@ -2,14 +2,13 @@ use crate::check::regionck::OutlivesEnvironmentExt;
 use crate::constrained_generic_params::{identify_constrained_generic_params, Parameter};
 use rustc_ast as ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use rustc_errors::{struct_span_err, Applicability, DiagnosticBuilder, ErrorGuaranteed};
+use rustc_errors::{pluralize, struct_span_err, Applicability, DiagnosticBuilder, ErrorGuaranteed};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::ItemKind;
-use rustc_infer::infer::outlives::env::OutlivesEnvironment;
+use rustc_infer::infer::outlives::env::{OutlivesEnvironment, RegionBoundPairs};
 use rustc_infer::infer::outlives::obligations::TypeOutlives;
-use rustc_infer::infer::region_constraints::GenericKind;
 use rustc_infer::infer::{self, InferCtxt, TyCtxtInferExt};
 use rustc_infer::traits::Normalized;
 use rustc_middle::ty::query::Providers;
@@ -474,7 +473,7 @@ fn check_gat_where_clauses(tcx: TyCtxt<'_>, associated_items: &[hir::TraitItemRe
         unsatisfied_bounds.sort();
 
         if !unsatisfied_bounds.is_empty() {
-            let plural = if unsatisfied_bounds.len() > 1 { "s" } else { "" };
+            let plural = pluralize!(unsatisfied_bounds.len());
             let mut err = tcx.sess.struct_span_err(
                 gat_item_hir.span,
                 &format!("missing required bound{} on `{}`", plural, gat_item_hir.ident),
@@ -689,10 +688,7 @@ fn resolve_regions_with_wf_tys<'tcx>(
     id: hir::HirId,
     param_env: ty::ParamEnv<'tcx>,
     wf_tys: &FxHashSet<Ty<'tcx>>,
-    add_constraints: impl for<'a> FnOnce(
-        &'a InferCtxt<'a, 'tcx>,
-        &'a Vec<(ty::Region<'tcx>, GenericKind<'tcx>)>,
-    ),
+    add_constraints: impl for<'a> FnOnce(&'a InferCtxt<'a, 'tcx>, &'a RegionBoundPairs<'tcx>),
 ) -> bool {
     // Unfortunately, we have to use a new `InferCtxt` each call, because
     // region constraints get added and solved there and we need to test each
@@ -848,29 +844,13 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) {
             let ty = tcx.type_of(tcx.hir().local_def_id(param.hir_id));
 
             if tcx.features().adt_const_params {
-                let err = match ty.peel_refs().kind() {
-                    ty::FnPtr(_) => Some("function pointers"),
-                    ty::RawPtr(_) => Some("raw pointers"),
-                    _ => None,
-                };
-
-                if let Some(unsupported_type) = err {
-                    tcx.sess.span_err(
-                        hir_ty.span,
-                        &format!(
-                            "using {} as const generic parameters is forbidden",
-                            unsupported_type
-                        ),
-                    );
-                }
-
                 if let Some(non_structural_match_ty) =
-                    traits::search_for_structural_match_violation(param.span, tcx, ty, false)
+                    traits::search_for_adt_const_param_violation(param.span, tcx, ty)
                 {
                     // We use the same error code in both branches, because this is really the same
                     // issue: we just special-case the message for type parameters to make it
                     // clearer.
-                    match ty.peel_refs().kind() {
+                    match non_structural_match_ty.kind() {
                         ty::Param(_) => {
                             // Const parameters may not have type parameters as their types,
                             // because we cannot be sure that the type parameter derives `PartialEq`
@@ -902,6 +882,24 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) {
                             .note("floats do not derive `Eq` or `Ord`, which are required for const parameters")
                             .emit();
                         }
+                        ty::FnPtr(_) => {
+                            struct_span_err!(
+                                tcx.sess,
+                                hir_ty.span,
+                                E0741,
+                                "using function pointers as const generic parameters is forbidden",
+                            )
+                            .emit();
+                        }
+                        ty::RawPtr(_) => {
+                            struct_span_err!(
+                                tcx.sess,
+                                hir_ty.span,
+                                E0741,
+                                "using raw pointers as const generic parameters is forbidden",
+                            )
+                            .emit();
+                        }
                         _ => {
                             let mut diag = struct_span_err!(
                                 tcx.sess,
@@ -909,10 +907,10 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) {
                                 E0741,
                                 "`{}` must be annotated with `#[derive(PartialEq, Eq)]` to be used as \
                                 the type of a const parameter",
-                                non_structural_match_ty.ty,
+                                non_structural_match_ty,
                             );
 
-                            if ty == non_structural_match_ty.ty {
+                            if ty == non_structural_match_ty {
                                 diag.span_label(
                                     hir_ty.span,
                                     format!("`{ty}` doesn't derive both `PartialEq` and `Eq`"),

@@ -1452,7 +1452,7 @@ pub trait PrettyPrinter<'tcx>:
                 }
             },
             (ty::ValTree::Branch(_), ty::Array(t, _)) if *t == u8_type => {
-                let bytes = valtree.try_to_raw_bytes(self.tcx(), *t).unwrap_or_else(|| {
+                let bytes = valtree.try_to_raw_bytes(self.tcx(), ty).unwrap_or_else(|| {
                     bug!("expected to convert valtree to raw bytes for type {:?}", t)
                 });
                 p!("*");
@@ -2556,7 +2556,7 @@ define_print_and_forward_display! {
 
     ty::TraitPredicate<'tcx> {
         p!(print(self.trait_ref.self_ty()), ": ");
-        if let ty::BoundConstness::ConstIfConst = self.constness {
+        if let ty::BoundConstness::ConstIfConst = self.constness && cx.tcx().features().const_trait_impl {
             p!("~const ");
         }
         p!(print(self.trait_ref.print_only_trait_path()))
