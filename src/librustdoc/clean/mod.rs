@@ -908,7 +908,7 @@ fn clean_function<'tcx>(
     sig: &hir::FnSig<'tcx>,
     generics: &hir::Generics<'tcx>,
     body_id: hir::BodyId,
-) -> Function {
+) -> Box<Function> {
     let (generics, decl) = enter_impl_trait(cx, |cx| {
         // NOTE: generics must be cleaned before args
         let generics = generics.clean(cx);
@@ -916,7 +916,7 @@ fn clean_function<'tcx>(
         let decl = clean_fn_decl_with_args(cx, sig.decl, args);
         (generics, decl)
     });
-    Function { decl, generics }
+    Box::new(Function { decl, generics })
 }
 
 fn clean_args_from_types_and_names<'tcx>(
@@ -1061,18 +1061,18 @@ impl<'tcx> Clean<'tcx, Item> for hir::TraitItem<'tcx> {
                         let decl = clean_fn_decl_with_args(cx, sig.decl, args);
                         (generics, decl)
                     });
-                    TyMethodItem(Function { decl, generics })
+                    TyMethodItem(Box::new(Function { decl, generics }))
                 }
                 hir::TraitItemKind::Type(bounds, Some(default)) => {
                     let generics = enter_impl_trait(cx, |cx| self.generics.clean(cx));
                     let bounds = bounds.iter().filter_map(|x| x.clean(cx)).collect();
                     let item_type = clean_middle_ty(hir_ty_to_ty(cx.tcx, default), cx, None);
                     AssocTypeItem(
-                        Typedef {
+                        Box::new(Typedef {
                             type_: clean_ty(default, cx),
                             generics,
                             item_type: Some(item_type),
-                        },
+                        }),
                         bounds,
                     )
                 }
@@ -1109,7 +1109,7 @@ impl<'tcx> Clean<'tcx, Item> for hir::ImplItem<'tcx> {
                     let generics = self.generics.clean(cx);
                     let item_type = clean_middle_ty(hir_ty_to_ty(cx.tcx, hir_ty), cx, None);
                     AssocTypeItem(
-                        Typedef { type_, generics, item_type: Some(item_type) },
+                        Box::new(Typedef { type_, generics, item_type: Some(item_type) }),
                         Vec::new(),
                     )
                 }
@@ -1186,9 +1186,9 @@ impl<'tcx> Clean<'tcx, Item> for ty::AssocItem {
                         ty::ImplContainer(_) => Some(self.defaultness),
                         ty::TraitContainer(_) => None,
                     };
-                    MethodItem(Function { generics, decl }, defaultness)
+                    MethodItem(Box::new(Function { generics, decl }), defaultness)
                 } else {
-                    TyMethodItem(Function { generics, decl })
+                    TyMethodItem(Box::new(Function { generics, decl }))
                 }
             }
             ty::AssocKind::Type => {
@@ -1282,7 +1282,7 @@ impl<'tcx> Clean<'tcx, Item> for ty::AssocItem {
 
                     if self.defaultness.has_value() {
                         AssocTypeItem(
-                            Typedef {
+                            Box::new(Typedef {
                                 type_: clean_middle_ty(
                                     tcx.type_of(self.def_id),
                                     cx,
@@ -1291,7 +1291,7 @@ impl<'tcx> Clean<'tcx, Item> for ty::AssocItem {
                                 generics,
                                 // FIXME: should we obtain the Type from HIR and pass it on here?
                                 item_type: None,
-                            },
+                            }),
                             bounds,
                         )
                     } else {
@@ -1300,11 +1300,11 @@ impl<'tcx> Clean<'tcx, Item> for ty::AssocItem {
                 } else {
                     // FIXME: when could this happen? Associated items in inherent impls?
                     AssocTypeItem(
-                        Typedef {
+                        Box::new(Typedef {
                             type_: clean_middle_ty(tcx.type_of(self.def_id), cx, Some(self.def_id)),
                             generics: Generics { params: Vec::new(), where_predicates: Vec::new() },
                             item_type: None,
-                        },
+                        }),
                         Vec::new(),
                     )
                 }
@@ -1812,61 +1812,48 @@ fn is_field_vis_inherited(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     }
 }
 
-impl<'tcx> Clean<'tcx, Visibility> for ty::Visibility {
-    fn clean(&self, _cx: &mut DocContext<'_>) -> Visibility {
-        match *self {
-            ty::Visibility::Public => Visibility::Public,
-            // NOTE: this is not quite right: `ty` uses `Invisible` to mean 'private',
-            // while rustdoc really does mean inherited. That means that for enum variants, such as
-            // `pub enum E { V }`, `V` will be marked as `Public` by `ty`, but as `Inherited` by rustdoc.
-            // Various parts of clean override `tcx.visibility` explicitly to make sure this distinction is captured.
-            ty::Visibility::Invisible => Visibility::Inherited,
-            ty::Visibility::Restricted(module) => Visibility::Restricted(module),
+pub(crate) fn clean_visibility(vis: ty::Visibility) -> Visibility {
+    match vis {
+        ty::Visibility::Public => Visibility::Public,
+        // NOTE: this is not quite right: `ty` uses `Invisible` to mean 'private',
+        // while rustdoc really does mean inherited. That means that for enum variants, such as
+        // `pub enum E { V }`, `V` will be marked as `Public` by `ty`, but as `Inherited` by rustdoc.
+        // Various parts of clean override `tcx.visibility` explicitly to make sure this distinction is captured.
+        ty::Visibility::Invisible => Visibility::Inherited,
+        ty::Visibility::Restricted(module) => Visibility::Restricted(module),
+    }
+}
+
+pub(crate) fn clean_variant_def<'tcx>(variant: &ty::VariantDef, cx: &mut DocContext<'tcx>) -> Item {
+    let kind = match variant.ctor_kind {
+        CtorKind::Const => Variant::CLike,
+        CtorKind::Fn => Variant::Tuple(
+            variant.fields.iter().map(|field| clean_middle_field(field, cx)).collect(),
+        ),
+        CtorKind::Fictive => Variant::Struct(VariantStruct {
+            struct_type: CtorKind::Fictive,
+            fields: variant.fields.iter().map(|field| clean_middle_field(field, cx)).collect(),
+        }),
+    };
+    let what_rustc_thinks =
+        Item::from_def_id_and_parts(variant.def_id, Some(variant.name), VariantItem(kind), cx);
+    // don't show `pub` for variants, which always inherit visibility
+    Item { visibility: Inherited, ..what_rustc_thinks }
+}
+
+fn clean_variant_data<'tcx>(
+    variant: &hir::VariantData<'tcx>,
+    cx: &mut DocContext<'tcx>,
+) -> Variant {
+    match variant {
+        hir::VariantData::Struct(..) => Variant::Struct(VariantStruct {
+            struct_type: CtorKind::from_hir(variant),
+            fields: variant.fields().iter().map(|x| clean_field(x, cx)).collect(),
+        }),
+        hir::VariantData::Tuple(..) => {
+            Variant::Tuple(variant.fields().iter().map(|x| clean_field(x, cx)).collect())
         }
-    }
-}
-
-impl<'tcx> Clean<'tcx, VariantStruct> for rustc_hir::VariantData<'tcx> {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> VariantStruct {
-        VariantStruct {
-            struct_type: CtorKind::from_hir(self),
-            fields: self.fields().iter().map(|x| clean_field(x, cx)).collect(),
-        }
-    }
-}
-
-impl<'tcx> Clean<'tcx, Vec<Item>> for hir::VariantData<'tcx> {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> Vec<Item> {
-        self.fields().iter().map(|x| clean_field(x, cx)).collect()
-    }
-}
-
-impl<'tcx> Clean<'tcx, Item> for ty::VariantDef {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> Item {
-        let kind = match self.ctor_kind {
-            CtorKind::Const => Variant::CLike,
-            CtorKind::Fn => Variant::Tuple(
-                self.fields.iter().map(|field| clean_middle_field(field, cx)).collect(),
-            ),
-            CtorKind::Fictive => Variant::Struct(VariantStruct {
-                struct_type: CtorKind::Fictive,
-                fields: self.fields.iter().map(|field| clean_middle_field(field, cx)).collect(),
-            }),
-        };
-        let what_rustc_thinks =
-            Item::from_def_id_and_parts(self.def_id, Some(self.name), VariantItem(kind), cx);
-        // don't show `pub` for variants, which always inherit visibility
-        Item { visibility: Inherited, ..what_rustc_thinks }
-    }
-}
-
-impl<'tcx> Clean<'tcx, Variant> for hir::VariantData<'tcx> {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> Variant {
-        match self {
-            hir::VariantData::Struct(..) => Variant::Struct(self.clean(cx)),
-            hir::VariantData::Tuple(..) => Variant::Tuple(self.clean(cx)),
-            hir::VariantData::Unit(..) => Variant::CLike,
-        }
+        hir::VariantData::Unit(..) => Variant::CLike,
     }
 }
 
@@ -1954,11 +1941,11 @@ fn clean_maybe_renamed_item<'tcx>(
             ItemKind::TyAlias(hir_ty, generics) => {
                 let rustdoc_ty = clean_ty(hir_ty, cx);
                 let ty = clean_middle_ty(hir_ty_to_ty(cx.tcx, hir_ty), cx, None);
-                TypedefItem(Typedef {
+                TypedefItem(Box::new(Typedef {
                     type_: rustdoc_ty,
                     generics: generics.clean(cx),
                     item_type: Some(ty),
-                })
+                }))
             }
             ItemKind::Enum(ref def, generics) => EnumItem(Enum {
                 variants: def.variants.iter().map(|v| v.clean(cx)).collect(),
@@ -1983,7 +1970,7 @@ fn clean_maybe_renamed_item<'tcx>(
                 clean_fn_or_proc_macro(item, sig, generics, body_id, &mut name, cx)
             }
             ItemKind::Macro(ref macro_def, _) => {
-                let ty_vis = cx.tcx.visibility(def_id).clean(cx);
+                let ty_vis = clean_visibility(cx.tcx.visibility(def_id));
                 MacroItem(Macro {
                     source: display_macro_source(cx, name, macro_def, def_id, ty_vis),
                 })
@@ -2014,7 +2001,7 @@ fn clean_maybe_renamed_item<'tcx>(
 
 impl<'tcx> Clean<'tcx, Item> for hir::Variant<'tcx> {
     fn clean(&self, cx: &mut DocContext<'tcx>) -> Item {
-        let kind = VariantItem(self.data.clean(cx));
+        let kind = VariantItem(clean_variant_data(&self.data, cx));
         let what_rustc_thinks =
             Item::from_hir_id_and_parts(self.id, Some(self.ident.name), kind, cx);
         // don't show `pub` for variants, which are always public
@@ -2046,7 +2033,7 @@ fn clean_impl<'tcx>(
         _ => None,
     });
     let mut make_item = |trait_: Option<Path>, for_: Type, items: Vec<Item>| {
-        let kind = ImplItem(Impl {
+        let kind = ImplItem(Box::new(Impl {
             unsafety: impl_.unsafety,
             generics: impl_.generics.clean(cx),
             trait_,
@@ -2058,7 +2045,7 @@ fn clean_impl<'tcx>(
             } else {
                 ImplKind::Normal
             },
-        });
+        }));
         Item::from_hir_id_and_parts(hir_id, None, kind, cx)
     };
     if let Some(type_alias) = type_alias {
@@ -2112,8 +2099,8 @@ fn clean_extern_crate<'tcx>(
         name: Some(name),
         attrs: Box::new(attrs.clean(cx)),
         item_id: crate_def_id.into(),
-        visibility: ty_vis.clean(cx),
-        kind: box ExternCrateItem { src: orig_name },
+        visibility: clean_visibility(ty_vis),
+        kind: Box::new(ExternCrateItem { src: orig_name }),
         cfg: attrs.cfg(cx.tcx, &cx.cache.hidden_cfg),
     }]
 }
@@ -2248,7 +2235,7 @@ fn clean_maybe_renamed_foreign_item<'tcx>(
                     let decl = clean_fn_decl_with_args(cx, decl, args);
                     (generics, decl)
                 });
-                ForeignFunctionItem(Function { decl, generics })
+                ForeignFunctionItem(Box::new(Function { decl, generics }))
             }
             hir::ForeignItemKind::Static(ty, mutability) => {
                 ForeignStaticItem(Static { type_: clean_ty(ty, cx), mutability, expr: None })
