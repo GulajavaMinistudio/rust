@@ -293,6 +293,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     pub(crate) fn if_cause(
         &self,
         span: Span,
+        cond_span: Span,
         then_expr: &'tcx hir::Expr<'tcx>,
         else_expr: &'tcx hir::Expr<'tcx>,
         then_ty: Ty<'tcx>,
@@ -357,8 +358,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // ```
             if block.expr.is_none() && block.stmts.is_empty()
                 && let Some(outer_span) = &mut outer_span
+                && let Some(cond_span) = cond_span.find_ancestor_inside(*outer_span)
             {
-                *outer_span = self.tcx.sess.source_map().guess_head_span(*outer_span);
+                *outer_span = outer_span.with_hi(cond_span.hi())
             }
 
             (self.find_block_span(block), block.hir_id)
