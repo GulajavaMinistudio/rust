@@ -51,19 +51,24 @@ pub(crate) trait Clean<'tcx, T> {
 impl<'tcx> Clean<'tcx, Item> for DocModule<'tcx> {
     fn clean(&self, cx: &mut DocContext<'tcx>) -> Item {
         let mut items: Vec<Item> = vec![];
-        items.extend(
-            self.foreigns
-                .iter()
-                .map(|(item, renamed)| clean_maybe_renamed_foreign_item(cx, item, *renamed)),
-        );
-        items.extend(self.mods.iter().map(|x| x.clean(cx)));
+        let mut inserted = FxHashSet::default();
+        items.extend(self.foreigns.iter().map(|(item, renamed)| {
+            let item = clean_maybe_renamed_foreign_item(cx, item, *renamed);
+            if let Some(name) = item.name {
+                inserted.insert((item.type_(), name));
+            }
+            item
+        }));
+        items.extend(self.mods.iter().map(|x| {
+            inserted.insert((ItemType::Module, x.name));
+            x.clean(cx)
+        }));
 
         // Split up imports from all other items.
         //
         // This covers the case where somebody does an import which should pull in an item,
         // but there's already an item with the same namespace and same name. Rust gives
         // priority to the not-imported one, so we should, too.
-        let mut inserted = FxHashSet::default();
         items.extend(self.items.iter().flat_map(|(item, renamed)| {
             // First, lower everything other than imports.
             if matches!(item.kind, hir::ItemKind::Use(..)) {
@@ -242,29 +247,27 @@ pub(crate) fn clean_middle_const<'tcx>(
     }
 }
 
-impl<'tcx> Clean<'tcx, Option<Lifetime>> for ty::Region<'tcx> {
-    fn clean(&self, _cx: &mut DocContext<'_>) -> Option<Lifetime> {
-        match **self {
-            ty::ReStatic => Some(Lifetime::statik()),
-            ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name), .. }) => {
-                if name != kw::UnderscoreLifetime { Some(Lifetime(name)) } else { None }
-            }
-            ty::ReEarlyBound(ref data) => {
-                if data.name != kw::UnderscoreLifetime {
-                    Some(Lifetime(data.name))
-                } else {
-                    None
-                }
-            }
-            ty::ReLateBound(..)
-            | ty::ReFree(..)
-            | ty::ReVar(..)
-            | ty::RePlaceholder(..)
-            | ty::ReEmpty(_)
-            | ty::ReErased => {
-                debug!("cannot clean region {:?}", self);
+pub(crate) fn clean_middle_region<'tcx>(region: ty::Region<'tcx>) -> Option<Lifetime> {
+    match *region {
+        ty::ReStatic => Some(Lifetime::statik()),
+        ty::ReLateBound(_, ty::BoundRegion { kind: ty::BrNamed(_, name), .. }) => {
+            if name != kw::UnderscoreLifetime { Some(Lifetime(name)) } else { None }
+        }
+        ty::ReEarlyBound(ref data) => {
+            if data.name != kw::UnderscoreLifetime {
+                Some(Lifetime(data.name))
+            } else {
                 None
             }
+        }
+        ty::ReLateBound(..)
+        | ty::ReFree(..)
+        | ty::ReVar(..)
+        | ty::RePlaceholder(..)
+        | ty::ReEmpty(_)
+        | ty::ReErased => {
+            debug!("cannot clean region {:?}", region);
+            None
         }
     }
 }
@@ -316,7 +319,7 @@ impl<'tcx> Clean<'tcx, Option<WherePredicate>> for ty::Predicate<'tcx> {
             ty::PredicateKind::Trait(pred) => {
                 clean_poly_trait_predicate(bound_predicate.rebind(pred), cx)
             }
-            ty::PredicateKind::RegionOutlives(pred) => clean_region_outlives_predicate(pred, cx),
+            ty::PredicateKind::RegionOutlives(pred) => clean_region_outlives_predicate(pred),
             ty::PredicateKind::TypeOutlives(pred) => clean_type_outlives_predicate(pred, cx),
             ty::PredicateKind::Projection(pred) => Some(clean_projection_predicate(pred, cx)),
             ty::PredicateKind::ConstEvaluatable(..) => None,
@@ -353,7 +356,6 @@ fn clean_poly_trait_predicate<'tcx>(
 
 fn clean_region_outlives_predicate<'tcx>(
     pred: ty::OutlivesPredicate<ty::Region<'tcx>, ty::Region<'tcx>>,
-    cx: &mut DocContext<'tcx>,
 ) -> Option<WherePredicate> {
     let ty::OutlivesPredicate(a, b) = pred;
 
@@ -362,8 +364,10 @@ fn clean_region_outlives_predicate<'tcx>(
     }
 
     Some(WherePredicate::RegionPredicate {
-        lifetime: a.clean(cx).expect("failed to clean lifetime"),
-        bounds: vec![GenericBound::Outlives(b.clean(cx).expect("failed to clean bounds"))],
+        lifetime: clean_middle_region(a).expect("failed to clean lifetime"),
+        bounds: vec![GenericBound::Outlives(
+            clean_middle_region(b).expect("failed to clean bounds"),
+        )],
     })
 }
 
@@ -379,7 +383,9 @@ fn clean_type_outlives_predicate<'tcx>(
 
     Some(WherePredicate::BoundPredicate {
         ty: clean_middle_ty(ty, cx, None),
-        bounds: vec![GenericBound::Outlives(lt.clean(cx).expect("failed to clean lifetimes"))],
+        bounds: vec![GenericBound::Outlives(
+            clean_middle_region(lt).expect("failed to clean lifetimes"),
+        )],
         bound_params: Vec::new(),
     })
 }
@@ -950,7 +956,11 @@ fn clean_fn_decl_with_args<'tcx>(
     decl: &hir::FnDecl<'tcx>,
     args: Arguments,
 ) -> FnDecl {
-    FnDecl { inputs: args, output: decl.output.clean(cx), c_variadic: decl.c_variadic }
+    let output = match decl.output {
+        hir::FnRetTy::Return(typ) => Return(clean_ty(typ, cx)),
+        hir::FnRetTy::DefaultReturn(..) => DefaultReturn,
+    };
+    FnDecl { inputs: args, output, c_variadic: decl.c_variadic }
 }
 
 fn clean_fn_decl_from_did_and_sig<'tcx>(
@@ -985,36 +995,16 @@ fn clean_fn_decl_from_did_and_sig<'tcx>(
     }
 }
 
-impl<'tcx> Clean<'tcx, FnRetTy> for hir::FnRetTy<'tcx> {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> FnRetTy {
-        match *self {
-            Self::Return(typ) => Return(clean_ty(typ, cx)),
-            Self::DefaultReturn(..) => DefaultReturn,
-        }
-    }
-}
-
-impl<'tcx> Clean<'tcx, bool> for hir::IsAuto {
-    fn clean(&self, _: &mut DocContext<'tcx>) -> bool {
-        match *self {
-            hir::IsAuto::Yes => true,
-            hir::IsAuto::No => false,
-        }
-    }
-}
-
-impl<'tcx> Clean<'tcx, Path> for hir::TraitRef<'tcx> {
-    fn clean(&self, cx: &mut DocContext<'tcx>) -> Path {
-        let path = clean_path(self.path, cx);
-        register_res(cx, path.res);
-        path
-    }
+fn clean_trait_ref<'tcx>(trait_ref: &hir::TraitRef<'tcx>, cx: &mut DocContext<'tcx>) -> Path {
+    let path = clean_path(trait_ref.path, cx);
+    register_res(cx, path.res);
+    path
 }
 
 impl<'tcx> Clean<'tcx, PolyTrait> for hir::PolyTraitRef<'tcx> {
     fn clean(&self, cx: &mut DocContext<'tcx>) -> PolyTrait {
         PolyTrait {
-            trait_: self.trait_ref.clean(cx),
+            trait_: clean_trait_ref(&self.trait_ref, cx),
             generic_params: self
                 .bound_generic_params
                 .iter()
@@ -1592,7 +1582,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
         }
         ty::RawPtr(mt) => RawPointer(mt.mutbl, Box::new(clean_middle_ty(mt.ty, cx, None))),
         ty::Ref(r, ty, mutbl) => BorrowedRef {
-            lifetime: r.clean(cx),
+            lifetime: clean_middle_region(r),
             mutability: mutbl,
             type_: Box::new(clean_middle_ty(ty, cx, None)),
         },
@@ -1639,7 +1629,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
 
             inline::record_extern_fqn(cx, did, ItemType::Trait);
 
-            let lifetime = reg.clean(cx);
+            let lifetime = clean_middle_region(*reg);
             let mut bounds = vec![];
 
             for did in dids {
@@ -1705,7 +1695,7 @@ pub(crate) fn clean_middle_ty<'tcx>(
                     let trait_ref = match bound_predicate.skip_binder() {
                         ty::PredicateKind::Trait(tr) => bound_predicate.rebind(tr.trait_ref),
                         ty::PredicateKind::TypeOutlives(ty::OutlivesPredicate(_ty, reg)) => {
-                            if let Some(r) = reg.clean(cx) {
+                            if let Some(r) = clean_middle_region(reg) {
                                 regions.push(GenericBound::Outlives(r));
                             }
                             return None;
@@ -2003,7 +1993,7 @@ fn clean_impl<'tcx>(
 ) -> Vec<Item> {
     let tcx = cx.tcx;
     let mut ret = Vec::new();
-    let trait_ = impl_.of_trait.as_ref().map(|t| t.clean(cx));
+    let trait_ = impl_.of_trait.as_ref().map(|t| clean_trait_ref(t, cx));
     let items =
         impl_.items.iter().map(|ii| tcx.hir().impl_item(ii.id).clean(cx)).collect::<Vec<_>>();
     let def_id = tcx.hir().local_def_id(hir_id);
