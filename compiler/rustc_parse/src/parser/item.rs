@@ -675,14 +675,44 @@ impl<'a> Parser<'a> {
             }
             match parse_item(self) {
                 Ok(None) => {
+                    let is_unnecessary_semicolon = !items.is_empty()
+                        // When the close delim is `)` in a case like the following, `token.kind` is expected to be `token::CloseDelim(Delimiter::Parenthesis)`,
+                        // but the actual `token.kind` is `token::CloseDelim(Delimiter::Bracket)`.
+                        // This is because the `token.kind` of the close delim is treated as the same as
+                        // that of the open delim in `TokenTreesReader::parse_token_tree`, even if the delimiters of them are different.
+                        // Therefore, `token.kind` should not be compared here.
+                        //
+                        // issue-60075.rs
+                        // ```
+                        // trait T {
+                        //     fn qux() -> Option<usize> {
+                        //         let _ = if true {
+                        //         });
+                        //          ^ this close delim
+                        //         Some(4)
+                        //     }
+                        // ```
+                        && self
+                            .span_to_snippet(self.prev_token.span)
+                            .map_or(false, |snippet| snippet == "}")
+                        && self.token.kind == token::Semi;
+                    let semicolon_span = self.token.span;
                     // We have to bail or we'll potentially never make progress.
                     let non_item_span = self.token.span;
                     self.consume_block(Delimiter::Brace, ConsumeClosingDelim::Yes);
-                    self.struct_span_err(non_item_span, "non-item in item list")
-                        .span_label(open_brace_span, "item list starts here")
+                    let mut err = self.struct_span_err(non_item_span, "non-item in item list");
+                    err.span_label(open_brace_span, "item list starts here")
                         .span_label(non_item_span, "non-item starts here")
-                        .span_label(self.prev_token.span, "item list ends here")
-                        .emit();
+                        .span_label(self.prev_token.span, "item list ends here");
+                    if is_unnecessary_semicolon {
+                        err.span_suggestion(
+                            semicolon_span,
+                            "consider removing this semicolon",
+                            "",
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
+                    err.emit();
                     break;
                 }
                 Ok(Some(item)) => items.extend(item),
@@ -1132,6 +1162,16 @@ impl<'a> Parser<'a> {
                     Applicability::MaybeIncorrect,
                 )
                 .emit();
+        } else if self.eat_keyword(kw::Let) {
+            let span = self.prev_token.span;
+            self.struct_span_err(const_span.to(span), "`const` and `let` are mutually exclusive")
+                .span_suggestion(
+                    const_span.to(span),
+                    "remove `let`",
+                    "const",
+                    Applicability::MaybeIncorrect,
+                )
+                .emit();
         }
     }
 
@@ -1544,8 +1584,12 @@ impl<'a> Parser<'a> {
                     }
                 }
 
-                if self.token.is_ident() {
-                    // This is likely another field; emit the diagnostic and keep going
+                if self.token.is_ident()
+                    || (self.token.kind == TokenKind::Pound
+                        && (self.look_ahead(1, |t| t == &token::OpenDelim(Delimiter::Bracket))))
+                {
+                    // This is likely another field, TokenKind::Pound is used for `#[..]` attribute for next field,
+                    // emit the diagnostic and keep going
                     err.span_suggestion(
                         sp,
                         "try adding a comma",
@@ -2265,7 +2309,7 @@ impl<'a> Parser<'a> {
                 (pat, this.parse_ty_for_param()?)
             } else {
                 debug!("parse_param_general ident_to_pat");
-                let parser_snapshot_before_ty = this.clone();
+                let parser_snapshot_before_ty = this.create_snapshot_for_diagnostic();
                 this.eat_incorrect_doc_comment_for_param_type();
                 let mut ty = this.parse_ty_for_param();
                 if ty.is_ok()
@@ -2288,13 +2332,13 @@ impl<'a> Parser<'a> {
                     // Recover from attempting to parse the argument as a type without pattern.
                     Err(err) => {
                         err.cancel();
-                        *this = parser_snapshot_before_ty;
+                        this.restore_snapshot(parser_snapshot_before_ty);
                         this.recover_arg_parse()?
                     }
                 }
             };
 
-            let span = lo.until(this.token.span);
+            let span = lo.to(this.prev_token.span);
 
             Ok((
                 Param {

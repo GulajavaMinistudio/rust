@@ -55,6 +55,19 @@ impl<'a> Parser<'a> {
             return Ok(Some(stmt.into_inner()));
         }
 
+        if self.token.is_keyword(kw::Mut) && self.is_keyword_ahead(1, &[kw::Let]) {
+            self.bump();
+            let mut_let_span = lo.to(self.token.span);
+            self.struct_span_err(mut_let_span, "invalid variable declaration")
+                .span_suggestion(
+                    mut_let_span,
+                    "switch the order of `mut` and `let`",
+                    "let mut",
+                    Applicability::MaybeIncorrect,
+                )
+                .emit();
+        }
+
         Ok(Some(if self.token.is_keyword(kw::Let) {
             self.parse_local_mk(lo, attrs, capture_semi, force_collect)?
         } else if self.is_kw_followed_by_ident(kw::Mut) {
@@ -130,10 +143,10 @@ impl<'a> Parser<'a> {
             }
 
             let expr = if this.eat(&token::OpenDelim(Delimiter::Brace)) {
-                this.parse_struct_expr(None, path, AttrVec::new(), true)?
+                this.parse_struct_expr(None, path, true)?
             } else {
                 let hi = this.prev_token.span;
-                this.mk_expr(lo.to(hi), ExprKind::Path(None, path), AttrVec::new())
+                this.mk_expr(lo.to(hi), ExprKind::Path(None, path))
             };
 
             let expr = this.with_res(Restrictions::STMT_EXPR, |this| {
@@ -179,7 +192,7 @@ impl<'a> Parser<'a> {
             StmtKind::MacCall(P(MacCallStmt { mac, style, attrs, tokens: None }))
         } else {
             // Since none of the above applied, this is an expression statement macro.
-            let e = self.mk_expr(lo.to(hi), ExprKind::MacCall(mac), AttrVec::new());
+            let e = self.mk_expr(lo.to(hi), ExprKind::MacCall(mac));
             let e = self.maybe_recover_from_bad_qpath(e)?;
             let e = self.parse_dot_or_call_expr_with(e, lo, attrs.into())?;
             let e = self.parse_assoc_expr_with(0, LhsExpr::AlreadyParsed(e))?;
@@ -247,6 +260,22 @@ impl<'a> Parser<'a> {
     /// Parses a local variable declaration.
     fn parse_local(&mut self, attrs: AttrVec) -> PResult<'a, P<Local>> {
         let lo = self.prev_token.span;
+
+        if self.token.is_keyword(kw::Const) && self.look_ahead(1, |t| t.is_ident()) {
+            self.struct_span_err(
+                lo.to(self.token.span),
+                "`const` and `let` are mutually exclusive",
+            )
+            .span_suggestion(
+                lo.to(self.token.span),
+                "remove `let`",
+                "const",
+                Applicability::MaybeIncorrect,
+            )
+            .emit();
+            self.bump();
+        }
+
         let (pat, colon) = self.parse_pat_before_ty(None, RecoverComma::Yes, "`let` bindings")?;
 
         let (err, ty) = if colon {

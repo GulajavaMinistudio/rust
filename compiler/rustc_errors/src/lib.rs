@@ -58,6 +58,7 @@ mod lock;
 pub mod registry;
 mod snippet;
 mod styled_buffer;
+pub mod translation;
 
 pub use snippet::Style;
 
@@ -457,6 +458,7 @@ struct HandlerInner {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum StashKey {
     ItemNoType,
+    UnderscoreForArrayLengths,
 }
 
 fn default_track_diagnostic(_: &Diagnostic) {}

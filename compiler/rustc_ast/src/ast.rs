@@ -497,7 +497,6 @@ pub struct WhereRegionPredicate {
 /// E.g., `T = int`.
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct WhereEqPredicate {
-    pub id: NodeId,
     pub span: Span,
     pub lhs_ty: P<Ty>,
     pub rhs_ty: P<Ty>,
@@ -1690,7 +1689,7 @@ pub enum StrStyle {
 #[derive(Clone, Encodable, Decodable, Debug, HashStable_Generic)]
 pub struct Lit {
     /// The original literal token as written in source code.
-    pub token: token::Lit,
+    pub token_lit: token::Lit,
     /// The "semantic" representation of the literal lowered from the original tokens.
     /// Strings are unescaped, hexadecimal forms are eliminated, etc.
     /// FIXME: Remove this and only create the semantic representation during lowering to HIR.
@@ -1718,7 +1717,7 @@ impl StrLit {
             StrStyle::Raw(n) => token::StrRaw(n),
         };
         Lit {
-            token: token::Lit::new(token_kind, self.symbol, self.suffix),
+            token_lit: token::Lit::new(token_kind, self.symbol, self.suffix),
             span: self.span,
             kind: LitKind::Str(self.symbol_unescaped, self.style),
         }
@@ -2548,9 +2547,15 @@ pub struct Attribute {
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
+pub struct NormalAttr {
+    pub item: AttrItem,
+    pub tokens: Option<LazyTokenStream>,
+}
+
+#[derive(Clone, Encodable, Decodable, Debug)]
 pub enum AttrKind {
     /// A normal attribute.
-    Normal(AttrItem, Option<LazyTokenStream>),
+    Normal(P<NormalAttr>),
 
     /// A doc comment (e.g. `/// ...`, `//! ...`, `/** ... */`, `/*! ... */`).
     /// Doc attributes (e.g. `#[doc="..."]`) are represented with the `Normal`
@@ -3033,9 +3038,10 @@ mod size_asserts {
     // These are in alphabetical order, which is easy to maintain.
     static_assert_size!(AssocItem, 160);
     static_assert_size!(AssocItemKind, 72);
-    static_assert_size!(Attribute, 152);
+    static_assert_size!(Attribute, 32);
     static_assert_size!(Block, 48);
     static_assert_size!(Expr, 104);
+    static_assert_size!(ExprKind, 72);
     static_assert_size!(Fn, 192);
     static_assert_size!(ForeignItem, 160);
     static_assert_size!(ForeignItemKind, 72);
@@ -3045,9 +3051,13 @@ mod size_asserts {
     static_assert_size!(Item, 200);
     static_assert_size!(ItemKind, 112);
     static_assert_size!(Lit, 48);
+    static_assert_size!(LitKind, 24);
     static_assert_size!(Pat, 120);
+    static_assert_size!(PatKind, 96);
     static_assert_size!(Path, 40);
     static_assert_size!(PathSegment, 24);
     static_assert_size!(Stmt, 32);
+    static_assert_size!(StmtKind, 16);
     static_assert_size!(Ty, 96);
+    static_assert_size!(TyKind, 72);
 }
