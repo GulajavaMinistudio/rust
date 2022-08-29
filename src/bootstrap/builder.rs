@@ -647,9 +647,9 @@ impl<'a> Builder<'a> {
                 test::CrateRustdocJsonTypes,
                 test::Linkcheck,
                 test::TierCheck,
+                test::ReplacePlaceholderTest,
                 test::Cargotest,
                 test::Cargo,
-                test::Rls,
                 test::RustAnalyzer,
                 test::ErrorIndex,
                 test::Distcheck,
@@ -736,7 +736,6 @@ impl<'a> Builder<'a> {
                 install::Docs,
                 install::Std,
                 install::Cargo,
-                install::Rls,
                 install::RustAnalyzer,
                 install::Rustfmt,
                 install::RustDemangler,
@@ -746,7 +745,12 @@ impl<'a> Builder<'a> {
                 install::Src,
                 install::Rustc
             ),
-            Kind::Run => describe!(run::ExpandYamlAnchors, run::BuildManifest, run::BumpStage0),
+            Kind::Run => describe!(
+                run::ExpandYamlAnchors,
+                run::BuildManifest,
+                run::BumpStage0,
+                run::ReplaceVersionPlaceholder,
+            ),
             // These commands either don't use paths, or they're special-cased in Build::build()
             Kind::Clean | Kind::Format | Kind::Setup => vec![],
         }
