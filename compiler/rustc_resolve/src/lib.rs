@@ -11,6 +11,7 @@
 #![feature(drain_filter)]
 #![feature(if_let_guard)]
 #![feature(iter_intersperse)]
+#![feature(let_chains)]
 #![feature(let_else)]
 #![feature(never_type)]
 #![recursion_limit = "256"]
@@ -107,7 +108,6 @@ enum Scope<'a> {
     // The node ID is for reporting the `PROC_MACRO_DERIVE_RESOLUTION_FALLBACK`
     // lint if it should be reported.
     Module(Module<'a>, Option<NodeId>),
-    RegisteredAttrs,
     MacroUsePrelude,
     BuiltinAttrs,
     ExternPrelude,
@@ -975,7 +975,6 @@ pub struct Resolver<'a> {
     /// A small map keeping true kinds of built-in macros that appear to be fn-like on
     /// the surface (`macro` items in libcore), but are actually attributes or derives.
     builtin_macro_kinds: FxHashMap<LocalDefId, MacroKind>,
-    registered_attrs: FxHashSet<Ident>,
     registered_tools: RegisteredTools,
     macro_use_prelude: FxHashMap<Symbol, &'a NameBinding<'a>>,
     macro_map: FxHashMap<DefId, MacroData>,
@@ -1252,8 +1251,7 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        let (registered_attrs, registered_tools) =
-            macros::registered_attrs_and_tools(session, &krate.attrs);
+        let registered_tools = macros::registered_tools(session, &krate.attrs);
 
         let features = session.features_untracked();
 
@@ -1318,7 +1316,6 @@ impl<'a> Resolver<'a> {
             macro_names: FxHashSet::default(),
             builtin_macros: Default::default(),
             builtin_macro_kinds: Default::default(),
-            registered_attrs,
             registered_tools,
             macro_use_prelude: FxHashMap::default(),
             macro_map: FxHashMap::default(),

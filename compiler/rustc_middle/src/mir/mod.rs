@@ -332,11 +332,6 @@ impl<'tcx> Body<'tcx> {
     }
 
     #[inline]
-    pub fn basic_blocks(&self) -> &IndexVec<BasicBlock, BasicBlockData<'tcx>> {
-        &self.basic_blocks
-    }
-
-    #[inline]
     pub fn basic_blocks_mut(&mut self) -> &mut IndexVec<BasicBlock, BasicBlockData<'tcx>> {
         self.basic_blocks.as_mut()
     }
@@ -490,7 +485,7 @@ impl<'tcx> Index<BasicBlock> for Body<'tcx> {
 
     #[inline]
     fn index(&self, index: BasicBlock) -> &BasicBlockData<'tcx> {
-        &self.basic_blocks()[index]
+        &self.basic_blocks[index]
     }
 }
 
@@ -2692,8 +2687,8 @@ fn pretty_print_const_value<'tcx>(
                 match inner.kind() {
                     ty::Slice(t) => {
                         if *t == u8_type {
-                            // The `inspect` here is okay since we checked the bounds, and there are
-                            // no relocations (we have an active slice reference here). We don't use
+                            // The `inspect` here is okay since we checked the bounds, and `u8` carries
+                            // no provenance (we have an active slice reference here). We don't use
                             // this result to affect interpreter execution.
                             let byte_str = data
                                 .inner()
@@ -2703,8 +2698,8 @@ fn pretty_print_const_value<'tcx>(
                         }
                     }
                     ty::Str => {
-                        // The `inspect` here is okay since we checked the bounds, and there are no
-                        // relocations (we have an active `str` reference here). We don't use this
+                        // The `inspect` here is okay since we checked the bounds, and `str` carries
+                        // no provenance (we have an active `str` reference here). We don't use this
                         // result to affect interpreter execution.
                         let slice = data
                             .inner()
@@ -2719,7 +2714,7 @@ fn pretty_print_const_value<'tcx>(
                 let n = n.kind().try_to_bits(tcx.data_layout.pointer_size).unwrap();
                 // cast is ok because we already checked for pointer size (32 or 64 bit) above
                 let range = AllocRange { start: offset, size: Size::from_bytes(n) };
-                let byte_str = alloc.inner().get_bytes(&tcx, range).unwrap();
+                let byte_str = alloc.inner().get_bytes_strip_provenance(&tcx, range).unwrap();
                 fmt.write_str("*")?;
                 pretty_print_byte_str(fmt, byte_str)?;
                 return Ok(());

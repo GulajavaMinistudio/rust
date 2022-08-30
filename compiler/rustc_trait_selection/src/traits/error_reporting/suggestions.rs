@@ -20,7 +20,7 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind, Node};
-use rustc_infer::infer::TyCtxtInferExt;
+use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_middle::hir::map;
 use rustc_middle::ty::{
     self, suggest_arbitrary_trait_bound, suggest_constraining_type_param, AdtKind, DefIdTree,
@@ -690,13 +690,17 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
                 real_trait_pred = parent_trait_pred;
             }
 
-            // Skipping binder here, remapping below
-            let real_ty = real_trait_pred.self_ty().skip_binder();
-            if self.can_eq(obligation.param_env, real_ty, arg_ty).is_err() {
+            let real_ty = real_trait_pred.self_ty();
+            // We `erase_late_bound_regions` here because `make_subregion` does not handle
+            // `ReLateBound`, and we don't particularly care about the regions.
+            if self
+                .can_eq(obligation.param_env, self.tcx.erase_late_bound_regions(real_ty), arg_ty)
+                .is_err()
+            {
                 continue;
             }
 
-            if let ty::Ref(region, base_ty, mutbl) = *real_ty.kind() {
+            if let ty::Ref(region, base_ty, mutbl) = *real_ty.skip_binder().kind() {
                 let mut autoderef = Autoderef::new(
                     self,
                     obligation.param_env,
@@ -1585,32 +1589,38 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         expected: ty::PolyTraitRef<'tcx>,
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         pub(crate) fn build_fn_sig_ty<'tcx>(
-            tcx: TyCtxt<'tcx>,
+            infcx: &InferCtxt<'_, 'tcx>,
             trait_ref: ty::PolyTraitRef<'tcx>,
         ) -> Ty<'tcx> {
             let inputs = trait_ref.skip_binder().substs.type_at(1);
             let sig = match inputs.kind() {
                 ty::Tuple(inputs)
-                    if tcx.fn_trait_kind_from_lang_item(trait_ref.def_id()).is_some() =>
+                    if infcx.tcx.fn_trait_kind_from_lang_item(trait_ref.def_id()).is_some() =>
                 {
-                    tcx.mk_fn_sig(
+                    infcx.tcx.mk_fn_sig(
                         inputs.iter(),
-                        tcx.mk_ty_infer(ty::TyVar(ty::TyVid::from_u32(0))),
+                        infcx.next_ty_var(TypeVariableOrigin {
+                            span: DUMMY_SP,
+                            kind: TypeVariableOriginKind::MiscVariable,
+                        }),
                         false,
                         hir::Unsafety::Normal,
                         abi::Abi::Rust,
                     )
                 }
-                _ => tcx.mk_fn_sig(
+                _ => infcx.tcx.mk_fn_sig(
                     std::iter::once(inputs),
-                    tcx.mk_ty_infer(ty::TyVar(ty::TyVid::from_u32(0))),
+                    infcx.next_ty_var(TypeVariableOrigin {
+                        span: DUMMY_SP,
+                        kind: TypeVariableOriginKind::MiscVariable,
+                    }),
                     false,
                     hir::Unsafety::Normal,
                     abi::Abi::Rust,
                 ),
             };
 
-            tcx.mk_fn_ptr(trait_ref.rebind(sig))
+            infcx.tcx.mk_fn_ptr(trait_ref.rebind(sig))
         }
 
         let argument_kind = match expected.skip_binder().self_ty().kind() {
@@ -1630,11 +1640,10 @@ impl<'a, 'tcx> InferCtxtExt<'tcx> for InferCtxt<'a, 'tcx> {
         let found_span = found_span.unwrap_or(span);
         err.span_label(found_span, "found signature defined here");
 
-        let expected = build_fn_sig_ty(self.tcx, expected);
-        let found = build_fn_sig_ty(self.tcx, found);
+        let expected = build_fn_sig_ty(self, expected);
+        let found = build_fn_sig_ty(self, found);
 
-        let (expected_str, found_str) =
-            self.tcx.infer_ctxt().enter(|infcx| infcx.cmp(expected, found));
+        let (expected_str, found_str) = self.cmp(expected, found);
 
         let signature_kind = format!("{argument_kind} signature");
         err.note_expected_found(&signature_kind, expected_str, &signature_kind, found_str);

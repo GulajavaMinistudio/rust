@@ -1,3 +1,4 @@
+#![feature(let_chains)]
 #![feature(once_cell)]
 #![feature(rustc_attrs)]
 #![feature(type_alias_impl_trait)]
@@ -41,6 +42,7 @@ fluent_messages! {
     driver => "../locales/en-US/driver.ftl",
     expand => "../locales/en-US/expand.ftl",
     interface => "../locales/en-US/interface.ftl",
+    infer => "../locales/en-US/infer.ftl",
     lint => "../locales/en-US/lint.ftl",
     parser => "../locales/en-US/parser.ftl",
     passes => "../locales/en-US/passes.ftl",

@@ -415,7 +415,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     /// Turn the wide MPlace into a string (must already be dereferenced!)
     pub fn read_str(&self, mplace: &MPlaceTy<'tcx, M::Provenance>) -> InterpResult<'tcx, &str> {
         let len = mplace.len(self)?;
-        let bytes = self.read_bytes_ptr(mplace.ptr, Size::from_bytes(len))?;
+        let bytes = self.read_bytes_ptr_strip_provenance(mplace.ptr, Size::from_bytes(len))?;
         let str = std::str::from_utf8(bytes).map_err(|err| err_ub!(InvalidStr(err)))?;
         Ok(str)
     }
@@ -444,7 +444,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         }
     }
 
-    /// Read from a local. Will not actually access the local if reading from a ZST.
+    /// Read from a local.
     /// Will not access memory, instead an indirect `Operand` is returned.
     ///
     /// This is public because it is used by [priroda](https://github.com/oli-obk/priroda) to get an
@@ -456,12 +456,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         layout: Option<TyAndLayout<'tcx>>,
     ) -> InterpResult<'tcx, OpTy<'tcx, M::Provenance>> {
         let layout = self.layout_of_local(frame, local, layout)?;
-        let op = if layout.is_zst() {
-            // Bypass `access_local` (helps in ConstProp)
-            Operand::Immediate(Immediate::Uninit)
-        } else {
-            *M::access_local(frame, local)?
-        };
+        let op = *frame.locals[local].access()?;
         Ok(OpTy { op, layout, align: Some(layout.align.abi) })
     }
 

@@ -2,8 +2,6 @@
 //! into a place.
 //! All high-level functions to write to memory work on places as destinations.
 
-use std::hash::Hash;
-
 use rustc_ast::Mutability;
 use rustc_middle::mir;
 use rustc_middle::ty;
@@ -290,7 +288,7 @@ impl<'tcx, Prov: Provenance> PlaceTy<'tcx, Prov> {
 // FIXME: Working around https://github.com/rust-lang/rust/issues/54385
 impl<'mir, 'tcx: 'mir, Prov, M> InterpCx<'mir, 'tcx, M>
 where
-    Prov: Provenance + Eq + Hash + 'static,
+    Prov: Provenance + 'static,
     M: Machine<'mir, 'tcx, Provenance = Prov>,
 {
     /// Take a value, which represents a (thin or wide) reference, and make it a place.
@@ -642,7 +640,7 @@ where
         // avoid force_allocation.
         let src = match self.read_immediate_raw(src)? {
             Ok(src_val) => {
-                assert!(!src.layout.is_unsized(), "cannot have unsized immediates");
+                assert!(!src.layout.is_unsized(), "cannot copy unsized immediates");
                 assert!(
                     !dest.layout.is_unsized(),
                     "the src is sized, so the dest must also be sized"
