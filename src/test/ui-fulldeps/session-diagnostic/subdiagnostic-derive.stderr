@@ -174,32 +174,8 @@ LL | |     b: u64
 LL | | }
    | |_^
 
-error: specified multiple times
-  --> $DIR/subdiagnostic-derive.rs:314:1
-   |
-LL | #[label(parser::add_paren)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: previously specified here
-  --> $DIR/subdiagnostic-derive.rs:311:1
-   |
-LL | #[label(parser::add_paren)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: specified multiple times
-  --> $DIR/subdiagnostic-derive.rs:314:1
-   |
-LL | #[label(parser::add_paren)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: previously specified here
-  --> $DIR/subdiagnostic-derive.rs:311:1
-   |
-LL | #[label(parser::add_paren)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
 error: `#[label(parser::add_paren)]` is not a valid attribute
-  --> $DIR/subdiagnostic-derive.rs:323:28
+  --> $DIR/subdiagnostic-derive.rs:311:28
    |
 LL | #[label(parser::add_paren, parser::add_paren)]
    |                            ^^^^^^^^^^^^^^^^^
@@ -207,55 +183,55 @@ LL | #[label(parser::add_paren, parser::add_paren)]
    = help: a diagnostic slug must be the first argument to the attribute
 
 error: specified multiple times
-  --> $DIR/subdiagnostic-derive.rs:336:5
+  --> $DIR/subdiagnostic-derive.rs:324:5
    |
 LL |     #[primary_span]
    |     ^^^^^^^^^^^^^^^
    |
 note: previously specified here
-  --> $DIR/subdiagnostic-derive.rs:333:5
+  --> $DIR/subdiagnostic-derive.rs:321:5
    |
 LL |     #[primary_span]
    |     ^^^^^^^^^^^^^^^
 
 error: subdiagnostic kind not specified
-  --> $DIR/subdiagnostic-derive.rs:342:8
+  --> $DIR/subdiagnostic-derive.rs:330:8
    |
 LL | struct AG {
    |        ^^
 
 error: specified multiple times
-  --> $DIR/subdiagnostic-derive.rs:379:47
+  --> $DIR/subdiagnostic-derive.rs:367:47
    |
 LL | #[suggestion(parser::add_paren, code = "...", code = "...")]
    |                                               ^^^^^^^^^^^^
    |
 note: previously specified here
-  --> $DIR/subdiagnostic-derive.rs:379:33
+  --> $DIR/subdiagnostic-derive.rs:367:33
    |
 LL | #[suggestion(parser::add_paren, code = "...", code = "...")]
    |                                 ^^^^^^^^^^^^
 
 error: specified multiple times
-  --> $DIR/subdiagnostic-derive.rs:397:5
+  --> $DIR/subdiagnostic-derive.rs:385:5
    |
 LL |     #[applicability]
    |     ^^^^^^^^^^^^^^^^
    |
 note: previously specified here
-  --> $DIR/subdiagnostic-derive.rs:394:5
+  --> $DIR/subdiagnostic-derive.rs:382:5
    |
 LL |     #[applicability]
    |     ^^^^^^^^^^^^^^^^
 
 error: the `#[applicability]` attribute can only be applied to fields of type `Applicability`
-  --> $DIR/subdiagnostic-derive.rs:408:5
+  --> $DIR/subdiagnostic-derive.rs:396:5
    |
 LL |     #[applicability]
    |     ^^^^^^^^^^^^^^^^
 
 error: suggestion without `applicability`
-  --> $DIR/subdiagnostic-derive.rs:403:1
+  --> $DIR/subdiagnostic-derive.rs:391:1
    |
 LL | / #[suggestion(parser::add_paren, code = "...")]
 LL | |
@@ -267,7 +243,7 @@ LL | | }
    | |_^
 
 error: suggestion without `applicability`
-  --> $DIR/subdiagnostic-derive.rs:414:1
+  --> $DIR/subdiagnostic-derive.rs:402:1
    |
 LL | / #[suggestion(parser::add_paren, code = "...")]
 LL | |
@@ -278,7 +254,7 @@ LL | | }
    | |_^
 
 error: suggestion without `code = "..."`
-  --> $DIR/subdiagnostic-derive.rs:422:1
+  --> $DIR/subdiagnostic-derive.rs:410:1
    |
 LL | / #[suggestion(parser::add_paren)]
 LL | |
@@ -290,13 +266,13 @@ LL | | }
    | |_^
 
 error: invalid applicability
-  --> $DIR/subdiagnostic-derive.rs:432:46
+  --> $DIR/subdiagnostic-derive.rs:420:46
    |
 LL | #[suggestion(parser::add_paren, code ="...", applicability = "foo")]
    |                                              ^^^^^^^^^^^^^^^^^^^^^
 
 error: suggestion without `applicability`
-  --> $DIR/subdiagnostic-derive.rs:450:1
+  --> $DIR/subdiagnostic-derive.rs:438:1
    |
 LL | / #[suggestion(parser::add_paren, code = "...")]
 LL | |
@@ -307,7 +283,7 @@ LL | | }
    | |_^
 
 error: suggestion without `#[primary_span]` field
-  --> $DIR/subdiagnostic-derive.rs:450:1
+  --> $DIR/subdiagnostic-derive.rs:438:1
    |
 LL | / #[suggestion(parser::add_paren, code = "...")]
 LL | |
@@ -318,19 +294,19 @@ LL | | }
    | |_^
 
 error: unsupported type attribute for subdiagnostic enum
-  --> $DIR/subdiagnostic-derive.rs:465:1
+  --> $DIR/subdiagnostic-derive.rs:453:1
    |
 LL | #[label]
    | ^^^^^^^^
 
 error: `var` doesn't refer to a field on this type
-  --> $DIR/subdiagnostic-derive.rs:485:39
+  --> $DIR/subdiagnostic-derive.rs:473:39
    |
 LL | #[suggestion(parser::add_paren, code ="{var}", applicability = "machine-applicable")]
    |                                       ^^^^^^^
 
 error: `var` doesn't refer to a field on this type
-  --> $DIR/subdiagnostic-derive.rs:504:43
+  --> $DIR/subdiagnostic-derive.rs:492:43
    |
 LL |     #[suggestion(parser::add_paren, code ="{var}", applicability = "machine-applicable")]
    |                                           ^^^^^^^
@@ -395,6 +371,6 @@ error[E0425]: cannot find value `slug` in module `rustc_errors::fluent`
 LL | #[label(slug)]
    |         ^^^^ not found in `rustc_errors::fluent`
 
-error: aborting due to 52 previous errors
+error: aborting due to 50 previous errors
 
 For more information about this error, try `rustc --explain E0425`.

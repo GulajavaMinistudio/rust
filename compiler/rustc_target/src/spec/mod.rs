@@ -837,15 +837,15 @@ impl fmt::Display for StackProtector {
 }
 
 macro_rules! supported_targets {
-    ( $(($( $triple:literal, )+ $module:ident ),)+ ) => {
+    ( $(($triple:literal, $module:ident ),)+ ) => {
         $(mod $module;)+
 
         /// List of supported targets
-        pub const TARGETS: &[&str] = &[$($($triple),+),+];
+        pub const TARGETS: &[&str] = &[$($triple),+];
 
         fn load_builtin(target: &str) -> Option<Target> {
             let mut t = match target {
-                $( $($triple)|+ => $module::target(), )+
+                $( $triple => $module::target(), )+
                 _ => return None,
             };
             t.is_builtin = true;
@@ -861,7 +861,7 @@ macro_rules! supported_targets {
             $(
                 #[test] // `#[test]`
                 fn $module() {
-                    tests_impl::test_target(super::$module::target());
+                    tests_impl::test_target(super::$module::target(), $triple);
                 }
             )+
         }
@@ -944,9 +944,11 @@ supported_targets! {
 
     ("aarch64-unknown-openbsd", aarch64_unknown_openbsd),
     ("i686-unknown-openbsd", i686_unknown_openbsd),
+    ("powerpc-unknown-openbsd", powerpc_unknown_openbsd),
+    ("powerpc64-unknown-openbsd", powerpc64_unknown_openbsd),
+    ("riscv64gc-unknown-openbsd", riscv64gc_unknown_openbsd),
     ("sparc64-unknown-openbsd", sparc64_unknown_openbsd),
     ("x86_64-unknown-openbsd", x86_64_unknown_openbsd),
-    ("powerpc-unknown-openbsd", powerpc_unknown_openbsd),
 
     ("aarch64-unknown-netbsd", aarch64_unknown_netbsd),
     ("armv6-unknown-netbsd-eabihf", armv6_unknown_netbsd_eabihf),
@@ -1526,7 +1528,7 @@ fn add_link_args(link_args: &mut LinkArgs, flavor: LinkerFlavor, args: &[&'stati
     match flavor {
         LinkerFlavor::Ld => insert(LinkerFlavor::Lld(LldFlavor::Ld)),
         LinkerFlavor::Msvc => insert(LinkerFlavor::Lld(LldFlavor::Link)),
-        LinkerFlavor::Lld(LldFlavor::Wasm) => {}
+        LinkerFlavor::Lld(LldFlavor::Ld64) | LinkerFlavor::Lld(LldFlavor::Wasm) => {}
         LinkerFlavor::Lld(lld_flavor) => {
             panic!("add_link_args: use non-LLD flavor for {:?}", lld_flavor)
         }

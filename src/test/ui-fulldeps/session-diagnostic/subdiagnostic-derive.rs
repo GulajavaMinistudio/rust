@@ -308,18 +308,6 @@ union AC {
 }
 
 #[derive(SessionSubdiagnostic)]
-#[label(parser::add_paren)]
-//~^ NOTE previously specified here
-//~^^ NOTE previously specified here
-#[label(parser::add_paren)]
-//~^ ERROR specified multiple times
-//~^^ ERROR specified multiple times
-struct AD {
-    #[primary_span]
-    span: Span,
-}
-
-#[derive(SessionSubdiagnostic)]
 #[label(parser::add_paren, parser::add_paren)]
 //~^ ERROR `#[label(parser::add_paren)]` is not a valid attribute
 struct AE {

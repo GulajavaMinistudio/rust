@@ -686,19 +686,12 @@ impl Diagnostic {
         suggestion: Vec<(Span, String)>,
         applicability: Applicability,
     ) -> &mut Self {
-        assert!(!suggestion.is_empty());
-        self.push_suggestion(CodeSuggestion {
-            substitutions: vec![Substitution {
-                parts: suggestion
-                    .into_iter()
-                    .map(|(span, snippet)| SubstitutionPart { snippet, span })
-                    .collect(),
-            }],
-            msg: self.subdiagnostic_message_to_diagnostic_message(msg),
-            style: SuggestionStyle::CompletelyHidden,
+        self.multipart_suggestion_with_style(
+            msg,
+            suggestion,
             applicability,
-        });
-        self
+            SuggestionStyle::CompletelyHidden,
+        )
     }
 
     /// Prints out a message with a suggested edit of the code.
@@ -981,12 +974,12 @@ impl Diagnostic {
     fn sub_with_highlights<M: Into<SubdiagnosticMessage>>(
         &mut self,
         level: Level,
-        mut message: Vec<(M, Style)>,
+        message: Vec<(M, Style)>,
         span: MultiSpan,
         render_span: Option<MultiSpan>,
     ) {
         let message = message
-            .drain(..)
+            .into_iter()
             .map(|m| (self.subdiagnostic_message_to_diagnostic_message(m.0), m.1))
             .collect();
         let sub = SubDiagnostic { level, message, span, render_span };
