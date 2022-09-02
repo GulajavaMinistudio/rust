@@ -1089,7 +1089,7 @@ pub struct GlobalCtxt<'tcx> {
 
     pub queries: &'tcx dyn query::QueryEngine<'tcx>,
     pub query_caches: query::QueryCaches<'tcx>,
-    query_kinds: &'tcx [DepKindStruct],
+    query_kinds: &'tcx [DepKindStruct<'tcx>],
 
     // Internal caches for metadata decoding. No need to track deps on this.
     pub ty_rcache: Lock<FxHashMap<ty::CReaderCacheKey, Ty<'tcx>>>,
@@ -1246,7 +1246,7 @@ impl<'tcx> TyCtxt<'tcx> {
         dep_graph: DepGraph,
         on_disk_cache: Option<&'tcx dyn OnDiskCache<'tcx>>,
         queries: &'tcx dyn query::QueryEngine<'tcx>,
-        query_kinds: &'tcx [DepKindStruct],
+        query_kinds: &'tcx [DepKindStruct<'tcx>],
         crate_name: &str,
         output_filenames: OutputFilenames,
     ) -> GlobalCtxt<'tcx> {
@@ -1296,7 +1296,7 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
-    pub(crate) fn query_kind(self, k: DepKind) -> &'tcx DepKindStruct {
+    pub(crate) fn query_kind(self, k: DepKind) -> &'tcx DepKindStruct<'tcx> {
         &self.query_kinds[k as usize]
     }
 
@@ -1498,17 +1498,17 @@ impl<'tcx> TyCtxt<'tcx> {
         // Create a dependency to the crate to be sure we re-execute this when the amount of
         // definitions change.
         self.ensure().hir_crate(());
-        // Leak a read lock once we start iterating on definitions, to prevent adding new onces
+        // Leak a read lock once we start iterating on definitions, to prevent adding new ones
         // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.definitions.leak();
         definitions.iter_local_def_id()
     }
 
     pub fn def_path_table(self) -> &'tcx rustc_hir::definitions::DefPathTable {
-        // Create a dependency to the crate to be sure we reexcute this when the amount of
+        // Create a dependency to the crate to be sure we re-execute this when the amount of
         // definitions change.
         self.ensure().hir_crate(());
-        // Leak a read lock once we start iterating on definitions, to prevent adding new onces
+        // Leak a read lock once we start iterating on definitions, to prevent adding new ones
         // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.definitions.leak();
         definitions.def_path_table()
@@ -1517,10 +1517,10 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn def_path_hash_to_def_index_map(
         self,
     ) -> &'tcx rustc_hir::def_path_hash_map::DefPathHashMap {
-        // Create a dependency to the crate to be sure we reexcute this when the amount of
+        // Create a dependency to the crate to be sure we re-execute this when the amount of
         // definitions change.
         self.ensure().hir_crate(());
-        // Leak a read lock once we start iterating on definitions, to prevent adding new onces
+        // Leak a read lock once we start iterating on definitions, to prevent adding new ones
         // while iterating.  If some query needs to add definitions, it should be `ensure`d above.
         let definitions = self.definitions.leak();
         definitions.def_path_hash_to_def_index_map()
@@ -1829,9 +1829,9 @@ pub mod tls {
     use crate::dep_graph::TaskDepsRef;
     use crate::ty::query;
     use rustc_data_structures::sync::{self, Lock};
-    use rustc_data_structures::thin_vec::ThinVec;
     use rustc_errors::Diagnostic;
     use std::mem;
+    use thin_vec::ThinVec;
 
     #[cfg(not(parallel_compiler))]
     use std::cell::Cell;

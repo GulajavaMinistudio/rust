@@ -944,13 +944,18 @@ impl<'a> Parser<'a> {
         // Stitch the list of outer attributes onto the return value.
         // A little bit ugly, but the best way given the current code
         // structure
-        self.parse_dot_or_call_expr_with_(e0, lo).map(|expr| {
-            expr.map(|mut expr| {
-                attrs.extend(expr.attrs);
-                expr.attrs = attrs;
-                expr
+        let res = self.parse_dot_or_call_expr_with_(e0, lo);
+        if attrs.is_empty() {
+            res
+        } else {
+            res.map(|expr| {
+                expr.map(|mut expr| {
+                    attrs.extend(expr.attrs);
+                    expr.attrs = attrs;
+                    expr
+                })
             })
-        })
+        }
     }
 
     fn parse_dot_or_call_expr_with_(&mut self, mut e: P<Expr>, lo: Span) -> PResult<'a, P<Expr>> {
@@ -1578,7 +1583,7 @@ impl<'a> Parser<'a> {
                     Applicability::MachineApplicable,
                 );
 
-                // Replace `'label: non_block_expr` with `'label: {non_block_expr}` in order to supress future errors about `break 'label`.
+                // Replace `'label: non_block_expr` with `'label: {non_block_expr}` in order to suppress future errors about `break 'label`.
                 let stmt = self.mk_stmt(span, StmtKind::Expr(expr));
                 let blk = self.mk_block(vec![stmt], BlockCheckMode::Default, span);
                 self.mk_expr(span, ExprKind::Block(blk, label))
@@ -2578,7 +2583,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_arm(&mut self) -> PResult<'a, Arm> {
-        // Used to check the `let_chains` and `if_let_guard` features mostly by scaning
+        // Used to check the `let_chains` and `if_let_guard` features mostly by scanning
         // `&&` tokens.
         fn check_let_expr(expr: &Expr) -> (bool, bool) {
             match expr.kind {

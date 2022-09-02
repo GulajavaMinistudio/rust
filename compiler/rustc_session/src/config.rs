@@ -12,8 +12,8 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 
 use rustc_data_structures::stable_hasher::ToStableHashKey;
 use rustc_target::abi::{Align, TargetDataLayout};
-use rustc_target::spec::{LinkerFlavor, SplitDebuginfo, Target, TargetTriple, TargetWarnings};
-use rustc_target::spec::{PanicStrategy, SanitizerSet, TARGETS};
+use rustc_target::spec::{PanicStrategy, SanitizerSet, SplitDebuginfo};
+use rustc_target::spec::{Target, TargetTriple, TargetWarnings, TARGETS};
 
 use crate::parse::{CrateCheckConfig, CrateConfig};
 use rustc_feature::UnstableFeatures;
@@ -2379,16 +2379,6 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         }
     }
 
-    if cg.linker_flavor == Some(LinkerFlavor::L4Bender)
-        && !nightly_options::is_unstable_enabled(matches)
-    {
-        early_error(
-            error_format,
-            "`l4-bender` linker flavor is unstable, `-Z unstable-options` \
-             flag must also be passed to explicitly use it",
-        );
-    }
-
     let prints = collect_print_requests(&mut cg, &mut unstable_opts, matches, error_format);
 
     let cg = cg;
@@ -2530,7 +2520,7 @@ fn parse_pretty(unstable_opts: &UnstableOptions, efmt: ErrorOutputType) -> Optio
             ),
         ),
     };
-    tracing::debug!("got unpretty option: {first:?}");
+    debug!("got unpretty option: {first:?}");
     Some(first)
 }
 
