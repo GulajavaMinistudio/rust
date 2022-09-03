@@ -285,7 +285,7 @@ pub fn nt_success(status: NTSTATUS) -> bool {
     status >= 0
 }
 
-pub const BCRYPT_USE_SYSTEM_PREFERRED_RNG: DWORD = 0x00000002;
+pub const BCRYPT_RNG_ALG_HANDLE: usize = 0x81;
 
 #[repr(C)]
 pub struct UNICODE_STRING {
@@ -452,6 +452,12 @@ pub enum FILE_INFO_BY_HANDLE_CLASS {
     FileIdExtdDirectoryRestartInfo = 20, // 0x14
     FileDispositionInfoEx = 21,          // 0x15, Windows 10 version 1607
     MaximumFileInfoByHandlesClass,
+}
+
+#[repr(C)]
+pub struct FILE_ATTRIBUTE_TAG_INFO {
+    pub FileAttributes: DWORD,
+    pub ReparseTag: DWORD,
 }
 
 #[repr(C)]

@@ -778,14 +778,6 @@ pre, .rustdoc.source .example-wrap {
 	margin-bottom: .6em;
 }
 
-.content .impl-items > .item-info {
-	margin-left: 40px;
-}
-
-.methods > .item-info, .content .impl-items > .item-info {
-	margin-top: -8px;
-}
-
 .impl-items {
 	flex-basis: 100%;
 }
@@ -987,6 +979,9 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	width: 100%;
 	background-color: var(--button-background-color);
 }
+.search-input:focus {
+	border-color: var(--search-input-focused-border-color);
+}
 
 .search-results {
 	display: none;
@@ -1167,6 +1162,12 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	float: right;
 }
 
+.rightside:not(a),
+.out-of-band {
+	color: var(--right-side-color);
+}
+
+
 .impl-items .srclink, .impl .srclink, .methods .srclink {
 	/* Override header settings otherwise it's too bold */
 	font-weight: normal;
@@ -1205,6 +1206,7 @@ a.test-arrow:hover {
 
 .code-attribute {
 	font-weight: 300;
+	color: var(--code-attribute-color);
 }
 
 .item-spacer {
@@ -1239,12 +1241,6 @@ h3.variant {
 
 .sub-variant > .sub-variant-field {
 	margin-left: 24px;
-}
-
-.toggle-label {
-	display: inline-block;
-	margin-left: 4px;
-	margin-top: 3px;
 }
 
 :target > code, :target > .code-header {
@@ -1484,6 +1480,16 @@ pre.rust {
 	background-color: var(--button-background-color);
 }
 
+#copy-path {
+	color: var(--copy-path-button-color);
+}
+#copy-path > img {
+	filter: var(--copy-path-img-filter);
+}
+#copy-path:hover > img {
+	filter: var(--copy-path-img-hover-filter);
+}
+
 @keyframes rotating {
 	from {
 		transform: rotate(0deg);
@@ -1605,6 +1611,12 @@ details.rustdoc-toggle > summary::before {
 	display: inline-block;
 	vertical-align: middle;
 	opacity: .5;
+}
+
+details.rustdoc-toggle > summary.hideme > span,
+details.rustdoc-toggle > summary::before,
+.more-examples-toggle summary, .more-examples-toggle .hide-more {
+	color: var(--toggles-color);
 }
 
 /* Screen readers see the text version at the end the line.
@@ -2014,6 +2026,11 @@ in storage.js plus the media query with (min-width: 701px)
 	#main-content > details.rustdoc-toggle:not(.top-doc) > summary::before,
 	#main-content > div > details.rustdoc-toggle > summary::before {
 		left: -11px;
+	}
+
+	/* Align summary-nested and unnested item-info gizmos. */
+	.content .impl-items > .item-info {
+		margin-left: 34px;
 	}
 }
 
