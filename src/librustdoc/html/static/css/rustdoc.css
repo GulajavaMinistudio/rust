@@ -778,10 +778,6 @@ pre, .rustdoc.source .example-wrap {
 	margin-bottom: .6em;
 }
 
-.impl-items {
-	flex-basis: 100%;
-}
-
 #main-content > .item-info {
 	margin-top: 0;
 	margin-left: 0;
@@ -1885,10 +1881,6 @@ in storage.js plus the media query with (min-width: 701px)
 	.sidebar-elems {
 		margin-top: 1em;
 		background-color: var(--sidebar-background-color);
-	}
-
-	.source nav:not(.sidebar).sub {
-		margin-left: 32px;
 	}
 
 	.content {
