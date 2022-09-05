@@ -250,16 +250,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         }
 
         let res = self.expect_full_res(segment.id);
-        let id = self.lower_node_id(segment.id);
+        let hir_id = self.lower_node_id(segment.id);
         debug!(
             "lower_path_segment: ident={:?} original-id={:?} new-id={:?}",
-            segment.ident, segment.id, id,
+            segment.ident, segment.id, hir_id,
         );
 
         hir::PathSegment {
             ident: self.lower_ident(segment.ident),
-            hir_id: Some(id),
-            res: Some(self.lower_res(res)),
+            hir_id,
+            res: self.lower_res(res),
             infer_args,
             args: if generic_args.is_empty() && generic_args.span.is_empty() {
                 None
@@ -358,7 +358,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             }
             FnRetTy::Default(_) => self.arena.alloc(self.ty_tup(*span, &[])),
         };
-        let args = smallvec![GenericArg::Type(self.ty_tup(*inputs_span, inputs))];
+        let args = smallvec![GenericArg::Type(self.arena.alloc(self.ty_tup(*inputs_span, inputs)))];
         let binding = self.output_ty_binding(output_ty.span, output_ty);
         (
             GenericArgsCtor {

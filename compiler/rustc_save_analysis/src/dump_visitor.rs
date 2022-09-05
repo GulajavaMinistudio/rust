@@ -803,6 +803,7 @@ impl<'tcx> DumpVisitor<'tcx> {
         &mut self,
         ex: &'tcx hir::Expr<'tcx>,
         seg: &'tcx hir::PathSegment<'tcx>,
+        receiver: &'tcx hir::Expr<'tcx>,
         args: &'tcx [hir::Expr<'tcx>],
     ) {
         debug!("process_method_call {:?} {:?}", ex, ex.span);
@@ -823,6 +824,7 @@ impl<'tcx> DumpVisitor<'tcx> {
         }
 
         // walk receiver and args
+        self.visit_expr(receiver);
         walk_list!(self, visit_expr, args);
     }
 
@@ -912,7 +914,10 @@ impl<'tcx> DumpVisitor<'tcx> {
                     _,
                 )
                 | Res::SelfTy { .. } => {
-                    self.dump_path_segment_ref(id, &hir::PathSegment::from_ident(ident));
+                    self.dump_path_segment_ref(
+                        id,
+                        &hir::PathSegment::new(ident, hir::HirId::INVALID, Res::Err),
+                    );
                 }
                 def => {
                     error!("unexpected definition kind when processing collected idents: {:?}", def)
@@ -972,7 +977,7 @@ impl<'tcx> DumpVisitor<'tcx> {
         self.process_macro_use(trait_item.span);
         match trait_item.kind {
             hir::TraitItemKind::Const(ref ty, body) => {
-                let body = body.map(|b| &self.tcx.hir().body(b).value);
+                let body = body.map(|b| self.tcx.hir().body(b).value);
                 let attrs = self.tcx.hir().attrs(trait_item.hir_id());
                 self.process_assoc_const(
                     trait_item.def_id,
@@ -1340,7 +1345,9 @@ impl<'tcx> Visitor<'tcx> for DumpVisitor<'tcx> {
                 let res = self.save_ctxt.get_path_res(hir_expr.hir_id);
                 self.process_struct_lit(ex, path, fields, adt.variant_of_res(res), *rest)
             }
-            hir::ExprKind::MethodCall(ref seg, args, _) => self.process_method_call(ex, seg, args),
+            hir::ExprKind::MethodCall(ref seg, receiver, args, _) => {
+                self.process_method_call(ex, seg, receiver, args)
+            }
             hir::ExprKind::Field(ref sub_ex, _) => {
                 self.visit_expr(&sub_ex);
 

@@ -711,8 +711,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                             Applicability::MachineApplicable,
                         );
                         self.suggested = true;
-                    } else if let hir::ExprKind::MethodCall(_path, args @ [_, ..], sp) = expr.kind
-                        && let hir::ExprKind::Index(val, index) = args[0].kind
+                    } else if let hir::ExprKind::MethodCall(_path, receiver, _, sp) = expr.kind
+                        && let hir::ExprKind::Index(val, index) = receiver.kind
                         && expr.span == self.assign_span
                     {
                         // val[index].path(args..);
@@ -724,7 +724,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                                     ".get_mut(".to_string(),
                                 ),
                                 (
-                                    index.span.shrink_to_hi().with_hi(args[0].span.hi()),
+                                    index.span.shrink_to_hi().with_hi(receiver.span.hi()),
                                     ").map(|val| val".to_string(),
                                 ),
                                 (sp.shrink_to_hi(), ")".to_string()),
@@ -911,11 +911,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                                                         [
                                                             Expr {
                                                                 kind:
-                                                                    MethodCall(
-                                                                        path_segment,
-                                                                        _args,
-                                                                        span,
-                                                                    ),
+                                                                    MethodCall(path_segment, _, _, span),
                                                                 hir_id,
                                                                 ..
                                                             },
@@ -935,10 +931,11 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 _,
             ) = hir_map.body(fn_body_id).value.kind
             {
-                let opt_suggestions = path_segment
-                    .hir_id
-                    .map(|path_hir_id| self.infcx.tcx.typeck(path_hir_id.owner))
-                    .and_then(|typeck| typeck.type_dependent_def_id(*hir_id))
+                let opt_suggestions = self
+                    .infcx
+                    .tcx
+                    .typeck(path_segment.hir_id.owner)
+                    .type_dependent_def_id(*hir_id)
                     .and_then(|def_id| self.infcx.tcx.impl_of_method(def_id))
                     .map(|def_id| self.infcx.tcx.associated_items(def_id))
                     .map(|assoc_items| {

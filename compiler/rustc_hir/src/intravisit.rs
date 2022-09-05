@@ -724,7 +724,7 @@ pub fn walk_path_segment<'v, V: Visitor<'v>>(
     segment: &'v PathSegment<'v>,
 ) {
     visitor.visit_ident(segment.ident);
-    walk_list!(visitor, visit_id, segment.hir_id);
+    visitor.visit_id(segment.hir_id);
     if let Some(ref args) = segment.args {
         visitor.visit_generic_args(path_span, args);
     }
@@ -1094,8 +1094,9 @@ pub fn walk_expr<'v, V: Visitor<'v>>(visitor: &mut V, expression: &'v Expr<'v>) 
             visitor.visit_expr(callee_expression);
             walk_list!(visitor, visit_expr, arguments);
         }
-        ExprKind::MethodCall(ref segment, arguments, _) => {
+        ExprKind::MethodCall(ref segment, receiver, arguments, _) => {
             visitor.visit_path_segment(expression.span, segment);
+            visitor.visit_expr(receiver);
             walk_list!(visitor, visit_expr, arguments);
         }
         ExprKind::Binary(_, ref left_expression, ref right_expression) => {
