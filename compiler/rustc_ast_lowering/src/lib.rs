@@ -132,6 +132,12 @@ struct LoweringContext<'a, 'hir> {
     allow_try_trait: Option<Lrc<[Symbol]>>,
     allow_gen_future: Option<Lrc<[Symbol]>>,
     allow_into_future: Option<Lrc<[Symbol]>>,
+
+    /// Mapping from generics `def_id`s to TAIT generics `def_id`s.
+    /// For each captured lifetime (e.g., 'a), we create a new lifetime parameter that is a generic
+    /// defined on the TAIT, so we have type Foo<'a1> = ... and we establish a mapping in this
+    /// field from the original parameter 'a to the new parameter 'a1.
+    generics_def_id_map: Vec<FxHashMap<LocalDefId, LocalDefId>>,
 }
 
 trait ResolverAstLoweringExt {
@@ -142,12 +148,6 @@ trait ResolverAstLoweringExt {
     fn get_lifetime_res(&self, id: NodeId) -> Option<LifetimeRes>;
     fn take_extra_lifetime_params(&mut self, id: NodeId) -> Vec<(Ident, NodeId, LifetimeRes)>;
     fn decl_macro_kind(&self, def_id: LocalDefId) -> MacroKind;
-    /// Record the map from `from` local def id to `to` local def id, on `generics_def_id_map`
-    /// field.
-    fn record_def_id_remap(&mut self, from: LocalDefId, to: LocalDefId);
-    /// Get the previously recorded `to` local def id given the `from` local def id, obtained using
-    /// `generics_def_id_map` field.
-    fn get_remapped_def_id(&self, local_def_id: LocalDefId) -> LocalDefId;
 }
 
 impl ResolverAstLoweringExt for ResolverAstLowering {
@@ -214,41 +214,6 @@ impl ResolverAstLoweringExt for ResolverAstLowering {
 
     fn decl_macro_kind(&self, def_id: LocalDefId) -> MacroKind {
         self.builtin_macro_kinds.get(&def_id).copied().unwrap_or(MacroKind::Bang)
-    }
-
-    /// Push a remapping into the top-most map.
-    /// Panics if no map has been pushed.
-    /// Remapping is used when creating lowering `-> impl Trait` return
-    /// types to create the resulting opaque type.
-    #[instrument(level = "debug", skip(self))]
-    fn record_def_id_remap(&mut self, from: LocalDefId, to: LocalDefId) {
-        self.generics_def_id_map.last_mut().expect("no map pushed").insert(from, to);
-    }
-
-    fn get_remapped_def_id(&self, mut local_def_id: LocalDefId) -> LocalDefId {
-        // `generics_def_id_map` is a stack of mappings. As we go deeper in impl traits nesting we
-        // push new mappings so we need to try first the latest mappings, hence `iter().rev()`.
-        //
-        // Consider:
-        //
-        // `fn test<'a, 'b>() -> impl Trait<&'a u8, Ty = impl Sized + 'b> {}`
-        //
-        // We would end with a generics_def_id_map like:
-        //
-        // `[[fn#'b -> impl_trait#'b], [fn#'b -> impl_sized#'b]]`
-        //
-        // for the opaque type generated on `impl Sized + 'b`, We want the result to be:
-        // impl_sized#'b, so iterating forward is the wrong thing to do.
-        for map in self.generics_def_id_map.iter().rev() {
-            if let Some(r) = map.get(&local_def_id) {
-                debug!("def_id_remapper: remapping from `{local_def_id:?}` to `{r:?}`");
-                local_def_id = *r;
-            } else {
-                debug!("def_id_remapper: no remapping for `{local_def_id:?}` found in map");
-            }
-        }
-
-        local_def_id
     }
 }
 
@@ -522,11 +487,39 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         self.resolver
             .node_id_to_def_id
             .get(&node)
-            .map(|local_def_id| self.resolver.get_remapped_def_id(*local_def_id))
+            .map(|local_def_id| self.get_remapped_def_id(*local_def_id))
     }
 
     fn local_def_id(&self, node: NodeId) -> LocalDefId {
         self.opt_local_def_id(node).unwrap_or_else(|| panic!("no entry for node id: `{:?}`", node))
+    }
+
+    /// Get the previously recorded `to` local def id given the `from` local def id, obtained using
+    /// `generics_def_id_map` field.
+    fn get_remapped_def_id(&self, mut local_def_id: LocalDefId) -> LocalDefId {
+        // `generics_def_id_map` is a stack of mappings. As we go deeper in impl traits nesting we
+        // push new mappings so we need to try first the latest mappings, hence `iter().rev()`.
+        //
+        // Consider:
+        //
+        // `fn test<'a, 'b>() -> impl Trait<&'a u8, Ty = impl Sized + 'b> {}`
+        //
+        // We would end with a generics_def_id_map like:
+        //
+        // `[[fn#'b -> impl_trait#'b], [fn#'b -> impl_sized#'b]]`
+        //
+        // for the opaque type generated on `impl Sized + 'b`, We want the result to be:
+        // impl_sized#'b, so iterating forward is the wrong thing to do.
+        for map in self.generics_def_id_map.iter().rev() {
+            if let Some(r) = map.get(&local_def_id) {
+                debug!("def_id_remapper: remapping from `{local_def_id:?}` to `{r:?}`");
+                local_def_id = *r;
+            } else {
+                debug!("def_id_remapper: no remapping for `{local_def_id:?}` found in map");
+            }
+        }
+
+        local_def_id
     }
 
     /// Freshen the `LoweringContext` and ready it to lower a nested item.
@@ -597,9 +590,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         remap: FxHashMap<LocalDefId, LocalDefId>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        self.resolver.generics_def_id_map.push(remap);
+        self.generics_def_id_map.push(remap);
         let res = f(self);
-        self.resolver.generics_def_id_map.pop();
+        self.generics_def_id_map.pop();
         res
     }
 
@@ -1568,8 +1561,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
                 LifetimeRes::Fresh { param, binder: _ } => {
                     debug_assert_eq!(lifetime.ident.name, kw::UnderscoreLifetime);
-                    let old_def_id = self.local_def_id(param);
-                    if remapping.get(&old_def_id).is_none() {
+                    if let Some(old_def_id) = self.opt_local_def_id(param) && remapping.get(&old_def_id).is_none() {
                         let node_id = self.next_node_id();
 
                         let new_def_id = self.create_def(
@@ -1699,10 +1691,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             output,
             c_variadic,
             implicit_self: decl.inputs.get(0).map_or(hir::ImplicitSelfKind::None, |arg| {
-                use BindingMode::{ByRef, ByValue};
                 let is_mutable_pat = matches!(
                     arg.pat.kind,
-                    PatKind::Ident(ByValue(Mutability::Mut) | ByRef(Mutability::Mut), ..)
+                    PatKind::Ident(hir::BindingAnnotation(_, Mutability::Mut), ..)
                 );
 
                 match arg.ty.kind {
@@ -2027,7 +2018,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let name = match res {
             LifetimeRes::Param { param, .. } => {
                 let p_name = ParamName::Plain(ident);
-                let param = self.resolver.get_remapped_def_id(param);
+                let param = self.get_remapped_def_id(param);
 
                 hir::LifetimeName::Param(param, p_name)
             }
@@ -2367,11 +2358,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     }
 
     fn pat_ident(&mut self, span: Span, ident: Ident) -> (&'hir hir::Pat<'hir>, hir::HirId) {
-        self.pat_ident_binding_mode(span, ident, hir::BindingAnnotation::Unannotated)
+        self.pat_ident_binding_mode(span, ident, hir::BindingAnnotation::NONE)
     }
 
     fn pat_ident_mut(&mut self, span: Span, ident: Ident) -> (hir::Pat<'hir>, hir::HirId) {
-        self.pat_ident_binding_mode_mut(span, ident, hir::BindingAnnotation::Unannotated)
+        self.pat_ident_binding_mode_mut(span, ident, hir::BindingAnnotation::NONE)
     }
 
     fn pat_ident_binding_mode(

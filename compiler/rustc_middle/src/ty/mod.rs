@@ -15,6 +15,7 @@ pub use self::AssocItemContainer::*;
 pub use self::BorrowKind::*;
 pub use self::IntVarValue::*;
 pub use self::Variance::*;
+use crate::error::{OpaqueHiddenTypeMismatch, TypeMismatchReason};
 use crate::metadata::ModChild;
 use crate::middle::privacy::AccessLevels;
 use crate::mir::{Body, GeneratorLayout};
@@ -178,11 +179,6 @@ pub struct ResolverAstLowering {
     pub label_res_map: NodeMap<ast::NodeId>,
     /// Resolutions for lifetimes.
     pub lifetimes_res_map: NodeMap<LifetimeRes>,
-    /// Mapping from generics `def_id`s to TAIT generics `def_id`s.
-    /// For each captured lifetime (e.g., 'a), we create a new lifetime parameter that is a generic
-    /// defined on the TAIT, so we have type Foo<'a1> = ... and we establish a mapping in this
-    /// field from the original parameter 'a to the new parameter 'a1.
-    pub generics_def_id_map: Vec<FxHashMap<LocalDefId, LocalDefId>>,
     /// Lifetime parameters that lowering will have to introduce.
     pub extra_lifetime_params_map: NodeMap<Vec<(Ident, ast::NodeId, LifetimeRes)>>,
 
@@ -1184,20 +1180,17 @@ pub struct OpaqueHiddenType<'tcx> {
 impl<'tcx> OpaqueHiddenType<'tcx> {
     pub fn report_mismatch(&self, other: &Self, tcx: TyCtxt<'tcx>) {
         // Found different concrete types for the opaque type.
-        let mut err = tcx.sess.struct_span_err(
-            other.span,
-            "concrete type differs from previous defining opaque type use",
-        );
-        err.span_label(other.span, format!("expected `{}`, got `{}`", self.ty, other.ty));
-        if self.span == other.span {
-            err.span_label(
-                self.span,
-                "this expression supplies two conflicting concrete types for the same opaque type",
-            );
+        let sub_diag = if self.span == other.span {
+            TypeMismatchReason::ConflictType { span: self.span }
         } else {
-            err.span_note(self.span, "previous use here");
-        }
-        err.emit();
+            TypeMismatchReason::PreviousUse { span: self.span }
+        };
+        tcx.sess.emit_err(OpaqueHiddenTypeMismatch {
+            self_ty: self.ty,
+            other_ty: other.ty,
+            other_span: other.span,
+            sub: sub_diag,
+        });
     }
 }
 
@@ -2274,7 +2267,11 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     pub fn get_attr(self, did: DefId, attr: Symbol) -> Option<&'tcx ast::Attribute> {
-        self.get_attrs(did, attr).next()
+        if cfg!(debug_assertions) && !rustc_feature::is_valid_for_get_attr(attr) {
+            bug!("get_attr: unexpected called with DefId `{:?}`, attr `{:?}`", did, attr);
+        } else {
+            self.get_attrs(did, attr).next()
+        }
     }
 
     /// Determines whether an item is annotated with an attribute.
