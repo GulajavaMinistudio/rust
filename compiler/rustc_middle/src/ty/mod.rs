@@ -263,11 +263,11 @@ impl fmt::Display for ImplPolarity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy, Hash, Encodable, Decodable, HashStable)]
-pub enum Visibility {
+pub enum Visibility<Id = LocalDefId> {
     /// Visible everywhere (including in other crates).
     Public,
     /// Visible only in the given crate-local module.
-    Restricted(DefId),
+    Restricted(Id),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, HashStable, TyEncodable, TyDecodable)]
@@ -358,28 +358,45 @@ impl<'tcx> DefIdTree for TyCtxt<'tcx> {
     }
 }
 
-impl Visibility {
-    /// Returns `true` if an item with this visibility is accessible from the given block.
-    pub fn is_accessible_from<T: DefIdTree>(self, module: DefId, tree: T) -> bool {
-        let restriction = match self {
-            // Public items are visible everywhere.
-            Visibility::Public => return true,
-            // Restricted items are visible in an arbitrary local module.
-            Visibility::Restricted(other) if other.krate != module.krate => return false,
-            Visibility::Restricted(module) => module,
-        };
+impl<Id> Visibility<Id> {
+    pub fn is_public(self) -> bool {
+        matches!(self, Visibility::Public)
+    }
 
-        tree.is_descendant_of(module, restriction)
+    pub fn map_id<OutId>(self, f: impl FnOnce(Id) -> OutId) -> Visibility<OutId> {
+        match self {
+            Visibility::Public => Visibility::Public,
+            Visibility::Restricted(id) => Visibility::Restricted(f(id)),
+        }
+    }
+}
+
+impl<Id: Into<DefId>> Visibility<Id> {
+    pub fn to_def_id(self) -> Visibility<DefId> {
+        self.map_id(Into::into)
+    }
+
+    /// Returns `true` if an item with this visibility is accessible from the given module.
+    pub fn is_accessible_from(self, module: impl Into<DefId>, tree: impl DefIdTree) -> bool {
+        match self {
+            // Public items are visible everywhere.
+            Visibility::Public => true,
+            Visibility::Restricted(id) => tree.is_descendant_of(module.into(), id.into()),
+        }
     }
 
     /// Returns `true` if this visibility is at least as accessible as the given visibility
-    pub fn is_at_least<T: DefIdTree>(self, vis: Visibility, tree: T) -> bool {
-        let vis_restriction = match vis {
-            Visibility::Public => return self == Visibility::Public,
-            Visibility::Restricted(module) => module,
-        };
+    pub fn is_at_least(self, vis: Visibility<impl Into<DefId>>, tree: impl DefIdTree) -> bool {
+        match vis {
+            Visibility::Public => self.is_public(),
+            Visibility::Restricted(id) => self.is_accessible_from(id, tree),
+        }
+    }
+}
 
-        self.is_accessible_from(vis_restriction, tree)
+impl Visibility<DefId> {
+    pub fn expect_local(self) -> Visibility {
+        self.map_id(|id| id.expect_local())
     }
 
     // Returns `true` if this item is visible anywhere in the local crate.
@@ -388,10 +405,6 @@ impl Visibility {
             Visibility::Public => true,
             Visibility::Restricted(def_id) => def_id.is_local(),
         }
-    }
-
-    pub fn is_public(self) -> bool {
-        matches!(self, Visibility::Public)
     }
 }
 
@@ -902,10 +915,23 @@ pub struct CoercePredicate<'tcx> {
 }
 pub type PolyCoercePredicate<'tcx> = ty::Binder<'tcx, CoercePredicate<'tcx>>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Term<'tcx> {
     ptr: NonZeroUsize,
     marker: PhantomData<(Ty<'tcx>, Const<'tcx>)>,
+}
+
+impl Debug for Term<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let data = if let Some(ty) = self.ty() {
+            format!("Term::Ty({:?})", ty)
+        } else if let Some(ct) = self.ct() {
+            format!("Term::Ct({:?})", ct)
+        } else {
+            unreachable!()
+        };
+        f.write_str(&data)
+    }
 }
 
 impl<'tcx> From<Ty<'tcx>> for Term<'tcx> {
@@ -1861,7 +1887,7 @@ pub enum VariantDiscr {
 pub struct FieldDef {
     pub did: DefId,
     pub name: Symbol,
-    pub vis: Visibility,
+    pub vis: Visibility<DefId>,
 }
 
 impl PartialEq for FieldDef {
@@ -2457,6 +2483,14 @@ impl<'tcx> TyCtxt<'tcx> {
     #[inline]
     pub fn is_const_default_method(self, def_id: DefId) -> bool {
         matches!(self.trait_of_item(def_id), Some(trait_id) if self.has_attr(trait_id, sym::const_trait))
+    }
+
+    pub fn impl_trait_in_trait_parent(self, mut def_id: DefId) -> DefId {
+        while let def_kind = self.def_kind(def_id) && def_kind != DefKind::AssocFn {
+            debug_assert_eq!(def_kind, DefKind::ImplTraitPlaceholder);
+            def_id = self.parent(def_id);
+        }
+        def_id
     }
 }
 

@@ -197,10 +197,6 @@ h4.code-header {
 	position: relative;
 }
 
-div.impl-items > div {
-	padding-left: 0;
-}
-
 h1, h2, h3, h4, h5, h6,
 .sidebar,
 .mobile-topbar,
@@ -212,7 +208,6 @@ a.source,
 span.since,
 #source-sidebar, #sidebar-toggle,
 details.rustdoc-toggle > summary::before,
-div.impl-items > div:not(.docblock):not(.item-info),
 .content ul.crate a.crate,
 a.srclink,
 #help-button > button,
@@ -1165,6 +1160,42 @@ pre.rust .question-mark {
 	font-weight: bold;
 }
 
+pre.compile_fail,
+pre.should_panic {
+	border-left: 2px solid var(--codeblock-error-color);
+}
+
+pre.ignore {
+	border-left: 2px solid var(--codeblock-ignore-color);
+}
+
+pre.compile_fail:hover, .information:hover + .example-wrap pre.compile_fail,
+pre.should_panic:hover, .information:hover + .example-wrap pre.should_panic {
+	border-left: 2px solid var(--codeblock-error-hover-color);
+}
+
+pre.ignore:hover, .information:hover + .example-wrap pre.ignore {
+	border-left: 2px solid var(--codeblock-ignore-hover-color);
+}
+
+.tooltip.compile_fail,
+.tooltip.should_panic {
+	color: var(--codeblock-error-color);
+}
+
+.tooltip.ignore {
+	color:  var(--codeblock-ignore-color);
+}
+
+.information > .compile_fail:hover,
+.information > .should_panic:hover {
+	color: var(--codeblock-error-hover-color);
+}
+
+.information > .ignore:hover {
+	color: var(--codeblock-ignore-hover-color);
+}
+
 a.test-arrow {
 	display: inline-block;
 	visibility: hidden;
@@ -1449,9 +1480,7 @@ pre.rust {
 	border-radius: 2px;
 	cursor: pointer;
 }
-#settings-menu {
-	padding: 0;
-}
+
 #settings-menu > a, #help-button > button {
 	padding: 5px;
 	height: 100%;
@@ -1526,10 +1555,6 @@ kbd {
 	border: solid 1px var(--border-color);
 	border-radius: 3px;
 	cursor: default;
-}
-
-#implementations-list > h3 > span.in-band {
-	width: 100%;
 }
 
 #main-content > ul {

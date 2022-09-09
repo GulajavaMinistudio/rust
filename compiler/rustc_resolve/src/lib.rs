@@ -57,7 +57,7 @@ use rustc_span::{Span, DUMMY_SP};
 use smallvec::{smallvec, SmallVec};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
-use std::{cmp, fmt, ptr};
+use std::{fmt, ptr};
 
 use diagnostics::{ImportSuggestion, LabelSuggestion, Suggestion};
 use imports::{Import, ImportKind, ImportResolver, NameResolution};
@@ -163,30 +163,11 @@ enum ImplTraitContext {
     Universal(LocalDefId),
 }
 
-#[derive(Eq)]
 struct BindingError {
     name: Symbol,
     origin: BTreeSet<Span>,
     target: BTreeSet<Span>,
     could_be_path: bool,
-}
-
-impl PartialOrd for BindingError {
-    fn partial_cmp(&self, other: &BindingError) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for BindingError {
-    fn eq(&self, other: &BindingError) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Ord for BindingError {
-    fn cmp(&self, other: &BindingError) -> cmp::Ordering {
-        self.name.cmp(&other.name)
-    }
 }
 
 enum ResolutionError<'a> {
@@ -648,7 +629,7 @@ pub struct NameBinding<'a> {
     ambiguity: Option<(&'a NameBinding<'a>, AmbiguityKind)>,
     expansion: LocalExpnId,
     span: Span,
-    vis: ty::Visibility,
+    vis: ty::Visibility<DefId>,
 }
 
 pub trait ToNameBinding<'a> {
@@ -845,7 +826,7 @@ impl<'a> NameBinding<'a> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct ExternPreludeEntry<'a> {
     extern_crate_item: Option<&'a NameBinding<'a>>,
     pub introduced_by_item: bool,
@@ -1012,7 +993,7 @@ pub struct Resolver<'a> {
     /// Table for mapping struct IDs into struct constructor IDs,
     /// it's not used during normal resolution, only for better error reporting.
     /// Also includes of list of each fields visibility
-    struct_constructors: DefIdMap<(Res, ty::Visibility, Vec<ty::Visibility>)>,
+    struct_constructors: DefIdMap<(Res, ty::Visibility<DefId>, Vec<ty::Visibility<DefId>>)>,
 
     /// Features enabled for this crate.
     active_features: FxHashSet<Symbol>,
@@ -1808,7 +1789,11 @@ impl<'a> Resolver<'a> {
         self.pat_span_map.insert(node, span);
     }
 
-    fn is_accessible_from(&self, vis: ty::Visibility, module: Module<'a>) -> bool {
+    fn is_accessible_from(
+        &self,
+        vis: ty::Visibility<impl Into<DefId>>,
+        module: Module<'a>,
+    ) -> bool {
         vis.is_accessible_from(module.nearest_parent_mod(), self)
     }
 
@@ -1862,10 +1847,8 @@ impl<'a> Resolver<'a> {
                     self.crate_loader.maybe_process_path_extern(ident.name)?
                 };
                 let crate_root = self.expect_module(crate_id.as_def_id());
-                Some(
-                    (crate_root, ty::Visibility::Public, DUMMY_SP, LocalExpnId::ROOT)
-                        .to_name_binding(self.arenas),
-                )
+                let vis = ty::Visibility::<LocalDefId>::Public;
+                Some((crate_root, vis, DUMMY_SP, LocalExpnId::ROOT).to_name_binding(self.arenas))
             }
         })
     }

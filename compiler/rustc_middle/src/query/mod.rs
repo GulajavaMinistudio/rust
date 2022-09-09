@@ -161,6 +161,13 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    query compare_predicates_and_trait_impl_trait_tys(key: DefId)
+        -> Result<&'tcx FxHashMap<DefId, Ty<'tcx>>, ErrorGuaranteed>
+    {
+        desc { "better description please" }
+        separate_provide_extern
+    }
+
     query analysis(key: ()) -> Result<(), ErrorGuaranteed> {
         eval_always
         desc { "running analysis passes on this crate" }
@@ -1607,7 +1614,7 @@ rustc_queries! {
         desc { "looking up late bound vars" }
     }
 
-    query visibility(def_id: DefId) -> ty::Visibility {
+    query visibility(def_id: DefId) -> ty::Visibility<DefId> {
         desc { |tcx| "computing visibility of `{}`", tcx.def_path_str(def_id) }
         separate_provide_extern
     }

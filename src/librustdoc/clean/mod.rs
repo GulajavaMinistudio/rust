@@ -190,7 +190,7 @@ fn clean_poly_trait_ref_with_bindings<'tcx>(
     )
 }
 
-fn clean_lifetime<'tcx>(lifetime: hir::Lifetime, cx: &mut DocContext<'tcx>) -> Lifetime {
+fn clean_lifetime<'tcx>(lifetime: &hir::Lifetime, cx: &mut DocContext<'tcx>) -> Lifetime {
     let def = cx.tcx.named_region(lifetime.hir_id);
     if let Some(
         rl::Region::EarlyBound(node_id)
@@ -495,7 +495,7 @@ fn clean_generic_param<'tcx>(
                     .filter(|bp| !bp.in_where_clause)
                     .flat_map(|bp| bp.bounds)
                     .map(|bound| match bound {
-                        hir::GenericBound::Outlives(lt) => clean_lifetime(*lt, cx),
+                        hir::GenericBound::Outlives(lt) => clean_lifetime(lt, cx),
                         _ => panic!(),
                     })
                     .collect()
@@ -1392,7 +1392,7 @@ fn maybe_expand_private_type_alias<'tcx>(
                     }
                     _ => None,
                 });
-                if let Some(lt) = lifetime.cloned() {
+                if let Some(lt) = lifetime {
                     let lt_def_id = cx.tcx.hir().local_def_id(param.hir_id);
                     let cleaned =
                         if !lt.is_elided() { clean_lifetime(lt, cx) } else { Lifetime::elided() };
@@ -1492,7 +1492,7 @@ pub(crate) fn clean_ty<'tcx>(ty: &hir::Ty<'tcx>, cx: &mut DocContext<'tcx>) -> T
             Array(Box::new(clean_ty(ty, cx)), length)
         }
         TyKind::Tup(tys) => Tuple(tys.iter().map(|ty| clean_ty(ty, cx)).collect()),
-        TyKind::OpaqueDef(item_id, _) => {
+        TyKind::OpaqueDef(item_id, _, _) => {
             let item = cx.tcx.hir().item(item_id);
             if let hir::ItemKind::OpaqueTy(ref ty) = item.kind {
                 ImplTrait(ty.bounds.iter().filter_map(|x| clean_generic_bound(x, cx)).collect())
@@ -1777,7 +1777,7 @@ fn is_field_vis_inherited(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     }
 }
 
-pub(crate) fn clean_visibility(vis: ty::Visibility) -> Visibility {
+pub(crate) fn clean_visibility(vis: ty::Visibility<DefId>) -> Visibility {
     match vis {
         ty::Visibility::Public => Visibility::Public,
         ty::Visibility::Restricted(module) => Visibility::Restricted(module),
@@ -2111,8 +2111,8 @@ fn clean_use_statement<'tcx>(
     // `pub(super)` or higher. If the current module is the top level
     // module, there isn't really a parent module, which makes the results
     // meaningless. In this case, we make sure the answer is `false`.
-    let is_visible_from_parent_mod = visibility.is_accessible_from(parent_mod.to_def_id(), cx.tcx)
-        && !current_mod.is_top_level_module();
+    let is_visible_from_parent_mod =
+        visibility.is_accessible_from(parent_mod, cx.tcx) && !current_mod.is_top_level_module();
 
     if pub_underscore {
         if let Some(ref inline) = inline_attr {

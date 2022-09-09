@@ -847,6 +847,7 @@ fn should_encode_visibility(def_kind: DefKind) -> bool {
         | DefKind::Use
         | DefKind::ForeignMod
         | DefKind::OpaqueTy
+        | DefKind::ImplTraitPlaceholder
         | DefKind::Impl
         | DefKind::Field => true,
         DefKind::TyParam
@@ -879,6 +880,7 @@ fn should_encode_stability(def_kind: DefKind) -> bool {
         | DefKind::ForeignMod
         | DefKind::TyAlias
         | DefKind::OpaqueTy
+        | DefKind::ImplTraitPlaceholder
         | DefKind::Enum
         | DefKind::Union
         | DefKind::Impl
@@ -967,6 +969,7 @@ fn should_encode_variances(def_kind: DefKind) -> bool {
         | DefKind::ForeignMod
         | DefKind::TyAlias
         | DefKind::OpaqueTy
+        | DefKind::ImplTraitPlaceholder
         | DefKind::Impl
         | DefKind::Trait
         | DefKind::TraitAlias
@@ -1003,6 +1006,7 @@ fn should_encode_generics(def_kind: DefKind) -> bool {
         | DefKind::AnonConst
         | DefKind::InlineConst
         | DefKind::OpaqueTy
+        | DefKind::ImplTraitPlaceholder
         | DefKind::Impl
         | DefKind::Field
         | DefKind::TyParam
@@ -1032,6 +1036,7 @@ fn should_encode_type(tcx: TyCtxt<'_>, def_id: LocalDefId, def_kind: DefKind) ->
         | DefKind::Static(..)
         | DefKind::TyAlias
         | DefKind::OpaqueTy
+        | DefKind::ImplTraitPlaceholder
         | DefKind::ForeignTy
         | DefKind::Impl
         | DefKind::AssocFn
@@ -1081,6 +1086,7 @@ fn should_encode_const(def_kind: DefKind) -> bool {
         | DefKind::Static(..)
         | DefKind::TyAlias
         | DefKind::OpaqueTy
+        | DefKind::ImplTraitPlaceholder
         | DefKind::ForeignTy
         | DefKind::Impl
         | DefKind::AssocFn
@@ -1138,7 +1144,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 record!(self.tables.codegen_fn_attrs[def_id] <- self.tcx.codegen_fn_attrs(def_id));
             }
             if should_encode_visibility(def_kind) {
-                record!(self.tables.visibility[def_id] <- self.tcx.visibility(def_id));
+                let vis =
+                    self.tcx.local_visibility(local_id).map_id(|def_id| def_id.local_def_index);
+                record!(self.tables.visibility[def_id] <- vis);
             }
             if should_encode_stability(def_kind) {
                 self.encode_stability(def_id);
@@ -1727,7 +1735,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             self.tables.opt_def_kind.set(LOCAL_CRATE.as_def_id().index, DefKind::Mod);
             record!(self.tables.def_span[LOCAL_CRATE.as_def_id()] <- tcx.def_span(LOCAL_CRATE.as_def_id()));
             self.encode_attrs(LOCAL_CRATE.as_def_id().expect_local());
-            record!(self.tables.visibility[LOCAL_CRATE.as_def_id()] <- tcx.visibility(LOCAL_CRATE.as_def_id()));
+            let vis = tcx.local_visibility(CRATE_DEF_ID).map_id(|def_id| def_id.local_def_index);
+            record!(self.tables.visibility[LOCAL_CRATE.as_def_id()] <- vis);
             if let Some(stability) = stability {
                 record!(self.tables.lookup_stability[LOCAL_CRATE.as_def_id()] <- stability);
             }
