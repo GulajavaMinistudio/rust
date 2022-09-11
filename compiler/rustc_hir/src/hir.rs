@@ -300,9 +300,9 @@ impl GenericArg<'_> {
     pub fn to_ord(&self) -> ast::ParamKindOrd {
         match self {
             GenericArg::Lifetime(_) => ast::ParamKindOrd::Lifetime,
-            GenericArg::Type(_) => ast::ParamKindOrd::Type,
-            GenericArg::Const(_) => ast::ParamKindOrd::Const,
-            GenericArg::Infer(_) => ast::ParamKindOrd::Infer,
+            GenericArg::Type(_) | GenericArg::Const(_) | GenericArg::Infer(_) => {
+                ast::ParamKindOrd::TypeOrConst
+            }
         }
     }
 
@@ -2400,6 +2400,14 @@ impl<'hir> Ty<'hir> {
             | Res::SelfTy { trait_: Some(def_id), alias_to: None } => Some((def_id, segment.ident)),
             _ => None,
         }
+    }
+
+    pub fn peel_refs(&self) -> &Self {
+        let mut final_ty = self;
+        while let TyKind::Rptr(_, MutTy { ty, .. }) = &final_ty.kind {
+            final_ty = &ty;
+        }
+        final_ty
     }
 }
 
