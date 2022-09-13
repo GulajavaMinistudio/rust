@@ -651,6 +651,10 @@ pub enum ImplSource<'tcx, N> {
 
     /// ImplSource for a `const Drop` implementation.
     ConstDestruct(ImplSourceConstDestructData<N>),
+
+    /// ImplSource for a `std::marker::Tuple` implementation.
+    /// This has no nested predicates ever, so no data.
+    Tuple,
 }
 
 impl<'tcx, N> ImplSource<'tcx, N> {
@@ -665,7 +669,8 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             ImplSource::Object(d) => d.nested,
             ImplSource::FnPointer(d) => d.nested,
             ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
-            | ImplSource::Pointee(ImplSourcePointeeData) => Vec::new(),
+            | ImplSource::Pointee(ImplSourcePointeeData)
+            | ImplSource::Tuple => Vec::new(),
             ImplSource::TraitAlias(d) => d.nested,
             ImplSource::TraitUpcasting(d) => d.nested,
             ImplSource::ConstDestruct(i) => i.nested,
@@ -683,7 +688,8 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             ImplSource::Object(d) => &d.nested,
             ImplSource::FnPointer(d) => &d.nested,
             ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
-            | ImplSource::Pointee(ImplSourcePointeeData) => &[],
+            | ImplSource::Pointee(ImplSourcePointeeData)
+            | ImplSource::Tuple => &[],
             ImplSource::TraitAlias(d) => &d.nested,
             ImplSource::TraitUpcasting(d) => &d.nested,
             ImplSource::ConstDestruct(i) => &i.nested,
@@ -750,6 +756,7 @@ impl<'tcx, N> ImplSource<'tcx, N> {
                     nested: i.nested.into_iter().map(f).collect(),
                 })
             }
+            ImplSource::Tuple => ImplSource::Tuple,
         }
     }
 }
@@ -910,6 +917,12 @@ impl ObjectSafetyViolation {
             }
             ObjectSafetyViolation::Method(
                 name,
+                MethodViolationCode::ReferencesImplTraitInTrait,
+                _,
+            ) => format!("method `{}` references an `impl Trait` type in its return type", name)
+                .into(),
+            ObjectSafetyViolation::Method(
+                name,
                 MethodViolationCode::WhereClauseReferencesSelf,
                 _,
             ) => {
@@ -1013,6 +1026,9 @@ pub enum MethodViolationCode {
 
     /// e.g., `fn foo(&self) -> Self`
     ReferencesSelfOutput,
+
+    /// e.g., `fn foo(&self) -> impl Sized`
+    ReferencesImplTraitInTrait,
 
     /// e.g., `fn foo(&self) where Self: Clone`
     WhereClauseReferencesSelf,

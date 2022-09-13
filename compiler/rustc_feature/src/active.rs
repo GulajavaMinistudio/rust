@@ -221,6 +221,8 @@ declare_features! (
     (active, rustc_private, "1.0.0", Some(27812), None),
     /// Allows using internal rustdoc features like `doc(primitive)` or `doc(keyword)`.
     (active, rustdoc_internals, "1.58.0", Some(90418), None),
+    /// Allows using the `rustdoc::missing_doc_code_examples` lint
+    (active, rustdoc_missing_doc_code_examples, "1.31.0", Some(101730), None),
     /// Allows using `#[start]` on a function indicating that it is the program entrypoint.
     (active, start, "1.0.0", Some(29633), None),
     /// Allows using `#[structural_match]` which indicates that a type is structurally matchable.
@@ -336,6 +338,8 @@ declare_features! (
     (active, closure_track_caller, "1.57.0", Some(87417), None),
     /// Allows to use the `#[cmse_nonsecure_entry]` attribute.
     (active, cmse_nonsecure_entry, "1.48.0", Some(75835), None),
+    /// Allows use of the `#[collapse_debuginfo]` attribute.
+    (active, collapse_debuginfo, "CURRENT_RUSTC_VERSION", Some(100758), None),
     /// Allows `async {}` expressions in const contexts.
     (active, const_async_blocks, "1.53.0", Some(85368), None),
     // Allows limiting the evaluation steps of const expressions
