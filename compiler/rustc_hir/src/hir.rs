@@ -576,8 +576,7 @@ impl<'hir> Generics<'hir> {
         if self.has_where_clause_predicates {
             self.predicates
                 .iter()
-                .filter(|p| p.in_where_clause())
-                .last()
+                .rfind(|&p| p.in_where_clause())
                 .map_or(end, |p| p.span())
                 .shrink_to_hi()
                 .to(end)
@@ -2662,7 +2661,7 @@ pub struct FnDecl<'hir> {
 }
 
 /// Represents what type of implicit self a function has, if any.
-#[derive(Copy, Clone, Encodable, Decodable, Debug, HashStable_Generic)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub enum ImplicitSelfKind {
     /// Represents a `fn x(self);`.
     Imm,
