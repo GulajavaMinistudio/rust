@@ -384,6 +384,8 @@ declare_features! (
     (active, doc_cfg_hide, "1.57.0", Some(43781), None),
     /// Allows `#[doc(masked)]`.
     (active, doc_masked, "1.21.0", Some(44027), None),
+    /// Allows `dyn* Trait` objects.
+    (incomplete, dyn_star, "CURRENT_RUSTC_VERSION", Some(91611), None),
     /// Allows `X..Y` patterns.
     (active, exclusive_range_pattern, "1.11.0", Some(37854), None),
     /// Allows exhaustive pattern matching on types that contain uninhabited types.
@@ -428,8 +430,6 @@ declare_features! (
     (active, large_assignments, "1.52.0", Some(83518), None),
     /// Allows `if/while p && let q = r && ...` chains.
     (active, let_chains, "1.37.0", Some(53667), None),
-    /// Allows `let...else` statements.
-    (active, let_else, "1.56.0", Some(87335), None),
     /// Allows `#[link(..., cfg(..))]`.
     (active, link_cfg, "1.14.0", Some(37406), None),
     /// Allows using `reason` in lint attributes and the `#[expect(lint)]` lint check.

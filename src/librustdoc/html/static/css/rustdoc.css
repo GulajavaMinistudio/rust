@@ -222,7 +222,6 @@ details.rustdoc-toggle.non-exhaustive > summary::before,
 	font-family: "Fira Sans", Arial, NanumBarunGothic, sans-serif;
 }
 
-h1, h2, h3, h4,
 a#toggle-all-docs,
 a.anchor,
 .small-section-header a,
@@ -347,9 +346,7 @@ img {
 }
 
 .source .content {
-	max-width: none;
 	overflow: visible;
-	margin-left: 0px;
 }
 
 .sub-container {
@@ -498,9 +495,6 @@ img {
 	font-weight: 500;
 }
 
-.block {
-	padding: 0;
-}
 .block ul, .block li {
 	padding: 0;
 	margin: 0;
@@ -609,16 +603,12 @@ h2.location a {
 .docblock-short {
 	overflow-wrap: break-word;
 	overflow-wrap: anywhere;
-}
-.docblock-short p {
-	display: inline;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	margin: 0;
 }
 /* Wrap non-pre code blocks (`text`) but not (```text```). */
 .docblock > :not(pre) > code,
-.docblock-short > :not(pre) > code {
+.docblock-short > code {
 	white-space: pre-wrap;
 }
 
@@ -686,15 +676,6 @@ pre, .rustdoc.source .example-wrap {
 	position: relative;
 }
 
-.content table {
-	border-spacing: 0 5px;
-}
-.content td { vertical-align: top; }
-.content td:first-child { padding-right: 20px; }
-.content td p:first-child { margin-top: 0; }
-.content td h1, .content td h2 { margin-left: 0; font-size: 1.125rem; }
-.content tr:first-child td { border-top: 0; }
-
 .docblock table {
 	margin: .5em 0;
 	width: calc(100% - 2px);
@@ -705,6 +686,7 @@ pre, .rustdoc.source .example-wrap {
 .docblock table td {
 	padding: .5em;
 	border: 1px dashed var(--border-color);
+	vertical-align: top;
 }
 
 .docblock table th {
@@ -766,7 +748,6 @@ nav.sub form { display: inline; }
 
 a {
 	text-decoration: none;
-	background: transparent;
 }
 
 .small-section-header {
@@ -1267,7 +1248,6 @@ a.test-arrow:hover {
 }
 
 .out-of-band > span.since {
-	position: initial;
 	font-size: 1.25rem;
 }
 
@@ -1378,27 +1358,19 @@ pre.rust {
 }
 
 #titles {
-	height: 35px;
+	display: flex;
+	flex-direction: row;
+	gap: 1px;
+	margin-bottom: 4px;
 }
 
 #titles > button {
-	float: left;
-	width: 33.3%;
 	text-align: center;
 	font-size: 1.125rem;
 	cursor: pointer;
 	border: 0;
 	border-top: 2px solid;
-}
-
-#titles > button:first-child:last-child {
-	margin-right: 1px;
-	width: calc(100% - 1px);
-}
-
-#titles > button:not(:last-child) {
-	margin-right: 1px;
-	width: calc(33.3% - 1px);
+	flex: 1;
 }
 
 #titles > button > div.count {
@@ -1888,19 +1860,8 @@ in storage.js plus the media query with (min-width: 701px)
 		display: none !important;
 	}
 
-	.notable-traits {
-		position: absolute;
-		left: -22px;
-		top: 24px;
-	}
-
 	#titles > button > div.count {
-		float: left;
-		width: 100%;
-	}
-
-	#titles {
-		height: 50px;
+		display: block;
 	}
 
 	/* Because of ios, we need to actually have a full height sidebar title so the
@@ -2031,10 +1992,6 @@ in storage.js plus the media query with (min-width: 701px)
 }
 
 @media (max-width: 464px) {
-	#titles, #titles > button {
-		height: 73px;
-	}
-
 	#crate-search {
 		border-radius: 4px;
 	}

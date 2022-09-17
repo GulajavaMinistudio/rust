@@ -2072,6 +2072,7 @@ impl TyKind {
 #[derive(Clone, Copy, PartialEq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub enum TraitObjectSyntax {
     Dyn,
+    DynStar,
     None,
 }
 
@@ -2087,15 +2088,15 @@ pub enum InlineAsmRegOrRegClass {
 bitflags::bitflags! {
     #[derive(Encodable, Decodable, HashStable_Generic)]
     pub struct InlineAsmOptions: u16 {
-        const PURE = 1 << 0;
-        const NOMEM = 1 << 1;
-        const READONLY = 1 << 2;
+        const PURE            = 1 << 0;
+        const NOMEM           = 1 << 1;
+        const READONLY        = 1 << 2;
         const PRESERVES_FLAGS = 1 << 3;
-        const NORETURN = 1 << 4;
-        const NOSTACK = 1 << 5;
-        const ATT_SYNTAX = 1 << 6;
-        const RAW = 1 << 7;
-        const MAY_UNWIND = 1 << 8;
+        const NORETURN        = 1 << 4;
+        const NOSTACK         = 1 << 5;
+        const ATT_SYNTAX      = 1 << 6;
+        const RAW             = 1 << 7;
+        const MAY_UNWIND      = 1 << 8;
     }
 }
 
@@ -2523,8 +2524,8 @@ impl<S: Encoder> Encodable<S> for AttrId {
 }
 
 impl<D: Decoder> Decodable<D> for AttrId {
-    fn decode(_: &mut D) -> AttrId {
-        crate::attr::mk_attr_id()
+    default fn decode(_: &mut D) -> AttrId {
+        panic!("cannot decode `AttrId` with `{}`", std::any::type_name::<D>());
     }
 }
 
