@@ -533,9 +533,6 @@ impl Span {
         self.data().with_hi(hi)
     }
     #[inline]
-    pub fn ctxt(self) -> SyntaxContext {
-        self.data_untracked().ctxt
-    }
     pub fn eq_ctxt(self, other: Span) -> bool {
         self.data_untracked().ctxt == other.data_untracked().ctxt
     }
@@ -1631,10 +1628,9 @@ impl SourceFile {
     /// number. If the source_file is empty or the position is located before the
     /// first line, `None` is returned.
     pub fn lookup_line(&self, pos: BytePos) -> Option<usize> {
-        self.lines(|lines| match lines.binary_search(&pos) {
-            Ok(idx) => Some(idx),
-            Err(0) => None,
-            Err(idx) => Some(idx - 1),
+        self.lines(|lines| match lines.partition_point(|x| x <= &pos) {
+            0 => None,
+            i => Some(i - 1),
         })
     }
 
