@@ -522,10 +522,6 @@ img {
 	width: 100px;
 }
 
-.location:empty {
-	border: none;
-}
-
 .block ul, .block li {
 	padding: 0;
 	margin: 0;
@@ -577,13 +573,9 @@ h2.location a {
 }
 
 .rustdoc .example-wrap {
-	display: inline-flex;
+	display: flex;
 	margin-bottom: 10px;
-}
-
-.example-wrap {
 	position: relative;
-	width: 100%;
 }
 
 .example-wrap > pre.line-number {
@@ -674,7 +666,6 @@ h2.location a {
 }
 
 .method > .code-header, .trait-impl > .code-header {
-	max-width: calc(100% - 41px);
 	display: block;
 }
 
@@ -745,7 +736,6 @@ pre, .rustdoc.source .example-wrap {
 }
 
 .content .item-info {
-	position: relative;
 	margin-left: 24px;
 }
 
@@ -1077,10 +1067,6 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	margin-bottom: 5px;
 	font-size: 0.875rem;
 	font-weight: normal;
-}
-.stab p {
-	display: inline;
-	margin: 0;
 }
 
 .stab .emoji {

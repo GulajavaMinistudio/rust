@@ -74,7 +74,9 @@ use crate::html::format::{
     PrintWithSpace,
 };
 use crate::html::highlight;
-use crate::html::markdown::{HeadingOffset, IdMap, Markdown, MarkdownHtml, MarkdownSummaryLine};
+use crate::html::markdown::{
+    HeadingOffset, IdMap, Markdown, MarkdownItemInfo, MarkdownSummaryLine,
+};
 use crate::html::sources;
 use crate::html::static_files::SCRAPE_EXAMPLES_HELP_MD;
 use crate::scrape_examples::{CallData, CallLocation};
@@ -239,8 +241,8 @@ struct AllTypes {
     opaque_tys: FxHashSet<ItemEntry>,
     statics: FxHashSet<ItemEntry>,
     constants: FxHashSet<ItemEntry>,
-    attributes: FxHashSet<ItemEntry>,
-    derives: FxHashSet<ItemEntry>,
+    attribute_macros: FxHashSet<ItemEntry>,
+    derive_macros: FxHashSet<ItemEntry>,
     trait_aliases: FxHashSet<ItemEntry>,
 }
 
@@ -259,8 +261,8 @@ impl AllTypes {
             opaque_tys: new_set(100),
             statics: new_set(100),
             constants: new_set(100),
-            attributes: new_set(100),
-            derives: new_set(100),
+            attribute_macros: new_set(100),
+            derive_macros: new_set(100),
             trait_aliases: new_set(100),
         }
     }
@@ -283,8 +285,10 @@ impl AllTypes {
                 ItemType::OpaqueTy => self.opaque_tys.insert(ItemEntry::new(new_url, name)),
                 ItemType::Static => self.statics.insert(ItemEntry::new(new_url, name)),
                 ItemType::Constant => self.constants.insert(ItemEntry::new(new_url, name)),
-                ItemType::ProcAttribute => self.attributes.insert(ItemEntry::new(new_url, name)),
-                ItemType::ProcDerive => self.derives.insert(ItemEntry::new(new_url, name)),
+                ItemType::ProcAttribute => {
+                    self.attribute_macros.insert(ItemEntry::new(new_url, name))
+                }
+                ItemType::ProcDerive => self.derive_macros.insert(ItemEntry::new(new_url, name)),
                 ItemType::TraitAlias => self.trait_aliases.insert(ItemEntry::new(new_url, name)),
                 _ => true,
             };
@@ -327,10 +331,10 @@ impl AllTypes {
         if !self.constants.is_empty() {
             sections.insert(ItemSection::Constants);
         }
-        if !self.attributes.is_empty() {
+        if !self.attribute_macros.is_empty() {
             sections.insert(ItemSection::AttributeMacros);
         }
-        if !self.derives.is_empty() {
+        if !self.derive_macros.is_empty() {
             sections.insert(ItemSection::DeriveMacros);
         }
         if !self.trait_aliases.is_empty() {
@@ -373,8 +377,8 @@ impl AllTypes {
         print_entries(f, &self.primitives, ItemSection::PrimitiveTypes);
         print_entries(f, &self.traits, ItemSection::Traits);
         print_entries(f, &self.macros, ItemSection::Macros);
-        print_entries(f, &self.attributes, ItemSection::AttributeMacros);
-        print_entries(f, &self.derives, ItemSection::DeriveMacros);
+        print_entries(f, &self.attribute_macros, ItemSection::AttributeMacros);
+        print_entries(f, &self.derive_macros, ItemSection::DeriveMacros);
         print_entries(f, &self.functions, ItemSection::Functions);
         print_entries(f, &self.typedefs, ItemSection::TypeDefinitions);
         print_entries(f, &self.trait_aliases, ItemSection::TraitAliases);
@@ -582,7 +586,6 @@ fn short_item_info(
     parent: Option<&clean::Item>,
 ) -> Vec<String> {
     let mut extra_info = vec![];
-    let error_codes = cx.shared.codes;
 
     if let Some(depr @ Deprecation { note, since, is_since_rustc_version: _, suggestion: _ }) =
         item.deprecation(cx.tcx())
@@ -606,13 +609,7 @@ fn short_item_info(
 
         if let Some(note) = note {
             let note = note.as_str();
-            let html = MarkdownHtml(
-                note,
-                &mut cx.id_map,
-                error_codes,
-                cx.shared.edition(),
-                &cx.shared.playground,
-            );
+            let html = MarkdownItemInfo(note, &mut cx.id_map);
             message.push_str(&format!(": {}", html.into_string()));
         }
         extra_info.push(format!(
