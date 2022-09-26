@@ -3,7 +3,6 @@
 #![allow(rustc::potential_query_instability)]
 #![feature(box_patterns)]
 #![feature(let_chains)]
-#![cfg_attr(bootstrap, feature(let_else))]
 #![feature(min_specialization)]
 #![feature(never_type)]
 #![feature(rustc_attrs)]
@@ -134,7 +133,7 @@ fn mir_borrowck<'tcx>(
 
     let opt_closure_req = tcx
         .infer_ctxt()
-        .with_opaque_type_inference(DefiningAnchor::Bind(hir_owner))
+        .with_opaque_type_inference(DefiningAnchor::Bind(hir_owner.def_id))
         .enter(|infcx| {
             let input_body: &Body<'_> = &input_body.borrow();
             let promoted: &IndexVec<_, _> = &promoted.borrow();

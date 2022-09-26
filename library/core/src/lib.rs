@@ -138,6 +138,7 @@
 #![feature(const_size_of_val)]
 #![feature(const_slice_from_raw_parts_mut)]
 #![feature(const_slice_ptr_len)]
+#![feature(const_slice_split_at_mut)]
 #![feature(const_str_from_utf8_unchecked_mut)]
 #![feature(const_swap)]
 #![feature(const_trait_impl)]
@@ -309,7 +310,6 @@ pub mod clone;
 pub mod cmp;
 pub mod convert;
 pub mod default;
-#[cfg(not(bootstrap))]
 pub mod error;
 pub mod marker;
 pub mod ops;

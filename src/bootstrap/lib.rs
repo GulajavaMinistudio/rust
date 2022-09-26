@@ -198,6 +198,7 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &'static str, Option<&[&'static str]>)]
     (None, "bootstrap", None),
     (Some(Mode::Rustc), "parallel_compiler", None),
     (Some(Mode::ToolRustc), "parallel_compiler", None),
+    (Some(Mode::Codegen), "parallel_compiler", None),
     (Some(Mode::Std), "stdarch_intel_sde", None),
     (Some(Mode::Std), "no_fp_fmt_parse", None),
     (Some(Mode::Std), "no_global_oom_handling", None),
@@ -458,19 +459,18 @@ impl Build {
             .expect("failed to read src/version");
         let version = version.trim();
 
-        let bootstrap_out = if std::env::var("BOOTSTRAP_PYTHON").is_ok() {
-            out.join("bootstrap").join("debug")
-        } else {
-            let workspace_target_dir = std::env::var("CARGO_TARGET_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| src.join("target"));
-            let bootstrap_out = workspace_target_dir.join("debug");
-            if !bootstrap_out.join("rustc").exists() && !cfg!(test) {
-                // this restriction can be lifted whenever https://github.com/rust-lang/rfcs/pull/3028 is implemented
-                panic!("run `cargo build --bins` before `cargo run`")
-            }
-            bootstrap_out
-        };
+        let bootstrap_out = std::env::current_exe()
+            .expect("could not determine path to running process")
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        if !bootstrap_out.join(exe("rustc", config.build)).exists() && !cfg!(test) {
+            // this restriction can be lifted whenever https://github.com/rust-lang/rfcs/pull/3028 is implemented
+            panic!(
+                "`rustc` not found in {}, run `cargo build --bins` before `cargo run`",
+                bootstrap_out.display()
+            )
+        }
 
         let mut build = Build {
             initial_rustc: config.initial_rustc.clone(),
