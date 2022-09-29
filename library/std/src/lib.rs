@@ -294,7 +294,6 @@
 #![feature(is_some_with)]
 #![feature(maybe_uninit_slice)]
 #![feature(maybe_uninit_write_slice)]
-#![feature(mixed_integer_ops)]
 #![feature(nonnull_slice_from_raw_parts)]
 #![feature(panic_can_unwind)]
 #![feature(panic_info_message)]
@@ -349,7 +348,6 @@
 #![feature(trace_macros)]
 //
 // Only used in tests/benchmarks:
-#![feature(bench_black_box)]
 //
 // Only for const-ness:
 #![feature(const_io_structs)]
