@@ -201,7 +201,6 @@ h4.code-header {
 h1, h2, h3, h4, h5, h6,
 .sidebar,
 .mobile-topbar,
-a.source,
 .search-input,
 .search-results .result-name,
 .item-left > a,
@@ -448,7 +447,6 @@ img {
 }
 
 .source .sidebar > *:not(#sidebar-toggle) {
-	opacity: 0;
 	visibility: hidden;
 }
 
@@ -457,7 +455,6 @@ img {
 }
 
 .source-sidebar-expanded .source .sidebar > *:not(#sidebar-toggle) {
-	opacity: 1;
 	visibility: visible;
 }
 
@@ -545,6 +542,14 @@ h2.location a {
 	font-weight: 500;
 	padding: 0;
 	margin: 0;
+}
+
+.sidebar a, .sidebar .current {
+	color: var(--sidebar-link-color);
+}
+.sidebar .current,
+.sidebar a:hover {
+	background-color: var(--sidebar-current-link-background-color);
 }
 
 .sidebar-elems .block {
@@ -1247,13 +1252,11 @@ h3.variant {
 	font-weight: 600;
 	font-size: 1.125rem;
 	margin-bottom: 10px;
-	border-bottom: none;
 }
 
 .sub-variant h4 {
 	font-size: 1rem;
 	font-weight: 400;
-	border-bottom: none;
 	margin-top: 0;
 	margin-bottom: 0;
 }
@@ -1320,11 +1323,6 @@ h3.variant {
 	margin: 0;
 	padding: 0;
 	font-size: 1.25rem;
-}
-
-/* Example code has the "Run" button that needs to be positioned relative to the pre */
-pre.rust.rust-example-rendered {
-	position: relative;
 }
 
 pre.rust {
@@ -2015,7 +2013,10 @@ in storage.js plus the media query with (min-width: 701px)
 .method-toggle summary,
 .implementors-toggle summary,
 .impl,
-#implementors-list > .docblock {
+#implementors-list > .docblock,
+.impl-items > section,
+.methods > section
+{
 	margin-bottom: 0.75em;
 }
 
