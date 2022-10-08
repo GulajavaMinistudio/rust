@@ -29,9 +29,8 @@ use rustc_session::lint::builtin::{UNINHABITED_STATIC, UNSUPPORTED_CALLING_CONVE
 use rustc_span::symbol::sym;
 use rustc_span::{self, Span};
 use rustc_target::spec::abi::Abi;
-use rustc_trait_selection::traits::error_reporting::InferCtxtExt as _;
+use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
 use rustc_trait_selection::traits::{self, ObligationCtxt};
-use rustc_ty_utils::representability::{self, Representability};
 
 use std::ops::ControlFlow;
 
@@ -78,7 +77,7 @@ pub(super) fn check_abi(tcx: TyCtxt<'_>, hir_id: hir::HirId, span: Span, abi: Ab
 /// * inherited: other fields inherited from the enclosing fn (if any)
 #[instrument(skip(inherited, body), level = "debug")]
 pub(super) fn check_fn<'a, 'tcx>(
-    inherited: &'a Inherited<'a, 'tcx>,
+    inherited: &'a Inherited<'tcx>,
     param_env: ty::ParamEnv<'tcx>,
     fn_sig: ty::FnSig<'tcx>,
     decl: &'tcx hir::FnDecl<'tcx>,
@@ -381,7 +380,7 @@ fn check_struct(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     let def = tcx.adt_def(def_id);
     let span = tcx.def_span(def_id);
     def.destructor(tcx); // force the destructor to be evaluated
-    check_representable(tcx, span, def_id);
+    let _ = tcx.representability(def_id);
 
     if def.repr().simd() {
         check_simd(tcx, span, def_id);
@@ -395,7 +394,7 @@ fn check_union(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     let def = tcx.adt_def(def_id);
     let span = tcx.def_span(def_id);
     def.destructor(tcx); // force the destructor to be evaluated
-    check_representable(tcx, span, def_id);
+    let _ = tcx.representability(def_id);
     check_transparent(tcx, span, def);
     check_union_fields(tcx, span, def_id);
     check_packed(tcx, span, def);
@@ -732,52 +731,52 @@ fn check_opaque_meets_bounds<'tcx>(
     };
     let param_env = tcx.param_env(defining_use_anchor);
 
-    tcx.infer_ctxt().with_opaque_type_inference(DefiningAnchor::Bind(defining_use_anchor)).enter(
-        move |infcx| {
-            let ocx = ObligationCtxt::new(&infcx);
-            let opaque_ty = tcx.mk_opaque(def_id.to_def_id(), substs);
+    let infcx = tcx
+        .infer_ctxt()
+        .with_opaque_type_inference(DefiningAnchor::Bind(defining_use_anchor))
+        .build();
+    let ocx = ObligationCtxt::new(&infcx);
+    let opaque_ty = tcx.mk_opaque(def_id.to_def_id(), substs);
 
-            let misc_cause = traits::ObligationCause::misc(span, hir_id);
+    let misc_cause = traits::ObligationCause::misc(span, hir_id);
 
-            match infcx.at(&misc_cause, param_env).eq(opaque_ty, hidden_type) {
-                Ok(infer_ok) => ocx.register_infer_ok_obligations(infer_ok),
-                Err(ty_err) => {
-                    tcx.sess.delay_span_bug(
-                        span,
-                        &format!("could not unify `{hidden_type}` with revealed type:\n{ty_err}"),
-                    );
-                }
-            }
+    match infcx.at(&misc_cause, param_env).eq(opaque_ty, hidden_type) {
+        Ok(infer_ok) => ocx.register_infer_ok_obligations(infer_ok),
+        Err(ty_err) => {
+            tcx.sess.delay_span_bug(
+                span,
+                &format!("could not unify `{hidden_type}` with revealed type:\n{ty_err}"),
+            );
+        }
+    }
 
-            // Additionally require the hidden type to be well-formed with only the generics of the opaque type.
-            // Defining use functions may have more bounds than the opaque type, which is ok, as long as the
-            // hidden type is well formed even without those bounds.
-            let predicate = ty::Binder::dummy(ty::PredicateKind::WellFormed(hidden_type.into()))
-                .to_predicate(tcx);
-            ocx.register_obligation(Obligation::new(misc_cause, param_env, predicate));
+    // Additionally require the hidden type to be well-formed with only the generics of the opaque type.
+    // Defining use functions may have more bounds than the opaque type, which is ok, as long as the
+    // hidden type is well formed even without those bounds.
+    let predicate =
+        ty::Binder::dummy(ty::PredicateKind::WellFormed(hidden_type.into())).to_predicate(tcx);
+    ocx.register_obligation(Obligation::new(misc_cause, param_env, predicate));
 
-            // Check that all obligations are satisfied by the implementation's
-            // version.
-            let errors = ocx.select_all_or_error();
-            if !errors.is_empty() {
-                infcx.report_fulfillment_errors(&errors, None, false);
-            }
-            match origin {
-                // Checked when type checking the function containing them.
-                hir::OpaqueTyOrigin::FnReturn(..) | hir::OpaqueTyOrigin::AsyncFn(..) => {}
-                // Can have different predicates to their defining use
-                hir::OpaqueTyOrigin::TyAlias => {
-                    let outlives_environment = OutlivesEnvironment::new(param_env);
-                    infcx.check_region_obligations_and_report_errors(
-                        defining_use_anchor,
-                        &outlives_environment,
-                    );
-                }
-            }
-            // Clean up after ourselves
-            let _ = infcx.inner.borrow_mut().opaque_type_storage.take_opaque_types();
-        },
-    );
+    // Check that all obligations are satisfied by the implementation's
+    // version.
+    let errors = ocx.select_all_or_error();
+    if !errors.is_empty() {
+        infcx.err_ctxt().report_fulfillment_errors(&errors, None, false);
+    }
+    match origin {
+        // Checked when type checking the function containing them.
+        hir::OpaqueTyOrigin::FnReturn(..) | hir::OpaqueTyOrigin::AsyncFn(..) => {}
+        // Can have different predicates to their defining use
+        hir::OpaqueTyOrigin::TyAlias => {
+            let outlives_environment = OutlivesEnvironment::new(param_env);
+            infcx.check_region_obligations_and_report_errors(
+                defining_use_anchor,
+                &outlives_environment,
+            );
+        }
+    }
+    // Clean up after ourselves
+    let _ = infcx.inner.borrow_mut().opaque_type_storage.take_opaque_types();
 }
 
 fn check_item_type<'tcx>(tcx: TyCtxt<'tcx>, id: hir::ItemId) {
@@ -1151,27 +1150,6 @@ fn check_impl_items_against_trait<'tcx>(
     }
 }
 
-/// Checks whether a type can be represented in memory. In particular, it
-/// identifies types that contain themselves without indirection through a
-/// pointer, which would mean their size is unbounded.
-pub(super) fn check_representable(tcx: TyCtxt<'_>, sp: Span, item_def_id: LocalDefId) -> bool {
-    let rty = tcx.type_of(item_def_id);
-
-    // Check that it is possible to represent this type. This call identifies
-    // (1) types that contain themselves and (2) types that contain a different
-    // recursive type. It is only necessary to throw an error on those that
-    // contain themselves. For case 2, there must be an inner type that will be
-    // caught by case 1.
-    match representability::ty_is_representable(tcx, rty, sp, None) {
-        Representability::SelfRecursive(spans) => {
-            recursive_type_with_infinite_size_error(tcx, item_def_id.to_def_id(), spans);
-            return false;
-        }
-        Representability::Representable | Representability::ContainsRecursive => (),
-    }
-    true
-}
-
 pub fn check_simd(tcx: TyCtxt<'_>, sp: Span, def_id: LocalDefId) {
     let t = tcx.type_of(def_id);
     if let ty::Adt(def, substs) = t.kind()
@@ -1509,7 +1487,7 @@ fn check_enum<'tcx>(tcx: TyCtxt<'tcx>, vs: &'tcx [hir::Variant<'tcx>], def_id: L
 
     detect_discriminant_duplicate(tcx, def.discriminants(tcx).collect(), vs, sp);
 
-    check_representable(tcx, sp, def_id);
+    let _ = tcx.representability(def_id);
     check_transparent(tcx, sp, def);
 }
 
