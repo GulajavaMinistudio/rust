@@ -566,7 +566,7 @@ impl<'a, 'b, 'tcx> TypeFolder<'tcx> for AssocTypeNormalizer<'a, 'b, 'tcx> {
                     .unwrap_or_else(|| ty.super_fold_with(self).into())
                 };
                 // For cases like #95134 we would like to catch overflows early
-                // otherwise they slip away away and cause ICE.
+                // otherwise they slip away and cause ICE.
                 let recursion_limit = self.tcx().recursion_limit();
                 if !recursion_limit.value_within_limit(self.depth)
                     // HACK: Don't overflow when running cargo doc see #100991
@@ -2254,7 +2254,10 @@ fn confirm_impl_trait_in_trait_candidate<'tcx>(
     }
 
     let impl_fn_def_id = leaf_def.item.def_id;
-    let impl_fn_substs = obligation.predicate.substs.rebase_onto(tcx, trait_fn_def_id, data.substs);
+    // Rebase from {trait}::{fn}::{opaque} to {impl}::{fn}::{opaque},
+    // since `data.substs` are the impl substs.
+    let impl_fn_substs =
+        obligation.predicate.substs.rebase_onto(tcx, tcx.parent(trait_fn_def_id), data.substs);
 
     let cause = ObligationCause::new(
         obligation.cause.span,
