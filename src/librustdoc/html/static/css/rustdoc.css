@@ -199,7 +199,7 @@ h1, h2, h3, h4, h5, h6,
 .out-of-band,
 span.since,
 a.srclink,
-#help-button > button,
+#help-button > a,
 details.rustdoc-toggle.top-doc > summary,
 details.rustdoc-toggle.non-exhaustive > summary,
 .scraped-example-title,
@@ -372,15 +372,11 @@ img {
 }
 
 .sub-logo-container {
-	display: none;
+	display: block;
 	margin-right: 20px;
 }
 
-.source .sub-logo-container {
-	display: block;
-}
-
-.source .sub-logo-container > img {
+.sub-logo-container > img {
 	height: 60px;
 	width: 60px;
 	object-fit: contain;
@@ -974,32 +970,33 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	color: var(--main-color);
 }
 
-#help-button .popover {
+/* use larger max-width for help popover, but not for help.html */
+#help.popover {
 	max-width: 600px;
 }
 
-#help-button .popover::before {
+#help.popover::before {
 	right: 48px;
 }
 
-#help-button dt {
+#help dt {
 	float: left;
 	clear: left;
 	display: block;
 	margin-right: 0.5rem;
 }
-#help-button span.top, #help-button span.bottom {
+#help span.top, #help span.bottom {
 	text-align: center;
 	display: block;
 	font-size: 1.125rem;
 }
-#help-button span.top {
+#help span.top {
 	margin: 10px 0;
 	border-bottom: 1px solid var(--border-color);
 	padding-bottom: 4px;
 	margin-bottom: 6px;
 }
-#help-button span.bottom {
+#help span.bottom {
 	clear: both;
 	border-top: 1px solid var(--border-color);
 }
@@ -1433,24 +1430,29 @@ h3.variant {
 	outline: none;
 }
 
-#settings-menu > a, #help-button > button, #copy-path {
-	padding: 5px;
+#settings-menu > a, #help-button > a, #copy-path {
 	width: 33px;
-	border: 1px solid var(--border-color);
-	border-radius: 2px;
 	cursor: pointer;
 	line-height: 1.5;
 }
 
-#settings-menu > a, #help-button > button {
+#settings-menu > a, #help-button > a {
 	padding: 5px;
 	height: 100%;
 	display: block;
 	background-color: var(--button-background-color);
+	border: 1px solid var(--border-color);
+	border-radius: 2px;
 }
 
 #copy-path {
 	color: var(--copy-path-button-color);
+	background: var(--main-background-color);
+	height: 34px;
+	margin-left: 10px;
+	padding: 0;
+	padding-left: 2px;
+	border: 0;
 }
 #copy-path > img {
 	filter: var(--copy-path-img-filter);
@@ -1490,21 +1492,12 @@ input:checked + .slider {
 	background-color: var(--settings-input-color);
 }
 
-#help-button > button {
+#help-button > a {
 	text-align: center;
 	/* Rare exception to specifying font sizes in rem. Since this is acting
 	   as an icon, it's okay to specify their sizes in pixels. */
 	font-size: 20px;
 	padding-top: 2px;
-}
-
-#copy-path {
-	height: 34px;
-	background-color: var(--main-background-color);
-	margin-left: 10px;
-	padding: 0;
-	padding-left: 2px;
-	border: 0;
 }
 
 kbd {
@@ -1713,12 +1706,6 @@ in storage.js plus the media query with (max-width: 700px)
 	"one line" below. */
 	.docblock > .example-wrap:first-child .tooltip {
 		margin-top: 16px;
-	}
-
-	/* When we expand the sidebar on the source code page, we hide the logo on the left of the
-	search bar to have more space. */
-	.source-sidebar-expanded .source .sidebar + main .width-limiter .sub-logo-container.rust-logo {
-		display: none;
 	}
 
 	.source-sidebar-expanded .source .sidebar {
@@ -2003,10 +1990,6 @@ in storage.js plus the media query with (min-width: 701px)
 }
 
 @media (max-width: 464px) {
-	#crate-search {
-		border-radius: 4px;
-	}
-
 	.docblock {
 		margin-left: 12px;
 	}
@@ -2024,7 +2007,7 @@ in storage.js plus the media query with (min-width: 701px)
 		align-self: center;
 	}
 
-	.source .sub-logo-container > img {
+	.sub-logo-container > img {
 		height: 35px;
 		width: 35px;
 	}
