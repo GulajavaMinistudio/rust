@@ -292,10 +292,6 @@ p:last-child {
 	margin: 0;
 }
 
-summary {
-	outline: none;
-}
-
 /* Fix some style changes due to normalize.css 8 */
 
 button {
@@ -571,10 +567,18 @@ ul.block, .block li {
 	padding: 13px 8px;
 	border-top-left-radius: 5px;
 	border-bottom-left-radius: 5px;
+	border-color: var(--example-line-numbers-border-color);
 }
 
 .src-line-numbers span {
 	cursor: pointer;
+	color: var(--src-line-numbers-span-color);
+}
+.src-line-numbers .line-highlighted {
+	background-color: var(--src-line-number-highlighted-background-color);
+}
+.src-line-numbers :target {
+	background-color: transparent;
 }
 
 .search-loading {
@@ -679,13 +683,16 @@ nav.sub {
 	display: flex;
 	align-items: center;
 }
-nav.sub form {
+.search-form {
+	position: relative;
+	display: flex;
+	height: 34px;
 	flex-grow: 1;
 }
 .source nav.sub {
 	margin: 0 0 15px 0;
 }
-.source nav.sub form {
+.source .search-form {
 	margin-left: 32px;
 }
 
@@ -776,11 +783,6 @@ table,
 	padding-right: 1.25rem;
 }
 
-.search-container {
-	position: relative;
-	display: flex;
-	height: 34px;
-}
 .search-results-title {
 	margin-top: 0;
 	white-space: nowrap;
@@ -856,15 +858,12 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	   -webkit-appearance: textfield for search inputs. That
 	   causes rounded corners and no border on iOS Safari. */
 	-webkit-appearance: none;
-	/* Override Normalize.css: we have margins and do
-	 not want to overflow */
-	box-sizing: border-box !important;
 	outline: none;
 	border: 1px solid var(--border-color);
 	border-radius: 2px;
 	padding: 8px;
 	font-size: 1rem;
-	width: 100%;
+	flex-grow: 1;
 	background-color: var(--button-background-color);
 	color: var(--search-color);
 }
@@ -1527,6 +1526,8 @@ details.rustdoc-toggle > summary.hideme {
 
 details.rustdoc-toggle > summary {
 	list-style: none;
+	/* focus outline is shown on `::before` instead of this */
+	outline: none;
 }
 details.rustdoc-toggle > summary::-webkit-details-marker,
 details.rustdoc-toggle > summary::marker {
@@ -1951,7 +1952,7 @@ in storage.js
 		flex-direction: column;
 	}
 
-	nav.sub form {
+	.search-form {
 		align-self: stretch;
 	}
 
