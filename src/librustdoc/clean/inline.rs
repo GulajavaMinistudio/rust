@@ -323,6 +323,21 @@ pub(crate) fn build_impls(
     for &did in tcx.inherent_impls(did).iter() {
         build_impl(cx, parent_module, did, attrs, ret);
     }
+
+    // This pretty much exists expressly for `dyn Error` traits that exist in the `alloc` crate.
+    // See also:
+    //
+    // * https://github.com/rust-lang/rust/issues/103170 — where it didn't used to get documented
+    // * https://github.com/rust-lang/rust/pull/99917 — where the feature got used
+    // * https://github.com/rust-lang/rust/issues/53487 — overall tracking issue for Error
+    if tcx.has_attr(did, sym::rustc_has_incoherent_inherent_impls) {
+        use rustc_middle::ty::fast_reject::SimplifiedTypeGen::*;
+        let type_ =
+            if tcx.is_trait(did) { TraitSimplifiedType(did) } else { AdtSimplifiedType(did) };
+        for &did in tcx.incoherent_impls(type_) {
+            build_impl(cx, parent_module, did, attrs, ret);
+        }
+    }
 }
 
 /// `parent_module` refers to the parent of the re-export, not the original item
@@ -374,7 +389,7 @@ pub(crate) fn build_impl(
     if !did.is_local() {
         if let Some(traitref) = associated_trait {
             let did = traitref.def_id;
-            if !cx.cache.effective_visibilities.is_directly_public(did) {
+            if !cx.cache.effective_visibilities.is_directly_public(tcx, did) {
                 return;
             }
 
@@ -403,7 +418,7 @@ pub(crate) fn build_impl(
     // reachable in rustdoc generated documentation
     if !did.is_local() {
         if let Some(did) = for_.def_id(&cx.cache) {
-            if !cx.cache.effective_visibilities.is_directly_public(did) {
+            if !cx.cache.effective_visibilities.is_directly_public(tcx, did) {
                 return;
             }
 
