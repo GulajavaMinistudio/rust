@@ -670,6 +670,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 panic_in_drop_strategy: tcx.sess.opts.unstable_opts.panic_in_drop,
                 edition: tcx.sess.edition(),
                 has_global_allocator: tcx.has_global_allocator(LOCAL_CRATE),
+                has_alloc_error_handler: tcx.has_alloc_error_handler(LOCAL_CRATE),
                 has_panic_handler: tcx.has_panic_handler(LOCAL_CRATE),
                 has_default_lib_allocator: tcx
                     .sess
@@ -787,8 +788,7 @@ fn should_encode_attr(
     } else if attr.doc_str().is_some() {
         // We keep all public doc comments because they might be "imported" into downstream crates
         // if they use `#[doc(inline)]` to copy an item's documentation into their own.
-        *is_def_id_public
-            .get_or_insert_with(|| tcx.effective_visibilities(()).effective_vis(def_id).is_some())
+        *is_def_id_public.get_or_insert_with(|| tcx.effective_visibilities(()).is_exported(def_id))
     } else if attr.has_name(sym::doc) {
         // If this is a `doc` attribute, and it's marked `inline` (as in `#[doc(inline)]`), we can
         // remove it. It won't be inlinable in downstream crates.
