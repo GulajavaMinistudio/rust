@@ -677,7 +677,6 @@ pre, .rustdoc.source .example-wrap {
 }
 
 #main-content > .item-info {
-	margin-top: 0;
 	margin-left: 0;
 }
 
@@ -882,31 +881,24 @@ so that we can apply CSS-filters to change the arrow color in themes */
 	display: block;
 }
 
-.search-results .desc > span {
+.search-results > a {
+	display: flex;
+	/* A little margin ensures the browser's outlining of focused links has room to display. */
+	margin-left: 2px;
+	margin-right: 2px;
+	border-bottom: 1px solid var(--border-color);
+	gap: 1em;
+}
+
+.search-results > a > div {
+	flex: 1;
+}
+
+.search-results > a > div.desc {
 	white-space: nowrap;
 	text-overflow: ellipsis;
 	overflow: hidden;
 	display: block;
-}
-
-.search-results > a {
-	display: block;
-	/* A little margin ensures the browser's outlining of focused links has room to display. */
-	margin-left: 2px;
-	margin-right: 2px;
-	border-bottom: 1px solid #aaa3;
-}
-
-.search-results > a > div {
-	display: flex;
-	flex-flow: row wrap;
-}
-
-.search-results .result-name, .search-results div.desc {
-	width: 50%;
-}
-.search-results .result-name {
-	padding-right: 1em;
 }
 
 .search-results a:hover,
@@ -1796,7 +1788,6 @@ in storage.js
 
 	.sidebar-elems {
 		margin-top: 1em;
-		background-color: var(--sidebar-background-color);
 	}
 
 	.content {
@@ -1869,19 +1860,16 @@ in storage.js
 	}
 
 	/* Display an alternating layout on tablets and phones */
-	.item-table, .item-row, .item-left, .item-right {
+	.item-table, .item-row, .item-left, .item-right,
+	.search-results > a, .search-results > a > div {
 		display: block;
 	}
 
 	/* Display an alternating layout on tablets and phones */
 	.search-results > a {
-		border-bottom: 1px solid #aaa9;
 		padding: 5px 0px;
 	}
-	.search-results .result-name, .search-results div.desc {
-		width: 100%;
-	}
-	.search-results div.desc, .item-right {
+	.search-results > a > div.desc, .item-right {
 		padding-left: 2em;
 	}
 
