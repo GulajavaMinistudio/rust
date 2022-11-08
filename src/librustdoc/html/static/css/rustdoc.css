@@ -367,7 +367,8 @@ img {
 	overflow: visible;
 }
 
-.sub-logo-container {
+.sub-logo-container, .logo-container {
+	/* zero text boxes so that computed line height = image height exactly */
 	line-height: 0;
 }
 
@@ -375,6 +376,10 @@ img {
 	height: 60px;
 	width: 60px;
 	object-fit: contain;
+}
+
+.rust-logo {
+	filter: var(--rust-logo-filter);
 }
 
 .sidebar, .mobile-topbar, .sidebar-menu-toggle {
@@ -465,10 +470,9 @@ img {
 }
 
 .sidebar .logo-container {
-	display: flex;
 	margin-top: 10px;
 	margin-bottom: 10px;
-	justify-content: center;
+	text-align: center;
 }
 
 .version {
@@ -1204,6 +1208,12 @@ a.test-arrow {
 	top: 5px;
 	right: 5px;
 	z-index: 1;
+	color: var(--test-arrow-color);
+	background-color: var(--test-arrow-background-color);
+}
+a.test-arrow:hover {
+	color: var(--test-arrow-hover-color);
+	background-color: var(--test-arrow-hover-background-color);
 }
 .example-wrap:hover .test-arrow {
 	visibility: visible;
@@ -1755,10 +1765,6 @@ in storage.js
 		white-space: nowrap;
 	}
 
-	.mobile-topbar .logo-container {
-		max-height: 45px;
-	}
-
 	.mobile-topbar .logo-container > img {
 		max-width: 35px;
 		max-height: 35px;
@@ -1800,21 +1806,6 @@ in storage.js
 
 	#titles > button > div.count {
 		display: block;
-	}
-
-	/* Because of ios, we need to actually have a full height sidebar title so the
-	 * actual sidebar can show up. But then we need to make it transparent so we don't
-	 * hide content. The filler just allows to create the background for the sidebar
-	 * title. But because of the absolute position, I had to lower the z-index.
-	 */
-	#sidebar-filler {
-		position: fixed;
-		left: 45px;
-		width: calc(100% - 45px);
-		top: 0;
-		height: 45px;
-		z-index: -1;
-		border-bottom: 1px solid;
 	}
 
 	#main-content > details.rustdoc-toggle > summary::before,
