@@ -91,6 +91,7 @@ pub mod nice_region_error;
 pub struct TypeErrCtxt<'a, 'tcx> {
     pub infcx: &'a InferCtxt<'tcx>,
     pub typeck_results: Option<std::cell::Ref<'a, ty::TypeckResults<'tcx>>>,
+    pub fallback_has_occurred: bool,
 }
 
 impl TypeErrCtxt<'_, '_> {
@@ -206,9 +207,12 @@ fn msg_span_from_early_bound_and_free_regions<'tcx>(
                         };
                         (text, sp)
                     }
-                    ty::BrAnon(idx) => (
+                    ty::BrAnon(idx, span) => (
                         format!("the anonymous lifetime #{} defined here", idx + 1),
-                        tcx.def_span(scope)
+                        match span {
+                            Some(span) => span,
+                            None => tcx.def_span(scope)
+                        }
                     ),
                     _ => (
                         format!("the lifetime `{}` as defined here", region),
