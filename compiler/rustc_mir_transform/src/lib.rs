@@ -1,5 +1,6 @@
 #![allow(rustc::potential_query_instability)]
 #![feature(box_patterns)]
+#![feature(drain_filter)]
 #![feature(let_chains)]
 #![feature(map_try_insert)]
 #![feature(min_specialization)]
@@ -54,6 +55,7 @@ mod const_goto;
 mod const_prop;
 mod const_prop_lint;
 mod coverage;
+mod dataflow_const_prop;
 mod dead_store_elimination;
 mod deaggregator;
 mod deduce_param_attrs;
@@ -91,6 +93,7 @@ pub mod simplify;
 mod simplify_branches;
 mod simplify_comparison_integral;
 mod simplify_try;
+mod sroa;
 mod uninhabited_enum_branching;
 mod unreachable_prop;
 
@@ -561,6 +564,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             &remove_zsts::RemoveZsts,
             &const_goto::ConstGoto,
             &remove_unneeded_drops::RemoveUnneededDrops,
+            &sroa::ScalarReplacementOfAggregates,
             &match_branches::MatchBranchSimplification,
             // inst combine is after MatchBranchSimplification to clean up Ne(_1, false)
             &multiple_return_terminators::MultipleReturnTerminators,
@@ -569,6 +573,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             //
             // FIXME(#70073): This pass is responsible for both optimization as well as some lints.
             &const_prop::ConstProp,
+            &dataflow_const_prop::DataflowConstProp,
             //
             // Const-prop runs unconditionally, but doesn't mutate the MIR at mir-opt-level=0.
             &const_debuginfo::ConstDebugInfo,

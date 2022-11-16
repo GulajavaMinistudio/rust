@@ -9,7 +9,7 @@
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/IR/Mangler.h"
 #if LLVM_VERSION_GE(16, 0)
-#include "llvm/IR/ModRef.h"
+#include "llvm/Support/ModRef.h"
 #endif
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/COFFImportFile.h"
@@ -1109,6 +1109,10 @@ extern "C" uint64_t LLVMRustDIBuilderCreateOpDeref() {
 
 extern "C" uint64_t LLVMRustDIBuilderCreateOpPlusUconst() {
   return dwarf::DW_OP_plus_uconst;
+}
+
+extern "C" int64_t LLVMRustDIBuilderCreateOpLLVMFragment() {
+  return dwarf::DW_OP_LLVM_fragment;
 }
 
 extern "C" void LLVMRustWriteTypeToString(LLVMTypeRef Ty, RustStringRef Str) {

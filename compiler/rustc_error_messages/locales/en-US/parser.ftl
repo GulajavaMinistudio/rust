@@ -375,3 +375,15 @@ parser_async_move_order_incorrect = the order of `move` and `async` is incorrect
 
 parser_double_colon_in_bound = expected `:` followed by trait or lifetime
     .suggestion = use single colon
+
+parser_fn_ptr_with_generics = function pointer types may not have generic parameters
+    .suggestion = consider moving the lifetime {$arity ->
+        [one] parameter
+        *[other] parameters
+    } to {$for_param_list_exists ->
+        [true] the
+        *[false] a
+    } `for` parameter list
+
+parser_invalid_identifier_with_leading_number = expected identifier, found number literal
+    .label = identifiers cannot start with a number
