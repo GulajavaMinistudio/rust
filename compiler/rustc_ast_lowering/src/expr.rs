@@ -14,6 +14,7 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir as hir;
 use rustc_hir::def::Res;
 use rustc_hir::definitions::DefPathData;
+use rustc_session::errors::report_lit_error;
 use rustc_span::source_map::{respan, DesugaringKind, Span, Spanned};
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::DUMMY_SP;
@@ -84,8 +85,15 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     let ohs = self.lower_expr(ohs);
                     hir::ExprKind::Unary(op, ohs)
                 }
-                ExprKind::Lit(ref l) => {
-                    hir::ExprKind::Lit(respan(self.lower_span(l.span), l.kind.clone()))
+                ExprKind::Lit(token_lit) => {
+                    let lit_kind = match LitKind::from_token_lit(token_lit) {
+                        Ok(lit_kind) => lit_kind,
+                        Err(err) => {
+                            report_lit_error(&self.tcx.sess.parse_sess, err, token_lit, e.span);
+                            LitKind::Err
+                        }
+                    };
+                    hir::ExprKind::Lit(respan(self.lower_span(e.span), lit_kind))
                 }
                 ExprKind::IncludedBytes(ref bytes) => hir::ExprKind::Lit(respan(
                     self.lower_span(e.span),
@@ -635,6 +643,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // `static |_task_context| -> <ret_ty> { body }`:
         let generator_kind = {
             let c = self.arena.alloc(hir::Closure {
+                def_id: self.local_def_id(closure_node_id),
                 binder: hir::ClosureBinder::Default,
                 capture_clause,
                 bound_generic_params: &[],
@@ -646,15 +655,40 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
             hir::ExprKind::Closure(c)
         };
-        let generator = hir::Expr {
-            hir_id: self.lower_node_id(closure_node_id),
-            kind: generator_kind,
-            span: self.lower_span(span),
-        };
-
-        // `future::from_generator`:
+        let parent_has_track_caller = self
+            .attrs
+            .values()
+            .find(|attrs| attrs.into_iter().find(|attr| attr.has_name(sym::track_caller)).is_some())
+            .is_some();
         let unstable_span =
             self.mark_span_with_reason(DesugaringKind::Async, span, self.allow_gen_future.clone());
+
+        let hir_id = if parent_has_track_caller {
+            let generator_hir_id = self.lower_node_id(closure_node_id);
+            self.lower_attrs(
+                generator_hir_id,
+                &[Attribute {
+                    kind: AttrKind::Normal(ptr::P(NormalAttr {
+                        item: AttrItem {
+                            path: Path::from_ident(Ident::new(sym::track_caller, span)),
+                            args: MacArgs::Empty,
+                            tokens: None,
+                        },
+                        tokens: None,
+                    })),
+                    id: self.tcx.sess.parse_sess.attr_id_generator.mk_attr_id(),
+                    style: AttrStyle::Outer,
+                    span: unstable_span,
+                }],
+            );
+            generator_hir_id
+        } else {
+            self.lower_node_id(closure_node_id)
+        };
+
+        let generator = hir::Expr { hir_id, kind: generator_kind, span: self.lower_span(span) };
+
+        // `future::from_generator`:
         let gen_future = self.expr_lang_item_path(
             unstable_span,
             hir::LangItem::FromGenerator,
@@ -887,6 +921,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         let fn_decl = self.lower_fn_decl(decl, None, fn_decl_span, FnDeclKind::Closure, None);
 
         let c = self.arena.alloc(hir::Closure {
+            def_id: self.local_def_id(closure_id),
             binder: binder_clause,
             capture_clause,
             bound_generic_params,
@@ -991,6 +1026,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             self.lower_fn_decl(&outer_decl, None, fn_decl_span, FnDeclKind::Closure, None);
 
         let c = self.arena.alloc(hir::Closure {
+            def_id: self.local_def_id(closure_id),
             binder: binder_clause,
             capture_clause,
             bound_generic_params,

@@ -830,8 +830,10 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             ),
         };
         let hir_id = self.lower_node_id(node_id);
+        let def_id = self.local_def_id(node_id);
         Some(hir::GenericParam {
             hir_id,
+            def_id,
             name,
             span: self.lower_span(ident.span),
             pure_wrt_drop: false,
@@ -959,8 +961,15 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             MacArgs::Eq(eq_span, MacArgsEq::Ast(ref expr)) => {
                 // In valid code the value always ends up as a single literal. Otherwise, a dummy
                 // literal suffices because the error is handled elsewhere.
-                let lit = if let ExprKind::Lit(lit) = &expr.kind {
-                    lit.clone()
+                let lit = if let ExprKind::Lit(token_lit) = expr.kind {
+                    match Lit::from_token_lit(token_lit, expr.span) {
+                        Ok(lit) => lit,
+                        Err(_err) => Lit {
+                            token_lit: token::Lit::new(token::LitKind::Err, kw::Empty, None),
+                            kind: LitKind::Err,
+                            span: DUMMY_SP,
+                        },
+                    }
                 } else {
                     Lit {
                         token_lit: token::Lit::new(token::LitKind::Err, kw::Empty, None),
@@ -1158,7 +1167,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                                 let node_id = self.next_node_id();
 
                                 // Add a definition for the in-band const def.
-                                self.create_def(
+                                let def_id = self.create_def(
                                     parent_def_id.def_id,
                                     node_id,
                                     DefPathData::AnonConst,
@@ -1174,6 +1183,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                                 };
 
                                 let ct = self.with_new_scopes(|this| hir::AnonConst {
+                                    def_id,
                                     hir_id: this.lower_node_id(node_id),
                                     body: this.lower_const_body(path_expr.span, Some(&path_expr)),
                                 });
@@ -1521,6 +1531,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
                         hir::GenericParam {
                             hir_id,
+                            def_id: lctx.local_def_id(new_node_id),
                             name,
                             span: lifetime.ident.span,
                             pure_wrt_drop: false,
@@ -1978,6 +1989,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
                         hir::GenericParam {
                             hir_id,
+                            def_id: this.local_def_id(new_node_id),
                             name,
                             span: lifetime.ident.span,
                             pure_wrt_drop: false,
@@ -2176,6 +2188,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         self.lower_attrs(hir_id, &param.attrs);
         hir::GenericParam {
             hir_id,
+            def_id: self.local_def_id(param.id),
             name,
             span: self.lower_span(param.span()),
             pure_wrt_drop: self.tcx.sess.contains_name(&param.attrs, sym::may_dangle),
@@ -2280,6 +2293,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // Set the name to `impl Bound1 + Bound2`.
         let param = hir::GenericParam {
             hir_id: self.lower_node_id(node_id),
+            def_id,
             name: ParamName::Plain(self.lower_ident(ident)),
             pure_wrt_drop: false,
             span: self.lower_span(span),
@@ -2340,6 +2354,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
     fn lower_anon_const(&mut self, c: &AnonConst) -> hir::AnonConst {
         self.with_new_scopes(|this| hir::AnonConst {
+            def_id: this.local_def_id(c.id),
             hir_id: this.lower_node_id(c.id),
             body: this.lower_const_body(c.value.span, Some(&c.value)),
         })
