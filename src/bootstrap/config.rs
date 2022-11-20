@@ -15,6 +15,7 @@ use std::str::FromStr;
 
 use crate::builder::TaskPath;
 use crate::cache::{Interned, INTERNER};
+use crate::cc_detect::{ndk_compiler, Language};
 use crate::channel::{self, GitInfo};
 pub use crate::flags::Subcommand;
 use crate::flags::{Color, Flags};
@@ -1237,8 +1238,12 @@ impl Config {
                 if let Some(s) = cfg.no_std {
                     target.no_std = s;
                 }
-                target.cc = cfg.cc.map(PathBuf::from);
-                target.cxx = cfg.cxx.map(PathBuf::from);
+                target.cc = cfg.cc.map(PathBuf::from).or_else(|| {
+                    target.ndk.as_ref().map(|ndk| ndk_compiler(Language::C, &triple, ndk))
+                });
+                target.cxx = cfg.cxx.map(PathBuf::from).or_else(|| {
+                    target.ndk.as_ref().map(|ndk| ndk_compiler(Language::CPlusPlus, &triple, ndk))
+                });
                 target.ar = cfg.ar.map(PathBuf::from);
                 target.ranlib = cfg.ranlib.map(PathBuf::from);
                 target.linker = cfg.linker.map(PathBuf::from);
@@ -1506,19 +1511,25 @@ impl Config {
 
     /// Return whether we will use a downloaded, pre-compiled version of rustc, or just build from source.
     pub(crate) fn download_rustc(&self) -> bool {
-        static DOWNLOAD_RUSTC: OnceCell<bool> = OnceCell::new();
+        self.download_rustc_commit().is_some()
+    }
+
+    pub(crate) fn download_rustc_commit(&self) -> Option<&'static str> {
+        static DOWNLOAD_RUSTC: OnceCell<Option<String>> = OnceCell::new();
         if self.dry_run() && DOWNLOAD_RUSTC.get().is_none() {
             // avoid trying to actually download the commit
-            return false;
+            return None;
         }
 
-        *DOWNLOAD_RUSTC.get_or_init(|| match &self.download_rustc_commit {
-            None => false,
-            Some(commit) => {
-                self.download_ci_rustc(commit);
-                true
-            }
-        })
+        DOWNLOAD_RUSTC
+            .get_or_init(|| match &self.download_rustc_commit {
+                None => None,
+                Some(commit) => {
+                    self.download_ci_rustc(commit);
+                    Some(commit.clone())
+                }
+            })
+            .as_deref()
     }
 
     pub(crate) fn initial_rustfmt(&self) -> Option<PathBuf> {

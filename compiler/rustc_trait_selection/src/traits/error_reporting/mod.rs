@@ -22,6 +22,7 @@ use rustc_errors::{
     MultiSpan, Style,
 };
 use rustc_hir as hir;
+use rustc_hir::def::Namespace;
 use rustc_hir::def_id::DefId;
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::GenericParam;
@@ -34,6 +35,7 @@ use rustc_middle::traits::select::OverflowError;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::ExpectedFound;
 use rustc_middle::ty::fold::{TypeFolder, TypeSuperFoldable};
+use rustc_middle::ty::print::{FmtPrinter, Print};
 use rustc_middle::ty::{
     self, SubtypePredicate, ToPolyTraitRef, ToPredicate, TraitRef, Ty, TyCtxt, TypeFoldable,
     TypeVisitable,
@@ -109,7 +111,10 @@ pub trait TypeErrCtxtExt<'tcx> {
         suggest_increasing_limit: bool,
     ) -> !
     where
-        T: fmt::Display + TypeFoldable<'tcx>;
+        T: fmt::Display
+            + TypeFoldable<'tcx>
+            + Print<'tcx, FmtPrinter<'tcx, 'tcx>, Output = FmtPrinter<'tcx, 'tcx>>,
+        <T as Print<'tcx, FmtPrinter<'tcx, 'tcx>>>::Error: std::fmt::Debug;
 
     fn suggest_new_overflow_limit(&self, err: &mut Diagnostic);
 
@@ -344,14 +349,14 @@ impl<'tcx> InferCtxtExt<'tcx> for InferCtxt<'tcx> {
                 });
                 let substs = self.tcx.mk_substs_trait(ty.skip_binder(), &[var.into()]);
                 let obligation = Obligation::new(
+                    self.tcx,
                     ObligationCause::dummy(),
                     param_env,
                     ty.rebind(ty::TraitPredicate {
                         trait_ref: ty::TraitRef::new(trait_def_id, substs),
                         constness,
                         polarity,
-                    })
-                    .to_predicate(self.tcx),
+                    }),
                 );
                 let mut fulfill_cx = <dyn TraitEngine<'tcx>>::new_in_snapshot(self.tcx);
                 fulfill_cx.register_predicate_obligation(self, obligation);
@@ -468,15 +473,31 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         suggest_increasing_limit: bool,
     ) -> !
     where
-        T: fmt::Display + TypeFoldable<'tcx>,
+        T: fmt::Display
+            + TypeFoldable<'tcx>
+            + Print<'tcx, FmtPrinter<'tcx, 'tcx>, Output = FmtPrinter<'tcx, 'tcx>>,
+        <T as Print<'tcx, FmtPrinter<'tcx, 'tcx>>>::Error: std::fmt::Debug,
     {
         let predicate = self.resolve_vars_if_possible(obligation.predicate.clone());
+        let mut pred_str = predicate.to_string();
+        if pred_str.len() > 50 {
+            // We don't need to save the type to a file, we will be talking about this type already
+            // in a separate note when we explain the obligation, so it will be available that way.
+            pred_str = predicate
+                .print(FmtPrinter::new_with_limit(
+                    self.tcx,
+                    Namespace::TypeNS,
+                    rustc_session::Limit(6),
+                ))
+                .unwrap()
+                .into_buffer();
+        }
         let mut err = struct_span_err!(
             self.tcx.sess,
             obligation.cause.span,
             E0275,
             "overflow evaluating the requirement `{}`",
-            predicate
+            pred_str,
         );
 
         if suggest_increasing_limit {
@@ -532,9 +553,12 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         root_obligation: &PredicateObligation<'tcx>,
         error: &SelectionError<'tcx>,
     ) {
-        self.set_tainted_by_errors();
         let tcx = self.tcx;
         let mut span = obligation.cause.span;
+        // FIXME: statically guarantee this by tainting after the diagnostic is emitted
+        self.set_tainted_by_errors(
+            tcx.sess.delay_span_bug(span, "`report_selection_error` did not emit an error"),
+        );
 
         let mut err = match *error {
             SelectionError::Unimplemented => {
@@ -984,7 +1008,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 );
                                 trait_pred
                             });
-                            let unit_obligation = obligation.with(predicate.to_predicate(tcx));
+                            let unit_obligation = obligation.with(tcx, predicate);
                             if self.predicate_may_hold(&unit_obligation) {
                                 err.note(
                                     "this error might have been caused by changes to \
@@ -1705,7 +1729,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 ty::Bool => Some(0),
                 ty::Char => Some(1),
                 ty::Str => Some(2),
-                ty::Adt(def, _) if tcx.is_diagnostic_item(sym::String, def.did()) => Some(2),
+                ty::Adt(def, _) if Some(def.did()) == tcx.lang_items().string() => Some(2),
                 ty::Int(..)
                 | ty::Uint(..)
                 | ty::Float(..)
@@ -2012,7 +2036,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             ..*tr
         });
 
-        Obligation::new(ObligationCause::dummy(), param_env, trait_pred.to_predicate(self.tcx))
+        Obligation::new(self.tcx, ObligationCause::dummy(), param_env, trait_pred)
     }
 
     #[instrument(skip(self), level = "debug")]
@@ -2060,7 +2084,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 // check upstream for type errors and don't add the obligations to
                 // begin with in those cases.
                 if self.tcx.lang_items().sized_trait() == Some(trait_ref.def_id()) {
-                    if !self.is_tainted_by_errors() {
+                    if let None = self.tainted_by_errors() {
                         self.emit_inference_failure_err(
                             body_id,
                             span,
@@ -2100,11 +2124,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     )
                 };
 
-                let obligation = Obligation::new(
-                    obligation.cause.clone(),
-                    obligation.param_env,
-                    trait_ref.to_poly_trait_predicate(),
-                );
+                let obligation = obligation.with(self.tcx, trait_ref.to_poly_trait_predicate());
                 let mut selcx = SelectionContext::with_query_mode(
                     &self,
                     crate::traits::TraitQueryMode::Standard,
@@ -2119,16 +2139,16 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         if impls.len() > 1 && impls.len() < 5 && has_non_region_infer {
                             self.annotate_source_of_ambiguity(&mut err, &impls, predicate);
                         } else {
-                            if self.is_tainted_by_errors() {
-                                err.delay_as_bug();
+                            if self.tainted_by_errors().is_some() {
+                                err.cancel();
                                 return;
                             }
                             err.note(&format!("cannot satisfy `{}`", predicate));
                         }
                     }
                     _ => {
-                        if self.is_tainted_by_errors() {
-                            err.delay_as_bug();
+                        if self.tainted_by_errors().is_some() {
+                            err.cancel();
                             return;
                         }
                         err.note(&format!("cannot satisfy `{}`", predicate));
@@ -2230,7 +2250,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         ] = path.segments
                         && data.trait_ref.def_id == *trait_id
                         && self.tcx.trait_of_item(*item_id) == Some(*trait_id)
-                        && !self.is_tainted_by_errors()
+                        && let None = self.tainted_by_errors()
                     {
                         let (verb, noun) = match self.tcx.associated_item(item_id).kind {
                             ty::AssocKind::Const => ("refer to the", "constant"),
@@ -2299,7 +2319,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 // with error messages.
                 if arg.references_error()
                     || self.tcx.sess.has_errors().is_some()
-                    || self.is_tainted_by_errors()
+                    || self.tainted_by_errors().is_some()
                 {
                     return;
                 }
@@ -2310,7 +2330,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             ty::PredicateKind::Subtype(data) => {
                 if data.references_error()
                     || self.tcx.sess.has_errors().is_some()
-                    || self.is_tainted_by_errors()
+                    || self.tainted_by_errors().is_some()
                 {
                     // no need to overload user in such cases
                     return;
@@ -2321,7 +2341,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 self.emit_inference_failure_err(body_id, span, a.into(), ErrorCode::E0282, true)
             }
             ty::PredicateKind::Projection(data) => {
-                if predicate.references_error() || self.is_tainted_by_errors() {
+                if predicate.references_error() || self.tainted_by_errors().is_some() {
                     return;
                 }
                 let subst = data
@@ -2355,7 +2375,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             }
 
             ty::PredicateKind::ConstEvaluatable(data) => {
-                if predicate.references_error() || self.is_tainted_by_errors() {
+                if predicate.references_error() || self.tainted_by_errors().is_some() {
                     return;
                 }
                 let subst = data.walk().find(|g| g.is_non_region_infer());
@@ -2382,7 +2402,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 }
             }
             _ => {
-                if self.tcx.sess.has_errors().is_some() || self.is_tainted_by_errors() {
+                if self.tcx.sess.has_errors().is_some() || self.tainted_by_errors().is_some() {
                     return;
                 }
                 let mut err = struct_span_err!(
@@ -2426,7 +2446,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         post.sort();
         post.dedup();
 
-        if self.is_tainted_by_errors()
+        if self.tainted_by_errors().is_some()
             && (crate_names.len() == 1
                 && spans.len() == 0
                 && ["`core`", "`alloc`", "`std`"].contains(&crate_names[0].as_str())
@@ -2534,11 +2554,8 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             )
             .value;
 
-            let obligation = Obligation::new(
-                ObligationCause::dummy(),
-                param_env,
-                cleaned_pred.to_predicate(selcx.tcx()),
-            );
+            let obligation =
+                Obligation::new(self.tcx, ObligationCause::dummy(), param_env, cleaned_pred);
 
             self.predicate_may_hold(&obligation)
         })

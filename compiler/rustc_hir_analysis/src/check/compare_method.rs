@@ -238,7 +238,7 @@ fn compare_predicate_entailment<'tcx>(
                 kind: impl_m.kind,
             },
         );
-        ocx.register_obligation(traits::Obligation::new(cause, param_env, predicate));
+        ocx.register_obligation(traits::Obligation::new(tcx, cause, param_env, predicate));
     }
 
     // We now need to check that the signature of the impl method is
@@ -402,10 +402,8 @@ pub fn collect_trait_impl_trait_tys<'tcx>(
         unnormalized_trait_sig.inputs_and_output.iter().chain(trait_sig.inputs_and_output.iter()),
     );
 
-    match infcx.at(&cause, param_env).eq(trait_return_ty, impl_return_ty) {
-        Ok(infer::InferOk { value: (), obligations }) => {
-            ocx.register_obligations(obligations);
-        }
+    match ocx.eq(&cause, param_env, trait_return_ty, impl_return_ty) {
+        Ok(()) => {}
         Err(terr) => {
             let mut diag = struct_span_err!(
                 tcx.sess,
@@ -442,10 +440,8 @@ pub fn collect_trait_impl_trait_tys<'tcx>(
     // the lifetimes of the return type, but do this after unifying just the
     // return types, since we want to avoid duplicating errors from
     // `compare_predicate_entailment`.
-    match infcx.at(&cause, param_env).eq(trait_fty, impl_fty) {
-        Ok(infer::InferOk { value: (), obligations }) => {
-            ocx.register_obligations(obligations);
-        }
+    match ocx.eq(&cause, param_env, trait_fty, impl_fty) {
+        Ok(()) => {}
         Err(terr) => {
             // This function gets called during `compare_predicate_entailment` when normalizing a
             // signature that contains RPITIT. When the method signatures don't match, we have to
@@ -521,7 +517,13 @@ pub fn collect_trait_impl_trait_tys<'tcx>(
                 let num_trait_substs = trait_to_impl_substs.len();
                 let num_impl_substs = tcx.generics_of(impl_m.container_id(tcx)).params.len();
                 let ty = tcx.fold_regions(ty, |region, _| {
-                    let (ty::ReFree(_) | ty::ReEarlyBound(_)) = region.kind() else { return region; };
+                    match region.kind() {
+                        // Remap all free regions, which correspond to late-bound regions in the function.
+                        ty::ReFree(_) => {}
+                        // Remap early-bound regions as long as they don't come from the `impl` itself.
+                        ty::ReEarlyBound(ebr) if tcx.parent(ebr.def_id) != impl_m.container_id(tcx) => {}
+                        _ => return region,
+                    }
                     let Some(ty::ReEarlyBound(e)) = map.get(&region.into()).map(|r| r.expect_region().kind())
                     else {
                         tcx
@@ -605,6 +607,7 @@ impl<'tcx> TypeFolder<'tcx> for ImplTraitInTraitCollector<'_, 'tcx> {
                 );
 
                 self.ocx.register_obligation(traits::Obligation::new(
+                    self.tcx(),
                     ObligationCause::new(
                         self.span,
                         self.body_id,
@@ -681,9 +684,7 @@ fn report_trait_method_mismatch<'tcx>(
                 // Suggestion to change output type. We do not suggest in `async` functions
                 // to avoid complex logic or incorrect output.
                 match tcx.hir().expect_impl_item(impl_m.def_id.expect_local()).kind {
-                    ImplItemKind::Fn(ref sig, _)
-                        if sig.header.asyncness == hir::IsAsync::NotAsync =>
-                    {
+                    ImplItemKind::Fn(ref sig, _) if !sig.header.asyncness.is_async() => {
                         let msg = "change the output type to match the trait";
                         let ap = Applicability::MachineApplicable;
                         match sig.decl.output {
@@ -1579,7 +1580,7 @@ fn compare_type_predicate_entailment<'tcx>(
             },
         );
         ocx.register_obligations(obligations);
-        ocx.register_obligation(traits::Obligation::new(cause, param_env, predicate));
+        ocx.register_obligation(traits::Obligation::new(tcx, cause, param_env, predicate));
     }
 
     // Check that all obligations are satisfied by the implementation's
@@ -1784,7 +1785,7 @@ pub fn check_type_bounds<'tcx>(
         .subst_iter_copied(tcx, rebased_substs)
         .map(|(concrete_ty_bound, span)| {
             debug!("check_type_bounds: concrete_ty_bound = {:?}", concrete_ty_bound);
-            traits::Obligation::new(mk_cause(span), param_env, concrete_ty_bound)
+            traits::Obligation::new(tcx, mk_cause(span), param_env, concrete_ty_bound)
         })
         .collect();
     debug!("check_type_bounds: item_bounds={:?}", obligations);
