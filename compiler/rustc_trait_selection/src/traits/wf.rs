@@ -421,10 +421,7 @@ impl<'tcx> WfPredicates<'tcx> {
     fn require_sized(&mut self, subty: Ty<'tcx>, cause: traits::ObligationCauseCode<'tcx>) {
         if !subty.has_escaping_bound_vars() {
             let cause = self.cause(cause);
-            let trait_ref = ty::TraitRef {
-                def_id: self.tcx.require_lang_item(LangItem::Sized, None),
-                substs: self.tcx.mk_substs_trait(subty, &[]),
-            };
+            let trait_ref = self.tcx.at(cause.span).mk_trait_ref(LangItem::Sized, [subty]);
             self.out.push(traits::Obligation::with_depth(
                 self.tcx,
                 cause,
@@ -758,7 +755,7 @@ impl<'tcx> WfPredicates<'tcx> {
     fn from_object_ty(
         &mut self,
         ty: Ty<'tcx>,
-        data: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
+        data: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
         region: ty::Region<'tcx>,
     ) {
         // Imagine a type like this:
@@ -822,7 +819,7 @@ impl<'tcx> WfPredicates<'tcx> {
 /// `infer::required_region_bounds`, see that for more information.
 pub fn object_region_bounds<'tcx>(
     tcx: TyCtxt<'tcx>,
-    existential_predicates: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
+    existential_predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
 ) -> Vec<ty::Region<'tcx>> {
     // Since we don't actually *know* the self type for an object,
     // this "open(err)" serves as a kind of dummy standin -- basically

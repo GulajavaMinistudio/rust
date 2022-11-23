@@ -630,8 +630,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
             cause,
             coerce_unsized_did,
             0,
-            coerce_source,
-            &[coerce_target.into()]
+            [coerce_source, coerce_target]
         )];
 
         let mut has_unsized_tuple_coercion = false;
@@ -748,7 +747,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         &self,
         a: Ty<'tcx>,
         b: Ty<'tcx>,
-        predicates: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
+        predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
         b_region: ty::Region<'tcx>,
     ) -> CoerceResult<'tcx> {
         if !self.tcx.features().dyn_star {
@@ -805,10 +804,9 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 self.tcx,
                 self.cause.clone(),
                 self.param_env,
-                ty::Binder::dummy(ty::TraitRef::new(
-                    self.tcx.require_lang_item(hir::LangItem::PointerSized, Some(self.cause.span)),
-                    self.tcx.mk_substs_trait(a, &[]),
-                ))
+                ty::Binder::dummy(
+                    self.tcx.at(self.cause.span).mk_trait_ref(hir::LangItem::PointerSized, [a]),
+                )
                 .to_poly_trait_predicate(),
             ));
         }
@@ -1086,8 +1084,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.infcx
                 .type_implements_trait(
                     self.tcx.lang_items().deref_mut_trait()?,
-                    expr_ty,
-                    ty::List::empty(),
+                    [expr_ty],
                     self.param_env,
                 )
                 .may_apply()

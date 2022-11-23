@@ -7,7 +7,7 @@ use rustc_errors::{
 };
 use rustc_hir as hir;
 use rustc_hir::intravisit::{walk_block, walk_expr, Visitor};
-use rustc_hir::{AsyncGeneratorKind, GeneratorKind};
+use rustc_hir::{AsyncGeneratorKind, GeneratorKind, LangItem};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_infer::traits::ObligationCause;
 use rustc_middle::mir::tcx::PlaceTy;
@@ -489,12 +489,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             // but the type has region variables, so erase those.
             tcx.infer_ctxt()
                 .build()
-                .type_implements_trait(
-                    default_trait,
-                    tcx.erase_regions(ty),
-                    ty::List::empty(),
-                    param_env,
-                )
+                .type_implements_trait(default_trait, [tcx.erase_regions(ty)], param_env)
                 .must_apply_modulo_regions()
         };
 
@@ -606,7 +601,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         else { return; };
         // Try to find predicates on *generic params* that would allow copying `ty`
         let infcx = tcx.infer_ctxt().build();
-        let copy_did = infcx.tcx.lang_items().copy_trait().unwrap();
+        let copy_did = infcx.tcx.require_lang_item(LangItem::Copy, Some(span));
         let cause = ObligationCause::new(
             span,
             self.mir_hir_id(),
@@ -1707,7 +1702,6 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             err.span_label(borrow_span, note);
 
             let tcx = self.infcx.tcx;
-            let ty_params = ty::List::empty();
 
             let return_ty = self.regioncx.universal_regions().unnormalized_output_ty;
             let return_ty = tcx.erase_regions(return_ty);
@@ -1716,7 +1710,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             if let Some(iter_trait) = tcx.get_diagnostic_item(sym::Iterator)
                 && self
                     .infcx
-                    .type_implements_trait(iter_trait, return_ty, ty_params, self.param_env)
+                    .type_implements_trait(iter_trait, [return_ty], self.param_env)
                     .must_apply_modulo_regions()
             {
                 err.span_suggestion_hidden(

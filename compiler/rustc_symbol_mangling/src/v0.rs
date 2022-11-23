@@ -502,7 +502,7 @@ impl<'tcx> Printer<'tcx> for &mut SymbolMangler<'tcx> {
 
     fn print_dyn_existential(
         mut self,
-        predicates: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
+        predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
     ) -> Result<Self::DynExistential, Self::Error> {
         // Okay, so this is a bit tricky. Imagine we have a trait object like
         // `dyn for<'a> Foo<'a, Bar = &'a ()>`. When we mangle this, the
@@ -689,15 +689,15 @@ impl<'tcx> Printer<'tcx> for &mut SymbolMangler<'tcx> {
                         self.push("V");
                         self = self.print_def_path(variant_def.def_id, substs)?;
 
-                        match variant_def.ctor_kind {
-                            CtorKind::Const => {
+                        match variant_def.ctor_kind() {
+                            Some(CtorKind::Const) => {
                                 self.push("U");
                             }
-                            CtorKind::Fn => {
+                            Some(CtorKind::Fn) => {
                                 self.push("T");
                                 self = print_field_list(self)?;
                             }
-                            CtorKind::Fictive => {
+                            None => {
                                 self.push("S");
                                 for (field_def, field) in iter::zip(&variant_def.fields, fields) {
                                     // HACK(eddyb) this mimics `path_append`,

@@ -60,8 +60,8 @@ use rustc_hir::def_id::{LocalDefId, CRATE_DEF_ID};
 use rustc_hir::definitions::DefPathData;
 use rustc_hir::{ConstArg, GenericArg, ItemLocalId, ParamName, TraitCandidate};
 use rustc_index::vec::{Idx, IndexVec};
+use rustc_middle::span_bug;
 use rustc_middle::ty::{ResolverAstLowering, TyCtxt};
-use rustc_middle::{bug, span_bug};
 use rustc_session::parse::feature_err;
 use rustc_span::hygiene::MacroKind;
 use rustc_span::source_map::DesugaringKind;
@@ -911,7 +911,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             AttrKind::Normal(ref normal) => AttrKind::Normal(P(NormalAttr {
                 item: AttrItem {
                     path: normal.item.path.clone(),
-                    args: self.lower_mac_args(&normal.item.args),
+                    args: self.lower_attr_args(&normal.item.args),
                     tokens: None,
                 },
                 tokens: None,
@@ -931,32 +931,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         }
     }
 
-    fn lower_mac_args(&self, args: &MacArgs) -> MacArgs {
+    fn lower_attr_args(&self, args: &AttrArgs) -> AttrArgs {
         match *args {
-            MacArgs::Empty => MacArgs::Empty,
-            MacArgs::Delimited(dspan, delim, ref tokens) => {
-                // This is either a non-key-value attribute, or a `macro_rules!` body.
-                // We either not have any nonterminals present (in the case of an attribute),
-                // or have tokens available for all nonterminals in the case of a nested
-                // `macro_rules`: e.g:
-                //
-                // ```rust
-                // macro_rules! outer {
-                //     ($e:expr) => {
-                //         macro_rules! inner {
-                //             () => { $e }
-                //         }
-                //     }
-                // }
-                // ```
-                //
-                // In both cases, we don't want to synthesize any tokens
-                MacArgs::Delimited(dspan, delim, tokens.flattened())
-            }
+            AttrArgs::Empty => AttrArgs::Empty,
+            AttrArgs::Delimited(ref args) => AttrArgs::Delimited(self.lower_delim_args(args)),
             // This is an inert key-value attribute - it will never be visible to macros
             // after it gets lowered to HIR. Therefore, we can extract literals to handle
             // nonterminals in `#[doc]` (e.g. `#[doc = $e]`).
-            MacArgs::Eq(eq_span, MacArgsEq::Ast(ref expr)) => {
+            AttrArgs::Eq(eq_span, AttrArgsEq::Ast(ref expr)) => {
                 // In valid code the value always ends up as a single literal. Otherwise, a dummy
                 // literal suffices because the error is handled elsewhere.
                 let lit = if let ExprKind::Lit(token_lit) = expr.kind {
@@ -975,12 +957,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         span: DUMMY_SP,
                     }
                 };
-                MacArgs::Eq(eq_span, MacArgsEq::Hir(lit))
+                AttrArgs::Eq(eq_span, AttrArgsEq::Hir(lit))
             }
-            MacArgs::Eq(_, MacArgsEq::Hir(ref lit)) => {
+            AttrArgs::Eq(_, AttrArgsEq::Hir(ref lit)) => {
                 unreachable!("in literal form when lowering mac args eq: {:?}", lit)
             }
         }
+    }
+
+    fn lower_delim_args(&self, args: &DelimArgs) -> DelimArgs {
+        DelimArgs { dspan: args.dspan, delim: args.delim, tokens: args.tokens.flattened() }
     }
 
     /// Given an associated type constraint like one of these:
@@ -1465,17 +1451,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // frequently opened issues show.
         let opaque_ty_span = self.mark_span_with_reason(DesugaringKind::OpaqueTy, span, None);
 
-        let opaque_ty_def_id = match origin {
-            hir::OpaqueTyOrigin::TyAlias => self.create_def(
-                self.current_hir_id_owner.def_id,
-                opaque_ty_node_id,
-                DefPathData::ImplTrait,
-            ),
-            hir::OpaqueTyOrigin::FnReturn(fn_def_id) => {
-                self.create_def(fn_def_id, opaque_ty_node_id, DefPathData::ImplTrait)
-            }
-            hir::OpaqueTyOrigin::AsyncFn(..) => bug!("unreachable"),
-        };
+        let opaque_ty_def_id = self.create_def(
+            self.current_hir_id_owner.def_id,
+            opaque_ty_node_id,
+            DefPathData::ImplTrait,
+        );
         debug!(?opaque_ty_def_id);
 
         // Contains the new lifetime definitions created for the TAIT (if any).
@@ -1837,8 +1817,10 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
         let opaque_ty_span = self.mark_span_with_reason(DesugaringKind::Async, span, None);
 
-        let opaque_ty_def_id = self.local_def_id(opaque_ty_node_id);
         let fn_def_id = self.local_def_id(fn_node_id);
+
+        let opaque_ty_def_id =
+            self.create_def(fn_def_id, opaque_ty_node_id, DefPathData::ImplTrait);
 
         // When we create the opaque type for this async fn, it is going to have
         // to capture all the lifetimes involved in the signature (including in the

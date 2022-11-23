@@ -94,9 +94,10 @@ pub use self::sty::{
     BoundVariableKind, CanonicalPolyFnSig, ClosureSubsts, ClosureSubstsParts, ConstVid,
     EarlyBoundRegion, ExistentialPredicate, ExistentialProjection, ExistentialTraitRef, FnSig,
     FreeRegion, GenSig, GeneratorSubsts, GeneratorSubstsParts, InlineConstSubsts,
-    InlineConstSubstsParts, ParamConst, ParamTy, PolyExistentialProjection,
-    PolyExistentialTraitRef, PolyFnSig, PolyGenSig, PolyTraitRef, ProjectionTy, Region, RegionKind,
-    RegionVid, TraitRef, TyKind, TypeAndMut, UpvarSubsts, VarianceDiagInfo,
+    InlineConstSubstsParts, ParamConst, ParamTy, PolyExistentialPredicate,
+    PolyExistentialProjection, PolyExistentialTraitRef, PolyFnSig, PolyGenSig, PolyTraitRef,
+    ProjectionTy, Region, RegionKind, RegionVid, TraitRef, TyKind, TypeAndMut, UpvarSubsts,
+    VarianceDiagInfo,
 };
 pub use self::trait_def::TraitDef;
 
@@ -851,6 +852,10 @@ impl<'tcx> TraitPredicate<'tcx> {
         }
     }
 
+    pub fn with_self_type(self, tcx: TyCtxt<'tcx>, self_ty: Ty<'tcx>) -> Self {
+        Self { trait_ref: self.trait_ref.with_self_type(tcx, self_ty), ..self }
+    }
+
     pub fn def_id(self) -> DefId {
         self.trait_ref.def_id
     }
@@ -1257,7 +1262,7 @@ impl<'tcx> InstantiatedPredicates<'tcx> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, HashStable, TyEncodable, TyDecodable, Lift)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, HashStable, TyEncodable, TyDecodable, Lift)]
 #[derive(TypeFoldable, TypeVisitable)]
 pub struct OpaqueTypeKey<'tcx> {
     pub def_id: LocalDefId,
@@ -1332,6 +1337,9 @@ impl<'tcx> OpaqueHiddenType<'tcx> {
         let id_substs = InternalSubsts::identity_for_item(tcx, def_id.to_def_id());
         debug!(?id_substs);
 
+        // This zip may have several times the same lifetime in `substs` paired with a different
+        // lifetime from `id_substs`.  Simply `collect`ing the iterator is the correct behaviour:
+        // it will pick the last one, which is the one we introduced in the impl-trait desugaring.
         let map = substs.iter().zip(id_substs);
 
         let map: FxHashMap<GenericArg<'tcx>, GenericArg<'tcx>> = match origin {
@@ -1345,61 +1353,13 @@ impl<'tcx> OpaqueHiddenType<'tcx> {
                 // type Foo<'a, 'b, 'c> = impl Trait<'a> + 'b;
                 // ```
                 // we may not use `'c` in the hidden type.
-                struct OpaqueTypeLifetimeCollector<'tcx> {
-                    lifetimes: FxHashSet<ty::Region<'tcx>>,
-                }
+                let variances = tcx.variances_of(def_id);
+                debug!(?variances);
 
-                impl<'tcx> ty::TypeVisitor<'tcx> for OpaqueTypeLifetimeCollector<'tcx> {
-                    fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
-                        self.lifetimes.insert(r);
-                        r.super_visit_with(self)
-                    }
-                }
-
-                let mut collector = OpaqueTypeLifetimeCollector { lifetimes: Default::default() };
-
-                for pred in tcx.bound_explicit_item_bounds(def_id.to_def_id()).transpose_iter() {
-                    let pred = pred.map_bound(|(pred, _)| *pred).subst(tcx, id_substs);
-
-                    trace!(pred=?pred.kind());
-
-                    // We only ignore opaque type substs if the opaque type is the outermost type.
-                    // The opaque type may be nested within itself via recursion in e.g.
-                    // type Foo<'a> = impl PartialEq<Foo<'a>>;
-                    // which thus mentions `'a` and should thus accept hidden types that borrow 'a
-                    // instead of requiring an additional `+ 'a`.
-                    match pred.kind().skip_binder() {
-                        ty::PredicateKind::Trait(TraitPredicate {
-                            trait_ref: ty::TraitRef { def_id: _, substs },
-                            constness: _,
-                            polarity: _,
-                        }) => {
-                            trace!(?substs);
-                            for subst in &substs[1..] {
-                                subst.visit_with(&mut collector);
-                            }
-                        }
-                        ty::PredicateKind::Projection(ty::ProjectionPredicate {
-                            projection_ty: ty::ProjectionTy { substs, item_def_id: _ },
-                            term,
-                        }) => {
-                            for subst in &substs[1..] {
-                                subst.visit_with(&mut collector);
-                            }
-                            term.visit_with(&mut collector);
-                        }
-                        _ => {
-                            pred.visit_with(&mut collector);
-                        }
-                    }
-                }
-                let lifetimes = collector.lifetimes;
-                trace!(?lifetimes);
                 map.filter(|(_, v)| {
-                    let ty::GenericArgKind::Lifetime(lt) = v.unpack() else {
-                        return true;
-                    };
-                    lifetimes.contains(&lt)
+                    let ty::GenericArgKind::Lifetime(lt) = v.unpack() else { return true };
+                    let ty::ReEarlyBound(ebr) = lt.kind() else { bug!() };
+                    variances[ebr.index as usize] == ty::Variance::Invariant
                 })
                 .collect()
             }
@@ -1852,15 +1812,13 @@ pub struct VariantDef {
     pub def_id: DefId,
     /// `DefId` that identifies the variant's constructor.
     /// If this variant is a struct variant, then this is `None`.
-    pub ctor_def_id: Option<DefId>,
+    pub ctor: Option<(CtorKind, DefId)>,
     /// Variant or struct name.
     pub name: Symbol,
     /// Discriminant of this variant.
     pub discr: VariantDiscr,
     /// Fields of this variant.
     pub fields: Vec<FieldDef>,
-    /// Type of constructor of variant.
-    pub ctor_kind: CtorKind,
     /// Flags of the variant (e.g. is field list non-exhaustive)?
     flags: VariantFlags,
 }
@@ -1885,19 +1843,18 @@ impl VariantDef {
     pub fn new(
         name: Symbol,
         variant_did: Option<DefId>,
-        ctor_def_id: Option<DefId>,
+        ctor: Option<(CtorKind, DefId)>,
         discr: VariantDiscr,
         fields: Vec<FieldDef>,
-        ctor_kind: CtorKind,
         adt_kind: AdtKind,
         parent_did: DefId,
         recovered: bool,
         is_field_list_non_exhaustive: bool,
     ) -> Self {
         debug!(
-            "VariantDef::new(name = {:?}, variant_did = {:?}, ctor_def_id = {:?}, discr = {:?},
-             fields = {:?}, ctor_kind = {:?}, adt_kind = {:?}, parent_did = {:?})",
-            name, variant_did, ctor_def_id, discr, fields, ctor_kind, adt_kind, parent_did,
+            "VariantDef::new(name = {:?}, variant_did = {:?}, ctor = {:?}, discr = {:?},
+             fields = {:?}, adt_kind = {:?}, parent_did = {:?})",
+            name, variant_did, ctor, discr, fields, adt_kind, parent_did,
         );
 
         let mut flags = VariantFlags::NO_VARIANT_FLAGS;
@@ -1909,15 +1866,7 @@ impl VariantDef {
             flags |= VariantFlags::IS_RECOVERED;
         }
 
-        VariantDef {
-            def_id: variant_did.unwrap_or(parent_did),
-            ctor_def_id,
-            name,
-            discr,
-            fields,
-            ctor_kind,
-            flags,
-        }
+        VariantDef { def_id: variant_did.unwrap_or(parent_did), ctor, name, discr, fields, flags }
     }
 
     /// Is this field list non-exhaustive?
@@ -1936,6 +1885,16 @@ impl VariantDef {
     pub fn ident(&self, tcx: TyCtxt<'_>) -> Ident {
         Ident::new(self.name, tcx.def_ident_span(self.def_id).unwrap())
     }
+
+    #[inline]
+    pub fn ctor_kind(&self) -> Option<CtorKind> {
+        self.ctor.map(|(kind, _)| kind)
+    }
+
+    #[inline]
+    pub fn ctor_def_id(&self) -> Option<DefId> {
+        self.ctor.map(|(_, def_id)| def_id)
+    }
 }
 
 impl PartialEq for VariantDef {
@@ -1948,26 +1907,8 @@ impl PartialEq for VariantDef {
         // definition of `VariantDef` changes, a compile-error will be produced,
         // reminding us to revisit this assumption.
 
-        let Self {
-            def_id: lhs_def_id,
-            ctor_def_id: _,
-            name: _,
-            discr: _,
-            fields: _,
-            ctor_kind: _,
-            flags: _,
-        } = &self;
-
-        let Self {
-            def_id: rhs_def_id,
-            ctor_def_id: _,
-            name: _,
-            discr: _,
-            fields: _,
-            ctor_kind: _,
-            flags: _,
-        } = other;
-
+        let Self { def_id: lhs_def_id, ctor: _, name: _, discr: _, fields: _, flags: _ } = &self;
+        let Self { def_id: rhs_def_id, ctor: _, name: _, discr: _, fields: _, flags: _ } = other;
         lhs_def_id == rhs_def_id
     }
 }
@@ -1984,9 +1925,7 @@ impl Hash for VariantDef {
         // of `VariantDef` changes, a compile-error will be produced, reminding
         // us to revisit this assumption.
 
-        let Self { def_id, ctor_def_id: _, name: _, discr: _, fields: _, ctor_kind: _, flags: _ } =
-            &self;
-
+        let Self { def_id, ctor: _, name: _, discr: _, fields: _, flags: _ } = &self;
         def_id.hash(s)
     }
 }

@@ -634,7 +634,7 @@ impl<'tcx> LowerInto<'tcx, Option<chalk_ir::QuantifiedWhereClause<RustInterner<'
 }
 
 impl<'tcx> LowerInto<'tcx, chalk_ir::Binders<chalk_ir::QuantifiedWhereClauses<RustInterner<'tcx>>>>
-    for &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>
+    for &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>
 {
     fn lower_into(
         self,
@@ -689,7 +689,7 @@ impl<'tcx> LowerInto<'tcx, chalk_ir::Binders<chalk_ir::QuantifiedWhereClauses<Ru
                         trait_id: chalk_ir::TraitId(def_id),
                         substitution: interner
                             .tcx
-                            .mk_substs_trait(self_ty, &[])
+                            .mk_substs_trait(self_ty, [])
                             .lower_into(interner),
                     }),
                 ),
