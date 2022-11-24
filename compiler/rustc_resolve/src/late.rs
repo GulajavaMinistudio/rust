@@ -3841,7 +3841,9 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 }
             }
 
-            ExprKind::Loop(ref block, label) => self.resolve_labeled_block(label, expr.id, &block),
+            ExprKind::Loop(ref block, label, _) => {
+                self.resolve_labeled_block(label, expr.id, &block)
+            }
 
             ExprKind::While(ref cond, ref block, label) => {
                 self.with_resolved_label(label, expr.id, |this| {
@@ -3912,7 +3914,7 @@ impl<'a: 'ast, 'b, 'ast> LateResolutionVisitor<'a, 'b, 'ast> {
                 visit::walk_expr(self, expr);
                 self.diagnostic_metadata.current_type_ascription.pop();
             }
-            // `async |x| ...` gets desugared to `|x| future_from_generator(|| ...)`, so we need to
+            // `async |x| ...` gets desugared to `|x| async {...}`, so we need to
             // resolve the arguments within the proper scopes so that usages of them inside the
             // closure are detected as upvars rather than normal closure arg usages.
             ExprKind::Closure(box ast::Closure {

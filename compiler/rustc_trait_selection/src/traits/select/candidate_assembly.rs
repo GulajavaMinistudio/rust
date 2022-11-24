@@ -6,11 +6,9 @@
 //!
 //! [rustc dev guide]:https://rustc-dev-guide.rust-lang.org/traits/resolution.html#candidate-assembly
 use hir::LangItem;
-use rustc_errors::DelayDm;
 use rustc_hir as hir;
 use rustc_infer::traits::ObligationCause;
 use rustc_infer::traits::{Obligation, SelectionError, TraitObligation};
-use rustc_lint_defs::builtin::DEREF_INTO_DYN_SUPERTRAIT;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{self, Ty, TypeVisitable};
 use rustc_target::spec::abi::Abi;
@@ -314,7 +312,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     self.assemble_builtin_bound_candidates(clone_conditions, &mut candidates);
                 }
 
-                self.assemble_generator_candidates(obligation, &mut candidates);
+                if lang_items.gen_trait() == Some(def_id) {
+                    self.assemble_generator_candidates(obligation, &mut candidates);
+                } else if lang_items.future_trait() == Some(def_id) {
+                    self.assemble_future_candidates(obligation, &mut candidates);
+                }
+
                 self.assemble_closure_candidates(obligation, &mut candidates);
                 self.assemble_fn_pointer_candidates(obligation, &mut candidates);
                 self.assemble_candidates_from_impls(obligation, &mut candidates);
@@ -402,10 +405,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         obligation: &TraitObligation<'tcx>,
         candidates: &mut SelectionCandidateSet<'tcx>,
     ) {
-        if self.tcx().lang_items().gen_trait() != Some(obligation.predicate.def_id()) {
-            return;
-        }
-
         // Okay to skip binder because the substs on generator types never
         // touch bound regions, they just capture the in-scope
         // type/region parameters.
@@ -421,6 +420,23 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 candidates.ambiguous = true;
             }
             _ => {}
+        }
+    }
+
+    fn assemble_future_candidates(
+        &mut self,
+        obligation: &TraitObligation<'tcx>,
+        candidates: &mut SelectionCandidateSet<'tcx>,
+    ) {
+        let self_ty = obligation.self_ty().skip_binder();
+        if let ty::Generator(did, ..) = self_ty.kind() {
+            if let Some(rustc_hir::GeneratorKind::Async(_generator_kind)) =
+                self.tcx().generator_kind(did)
+            {
+                debug!(?self_ty, ?obligation, "assemble_future_candidates",);
+
+                candidates.vec.push(FutureCandidate);
+            }
         }
     }
 
@@ -776,9 +792,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         match (source.kind(), target.kind()) {
             // Trait+Kx+'a -> Trait+Ky+'b (upcasts).
-            (&ty::Dynamic(ref data_a, _, dyn_a), &ty::Dynamic(ref data_b, _, dyn_b))
-                if dyn_a == dyn_b =>
-            {
+            (&ty::Dynamic(ref data_a, _, ty::Dyn), &ty::Dynamic(ref data_b, _, ty::Dyn)) => {
                 // Upcast coercions permit several things:
                 //
                 // 1. Dropping auto traits, e.g., `Foo + Send` to `Foo`
@@ -811,16 +825,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             &obligation.cause,
                         ) {
                             if deref_trait_ref.def_id() == target_trait_did {
-                                self.tcx().struct_span_lint_hir(
-                                    DEREF_INTO_DYN_SUPERTRAIT,
-                                    obligation.cause.body_id,
-                                    obligation.cause.span,
-                                    DelayDm(|| format!(
-                                        "`{}` implements `Deref` with supertrait `{}` as output",
-                                        source, deref_trait_ref
-                                    )),
-                                    |lint| lint,
-                                );
                                 return;
                             }
                         }

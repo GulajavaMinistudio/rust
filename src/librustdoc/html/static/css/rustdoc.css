@@ -701,6 +701,8 @@ a {
 }
 
 .small-section-header {
+	/* fields use <span> tags, but should get their own lines */
+	display: block;
 	position: relative;
 }
 
@@ -727,9 +729,6 @@ a {
 }
 h2.small-section-header > .anchor {
 	padding-right: 6px;
-}
-.anchor::before {
-	content: '§';
 }
 
 .main-heading a:hover,
