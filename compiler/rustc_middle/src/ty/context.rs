@@ -137,6 +137,7 @@ pub struct CtxtInterners<'tcx> {
     // Specifically use a speedy hash algorithm for these hash sets, since
     // they're accessed quite often.
     type_: InternedSet<'tcx, WithStableHash<TyS<'tcx>>>,
+    const_lists: InternedSet<'tcx, List<ty::Const<'tcx>>>,
     substs: InternedSet<'tcx, InternalSubsts<'tcx>>,
     canonical_var_infos: InternedSet<'tcx, List<CanonicalVarInfo<'tcx>>>,
     region: InternedSet<'tcx, RegionKind<'tcx>>,
@@ -148,7 +149,7 @@ pub struct CtxtInterners<'tcx> {
     const_: InternedSet<'tcx, ConstS<'tcx>>,
     const_allocation: InternedSet<'tcx, Allocation>,
     bound_variable_kinds: InternedSet<'tcx, List<ty::BoundVariableKind>>,
-    layout: InternedSet<'tcx, LayoutS<'tcx>>,
+    layout: InternedSet<'tcx, LayoutS<VariantIdx>>,
     adt_def: InternedSet<'tcx, AdtDefData>,
 }
 
@@ -157,6 +158,7 @@ impl<'tcx> CtxtInterners<'tcx> {
         CtxtInterners {
             arena,
             type_: Default::default(),
+            const_lists: Default::default(),
             substs: Default::default(),
             region: Default::default(),
             poly_existential_predicates: Default::default(),
@@ -1233,7 +1235,7 @@ impl<'tcx> TyCtxt<'tcx> {
             global_ctxt: untracked_resolutions,
             ast_lowering: untracked_resolver_for_lowering,
         } = resolver_outputs;
-        let data_layout = TargetDataLayout::parse(&s.target).unwrap_or_else(|err| {
+        let data_layout = s.target.parse_data_layout().unwrap_or_else(|err| {
             s.emit_fatal(err);
         });
         let interners = CtxtInterners::new(arena);
@@ -2244,7 +2246,7 @@ direct_interners! {
     region: mk_region(RegionKind<'tcx>): Region -> Region<'tcx>,
     const_: mk_const_internal(ConstS<'tcx>): Const -> Const<'tcx>,
     const_allocation: intern_const_alloc(Allocation): ConstAllocation -> ConstAllocation<'tcx>,
-    layout: intern_layout(LayoutS<'tcx>): Layout -> Layout<'tcx>,
+    layout: intern_layout(LayoutS<VariantIdx>): Layout -> Layout<'tcx>,
     adt_def: intern_adt_def(AdtDefData): AdtDef -> AdtDef<'tcx>,
 }
 
@@ -2261,6 +2263,7 @@ macro_rules! slice_interners {
 }
 
 slice_interners!(
+    const_lists: _intern_const_list(Const<'tcx>),
     substs: _intern_substs(GenericArg<'tcx>),
     canonical_var_infos: _intern_canonical_var_infos(CanonicalVarInfo<'tcx>),
     poly_existential_predicates:
@@ -2296,7 +2299,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let future_trait = self.require_lang_item(LangItem::Future, None);
 
         self.explicit_item_bounds(def_id).iter().any(|(predicate, _)| {
-            let ty::PredicateKind::Trait(trait_predicate) = predicate.kind().skip_binder() else {
+            let ty::PredicateKind::Clause(ty::Clause::Trait(trait_predicate)) = predicate.kind().skip_binder() else {
                 return false;
             };
             trait_predicate.trait_ref.def_id == future_trait
@@ -2319,7 +2322,9 @@ impl<'tcx> TyCtxt<'tcx> {
             let generic_predicates = self.super_predicates_of(trait_did);
 
             for (predicate, _) in generic_predicates.predicates {
-                if let ty::PredicateKind::Trait(data) = predicate.kind().skip_binder() {
+                if let ty::PredicateKind::Clause(ty::Clause::Trait(data)) =
+                    predicate.kind().skip_binder()
+                {
                     if set.insert(data.def_id()) {
                         stack.push(data.def_id());
                     }
@@ -2712,6 +2717,17 @@ impl<'tcx> TyCtxt<'tcx> {
         } else {
             self._intern_predicates(preds)
         }
+    }
+
+    pub fn mk_const_list<I: InternAs<ty::Const<'tcx>, &'tcx List<ty::Const<'tcx>>>>(
+        self,
+        iter: I,
+    ) -> I::Output {
+        iter.intern_with(|xs| self.intern_const_list(xs))
+    }
+
+    pub fn intern_const_list(self, cs: &[ty::Const<'tcx>]) -> &'tcx List<ty::Const<'tcx>> {
+        if cs.is_empty() { List::empty() } else { self._intern_const_list(cs) }
     }
 
     pub fn intern_type_list(self, ts: &[Ty<'tcx>]) -> &'tcx List<Ty<'tcx>> {

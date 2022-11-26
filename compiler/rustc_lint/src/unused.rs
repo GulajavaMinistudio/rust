@@ -258,8 +258,9 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                     )
                     .filter_map(|obligation| {
                         // We only look at the `DefId`, so it is safe to skip the binder here.
-                        if let ty::PredicateKind::Trait(ref poly_trait_predicate) =
-                            obligation.predicate.kind().skip_binder()
+                        if let ty::PredicateKind::Clause(ty::Clause::Trait(
+                            ref poly_trait_predicate,
+                        )) = obligation.predicate.kind().skip_binder()
                         {
                             let def_id = poly_trait_predicate.trait_ref.def_id;
 
@@ -1015,6 +1016,7 @@ impl EarlyLintPass for UnusedParens {
         if let ast::TyKind::Paren(r) = &ty.kind {
             match &r.kind {
                 ast::TyKind::TraitObject(..) => {}
+                ast::TyKind::BareFn(b) if b.generic_params.len() > 0 => {}
                 ast::TyKind::ImplTrait(_, bounds) if bounds.len() > 1 => {}
                 ast::TyKind::Array(_, len) => {
                     self.check_unused_delims_expr(

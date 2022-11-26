@@ -282,10 +282,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 self.assemble_builtin_bound_candidates(copy_conditions, &mut candidates);
             } else if lang_items.discriminant_kind_trait() == Some(def_id) {
                 // `DiscriminantKind` is automatically implemented for every type.
-                candidates.vec.push(DiscriminantKindCandidate);
+                candidates.vec.push(BuiltinCandidate { has_nested: false });
             } else if lang_items.pointee_trait() == Some(def_id) {
                 // `Pointee` is automatically implemented for every type.
-                candidates.vec.push(PointeeCandidate);
+                candidates.vec.push(BuiltinCandidate { has_nested: false });
             } else if lang_items.sized_trait() == Some(def_id) {
                 // Sized is never implementable by end-users, it is
                 // always automatically computed.
@@ -731,12 +731,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // <ty as Deref>
         let trait_ref = tcx.mk_trait_ref(tcx.lang_items().deref_trait()?, [ty]);
 
-        let obligation = traits::Obligation::new(
-            tcx,
-            cause.clone(),
-            param_env,
-            ty::Binder::dummy(trait_ref).without_const(),
-        );
+        let obligation =
+            traits::Obligation::new(tcx, cause.clone(), param_env, ty::Binder::dummy(trait_ref));
         if !self.infcx.predicate_may_hold(&obligation) {
             return None;
         }

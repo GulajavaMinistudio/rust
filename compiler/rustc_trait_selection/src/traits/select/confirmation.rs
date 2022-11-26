@@ -22,12 +22,11 @@ use crate::traits::util::{self, closure_trait_ref_and_return_type, predicate_for
 use crate::traits::{
     BuiltinDerivedObligation, ImplDerivedObligation, ImplDerivedObligationCause, ImplSource,
     ImplSourceAutoImplData, ImplSourceBuiltinData, ImplSourceClosureData,
-    ImplSourceConstDestructData, ImplSourceDiscriminantKindData, ImplSourceFnPointerData,
-    ImplSourceFutureData, ImplSourceGeneratorData, ImplSourceObjectData, ImplSourcePointeeData,
-    ImplSourceTraitAliasData, ImplSourceTraitUpcastingData, ImplSourceUserDefinedData, Normalized,
-    ObjectCastObligation, Obligation, ObligationCause, OutputTypeParameterMismatch,
-    PredicateObligation, Selection, SelectionError, TraitNotObjectSafe, TraitObligation,
-    Unimplemented, VtblSegment,
+    ImplSourceConstDestructData, ImplSourceFnPointerData, ImplSourceFutureData,
+    ImplSourceGeneratorData, ImplSourceObjectData, ImplSourceTraitAliasData,
+    ImplSourceTraitUpcastingData, ImplSourceUserDefinedData, Normalized, ObjectCastObligation,
+    Obligation, ObligationCause, OutputTypeParameterMismatch, PredicateObligation, Selection,
+    SelectionError, TraitNotObjectSafe, TraitObligation, Unimplemented, VtblSegment,
 };
 
 use super::BuiltinImplConditions;
@@ -99,12 +98,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 let data = self.confirm_fn_pointer_candidate(obligation)?;
                 ImplSource::FnPointer(data)
             }
-
-            DiscriminantKindCandidate => {
-                ImplSource::DiscriminantKind(ImplSourceDiscriminantKindData)
-            }
-
-            PointeeCandidate => ImplSource::Pointee(ImplSourcePointeeData),
 
             TraitAliasCandidate => {
                 let data = self.confirm_trait_alias_candidate(obligation);
@@ -605,8 +598,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     {
         debug!(?obligation, "confirm_fn_pointer_candidate");
 
-        // Okay to skip binder; it is reintroduced below.
-        let self_ty = self.infcx.shallow_resolve(obligation.self_ty().skip_binder());
+        let self_ty = self
+            .infcx
+            .shallow_resolve(obligation.self_ty().no_bound_vars())
+            .expect("fn pointer should not capture bound vars from predicate");
         let sig = self_ty.fn_sig(self.tcx());
         let trait_ref = closure_trait_ref_and_return_type(
             self.tcx(),
@@ -621,15 +616,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         // Confirm the `type Output: Sized;` bound that is present on `FnOnce`
         let cause = obligation.derived_cause(BuiltinDerivedObligation);
-        // The binder on the Fn obligation is "less" important than the one on
-        // the signature, as evidenced by how we treat it during projection.
-        // The safe thing to do here is to liberate it, though, which should
-        // have no worse effect than skipping the binder here.
-        let liberated_fn_ty =
-            self.infcx.replace_bound_vars_with_placeholders(obligation.predicate.rebind(self_ty));
-        let output_ty = self
-            .infcx
-            .replace_bound_vars_with_placeholders(liberated_fn_ty.fn_sig(self.tcx()).output());
+        let output_ty = self.infcx.replace_bound_vars_with_placeholders(sig.output());
         let output_ty = normalize_with_depth_to(
             self,
             obligation.param_env,
@@ -640,12 +627,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         );
         let tr =
             ty::Binder::dummy(self.tcx().at(cause.span).mk_trait_ref(LangItem::Sized, [output_ty]));
-        nested.push(Obligation::new(
-            self.infcx.tcx,
-            cause,
-            obligation.param_env,
-            tr.to_poly_trait_predicate(),
-        ));
+        nested.push(Obligation::new(self.infcx.tcx, cause, obligation.param_env, tr));
 
         Ok(ImplSourceFnPointerData { fn_ty: self_ty, nested })
     }
@@ -693,16 +675,19 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         let gen_sig = substs.as_generator().poly_sig();
 
-        // (1) Feels icky to skip the binder here, but OTOH we know
-        // that the self-type is an generator type and hence is
+        // NOTE: The self-type is a generator type and hence is
         // in fact unparameterized (or at least does not reference any
-        // regions bound in the obligation). Still probably some
-        // refactoring could make this nicer.
+        // regions bound in the obligation).
+        let self_ty = obligation
+            .predicate
+            .self_ty()
+            .no_bound_vars()
+            .expect("unboxed closure type should not capture bound vars from the predicate");
 
         let trait_ref = super::util::generator_trait_ref_and_outputs(
             self.tcx(),
             obligation.predicate.def_id(),
-            obligation.predicate.skip_binder().self_ty(), // (1)
+            self_ty,
             gen_sig,
         )
         .map_bound(|(trait_ref, ..)| trait_ref);
