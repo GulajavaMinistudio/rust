@@ -208,6 +208,8 @@ pub struct ResolverAstLowering {
     /// A small map keeping true kinds of built-in macros that appear to be fn-like on
     /// the surface (`macro` items in libcore), but are actually attributes or derives.
     pub builtin_macro_kinds: FxHashMap<LocalDefId, MacroKind>,
+    /// List functions and methods for which lifetime elision was successful.
+    pub lifetime_elision_allowed: FxHashSet<ast::NodeId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -412,7 +414,7 @@ impl Visibility<DefId> {
         self.map_id(|id| id.expect_local())
     }
 
-    // Returns `true` if this item is visible anywhere in the local crate.
+    /// Returns `true` if this item is visible anywhere in the local crate.
     pub fn is_visible_locally(self) -> bool {
         match self {
             Visibility::Public => true,
@@ -529,7 +531,7 @@ impl ty::EarlyBoundRegion {
     /// Does this early bound region have a name? Early bound regions normally
     /// always have names except when using anonymous lifetimes (`'_`).
     pub fn has_name(&self) -> bool {
-        self.name != kw::UnderscoreLifetime
+        self.name != kw::UnderscoreLifetime && self.name != kw::Empty
     }
 }
 
@@ -924,9 +926,10 @@ impl<'tcx> PolyTraitPredicate<'tcx> {
     }
 }
 
+/// `A: B`
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, TyEncodable, TyDecodable)]
 #[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
-pub struct OutlivesPredicate<A, B>(pub A, pub B); // `A: B`
+pub struct OutlivesPredicate<A, B>(pub A, pub B);
 pub type RegionOutlivesPredicate<'tcx> = OutlivesPredicate<ty::Region<'tcx>, ty::Region<'tcx>>;
 pub type TypeOutlivesPredicate<'tcx> = OutlivesPredicate<Ty<'tcx>, ty::Region<'tcx>>;
 pub type PolyRegionOutlivesPredicate<'tcx> = ty::Binder<'tcx, RegionOutlivesPredicate<'tcx>>;
@@ -1747,7 +1750,7 @@ impl<'tcx> ParamEnv<'tcx> {
         }
 
         ParamEnv::new(
-            tcx.normalize_opaque_types(self.caller_bounds()),
+            tcx.reveal_opaque_types_in_bounds(self.caller_bounds()),
             Reveal::All,
             self.constness(),
         )

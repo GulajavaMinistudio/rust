@@ -83,7 +83,9 @@ pub struct BoundRegion {
 impl BoundRegionKind {
     pub fn is_named(&self) -> bool {
         match *self {
-            BoundRegionKind::BrNamed(_, name) => name != kw::UnderscoreLifetime,
+            BoundRegionKind::BrNamed(_, name) => {
+                name != kw::UnderscoreLifetime && name != kw::Empty
+            }
             _ => false,
         }
     }
@@ -2241,7 +2243,7 @@ impl<'tcx> Ty<'tcx> {
         }
     }
 
-    // If `self` is a primitive, return its [`Symbol`].
+    /// If `self` is a primitive, return its [`Symbol`].
     pub fn primitive_symbol(self) -> Option<Symbol> {
         match self.kind() {
             ty::Bool => Some(sym::bool),

@@ -716,19 +716,12 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 let moved_place = &self.move_data.move_paths[move_out.path].place;
                 let move_spans = self.move_spans(moved_place.as_ref(), move_out.source);
                 let move_span = move_spans.args_or_use();
-                let suggestion = if borrow_level == hir::Mutability::Mut {
-                    "&mut ".to_string()
-                } else {
-                    "&".to_string()
-                };
+                let suggestion = borrow_level.ref_prefix_str().to_owned();
                 (move_span.shrink_to_lo(), suggestion)
             })
             .collect();
         err.multipart_suggestion_verbose(
-            &format!(
-                "consider {}borrowing {value_name}",
-                if borrow_level == hir::Mutability::Mut { "mutably " } else { "" }
-            ),
+            format!("consider {}borrowing {value_name}", borrow_level.mutably_str()),
             sugg,
             Applicability::MaybeIncorrect,
         );
@@ -2677,7 +2670,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                             if let hir::TyKind::Rptr(lifetime, _) = &fn_decl.inputs[index].kind {
                                 // With access to the lifetime, we can get
                                 // the span of it.
-                                arguments.push((*argument, lifetime.span));
+                                arguments.push((*argument, lifetime.ident.span));
                             } else {
                                 bug!("ty type is a ref but hir type is not");
                             }
@@ -2696,7 +2689,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 let mut return_span = fn_decl.output.span();
                 if let hir::FnRetTy::Return(ty) = &fn_decl.output {
                     if let hir::TyKind::Rptr(lifetime, _) = ty.kind {
-                        return_span = lifetime.span;
+                        return_span = lifetime.ident.span;
                     }
                 }
 

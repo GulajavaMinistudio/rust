@@ -914,8 +914,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     // Check if an expression `original_expr_id` comes from the condition of a while loop,
-    // as opposed from the body of a while loop, which we can naively check by iterating
-    // parents until we find a loop...
+    /// as opposed from the body of a while loop, which we can naively check by iterating
+    /// parents until we find a loop...
     pub(super) fn comes_from_while_condition(
         &self,
         original_expr_id: HirId,
@@ -2333,12 +2333,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         base: &'tcx hir::Expr<'tcx>,
         ty: Ty<'tcx>,
     ) {
-        let output_ty = match self.get_impl_future_output_ty(ty) {
-            Some(output_ty) => self.resolve_vars_if_possible(output_ty),
-            _ => return,
-        };
+        let Some(output_ty) = self.get_impl_future_output_ty(ty) else { return; };
         let mut add_label = true;
-        if let ty::Adt(def, _) = output_ty.skip_binder().kind() {
+        if let ty::Adt(def, _) = output_ty.kind() {
             // no field access on enum type
             if !def.is_enum() {
                 if def

@@ -681,25 +681,20 @@ pub trait PrettyPrinter<'tcx>:
             }
             ty::Str => p!("str"),
             ty::Generator(did, substs, movability) => {
-                // FIXME(swatinem): async constructs used to be pretty printed
-                // as `impl Future` previously due to the `from_generator` wrapping.
-                // lets special case this here for now to avoid churn in diagnostics.
-                let generator_kind = self.tcx().generator_kind(did);
-                if matches!(generator_kind, Some(hir::GeneratorKind::Async(..))) {
-                    let return_ty = substs.as_generator().return_ty();
-                    p!(write("impl Future<Output = {}>", return_ty));
-
-                    return Ok(self);
-                }
-
                 p!(write("["));
-                match movability {
-                    hir::Movability::Movable => {}
-                    hir::Movability::Static => p!("static "),
+                let generator_kind = self.tcx().generator_kind(did).unwrap();
+                let should_print_movability =
+                    self.should_print_verbose() || generator_kind == hir::GeneratorKind::Gen;
+
+                if should_print_movability {
+                    match movability {
+                        hir::Movability::Movable => {}
+                        hir::Movability::Static => p!("static "),
+                    }
                 }
 
                 if !self.should_print_verbose() {
-                    p!("generator");
+                    p!(write("{}", generator_kind));
                     // FIXME(eddyb) should use `def_span`.
                     if let Some(did) = did.as_local() {
                         let span = self.tcx().def_span(did);
@@ -1977,17 +1972,13 @@ impl<'tcx> PrettyPrinter<'tcx> for FmtPrinter<'_, 'tcx> {
         let identify_regions = self.tcx.sess.opts.unstable_opts.identify_regions;
 
         match *region {
-            ty::ReEarlyBound(ref data) => {
-                data.name != kw::Empty && data.name != kw::UnderscoreLifetime
-            }
+            ty::ReEarlyBound(ref data) => data.has_name(),
 
             ty::ReLateBound(_, ty::BoundRegion { kind: br, .. })
             | ty::ReFree(ty::FreeRegion { bound_region: br, .. })
             | ty::RePlaceholder(ty::Placeholder { name: br, .. }) => {
-                if let ty::BrNamed(_, name) = br {
-                    if name != kw::Empty && name != kw::UnderscoreLifetime {
-                        return true;
-                    }
+                if br.is_named() {
+                    return true;
                 }
 
                 if let Some((region, _)) = highlight.highlight_bound_region {
@@ -2063,11 +2054,9 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
             ty::ReLateBound(_, ty::BoundRegion { kind: br, .. })
             | ty::ReFree(ty::FreeRegion { bound_region: br, .. })
             | ty::RePlaceholder(ty::Placeholder { name: br, .. }) => {
-                if let ty::BrNamed(_, name) = br {
-                    if name != kw::Empty && name != kw::UnderscoreLifetime {
-                        p!(write("{}", name));
-                        return Ok(self);
-                    }
+                if let ty::BrNamed(_, name) = br && br.is_named() {
+                    p!(write("{}", name));
+                    return Ok(self);
                 }
 
                 if let Some((region, counter)) = highlight.highlight_bound_region {
@@ -2280,7 +2269,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
 
                         (name, ty::BrNamed(CRATE_DEF_ID.to_def_id(), name))
                     }
-                    ty::BrNamed(def_id, kw::UnderscoreLifetime) => {
+                    ty::BrNamed(def_id, kw::UnderscoreLifetime | kw::Empty) => {
                         let name = next_name(&self);
 
                         if let Some(lt_idx) = lifetime_idx {
