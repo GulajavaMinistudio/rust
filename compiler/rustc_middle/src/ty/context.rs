@@ -17,8 +17,8 @@ use crate::traits;
 use crate::ty::query::{self, TyCtxtAt};
 use crate::ty::{
     self, AdtDef, AdtDefData, AdtKind, Binder, BindingMode, BoundVar, CanonicalPolyFnSig,
-    ClosureSizeProfileData, Const, ConstS, ConstVid, DefIdTree, FloatTy, FloatVar, FloatVid,
-    GenericParamDefKind, InferConst, InferTy, IntTy, IntVar, IntVid, List, ParamConst, ParamTy,
+    ClosureSizeProfileData, Const, ConstS, DefIdTree, FloatTy, FloatVar, FloatVid,
+    GenericParamDefKind, InferTy, IntTy, IntVar, IntVid, List, ParamConst, ParamTy,
     PolyExistentialPredicate, PolyFnSig, Predicate, PredicateKind, PredicateS, ProjectionTy,
     Region, RegionKind, ReprOptions, TraitObjectVisitor, Ty, TyKind, TyS, TyVar, TyVid, TypeAndMut,
     UintTy, Visibility,
@@ -142,7 +142,7 @@ pub struct CtxtInterners<'tcx> {
     canonical_var_infos: InternedSet<'tcx, List<CanonicalVarInfo<'tcx>>>,
     region: InternedSet<'tcx, RegionKind<'tcx>>,
     poly_existential_predicates: InternedSet<'tcx, List<PolyExistentialPredicate<'tcx>>>,
-    predicate: InternedSet<'tcx, PredicateS<'tcx>>,
+    predicate: InternedSet<'tcx, WithStableHash<PredicateS<'tcx>>>,
     predicates: InternedSet<'tcx, List<Predicate<'tcx>>>,
     projs: InternedSet<'tcx, List<ProjectionKind>>,
     place_elems: InternedSet<'tcx, List<PlaceElem<'tcx>>>,
@@ -190,20 +190,8 @@ impl<'tcx> CtxtInterners<'tcx> {
             self.type_
                 .intern(kind, |kind| {
                     let flags = super::flags::FlagComputation::for_kind(&kind);
-
-                    // It's impossible to hash inference variables (and will ICE), so we don't need to try to cache them.
-                    // Without incremental, we rarely stable-hash types, so let's not do it proactively.
-                    let stable_hash = if flags.flags.intersects(TypeFlags::NEEDS_INFER)
-                        || sess.opts.incremental.is_none()
-                    {
-                        Fingerprint::ZERO
-                    } else {
-                        let mut hasher = StableHasher::new();
-                        let mut hcx =
-                            StableHashingContext::new(sess, definitions, cstore, source_span);
-                        kind.hash_stable(&mut hcx, &mut hasher);
-                        hasher.finish()
-                    };
+                    let stable_hash =
+                        self.stable_hash(&flags, sess, definitions, cstore, source_span, &kind);
 
                     let ty_struct = TyS {
                         kind,
@@ -219,12 +207,43 @@ impl<'tcx> CtxtInterners<'tcx> {
         ))
     }
 
+    fn stable_hash<'a, T: HashStable<StableHashingContext<'a>>>(
+        &self,
+        flags: &ty::flags::FlagComputation,
+        sess: &'a Session,
+        definitions: &'a rustc_hir::definitions::Definitions,
+        cstore: &'a CrateStoreDyn,
+        source_span: &'a IndexVec<LocalDefId, Span>,
+        val: &T,
+    ) -> Fingerprint {
+        // It's impossible to hash inference variables (and will ICE), so we don't need to try to cache them.
+        // Without incremental, we rarely stable-hash types, so let's not do it proactively.
+        if flags.flags.intersects(TypeFlags::NEEDS_INFER) || sess.opts.incremental.is_none() {
+            Fingerprint::ZERO
+        } else {
+            let mut hasher = StableHasher::new();
+            let mut hcx = StableHashingContext::new(sess, definitions, cstore, source_span);
+            val.hash_stable(&mut hcx, &mut hasher);
+            hasher.finish()
+        }
+    }
+
     #[inline(never)]
-    fn intern_predicate(&self, kind: Binder<'tcx, PredicateKind<'tcx>>) -> Predicate<'tcx> {
+    fn intern_predicate(
+        &self,
+        kind: Binder<'tcx, PredicateKind<'tcx>>,
+        sess: &Session,
+        definitions: &rustc_hir::definitions::Definitions,
+        cstore: &CrateStoreDyn,
+        source_span: &IndexVec<LocalDefId, Span>,
+    ) -> Predicate<'tcx> {
         Predicate(Interned::new_unchecked(
             self.predicate
                 .intern(kind, |kind| {
                     let flags = super::flags::FlagComputation::for_predicate(kind);
+
+                    let stable_hash =
+                        self.stable_hash(&flags, sess, definitions, cstore, source_span, &kind);
 
                     let predicate_struct = PredicateS {
                         kind,
@@ -232,7 +251,10 @@ impl<'tcx> CtxtInterners<'tcx> {
                         outer_exclusive_binder: flags.outer_exclusive_binder,
                     };
 
-                    InternedInSet(self.arena.alloc(predicate_struct))
+                    InternedInSet(
+                        self.arena
+                            .alloc(WithStableHash { internee: predicate_struct, stable_hash }),
+                    )
                 })
                 .0,
         ))
@@ -1361,6 +1383,11 @@ impl<'tcx> TyCtxt<'tcx> {
         self.diagnostic_items(did.krate).name_to_id.get(&name) == Some(&did)
     }
 
+    /// Returns `true` if the node pointed to by `def_id` is a generator for an async construct.
+    pub fn generator_is_async(self, def_id: DefId) -> bool {
+        matches!(self.generator_kind(def_id), Some(hir::GeneratorKind::Async(_)))
+    }
+
     pub fn stability(self) -> &'tcx stability::Index {
         self.stability_index(())
     }
@@ -2163,23 +2190,25 @@ impl<'tcx> Hash for InternedInSet<'tcx, WithStableHash<TyS<'tcx>>> {
     }
 }
 
-impl<'tcx> Borrow<Binder<'tcx, PredicateKind<'tcx>>> for InternedInSet<'tcx, PredicateS<'tcx>> {
+impl<'tcx> Borrow<Binder<'tcx, PredicateKind<'tcx>>>
+    for InternedInSet<'tcx, WithStableHash<PredicateS<'tcx>>>
+{
     fn borrow<'a>(&'a self) -> &'a Binder<'tcx, PredicateKind<'tcx>> {
         &self.0.kind
     }
 }
 
-impl<'tcx> PartialEq for InternedInSet<'tcx, PredicateS<'tcx>> {
-    fn eq(&self, other: &InternedInSet<'tcx, PredicateS<'tcx>>) -> bool {
+impl<'tcx> PartialEq for InternedInSet<'tcx, WithStableHash<PredicateS<'tcx>>> {
+    fn eq(&self, other: &InternedInSet<'tcx, WithStableHash<PredicateS<'tcx>>>) -> bool {
         // The `Borrow` trait requires that `x.borrow() == y.borrow()` equals
         // `x == y`.
         self.0.kind == other.0.kind
     }
 }
 
-impl<'tcx> Eq for InternedInSet<'tcx, PredicateS<'tcx>> {}
+impl<'tcx> Eq for InternedInSet<'tcx, WithStableHash<PredicateS<'tcx>>> {}
 
-impl<'tcx> Hash for InternedInSet<'tcx, PredicateS<'tcx>> {
+impl<'tcx> Hash for InternedInSet<'tcx, WithStableHash<PredicateS<'tcx>>> {
     fn hash<H: Hasher>(&self, s: &mut H) {
         // The `Borrow` trait requires that `x.borrow().hash(s) == x.hash(s)`.
         self.0.kind.hash(s)
@@ -2381,7 +2410,14 @@ impl<'tcx> TyCtxt<'tcx> {
 
     #[inline]
     pub fn mk_predicate(self, binder: Binder<'tcx, PredicateKind<'tcx>>) -> Predicate<'tcx> {
-        self.interners.intern_predicate(binder)
+        self.interners.intern_predicate(
+            binder,
+            self.sess,
+            &self.definitions.read(),
+            &*self.untracked_resolutions.cstore,
+            // This is only used to create a stable hashing context.
+            &self.untracked_resolutions.source_span,
+        )
     }
 
     #[inline]
@@ -2599,13 +2635,8 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn mk_const(self, kind: ty::ConstKind<'tcx>, ty: Ty<'tcx>) -> Const<'tcx> {
-        self.mk_const_internal(ty::ConstS { kind, ty })
-    }
-
-    #[inline]
-    pub fn mk_const_var(self, v: ConstVid<'tcx>, ty: Ty<'tcx>) -> Const<'tcx> {
-        self.mk_const(ty::ConstKind::Infer(InferConst::Var(v)), ty)
+    pub fn mk_const(self, kind: impl Into<ty::ConstKind<'tcx>>, ty: Ty<'tcx>) -> Const<'tcx> {
+        self.mk_const_internal(ty::ConstS { kind: kind.into(), ty })
     }
 
     #[inline]
@@ -2624,18 +2655,8 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
-    pub fn mk_const_infer(self, ic: InferConst<'tcx>, ty: Ty<'tcx>) -> ty::Const<'tcx> {
-        self.mk_const(ty::ConstKind::Infer(ic), ty)
-    }
-
-    #[inline]
     pub fn mk_ty_param(self, index: u32, name: Symbol) -> Ty<'tcx> {
         self.mk_ty(Param(ParamTy { index, name }))
-    }
-
-    #[inline]
-    pub fn mk_const_param(self, index: u32, name: Symbol, ty: Ty<'tcx>) -> Const<'tcx> {
-        self.mk_const(ty::ConstKind::Param(ParamConst { index, name }), ty)
     }
 
     pub fn mk_param_from_def(self, param: &ty::GenericParamDef) -> GenericArg<'tcx> {
@@ -2644,9 +2665,12 @@ impl<'tcx> TyCtxt<'tcx> {
                 self.mk_region(ty::ReEarlyBound(param.to_early_bound_region_data())).into()
             }
             GenericParamDefKind::Type { .. } => self.mk_ty_param(param.index, param.name).into(),
-            GenericParamDefKind::Const { .. } => {
-                self.mk_const_param(param.index, param.name, self.type_of(param.def_id)).into()
-            }
+            GenericParamDefKind::Const { .. } => self
+                .mk_const(
+                    ParamConst { index: param.index, name: param.name },
+                    self.type_of(param.def_id),
+                )
+                .into(),
         }
     }
 

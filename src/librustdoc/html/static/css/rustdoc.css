@@ -242,7 +242,6 @@ h1 a,
 }
 
 .content span.fn, .content a.fn,
-.content .fnname,
 .content span.method, .content a.method,
 .content span.tymethod, .content a.tymethod {
 	color: var(--function-link-color);
@@ -1512,12 +1511,11 @@ details.rustdoc-toggle > summary.hideme > span {
 }
 
 details.rustdoc-toggle > summary::before {
+	background: url("toggle-plus-1092eb4930d581b0.svg") no-repeat top left;
 	content: "";
 	cursor: pointer;
 	width: 16px;
 	height: 16px;
-	background-repeat: no-repeat;
-	background-position: top left;
 	display: inline-block;
 	vertical-align: middle;
 	opacity: .5;
@@ -1598,19 +1596,9 @@ details.rustdoc-toggle[open] > summary.hideme > span {
 
 details.rustdoc-toggle[open] > summary::before,
 details.rustdoc-toggle[open] > summary.hideme::before {
-	background-image: url("toggle-minus-31bbd6e4c77f5c96.svg");
-}
-
-details.rustdoc-toggle > summary::before {
-	background-image: url("toggle-plus-1092eb4930d581b0.svg");
-}
-
-details.rustdoc-toggle[open] > summary::before,
-details.rustdoc-toggle[open] > summary.hideme::before {
+	background: url("toggle-minus-31bbd6e4c77f5c96.svg") no-repeat top left;
 	width: 16px;
 	height: 16px;
-	background-repeat: no-repeat;
-	background-position: top left;
 	display: inline-block;
 	content: "";
 }
