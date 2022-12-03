@@ -365,7 +365,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 let node_id = self.next_node_id();
 
                 // Add a definition for the in-band const def.
-                self.create_def(parent_def_id.def_id, node_id, DefPathData::AnonConst);
+                self.create_def(parent_def_id.def_id, node_id, DefPathData::AnonConst, f.span);
 
                 let anon_const = AnonConst { id: node_id, value: arg };
                 generic_args.push(AngleBracketedArg::Arg(GenericArg::Const(anon_const)));
@@ -1606,16 +1606,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
         };
 
         // `#[allow(unreachable_code)]`
-        let attr = {
-            // `allow(unreachable_code)`
-            let allow = {
-                let allow_ident = Ident::new(sym::allow, self.lower_span(span));
-                let uc_ident = Ident::new(sym::unreachable_code, self.lower_span(span));
-                let uc_nested = attr::mk_nested_word_item(uc_ident);
-                attr::mk_list_item(allow_ident, vec![uc_nested])
-            };
-            attr::mk_attr_outer(&self.tcx.sess.parse_sess.attr_id_generator, allow)
-        };
+        let attr = attr::mk_attr_nested_word(
+            &self.tcx.sess.parse_sess.attr_id_generator,
+            AttrStyle::Outer,
+            sym::allow,
+            sym::unreachable_code,
+            self.lower_span(span),
+        );
         let attrs: AttrVec = thin_vec![attr];
 
         // `ControlFlow::Continue(val) => #[allow(unreachable_code)] val,`
