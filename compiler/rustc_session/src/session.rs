@@ -686,6 +686,10 @@ impl Session {
         self.opts.unstable_opts.sanitizer.contains(SanitizerSet::CFI)
     }
 
+    pub fn is_sanitizer_kcfi_enabled(&self) -> bool {
+        self.opts.unstable_opts.sanitizer.contains(SanitizerSet::KCFI)
+    }
+
     /// Check whether this compile session and crate type use static crt.
     pub fn crt_static(&self, crate_type: Option<CrateType>) -> bool {
         if !self.target.crt_static_respected {
@@ -951,6 +955,17 @@ impl Session {
         name: Symbol,
     ) -> Option<Symbol> {
         attrs.iter().find(|at| at.has_name(name)).and_then(|at| at.value_str())
+    }
+
+    pub fn diagnostic_width(&self) -> usize {
+        let default_column_width = 140;
+        if let Some(width) = self.opts.diagnostic_width {
+            width
+        } else if self.opts.unstable_opts.ui_testing {
+            default_column_width
+        } else {
+            termize::dimensions().map_or(default_column_width, |(w, _)| w)
+        }
     }
 }
 
@@ -1531,6 +1546,14 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         if sess.opts.unstable_opts.virtual_function_elimination {
             sess.emit_err(UnstableVirtualFunctionElimination);
         }
+    }
+
+    // LLVM CFI and KCFI are mutually exclusive
+    if sess.is_sanitizer_cfi_enabled() && sess.is_sanitizer_kcfi_enabled() {
+        sess.emit_err(CannotMixAndMatchSanitizers {
+            first: "cfi".to_string(),
+            second: "kcfi".to_string(),
+        });
     }
 
     if sess.opts.unstable_opts.stack_protector != StackProtector::None {
