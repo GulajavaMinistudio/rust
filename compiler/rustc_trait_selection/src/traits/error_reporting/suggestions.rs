@@ -1,4 +1,5 @@
 // ignore-tidy-filelength
+
 use super::{DefIdOrName, Obligation, ObligationCause, ObligationCauseCode, PredicateObligation};
 
 use crate::autoderef::Autoderef;
@@ -258,6 +259,7 @@ pub trait TypeErrCtxtExt<'tcx> {
         found: ty::PolyTraitRef<'tcx>,
         expected: ty::PolyTraitRef<'tcx>,
         cause: &ObligationCauseCode<'tcx>,
+        found_node: Option<Node<'_>>,
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed>;
 
     fn note_conflicting_closure_bounds(
@@ -369,7 +371,7 @@ fn suggest_restriction<'tcx>(
     msg: &str,
     err: &mut Diagnostic,
     fn_sig: Option<&hir::FnSig<'_>>,
-    projection: Option<&ty::ProjectionTy<'_>>,
+    projection: Option<&ty::AliasTy<'_>>,
     trait_pred: ty::PolyTraitPredicate<'tcx>,
     // When we are dealing with a trait, `super_traits` will be `Some`:
     // Given `trait T: A + B + C {}`
@@ -495,7 +497,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         let self_ty = trait_pred.skip_binder().self_ty();
         let (param_ty, projection) = match self_ty.kind() {
             ty::Param(_) => (true, None),
-            ty::Projection(projection) => (false, Some(projection)),
+            ty::Alias(ty::Projection, projection) => (false, Some(projection)),
             _ => (false, None),
         };
 
@@ -855,10 +857,10 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     fn_sig.inputs().map_bound(|inputs| &inputs[1..]),
                 ))
             }
-            ty::Opaque(def_id, substs) => {
+            ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs }) => {
                 self.tcx.bound_item_bounds(def_id).subst(self.tcx, substs).iter().find_map(|pred| {
                     if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
-                    && Some(proj.projection_ty.item_def_id) == self.tcx.lang_items().fn_once_output()
+                    && Some(proj.projection_ty.def_id) == self.tcx.lang_items().fn_once_output()
                     // args tuple will always be substs[1]
                     && let ty::Tuple(args) = proj.projection_ty.substs.type_at(1).kind()
                     {
@@ -875,7 +877,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             ty::Dynamic(data, _, ty::Dyn) => {
                 data.iter().find_map(|pred| {
                     if let ty::ExistentialPredicate::Projection(proj) = pred.skip_binder()
-                    && Some(proj.item_def_id) == self.tcx.lang_items().fn_once_output()
+                    && Some(proj.def_id) == self.tcx.lang_items().fn_once_output()
                     // for existential projection, substs are shifted over by 1
                     && let ty::Tuple(args) = proj.substs.type_at(0).kind()
                     {
@@ -892,7 +894,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             ty::Param(_) => {
                 obligation.param_env.caller_bounds().iter().find_map(|pred| {
                     if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) = pred.kind().skip_binder()
-                    && Some(proj.projection_ty.item_def_id) == self.tcx.lang_items().fn_once_output()
+                    && Some(proj.projection_ty.def_id) == self.tcx.lang_items().fn_once_output()
                     && proj.projection_ty.self_ty() == found
                     // args tuple will always be substs[1]
                     && let ty::Tuple(args) = proj.projection_ty.substs.type_at(1).kind()
@@ -1695,6 +1697,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         found: ty::PolyTraitRef<'tcx>,
         expected: ty::PolyTraitRef<'tcx>,
         cause: &ObligationCauseCode<'tcx>,
+        found_node: Option<Node<'_>>,
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         pub(crate) fn build_fn_sig_ty<'tcx>(
             infcx: &InferCtxt<'tcx>,
@@ -1755,6 +1758,10 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         err.note_expected_found(&signature_kind, expected_str, &signature_kind, found_str);
 
         self.note_conflicting_closure_bounds(cause, &mut err);
+
+        if let Some(found_node) = found_node {
+            hint_missing_borrow(span, found_span, found, expected, found_node, &mut err);
+        }
 
         err
     }
@@ -2179,15 +2186,15 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             format!("does not implement `{}`", trait_pred.print_modifiers_and_trait_path())
         };
 
-        let mut explain_yield = |interior_span: Span,
-                                 yield_span: Span,
-                                 scope_span: Option<Span>| {
-            let mut span = MultiSpan::from_span(yield_span);
-            if let Ok(snippet) = source_map.span_to_snippet(interior_span) {
-                // #70935: If snippet contains newlines, display "the value" instead
-                // so that we do not emit complex diagnostics.
-                let snippet = &format!("`{}`", snippet);
-                let snippet = if snippet.contains('\n') { "the value" } else { snippet };
+        let mut explain_yield =
+            |interior_span: Span, yield_span: Span, scope_span: Option<Span>| {
+                let mut span = MultiSpan::from_span(yield_span);
+                let snippet = match source_map.span_to_snippet(interior_span) {
+                    // #70935: If snippet contains newlines, display "the value" instead
+                    // so that we do not emit complex diagnostics.
+                    Ok(snippet) if !snippet.contains('\n') => format!("`{}`", snippet),
+                    _ => "the value".to_string(),
+                };
                 // note: future is not `Send` as this value is used across an await
                 //   --> $DIR/issue-70935-complex-spans.rs:13:9
                 //    |
@@ -2212,17 +2219,11 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     interior_span,
                     format!("has type `{}` which {}", target_ty, trait_explanation),
                 );
-                // If available, use the scope span to annotate the drop location.
-                let mut scope_note = None;
                 if let Some(scope_span) = scope_span {
                     let scope_span = source_map.end_point(scope_span);
 
                     let msg = format!("{} is later dropped here", snippet);
-                    if source_map.is_multiline(yield_span.between(scope_span)) {
-                        span.push_span_label(scope_span, msg);
-                    } else {
-                        scope_note = Some((scope_span, msg));
-                    }
+                    span.push_span_label(scope_span, msg);
                 }
                 err.span_note(
                     span,
@@ -2231,11 +2232,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         future_or_generator, trait_explanation, an_await_or_yield
                     ),
                 );
-                if let Some((span, msg)) = scope_note {
-                    err.span_note(span, &msg);
-                }
-            }
-        };
+            };
         match interior_or_upvar_span {
             GeneratorInteriorOrUpvar::Interior(interior_span, interior_extra_info) => {
                 if let Some((scope_span, yield_span, expr, from_awaited_ty)) = interior_extra_info {
@@ -2644,7 +2641,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 Some(ident) => err.span_note(ident.span, &msg),
                                 None => err.note(&msg),
                             },
-                            ty::Opaque(def_id, _) => {
+                            ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs: _ }) => {
                                 // Avoid printing the future from `core::future::identity_future`, it's not helpful
                                 if tcx.parent(*def_id) == identity_future {
                                     break 'print;
@@ -3221,7 +3218,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             let ocx = ObligationCtxt::new_in_snapshot(self.infcx);
             for diff in &type_diffs {
                 let Sorts(expected_found) = diff else { continue; };
-                let ty::Projection(proj) = expected_found.expected.kind() else { continue; };
+                let ty::Alias(ty::Projection, proj) = expected_found.expected.kind() else { continue; };
 
                 let origin =
                     TypeVariableOrigin { kind: TypeVariableOriginKind::TypeInference, span };
@@ -3248,7 +3245,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 // This corresponds to `<ExprTy as Iterator>::Item = _`.
                 let trait_ref = ty::Binder::dummy(ty::PredicateKind::Clause(
                     ty::Clause::Projection(ty::ProjectionPredicate {
-                        projection_ty: ty::ProjectionTy { substs, item_def_id: proj.item_def_id },
+                        projection_ty: ty::AliasTy { substs, def_id: proj.def_id },
                         term: ty_var.into(),
                     }),
                 ));
@@ -3263,7 +3260,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 if ocx.select_where_possible().is_empty() {
                     // `ty_var` now holds the type that `Item` is for `ExprTy`.
                     let ty_var = self.resolve_vars_if_possible(ty_var);
-                    assocs_in_this_method.push(Some((span, (proj.item_def_id, ty_var))));
+                    assocs_in_this_method.push(Some((span, (proj.def_id, ty_var))));
                 } else {
                     // `<ExprTy as Iterator>` didn't select, so likely we've
                     // reached the end of the iterator chain, like the originating
@@ -3381,6 +3378,78 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 ),
             );
         }
+    }
+}
+
+/// Add a hint to add a missing borrow or remove an unnecessary one.
+fn hint_missing_borrow<'tcx>(
+    span: Span,
+    found_span: Span,
+    found: Ty<'tcx>,
+    expected: Ty<'tcx>,
+    found_node: Node<'_>,
+    err: &mut Diagnostic,
+) {
+    let found_args = match found.kind() {
+        ty::FnPtr(f) => f.inputs().skip_binder().iter(),
+        kind => {
+            span_bug!(span, "found was converted to a FnPtr above but is now {:?}", kind)
+        }
+    };
+    let expected_args = match expected.kind() {
+        ty::FnPtr(f) => f.inputs().skip_binder().iter(),
+        kind => {
+            span_bug!(span, "expected was converted to a FnPtr above but is now {:?}", kind)
+        }
+    };
+
+    let fn_decl = found_node
+        .fn_decl()
+        .unwrap_or_else(|| span_bug!(found_span, "found node must be a function"));
+
+    let arg_spans = fn_decl.inputs.iter().map(|ty| ty.span);
+
+    fn get_deref_type_and_refs<'tcx>(mut ty: Ty<'tcx>) -> (Ty<'tcx>, usize) {
+        let mut refs = 0;
+
+        while let ty::Ref(_, new_ty, _) = ty.kind() {
+            ty = *new_ty;
+            refs += 1;
+        }
+
+        (ty, refs)
+    }
+
+    let mut to_borrow = Vec::new();
+    let mut remove_borrow = Vec::new();
+
+    for ((found_arg, expected_arg), arg_span) in found_args.zip(expected_args).zip(arg_spans) {
+        let (found_ty, found_refs) = get_deref_type_and_refs(*found_arg);
+        let (expected_ty, expected_refs) = get_deref_type_and_refs(*expected_arg);
+
+        if found_ty == expected_ty {
+            if found_refs < expected_refs {
+                to_borrow.push((arg_span, expected_arg.to_string()));
+            } else if found_refs > expected_refs {
+                remove_borrow.push((arg_span, expected_arg.to_string()));
+            }
+        }
+    }
+
+    if !to_borrow.is_empty() {
+        err.multipart_suggestion(
+            "consider borrowing the argument",
+            to_borrow,
+            Applicability::MaybeIncorrect,
+        );
+    }
+
+    if !remove_borrow.is_empty() {
+        err.multipart_suggestion(
+            "do not borrow the argument",
+            remove_borrow,
+            Applicability::MaybeIncorrect,
+        );
     }
 }
 

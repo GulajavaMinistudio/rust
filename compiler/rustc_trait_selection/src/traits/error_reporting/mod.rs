@@ -1234,6 +1234,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     _ => None,
                 };
 
+                let found_node = found_did.and_then(|did| self.tcx.hir().get_if_local(did));
                 let found_span = found_did.and_then(|did| self.tcx.hir().span_if_local(did));
 
                 if self.reported_closure_mismatch.borrow().contains(&(span, found_span)) {
@@ -1287,6 +1288,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         found_trait_ref,
                         expected_trait_ref,
                         obligation.cause.code(),
+                        found_node,
                     )
                 } else {
                     let (closure_span, closure_arg_span, found) = found_did
@@ -1634,8 +1636,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 let normalized_ty = ocx.normalize(
                     &obligation.cause,
                     obligation.param_env,
-                    self.tcx
-                        .mk_projection(data.projection_ty.item_def_id, data.projection_ty.substs),
+                    self.tcx.mk_projection(data.projection_ty.def_id, data.projection_ty.substs),
                 );
 
                 debug!(?obligation.cause, ?obligation.param_env);
@@ -1686,10 +1687,10 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             let secondary_span = match predicate.kind().skip_binder() {
                 ty::PredicateKind::Clause(ty::Clause::Projection(proj)) => self
                     .tcx
-                    .opt_associated_item(proj.projection_ty.item_def_id)
+                    .opt_associated_item(proj.projection_ty.def_id)
                     .and_then(|trait_assoc_item| {
                         self.tcx
-                            .trait_of_item(proj.projection_ty.item_def_id)
+                            .trait_of_item(proj.projection_ty.def_id)
                             .map(|id| (trait_assoc_item, id))
                     })
                     .and_then(|(trait_assoc_item, id)| {
@@ -1745,7 +1746,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         let trait_def_id = pred.projection_ty.trait_def_id(self.tcx);
         let self_ty = pred.projection_ty.self_ty();
 
-        if Some(pred.projection_ty.item_def_id) == self.tcx.lang_items().fn_once_output() {
+        if Some(pred.projection_ty.def_id) == self.tcx.lang_items().fn_once_output() {
             Some(format!(
                 "expected `{self_ty}` to be a {fn_kind} that returns `{expected_ty}`, but it returns `{normalized_ty}`",
                 fn_kind = self_ty.prefix_string(self.tcx)
@@ -1788,8 +1789,8 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 ty::Closure(..) => Some(9),
                 ty::Tuple(..) => Some(10),
                 ty::Param(..) => Some(11),
-                ty::Projection(..) => Some(12),
-                ty::Opaque(..) => Some(13),
+                ty::Alias(ty::Projection, ..) => Some(12),
+                ty::Alias(ty::Opaque, ..) => Some(13),
                 ty::Never => Some(14),
                 ty::Adt(..) => Some(15),
                 ty::Generator(..) => Some(16),
