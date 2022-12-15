@@ -209,7 +209,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     ProbeScope::TraitsInScope,
                 ) {
                     Ok(ref new_pick) if pick.differs_from(new_pick) => {
-                        needs_mut = true;
+                        needs_mut = new_pick.self_ty.ref_mutability() != self_ty.ref_mutability();
                     }
                     _ => {}
                 }
@@ -285,7 +285,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.var_for_def(span, param)
         });
 
-        let trait_ref = ty::TraitRef::new(trait_def_id, substs);
+        let trait_ref = self.tcx.mk_trait_ref(trait_def_id, substs);
 
         // Construct an obligation
         let poly_trait_ref = ty::Binder::dummy(trait_ref);
@@ -326,7 +326,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             self.var_for_def(span, param)
         });
 
-        let trait_ref = ty::TraitRef::new(trait_def_id, substs);
+        let trait_ref = self.tcx.mk_trait_ref(trait_def_id, substs);
 
         // Construct an obligation
         let poly_trait_ref = ty::Binder::dummy(trait_ref);
