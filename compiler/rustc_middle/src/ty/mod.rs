@@ -80,13 +80,11 @@ pub use self::closure::{
     CAPTURE_STRUCT_LOCAL,
 };
 pub use self::consts::{
-    Const, ConstInt, ConstKind, ConstS, Expr, InferConst, ScalarInt, UnevaluatedConst, ValTree,
+    Const, ConstData, ConstInt, ConstKind, Expr, InferConst, ScalarInt, UnevaluatedConst, ValTree,
 };
 pub use self::context::{
-    tls, CanonicalUserType, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations,
-    CtxtInterners, DeducedParamAttrs, FreeRegionInfo, GeneratorDiagnosticData,
-    GeneratorInteriorTypeCause, GlobalCtxt, Lift, OnDiskCache, TyCtxt, TyCtxtFeed, TypeckResults,
-    UserType, UserTypeAnnotationIndex,
+    tls, CtxtInterners, DeducedParamAttrs, FreeRegionInfo, GlobalCtxt, Lift, OnDiskCache, TyCtxt,
+    TyCtxtFeed,
 };
 pub use self::instance::{Instance, InstanceDef, ShortInstance};
 pub use self::list::List;
@@ -103,6 +101,11 @@ pub use self::sty::{
     Region, RegionKind, RegionVid, TraitRef, TyKind, TypeAndMut, UpvarSubsts, VarianceDiagInfo,
 };
 pub use self::trait_def::TraitDef;
+pub use self::typeck_results::{
+    CanonicalUserType, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations,
+    GeneratorDiagnosticData, GeneratorInteriorTypeCause, TypeckResults, UserType,
+    UserTypeAnnotationIndex,
+};
 
 pub mod _match;
 pub mod abstract_const;
@@ -143,6 +146,7 @@ mod parameterized;
 mod rvalue_scopes;
 mod structural_impls;
 mod sty;
+mod typeck_results;
 
 // Data types
 
@@ -941,7 +945,7 @@ impl<'tcx> Term<'tcx> {
                     &*((ptr & !TAG_MASK) as *const WithCachedTypeInfo<ty::TyKind<'tcx>>),
                 ))),
                 CONST_TAG => TermKind::Const(ty::Const(Interned::new_unchecked(
-                    &*((ptr & !TAG_MASK) as *const ty::ConstS<'tcx>),
+                    &*((ptr & !TAG_MASK) as *const ty::ConstData<'tcx>),
                 ))),
                 _ => core::intrinsics::unreachable(),
             }
@@ -987,7 +991,7 @@ impl<'tcx> TermKind<'tcx> {
             TermKind::Const(ct) => {
                 // Ensure we can use the tag bits.
                 assert_eq!(mem::align_of_val(&*ct.0.0) & TAG_MASK, 0);
-                (CONST_TAG, ct.0.0 as *const ty::ConstS<'tcx> as usize)
+                (CONST_TAG, ct.0.0 as *const ty::ConstData<'tcx> as usize)
             }
         };
 

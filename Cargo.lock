@@ -394,7 +394,7 @@ dependencies = [
  "directories",
  "rustc-build-sysroot",
  "rustc-workspace-hack",
- "rustc_tools_util",
+ "rustc_tools_util 0.2.1",
  "rustc_version",
  "serde",
  "serde_json",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "clippy"
-version = "0.1.67"
+version = "0.1.68"
 dependencies = [
  "clippy_lints",
  "clippy_utils",
@@ -673,7 +673,7 @@ dependencies = [
  "regex",
  "rustc-semver",
  "rustc-workspace-hack",
- "rustc_tools_util",
+ "rustc_tools_util 0.3.0",
  "semver",
  "serde",
  "syn",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_lints"
-version = "0.1.67"
+version = "0.1.68"
 dependencies = [
  "cargo_metadata 0.14.0",
  "clippy_utils",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_utils"
-version = "0.1.67"
+version = "0.1.68"
 dependencies = [
  "arrayvec",
  "if_chain",
@@ -966,9 +966,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6455c0ca19f0d2fbf751b908d5c55c1f5cbc65e03c4225427254b46890bdde1e"
+checksum = "715e8152b692bba2d374b53d4875445368fdf21a94751410af607a5ac677d1fc"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch",
@@ -977,25 +977,24 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.6"
+version = "0.9.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97242a70df9b89a65d0b6df3c4bf5b9ce03c5b7309019777fbde37e7537f8762"
+checksum = "01a9af1f4c2ef74bb8aa1f7e19706bc72d03598c8a570bb5de72243c7a9d9d5a"
 dependencies = [
+ "autocfg",
  "cfg-if 1.0.0",
  "crossbeam-utils",
- "lazy_static",
  "memoffset",
  "scopeguard",
 ]
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.8"
+version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bf124c720b7686e3c2663cf54062ab0f68a88af2fb6a030e87e30bf721fcb38"
+checksum = "4fb766fa798726286dbbb842f174001dab8abc7b627a1dd86e0b7222a95d929f"
 dependencies = [
  "cfg-if 1.0.0",
- "lazy_static",
 ]
 
 [[package]]
@@ -1068,7 +1067,7 @@ checksum = "a0afaad2b26fa326569eb264b1363e8ae3357618c43982b3f285f0774ce76b69"
 
 [[package]]
 name = "declare_clippy_lint"
-version = "0.1.67"
+version = "0.1.68"
 dependencies = [
  "itertools",
  "quote",
@@ -2379,9 +2378,9 @@ dependencies = [
 
 [[package]]
 name = "memoffset"
-version = "0.6.5"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
 dependencies = [
  "autocfg",
 ]
@@ -4070,6 +4069,7 @@ dependencies = [
  "rustc_hir",
  "rustc_index",
  "rustc_infer",
+ "rustc_macros",
  "rustc_middle",
  "rustc_serialize",
  "rustc_session",
@@ -4428,6 +4428,12 @@ name = "rustc_tools_util"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "598f48ce2a421542b3e64828aa742b687cc1b91d2f96591cfdb7ac5988cd6366"
+
+[[package]]
+name = "rustc_tools_util"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ba09476327c4b70ccefb6180f046ef588c26a24cf5d269a9feba316eb4f029f"
 
 [[package]]
 name = "rustc_trait_selection"
@@ -5401,7 +5407,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "rand 0.8.5",
  "static_assertions",
 ]

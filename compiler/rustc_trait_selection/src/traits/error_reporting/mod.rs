@@ -35,7 +35,7 @@ use rustc_middle::traits::select::OverflowError;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::ExpectedFound;
 use rustc_middle::ty::fold::{TypeFolder, TypeSuperFoldable};
-use rustc_middle::ty::print::{FmtPrinter, Print};
+use rustc_middle::ty::print::{with_forced_trimmed_paths, FmtPrinter, Print};
 use rustc_middle::ty::{
     self, SubtypePredicate, ToPolyTraitRef, ToPredicate, TraitRef, Ty, TyCtxt, TypeFoldable,
     TypeVisitable,
@@ -1757,21 +1757,26 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         let trait_def_id = pred.projection_ty.trait_def_id(self.tcx);
         let self_ty = pred.projection_ty.self_ty();
 
-        if Some(pred.projection_ty.def_id) == self.tcx.lang_items().fn_once_output() {
-            Some(format!(
-                "expected `{self_ty}` to be a {fn_kind} that returns `{expected_ty}`, but it returns `{normalized_ty}`",
-                fn_kind = self_ty.prefix_string(self.tcx)
-            ))
-        } else if Some(trait_def_id) == self.tcx.lang_items().future_trait() {
-            Some(format!(
-                "expected `{self_ty}` to be a future that resolves to `{expected_ty}`, but it resolves to `{normalized_ty}`"
-            ))
-        } else if Some(trait_def_id) == self.tcx.get_diagnostic_item(sym::Iterator) {
-            Some(format!(
-                "expected `{self_ty}` to be an iterator that yields `{expected_ty}`, but it yields `{normalized_ty}`"
-            ))
-        } else {
-            None
+        with_forced_trimmed_paths! {
+            if Some(pred.projection_ty.def_id) == self.tcx.lang_items().fn_once_output() {
+                Some(format!(
+                    "expected `{self_ty}` to be a {fn_kind} that returns `{expected_ty}`, but it \
+                     returns `{normalized_ty}`",
+                    fn_kind = self_ty.prefix_string(self.tcx)
+                ))
+            } else if Some(trait_def_id) == self.tcx.lang_items().future_trait() {
+                Some(format!(
+                    "expected `{self_ty}` to be a future that resolves to `{expected_ty}`, but it \
+                     resolves to `{normalized_ty}`"
+                ))
+            } else if Some(trait_def_id) == self.tcx.get_diagnostic_item(sym::Iterator) {
+                Some(format!(
+                    "expected `{self_ty}` to be an iterator that yields `{expected_ty}`, but it \
+                     yields `{normalized_ty}`"
+                ))
+            } else {
+                None
+            }
         }
     }
 
@@ -2307,18 +2312,19 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         let trait_impls = self.tcx.trait_impls_of(data.trait_ref.def_id);
 
                         if trait_impls.blanket_impls().is_empty()
-                            && let Some((impl_ty, _)) = trait_impls.non_blanket_impls().iter().next()
-                            && let Some(impl_def_id) = impl_ty.def() {
-                            let message = if trait_impls.non_blanket_impls().len() == 1 {
+                            && let Some(impl_def_id) = trait_impls.non_blanket_impls().values().flatten().next()
+                        {
+                            let non_blanket_impl_count = trait_impls.non_blanket_impls().values().flatten().count();
+                            let message = if non_blanket_impl_count == 1 {
                                 "use the fully-qualified path to the only available implementation".to_string()
                             } else {
                                 format!(
                                     "use a fully-qualified path to a specific available implementation ({} found)",
-                                    trait_impls.non_blanket_impls().len()
+                                    non_blanket_impl_count
                                 )
                             };
                             let mut suggestions = vec![(
-                                trait_path_segment.ident.span.shrink_to_lo(),
+                                path.span.shrink_to_lo(),
                                 format!("<{} as ", self.tcx.type_of(impl_def_id))
                             )];
                             if let Some(generic_arg) = trait_path_segment.args {
