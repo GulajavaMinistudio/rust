@@ -332,7 +332,7 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for Symbol {
                     s.emit_str(self.as_str());
                 }
                 Entry::Occupied(o) => {
-                    let x = o.get().clone();
+                    let x = *o.get();
                     s.emit_u8(SYMBOL_OFFSET);
                     s.emit_usize(x);
                 }
@@ -1849,7 +1849,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         // the assumption that they are numbered 1 to n.
         // FIXME (#2166): This is not nearly enough to support correct versioning
         // but is enough to get transitive crate dependencies working.
-        self.lazy_array(deps.iter().map(|&(_, ref dep)| dep))
+        self.lazy_array(deps.iter().map(|(_, dep)| dep))
     }
 
     fn encode_lib_features(&mut self) -> LazyArray<(Symbol, Option<Symbol>)> {
@@ -1986,7 +1986,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         self.lazy_array(
             exported_symbols
                 .iter()
-                .filter(|&&(ref exported_symbol, _)| match *exported_symbol {
+                .filter(|&(exported_symbol, _)| match *exported_symbol {
                     ExportedSymbol::NoDefId(symbol_name) => symbol_name != metadata_symbol_name,
                     _ => true,
                 })
