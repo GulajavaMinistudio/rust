@@ -24,7 +24,6 @@ use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::DUMMY_SP;
 use std::mem;
 use thin_vec::ThinVec;
-use tracing::debug;
 
 impl<'a> Parser<'a> {
     /// Parses a source module as a crate. This is the main entry point for the parser.
@@ -2465,7 +2464,6 @@ impl<'a> Parser<'a> {
             };
             let (pat, ty) = if is_name_required || this.is_named_param() {
                 debug!("parse_param_general parse_pat (is_name_required:{})", is_name_required);
-
                 let (pat, colon) = this.parse_fn_param_pat_colon()?;
                 if !colon {
                     let mut err = this.unexpected::<()>().unwrap_err();
