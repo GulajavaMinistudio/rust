@@ -66,6 +66,7 @@ fn _assert_is_object_safe(_: &dyn Iterator<Item = ()>) {}
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub trait Iterator {
     /// The type of the elements being iterated over.
+    #[rustc_diagnostic_item = "IteratorItem"]
     #[stable(feature = "rust1", since = "1.0.0")]
     type Item;
 
@@ -2653,7 +2654,10 @@ pub trait Iterator {
     /// argument is a double reference. You can see this effect in the
     /// examples below, with `&&x`.
     ///
+    /// If you need the index of the element, see [`position()`].
+    ///
     /// [`Some(element)`]: Some
+    /// [`position()`]: Iterator::position
     ///
     /// # Examples
     ///

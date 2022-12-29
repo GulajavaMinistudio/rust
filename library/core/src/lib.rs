@@ -95,6 +95,7 @@
 #![warn(missing_docs)]
 #![allow(explicit_outlives_requirements)]
 #![allow(incomplete_features)]
+#![cfg_attr(not(bootstrap), warn(multiple_supertrait_upcastable))]
 //
 // Library features:
 #![feature(const_align_offset)]
@@ -194,7 +195,7 @@
 #![feature(const_refs_to_cell)]
 #![feature(decl_macro)]
 #![feature(deprecated_suggestion)]
-#![cfg_attr(not(bootstrap), feature(derive_const))]
+#![feature(derive_const)]
 #![feature(doc_cfg)]
 #![feature(doc_notable_trait)]
 #![feature(rustdoc_internals)]
@@ -231,6 +232,7 @@
 #![feature(unsized_fn_params)]
 #![feature(asm_const)]
 #![feature(const_transmute_copy)]
+#![cfg_attr(not(bootstrap), feature(multiple_supertrait_upcastable))]
 //
 // Target features:
 #![feature(arm_target_feature)]

@@ -87,6 +87,7 @@
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
 #![allow(explicit_outlives_requirements)]
+#![cfg_attr(not(bootstrap), warn(multiple_supertrait_upcastable))]
 //
 // Library features:
 #![feature(alloc_layout_extra)]
@@ -122,6 +123,7 @@
 #![feature(fmt_internals)]
 #![feature(fn_traits)]
 #![feature(hasher_prefixfree_extras)]
+#![feature(inline_const)]
 #![feature(inplace_iteration)]
 #![feature(iter_advance_by)]
 #![feature(iter_next_chunk)]
@@ -152,7 +154,7 @@
 #![feature(trusted_len)]
 #![feature(trusted_random_access)]
 #![feature(try_trait_v2)]
-#![cfg_attr(not(bootstrap), feature(tuple_trait))]
+#![feature(tuple_trait)]
 #![feature(unchecked_math)]
 #![feature(unicode_internals)]
 #![feature(unsize)]
@@ -190,6 +192,7 @@
 #![feature(unsized_fn_params)]
 #![feature(c_unwind)]
 #![feature(with_negative_coherence)]
+#![cfg_attr(not(bootstrap), feature(multiple_supertrait_upcastable))]
 //
 // Rustdoc features:
 #![feature(doc_cfg)]
@@ -206,6 +209,8 @@
 extern crate std;
 #[cfg(test)]
 extern crate test;
+#[cfg(test)]
+mod testing;
 
 // Module with internal macros used by other modules (needs to be included before other modules).
 #[macro_use]
