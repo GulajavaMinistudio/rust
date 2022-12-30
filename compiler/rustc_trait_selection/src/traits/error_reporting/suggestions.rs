@@ -2514,6 +2514,15 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             ObligationCauseCode::VariableType(hir_id) => {
                 let parent_node = self.tcx.hir().get_parent_node(hir_id);
                 match self.tcx.hir().find(parent_node) {
+                    Some(Node::Local(hir::Local { ty: Some(ty), .. })) => {
+                        err.span_suggestion_verbose(
+                            ty.span.shrink_to_lo(),
+                            "consider borrowing here",
+                            "&",
+                            Applicability::MachineApplicable,
+                        );
+                        err.note("all local variables must have a statically known size");
+                    }
                     Some(Node::Local(hir::Local {
                         init: Some(hir::Expr { kind: hir::ExprKind::Index(_, _), span, .. }),
                         ..
@@ -2683,7 +2692,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 // Don't print the tuple of capture types
                 'print: {
                     if !is_upvar_tys_infer_tuple {
-                        let msg = format!("required because it appears within the type `{}`", ty);
+                        let msg = with_forced_trimmed_paths!(format!(
+                            "required because it appears within the type `{ty}`",
+                        ));
                         match ty.kind() {
                             ty::Adt(def, _) => match self.tcx.opt_item_ident(def.did()) {
                                 Some(ident) => err.span_note(ident.span, &msg),
@@ -2724,7 +2735,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 let mut msg =
                                     "required because it captures the following types: ".to_owned();
                                 for ty in bound_tys.skip_binder() {
-                                    write!(msg, "`{}`, ", ty).unwrap();
+                                    with_forced_trimmed_paths!(write!(msg, "`{}`, ", ty).unwrap());
                                 }
                                 err.note(msg.trim_end_matches(", "))
                             }
@@ -2735,7 +2746,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 let kind = tcx.generator_kind(def_id).unwrap().descr();
                                 err.span_note(
                                     sp,
-                                    &format!("required because it's used within this {}", kind),
+                                    with_forced_trimmed_paths!(&format!(
+                                        "required because it's used within this {kind}",
+                                    )),
                                 )
                             }
                             ty::Closure(def_id, _) => err.span_note(
@@ -2959,7 +2972,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     let expr_ty = with_forced_trimmed_paths!(self.ty_to_string(expr_ty));
                     err.span_label(
                         expr_span,
-                        format!("return type was inferred to be `{expr_ty}` here"),
+                        with_forced_trimmed_paths!(format!(
+                            "return type was inferred to be `{expr_ty}` here",
+                        )),
                     );
                 }
             }
