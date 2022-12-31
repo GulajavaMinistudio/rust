@@ -3,7 +3,7 @@
 //! This library provides smart pointers and collections for managing
 //! heap-allocated values.
 //!
-//! This library, like libcore, normally doesn’t need to be used directly
+//! This library, like core, normally doesn’t need to be used directly
 //! since its contents are re-exported in the [`std` crate](../std/index.html).
 //! Crates that use the `#![no_std]` attribute however will typically
 //! not depend on `std`, so they’d use this crate instead.
@@ -75,7 +75,7 @@
 ))]
 #![no_std]
 #![needs_allocator]
-// To run liballoc tests without x.py without ending up with two copies of liballoc, Miri needs to be
+// To run alloc tests without x.py without ending up with two copies of alloc, Miri needs to be
 // able to "empty" this crate. See <https://github.com/rust-lang/miri-test-libstd/issues/4>.
 // rustc itself never sets the feature, so this line has no affect there.
 #![cfg(any(not(feature = "miri-test-libstd"), test, doctest))]
@@ -87,7 +87,6 @@
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
 #![allow(explicit_outlives_requirements)]
-#![cfg_attr(not(bootstrap), warn(multiple_supertrait_upcastable))]
 //
 // Library features:
 #![feature(alloc_layout_extra)]
@@ -192,7 +191,6 @@
 #![feature(unsized_fn_params)]
 #![feature(c_unwind)]
 #![feature(with_negative_coherence)]
-#![cfg_attr(not(bootstrap), feature(multiple_supertrait_upcastable))]
 //
 // Rustdoc features:
 #![feature(doc_cfg)]
