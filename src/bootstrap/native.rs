@@ -24,6 +24,8 @@ use crate::util::get_clang_cl_resource_dir;
 use crate::util::{self, exe, output, t, up_to_date};
 use crate::{CLang, GitRepo};
 
+use build_helper::ci::CiEnv;
+
 #[derive(Clone)]
 pub struct LlvmResult {
     /// Path to llvm-config binary.
@@ -217,7 +219,7 @@ pub(crate) fn is_ci_llvm_available(config: &Config, asserts: bool) -> bool {
         return false;
     }
 
-    if crate::util::CiEnv::is_ci() {
+    if CiEnv::is_ci() {
         // We assume we have access to git, so it's okay to unconditionally pass
         // `true` here.
         let llvm_sha = detect_llvm_sha(config, true);
@@ -1085,12 +1087,12 @@ fn supported_sanitizers(
 
     match &*target.triple {
         "aarch64-apple-darwin" => darwin_libs("osx", &["asan", "lsan", "tsan"]),
-        "aarch64-fuchsia" => common_libs("fuchsia", "aarch64", &["asan"]),
+        "aarch64-unknown-fuchsia" => common_libs("fuchsia", "aarch64", &["asan"]),
         "aarch64-unknown-linux-gnu" => {
             common_libs("linux", "aarch64", &["asan", "lsan", "msan", "tsan", "hwasan"])
         }
         "x86_64-apple-darwin" => darwin_libs("osx", &["asan", "lsan", "tsan"]),
-        "x86_64-fuchsia" => common_libs("fuchsia", "x86_64", &["asan"]),
+        "x86_64-unknown-fuchsia" => common_libs("fuchsia", "x86_64", &["asan"]),
         "x86_64-unknown-freebsd" => common_libs("freebsd", "x86_64", &["asan", "msan", "tsan"]),
         "x86_64-unknown-netbsd" => {
             common_libs("netbsd", "x86_64", &["asan", "lsan", "msan", "tsan"])
