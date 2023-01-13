@@ -471,6 +471,7 @@ compiler-team = [
     "@lcnr",
     "@nagisa",
     "@wesleywiser",
+    "@michaelwoerister",
 ]
 compiler-team-contributors = [
     "@compiler-errors",
@@ -478,6 +479,7 @@ compiler-team-contributors = [
     "@jackh726",
     "@TaKO8Ki",
     "@Nilstrieb",
+    "@WaffleLapkin",
 ]
 compiler = [
     "compiler-team",

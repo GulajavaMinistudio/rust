@@ -1,4 +1,7 @@
 // Regression test for #81650
+// run-rustfix
+
+#![allow(warnings)]
 
 struct Foo<'a> {
     x: &'a mut &'a i32,

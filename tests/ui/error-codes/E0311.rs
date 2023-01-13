@@ -1,3 +1,7 @@
+// run-rustfix
+
+#![allow(warnings)]
+
 fn no_restriction<T>(x: &()) -> &() {
     with_restriction::<T>(x) //~ ERROR E0311
 }

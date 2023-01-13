@@ -410,9 +410,6 @@ pub enum SubregionOrigin<'tcx> {
     /// Creating a pointer `b` to contents of another reference
     Reborrow(Span),
 
-    /// Data with type `Ty<'tcx>` was borrowed
-    DataBorrowed(Ty<'tcx>, Span),
-
     /// (&'a &'b T) where a >= b
     ReferenceOutlivesReferent(Ty<'tcx>, Span),
 
@@ -688,6 +685,10 @@ impl<'tcx> InferCtxt<'tcx> {
             typeck_results: None,
             fallback_has_occurred: false,
             normalize_fn_sig: Box::new(|fn_sig| fn_sig),
+            autoderef_steps: Box::new(|ty| {
+                debug_assert!(false, "shouldn't be using autoderef_steps outside of typeck");
+                vec![(ty, vec![])]
+            }),
         }
     }
 
@@ -1974,7 +1975,6 @@ impl<'tcx> SubregionOrigin<'tcx> {
             RelateParamBound(a, ..) => a,
             RelateRegionParamBound(a) => a,
             Reborrow(a) => a,
-            DataBorrowed(_, a) => a,
             ReferenceOutlivesReferent(_, a) => a,
             CompareImplItemObligation { span, .. } => span,
             AscribeUserTypeProvePredicate(span) => span,
