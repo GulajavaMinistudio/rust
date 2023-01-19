@@ -100,6 +100,13 @@ impl BoundRegionKind {
 
         None
     }
+
+    pub fn get_id(&self) -> Option<DefId> {
+        match *self {
+            BoundRegionKind::BrNamed(id, _) => return Some(id),
+            _ => None,
+        }
+    }
 }
 
 pub trait Article {
@@ -1106,17 +1113,6 @@ impl<'tcx, T> Binder<'tcx, T> {
         if self.0.has_escaping_bound_vars() { None } else { Some(self.skip_binder()) }
     }
 
-    pub fn no_bound_vars_ignoring_escaping(self, tcx: TyCtxt<'tcx>) -> Option<T>
-    where
-        T: TypeFoldable<'tcx>,
-    {
-        if !self.0.has_escaping_bound_vars() {
-            Some(self.skip_binder())
-        } else {
-            self.0.try_fold_with(&mut SkipBindersAt { index: ty::INNERMOST, tcx }).ok()
-        }
-    }
-
     /// Splits the contents into two things that share the same binder
     /// level as the original, returning two distinct binders.
     ///
@@ -2015,7 +2011,7 @@ impl<'tcx> Ty<'tcx> {
             type BreakTy = ();
 
             fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
-                if self.0 == t { ControlFlow::BREAK } else { t.super_visit_with(self) }
+                if self.0 == t { ControlFlow::Break(()) } else { t.super_visit_with(self) }
             }
         }
 
