@@ -1841,19 +1841,12 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 self.suggest_as_ref_where_appropriate(span, &exp_found, diag);
                 self.suggest_accessing_field_where_appropriate(cause, &exp_found, diag);
                 self.suggest_await_on_expect_found(cause, span, &exp_found, diag);
+                self.suggest_function_pointers(cause, span, &exp_found, diag);
             }
         }
 
-        // In some (most?) cases cause.body_id points to actual body, but in some cases
-        // it's an actual definition. According to the comments (e.g. in
-        // rustc_hir_analysis/check/compare_impl_item.rs:compare_predicate_entailment) the latter
-        // is relied upon by some other code. This might (or might not) need cleanup.
-        let body_owner_def_id =
-            self.tcx.hir().opt_local_def_id(cause.body_id).unwrap_or_else(|| {
-                self.tcx.hir().body_owner_def_id(hir::BodyId { hir_id: cause.body_id })
-            });
         self.check_and_note_conflicting_crates(diag, terr);
-        self.tcx.note_and_explain_type_err(diag, terr, cause, span, body_owner_def_id.to_def_id());
+        self.tcx.note_and_explain_type_err(diag, terr, cause, span, cause.body_id.to_def_id());
 
         if let Some(ValuePairs::PolyTraitRefs(exp_found)) = values
             && let ty::Closure(def_id, _) = exp_found.expected.skip_binder().self_ty().kind()
@@ -2585,7 +2578,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
     /// with the other type. A TyVar inference type is compatible with any type, and an IntVar or
     /// FloatVar inference type are compatible with themselves or their concrete types (Int and
     /// Float types, respectively). When comparing two ADTs, these rules apply recursively.
-    pub fn same_type_modulo_infer(&self, a: Ty<'tcx>, b: Ty<'tcx>) -> bool {
+    pub fn same_type_modulo_infer<T: relate::Relate<'tcx>>(&self, a: T, b: T) -> bool {
         let (a, b) = self.resolve_vars_if_possible((a, b));
         SameTypeModuloInfer(self).relate(a, b).is_ok()
     }
