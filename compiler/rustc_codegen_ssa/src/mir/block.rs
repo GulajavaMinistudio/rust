@@ -678,8 +678,8 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             let layout = bx.layout_of(ty);
             let do_panic = match intrinsic {
                 Inhabited => layout.abi.is_uninhabited(),
-                ZeroValid => !bx.tcx().permits_zero_init(layout),
-                MemUninitializedValid => !bx.tcx().permits_uninit_init(layout),
+                ZeroValid => !bx.tcx().permits_zero_init(bx.param_env().and(layout)),
+                MemUninitializedValid => !bx.tcx().permits_uninit_init(bx.param_env().and(layout)),
             };
             Some(if do_panic {
                 let msg_str = with_no_visible_paths!({
@@ -1801,8 +1801,8 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         match (src.layout.abi, dst.layout.abi) {
             (abi::Abi::Scalar(src_scalar), abi::Abi::Scalar(dst_scalar)) => {
                 // HACK(eddyb) LLVM doesn't like `bitcast`s between pointers and non-pointers.
-                let src_is_ptr = src_scalar.primitive() == abi::Pointer;
-                let dst_is_ptr = dst_scalar.primitive() == abi::Pointer;
+                let src_is_ptr = matches!(src_scalar.primitive(), abi::Pointer(_));
+                let dst_is_ptr = matches!(dst_scalar.primitive(), abi::Pointer(_));
                 if src_is_ptr == dst_is_ptr {
                     assert_eq!(src.layout.size, dst.layout.size);
 

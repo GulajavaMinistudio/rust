@@ -1863,9 +1863,10 @@ rustc_queries! {
     ///
     /// This query returns an `&Arc` because codegen backends need the value even after the `TyCtxt`
     /// has been destroyed.
-    query output_filenames(_: ()) -> &'tcx Arc<OutputFilenames> {
+    query output_filenames(_: ()) -> Arc<OutputFilenames> {
         feedable
         desc { "getting output filenames" }
+        arena_cache
     }
 
     /// Do not call this query directly: invoke `normalize` instead.
@@ -2116,12 +2117,12 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query permits_uninit_init(key: TyAndLayout<'tcx>) -> bool {
-        desc { "checking to see if `{}` permits being left uninit", key.ty }
+    query permits_uninit_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
+        desc { "checking to see if `{}` permits being left uninit", key.value.ty }
     }
 
-    query permits_zero_init(key: TyAndLayout<'tcx>) -> bool {
-        desc { "checking to see if `{}` permits being left zeroed", key.ty }
+    query permits_zero_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
+        desc { "checking to see if `{}` permits being left zeroed", key.value.ty }
     }
 
     query compare_impl_const(
