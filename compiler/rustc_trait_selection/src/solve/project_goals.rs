@@ -28,8 +28,8 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         // To only compute normalization once for each projection we only
         // normalize if the expected term is an unconstrained inference variable.
         //
-        // E.g. for `<T as Trait>::Assoc = u32` we recursively compute the goal
-        // `exists<U> <T as Trait>::Assoc = U` and then take the resulting type for
+        // E.g. for `<T as Trait>::Assoc == u32` we recursively compute the goal
+        // `exists<U> <T as Trait>::Assoc == U` and then take the resulting type for
         // `U` and equate it with `u32`. This means that we don't need a separate
         // projection cache in the solver.
         if self.term_is_fully_unconstrained(goal) {
@@ -296,7 +296,9 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
         goal: Goal<'tcx, Self>,
         assumption: ty::Predicate<'tcx>,
     ) -> QueryResult<'tcx> {
-        if let Some(poly_projection_pred) = assumption.to_opt_poly_projection_pred() {
+        if let Some(poly_projection_pred) = assumption.to_opt_poly_projection_pred()
+            && poly_projection_pred.projection_def_id() == goal.predicate.def_id()
+        {
             ecx.infcx.probe(|_| {
                 let assumption_projection_pred =
                     ecx.infcx.instantiate_bound_vars_with_infer(poly_projection_pred);
@@ -414,6 +416,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
                 | ty::Infer(ty::IntVar(..) | ty::FloatVar(..))
                 | ty::Generator(..)
                 | ty::GeneratorWitness(..)
+                | ty::GeneratorWitnessMIR(..)
                 | ty::Never
                 | ty::Foreign(..) => tcx.types.unit,
 

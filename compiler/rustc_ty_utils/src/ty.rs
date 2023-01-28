@@ -16,7 +16,13 @@ fn sized_constraint_for_ty<'tcx>(
         Bool | Char | Int(..) | Uint(..) | Float(..) | RawPtr(..) | Ref(..) | FnDef(..)
         | FnPtr(_) | Array(..) | Closure(..) | Generator(..) | Never => vec![],
 
-        Str | Dynamic(..) | Slice(_) | Foreign(..) | Error(_) | GeneratorWitness(..) => {
+        Str
+        | Dynamic(..)
+        | Slice(_)
+        | Foreign(..)
+        | Error(_)
+        | GeneratorWitness(..)
+        | GeneratorWitnessMIR(..) => {
             // these are never sized - return the target type
             vec![ty]
         }
@@ -299,7 +305,7 @@ fn well_formed_types_in_env(tcx: TyCtxt<'_>, def_id: DefId) -> &ty::List<Predica
         // In an fn, we assume that the arguments and all their constituents are
         // well-formed.
         NodeKind::Fn => {
-            let fn_sig = tcx.fn_sig(def_id);
+            let fn_sig = tcx.fn_sig(def_id).subst_identity();
             let fn_sig = tcx.liberate_late_bound_regions(def_id, fn_sig);
 
             inputs.extend(fn_sig.inputs().iter().flat_map(|ty| ty.walk()));

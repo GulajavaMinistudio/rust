@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "clippy"
-version = "0.1.68"
+version = "0.1.69"
 dependencies = [
  "clippy_lints",
  "clippy_utils",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_lints"
-version = "0.1.68"
+version = "0.1.69"
 dependencies = [
  "cargo_metadata 0.14.0",
  "clippy_utils",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_utils"
-version = "0.1.68"
+version = "0.1.69"
 dependencies = [
  "arrayvec",
  "if_chain",
@@ -1168,7 +1168,7 @@ checksum = "a0afaad2b26fa326569eb264b1363e8ae3357618c43982b3f285f0774ce76b69"
 
 [[package]]
 name = "declare_clippy_lint"
-version = "0.1.68"
+version = "0.1.69"
 dependencies = [
  "itertools",
  "quote",
@@ -3672,6 +3672,7 @@ name = "rustc_ast"
 version = "0.0.0"
 dependencies = [
  "bitflags",
+ "memchr",
  "rustc_data_structures",
  "rustc_index",
  "rustc_lexer",
@@ -5215,9 +5216,9 @@ checksum = "cc88c725d61fc6c3132893370cac4a0200e3fedf5da8331c570664b1987f5ca2"
 
 [[package]]
 name = "snap"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da73c8f77aebc0e40c300b93f0a5f1bece7a248a36eee287d4e095f35c7b7d6e"
+checksum = "5e9f0ab6ef7eb7353d9119c170a436d1bf248eea575ac42d19d12f4e34130831"
 
 [[package]]
 name = "snapbox"

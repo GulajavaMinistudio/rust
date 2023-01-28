@@ -141,17 +141,6 @@ type CanonicalResponse<'tcx> = Canonical<'tcx, Response<'tcx>>;
 /// solver, merge the two responses again.
 pub type QueryResult<'tcx> = Result<CanonicalResponse<'tcx>, NoSolution>;
 
-pub trait TyCtxtExt<'tcx> {
-    fn evaluate_goal(self, goal: CanonicalGoal<'tcx>) -> QueryResult<'tcx>;
-}
-
-impl<'tcx> TyCtxtExt<'tcx> for TyCtxt<'tcx> {
-    fn evaluate_goal(self, goal: CanonicalGoal<'tcx>) -> QueryResult<'tcx> {
-        let mut search_graph = search_graph::SearchGraph::new(self);
-        EvalCtxt::evaluate_canonical_goal(self, &mut search_graph, goal)
-    }
-}
-
 pub trait InferCtxtEvalExt<'tcx> {
     /// Evaluates a goal from **outside** of the trait solver.
     ///
@@ -194,6 +183,15 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         self.infcx.tcx
     }
 
+    /// The entry point of the solver.
+    ///
+    /// This function deals with (coinductive) cycles, overflow, and caching
+    /// and then calls [`EvalCtxt::compute_goal`] which contains the actual
+    /// logic of the solver.
+    ///
+    /// Instead of calling this function directly, use either [EvalCtxt::evaluate_goal]
+    /// if you're inside of the solver or [InferCtxtEvalExt::evaluate_root_goal] if you're
+    /// outside of it.
     #[instrument(level = "debug", skip(tcx, search_graph), ret)]
     fn evaluate_canonical_goal(
         tcx: TyCtxt<'tcx>,
@@ -337,15 +335,13 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
             // That won't actually reflect in the query response, so it seems moot.
             self.make_canonical_response(Certainty::AMBIGUOUS)
         } else {
-            self.infcx.probe(|_| {
-                let InferOk { value: (), obligations } = self
-                    .infcx
-                    .at(&ObligationCause::dummy(), goal.param_env)
-                    .sub(goal.predicate.a, goal.predicate.b)?;
-                self.evaluate_all_and_make_canonical_response(
-                    obligations.into_iter().map(|pred| pred.into()).collect(),
-                )
-            })
+            let InferOk { value: (), obligations } = self
+                .infcx
+                .at(&ObligationCause::dummy(), goal.param_env)
+                .sub(goal.predicate.a, goal.predicate.b)?;
+            self.evaluate_all_and_make_canonical_response(
+                obligations.into_iter().map(|pred| pred.into()).collect(),
+            )
         }
     }
 
@@ -378,22 +374,22 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         &mut self,
         goal: Goal<'tcx, ty::GenericArg<'tcx>>,
     ) -> QueryResult<'tcx> {
-        self.infcx.probe(|_| {
-            match crate::traits::wf::unnormalized_obligations(
-                self.infcx,
-                goal.param_env,
-                goal.predicate,
-            ) {
-                Some(obligations) => self.evaluate_all_and_make_canonical_response(
-                    obligations.into_iter().map(|o| o.into()).collect(),
-                ),
-                None => self.make_canonical_response(Certainty::AMBIGUOUS),
-            }
-        })
+        match crate::traits::wf::unnormalized_obligations(
+            self.infcx,
+            goal.param_env,
+            goal.predicate,
+        ) {
+            Some(obligations) => self.evaluate_all_and_make_canonical_response(
+                obligations.into_iter().map(|o| o.into()).collect(),
+            ),
+            None => self.make_canonical_response(Certainty::AMBIGUOUS),
+        }
     }
 }
 
 impl<'tcx> EvalCtxt<'_, 'tcx> {
+    // Recursively evaluates a list of goals to completion, returning the certainty
+    // of all of the goals.
     fn evaluate_all(
         &mut self,
         mut goals: Vec<Goal<'tcx, ty::Predicate<'tcx>>>,
@@ -430,6 +426,10 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         })
     }
 
+    // Recursively evaluates a list of goals to completion, making a query response.
+    //
+    // This is just a convenient way of calling [`EvalCtxt::evaluate_all`],
+    // then [`EvalCtxt::make_canonical_response`].
     fn evaluate_all_and_make_canonical_response(
         &mut self,
         goals: Vec<Goal<'tcx, ty::Predicate<'tcx>>>,
