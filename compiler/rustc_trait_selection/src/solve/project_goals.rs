@@ -93,24 +93,24 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             fn visit_ty(&mut self, t: Ty<'tcx>) -> ControlFlow<Self::BreakTy> {
                 if t.needs_infer() {
                     if ty::Term::from(t) == self.term {
-                        ControlFlow::BREAK
+                        ControlFlow::Break(())
                     } else {
                         t.super_visit_with(self)
                     }
                 } else {
-                    ControlFlow::CONTINUE
+                    ControlFlow::Continue(())
                 }
             }
 
             fn visit_const(&mut self, c: ty::Const<'tcx>) -> ControlFlow<Self::BreakTy> {
                 if c.needs_infer() {
                     if ty::Term::from(c) == self.term {
-                        ControlFlow::BREAK
+                        ControlFlow::Break(())
                     } else {
                         c.super_visit_with(self)
                     }
                 } else {
-                    ControlFlow::CONTINUE
+                    ControlFlow::Continue(())
                 }
             }
         }
@@ -171,7 +171,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             (CandidateSource::Impl(_), _)
             | (CandidateSource::ParamEnv(_), _)
             | (CandidateSource::BuiltinImpl, _)
-            | (CandidateSource::AliasBound(_), _) => unimplemented!(),
+            | (CandidateSource::AliasBound, _) => unimplemented!(),
         }
     }
 }

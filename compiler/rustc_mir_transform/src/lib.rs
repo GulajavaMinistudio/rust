@@ -54,7 +54,9 @@ mod const_debuginfo;
 mod const_goto;
 mod const_prop;
 mod const_prop_lint;
+mod copy_prop;
 mod coverage;
+mod ctfe_limit;
 mod dataflow_const_prop;
 mod dead_store_elimination;
 mod deaggregator;
@@ -86,6 +88,7 @@ mod required_consts;
 mod reveal_all;
 mod separate_const_switch;
 mod shim;
+mod ssa;
 // This pass is public to allow external drivers to perform MIR cleanup
 pub mod simplify;
 mod simplify_branches;
@@ -410,6 +413,8 @@ fn inner_mir_for_ctfe(tcx: TyCtxt<'_>, def: ty::WithOptConstParam<LocalDefId>) -
         }
     }
 
+    pm::run_passes(tcx, &mut body, &[&ctfe_limit::CtfeLimit], None);
+
     debug_assert!(!body.has_free_regions(), "Free regions in MIR for CTFE");
 
     body
@@ -426,7 +431,7 @@ fn mir_drops_elaborated_and_const_checked(
         return tcx.mir_drops_elaborated_and_const_checked(def);
     }
 
-    if tcx.generator_kind(def.did).is_some() {
+    if tcx.generator_kind(def.did).is_some() && tcx.sess.opts.unstable_opts.drop_tracking_mir {
         tcx.ensure().mir_generator_witnesses(def.did);
     }
     let mir_borrowck = tcx.mir_borrowck_opt_const_arg(def);
@@ -560,6 +565,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             &instcombine::InstCombine,
             &separate_const_switch::SeparateConstSwitch,
             &simplify::SimplifyLocals::new("before-const-prop"),
+            &copy_prop::CopyProp,
             //
             // FIXME(#70073): This pass is responsible for both optimization as well as some lints.
             &const_prop::ConstProp,

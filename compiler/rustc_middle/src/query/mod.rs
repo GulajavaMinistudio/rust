@@ -361,6 +361,13 @@ rustc_queries! {
         desc { |tcx| "constructing THIR tree for `{}`", tcx.def_path_str(key.did.to_def_id()) }
     }
 
+    /// Create a list-like THIR representation for debugging.
+    query thir_flat(key: ty::WithOptConstParam<LocalDefId>) -> String {
+        no_hash
+        arena_cache
+        desc { |tcx| "constructing flat THIR representation for `{}`", tcx.def_path_str(key.did.to_def_id()) }
+    }
+
     /// Set of all the `DefId`s in this crate that have MIR associated with
     /// them. This includes all the body owners, but also things like struct
     /// constructors.
@@ -1274,6 +1281,9 @@ rustc_queries! {
     query object_safety_violations(trait_id: DefId) -> &'tcx [traits::ObjectSafetyViolation] {
         desc { |tcx| "determining object safety of trait `{}`", tcx.def_path_str(trait_id) }
     }
+    query check_is_object_safe(trait_id: DefId) -> bool {
+        desc { |tcx| "checking if trait `{}` is object safe", tcx.def_path_str(trait_id) }
+    }
 
     /// Gets the ParameterEnvironment for a given item; this environment
     /// will be in "user-facing" mode, meaning that it is suitable for
@@ -1640,7 +1650,7 @@ rustc_queries! {
         Option<&'tcx FxHashMap<ItemLocalId, Region>> {
         desc { "looking up a named region" }
     }
-    query is_late_bound_map(_: LocalDefId) -> Option<&'tcx FxIndexSet<LocalDefId>> {
+    query is_late_bound_map(_: hir::OwnerId) -> Option<&'tcx FxIndexSet<ItemLocalId>> {
         desc { "testing if a region is late bound" }
     }
     /// For a given item's generic parameter, gets the default lifetimes to be used
