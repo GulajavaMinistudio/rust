@@ -23,6 +23,7 @@ use rustc_const_eval::util;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_data_structures::steal::Steal;
 use rustc_hir as hir;
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_index::vec::IndexVec;
@@ -104,7 +105,6 @@ use rustc_mir_dataflow::rustc_peek;
 
 pub fn provide(providers: &mut Providers) {
     check_unsafety::provide(providers);
-    check_packed_ref::provide(providers);
     coverage::query::provide(providers);
     ffi_unwind_calls::provide(providers);
     shim::provide(providers);
@@ -431,7 +431,9 @@ fn mir_drops_elaborated_and_const_checked(
         return tcx.mir_drops_elaborated_and_const_checked(def);
     }
 
-    if tcx.generator_kind(def.did).is_some() && tcx.sess.opts.unstable_opts.drop_tracking_mir {
+    if tcx.sess.opts.unstable_opts.drop_tracking_mir
+        && let DefKind::Generator = tcx.def_kind(def.did)
+    {
         tcx.ensure().mir_generator_witnesses(def.did);
     }
     let mir_borrowck = tcx.mir_borrowck_opt_const_arg(def);
@@ -549,13 +551,13 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &[
             &reveal_all::RevealAll, // has to be done before inlining, since inlined code is in RevealAll mode.
             &lower_slice_len::LowerSliceLenCalls, // has to be done before inlining, otherwise actual call will be almost always inlined. Also simple, so can just do first
-            &normalize_array_len::NormalizeArrayLen, // has to run after `slice::len` lowering
             &unreachable_prop::UnreachablePropagation,
             &uninhabited_enum_branching::UninhabitedEnumBranching,
             &o1(simplify::SimplifyCfg::new("after-uninhabited-enum-branching")),
             &inline::Inline,
             &remove_storage_markers::RemoveStorageMarkers,
             &remove_zsts::RemoveZsts,
+            &normalize_array_len::NormalizeArrayLen, // has to run after `slice::len` lowering
             &const_goto::ConstGoto,
             &remove_unneeded_drops::RemoveUnneededDrops,
             &sroa::ScalarReplacementOfAggregates,

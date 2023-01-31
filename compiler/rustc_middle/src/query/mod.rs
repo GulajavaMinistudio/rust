@@ -183,6 +183,15 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    query unsizing_params_for_adt(key: DefId) -> rustc_index::bit_set::BitSet<u32>
+    {
+        arena_cache
+        desc { |tcx|
+            "determining what parameters of `{}` can participate in unsizing",
+            tcx.def_path_str(key),
+        }
+    }
+
     query analysis(key: ()) -> Result<(), ErrorGuaranteed> {
         eval_always
         desc { "running analysis passes on this crate" }
@@ -812,15 +821,6 @@ rustc_queries! {
             |tcx| "unsafety-checking the const argument `{}`",
             tcx.def_path_str(key.0.to_def_id())
         }
-    }
-
-    /// HACK: when evaluated, this reports an "unsafe derive on repr(packed)" error.
-    ///
-    /// Unsafety checking is executed for each method separately, but we only want
-    /// to emit this error once per derive. As there are some impls with multiple
-    /// methods, we use a query for deduplication.
-    query unsafe_derive_on_repr_packed(key: LocalDefId) -> () {
-        desc { |tcx| "processing `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
     /// Returns the types assumed to be well formed while "inside" of the given item.
