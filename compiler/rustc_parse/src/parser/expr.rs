@@ -2109,7 +2109,7 @@ impl<'a> Parser<'a> {
             ClosureBinder::NotPresent
         };
 
-        let constness = self.parse_constness(Case::Sensitive);
+        let constness = self.parse_closure_constness(Case::Sensitive);
 
         let movability =
             if self.eat_keyword(kw::Static) { Movability::Static } else { Movability::Movable };
@@ -2141,7 +2141,7 @@ impl<'a> Parser<'a> {
         }
 
         if self.token.kind == TokenKind::Semi
-            && matches!(self.token_cursor.frame.delim_sp, Some((Delimiter::Parenthesis, _)))
+            && matches!(self.token_cursor.stack.last(), Some((_, Delimiter::Parenthesis, _)))
             && self.may_recover()
         {
             // It is likely that the closure body is a block but where the
