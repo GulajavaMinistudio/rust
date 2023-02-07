@@ -128,6 +128,9 @@ parse_missing_in_in_for_loop = missing `in` in `for` loop
     .use_in_not_of = try using `in` here instead
     .add_in = try adding `in` here
 
+parse_missing_expression_in_for_loop = missing expression to iterate on in `for` loop
+    .suggestion = try adding an expression to the `for` loop
+
 parse_missing_comma_after_match_arm = expected `,` following `match` arm
     .suggestion = missing a comma here to end this `match` arm
 
@@ -471,6 +474,9 @@ parse_unexpected_token_after_struct_name_found_other = expected `where`, `{"{"}`
 
 parse_unexpected_self_in_generic_parameters = unexpected keyword `Self` in generic parameters
     .note = you cannot use `Self` as a generic parameter because it is reserved for associated items
+
+parse_unexpected_default_value_for_lifetime_in_generic_parameters = unexpected default lifetime parameter
+    .label = lifetime parameters cannot have default values
 
 parse_multiple_where_clauses = cannot define duplicate `where` clauses on an item
     .label = previous `where` clause starts here

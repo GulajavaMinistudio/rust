@@ -434,6 +434,18 @@ pub(crate) enum MissingInInForLoopSub {
 }
 
 #[derive(Diagnostic)]
+#[diag(parse_missing_expression_in_for_loop)]
+pub(crate) struct MissingExpressionInForLoop {
+    #[primary_span]
+    #[suggestion(
+        code = "/* expression */ ",
+        applicability = "has-placeholders",
+        style = "verbose"
+    )]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag(parse_missing_comma_after_match_arm)]
 pub(crate) struct MissingCommaAfterMatchArm {
     #[primary_span]
@@ -1586,6 +1598,14 @@ impl UnexpectedTokenAfterStructName {
 #[note]
 pub(crate) struct UnexpectedSelfInGenericParameters {
     #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(parse_unexpected_default_value_for_lifetime_in_generic_parameters)]
+pub(crate) struct UnexpectedDefaultValueForLifetimeInGenericParameters {
+    #[primary_span]
+    #[label]
     pub span: Span,
 }
 
