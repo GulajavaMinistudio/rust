@@ -36,7 +36,7 @@ use rustc_data_structures::intern::Interned;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::tagged_ptr::CopyTaggedPtr;
 use rustc_hir as hir;
-use rustc_hir::def::{CtorKind, CtorOf, DefKind, LifetimeRes, Res};
+use rustc_hir::def::{CtorKind, CtorOf, DefKind, DocLinkResMap, LifetimeRes, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LocalDefIdMap};
 use rustc_hir::Node;
 use rustc_index::vec::IndexVec;
@@ -181,6 +181,8 @@ pub struct ResolverGlobalCtxt {
     /// exist under `std`. For example, wrote `str::from_utf8` instead of `std::str::from_utf8`.
     pub confused_type_with_std_module: FxHashMap<Span, Span>,
     pub registered_tools: RegisteredTools,
+    pub doc_link_resolutions: FxHashMap<LocalDefId, DocLinkResMap>,
+    pub doc_link_traits_in_scope: FxHashMap<LocalDefId, Vec<DefId>>,
 }
 
 /// Resolutions that should only be used for lowering.
@@ -545,6 +547,7 @@ impl<'tcx> Predicate<'tcx> {
             | PredicateKind::Clause(Clause::RegionOutlives(_))
             | PredicateKind::Clause(Clause::TypeOutlives(_))
             | PredicateKind::Clause(Clause::Projection(_))
+            | PredicateKind::AliasEq(..)
             | PredicateKind::ObjectSafe(_)
             | PredicateKind::ClosureKind(_, _, _)
             | PredicateKind::Subtype(_)
@@ -632,6 +635,12 @@ pub enum PredicateKind<'tcx> {
     /// A marker predicate that is always ambiguous.
     /// Used for coherence to mark opaque types as possibly equal to each other but ambiguous.
     Ambiguous,
+
+    /// Separate from `Clause::Projection` which is used for normalization in new solver.
+    /// This predicate requires two terms to be equal to eachother.
+    ///
+    /// Only used for new solver
+    AliasEq(Term<'tcx>, Term<'tcx>),
 }
 
 /// The crate outlives map is computed during typeck and contains the
@@ -963,6 +972,33 @@ impl<'tcx> Term<'tcx> {
             TermKind::Const(c) => c.into(),
         }
     }
+
+    /// This function returns `None` for `AliasKind::Opaque`.
+    ///
+    /// FIXME: rename `AliasTy` to `AliasTerm` and make sure we correctly
+    /// deal with constants.
+    pub fn to_alias_term_no_opaque(&self, tcx: TyCtxt<'tcx>) -> Option<AliasTy<'tcx>> {
+        match self.unpack() {
+            TermKind::Ty(ty) => match ty.kind() {
+                ty::Alias(kind, alias_ty) => match kind {
+                    AliasKind::Projection => Some(*alias_ty),
+                    AliasKind::Opaque => None,
+                },
+                _ => None,
+            },
+            TermKind::Const(ct) => match ct.kind() {
+                ConstKind::Unevaluated(uv) => Some(tcx.mk_alias_ty(uv.def.did, uv.substs)),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn is_infer(&self) -> bool {
+        match self.unpack() {
+            TermKind::Ty(ty) => ty.is_ty_or_numeric_infer(),
+            TermKind::Const(ct) => ct.is_ct_infer(),
+        }
+    }
 }
 
 const TAG_MASK: usize = 0b11;
@@ -1152,6 +1188,7 @@ impl<'tcx> Predicate<'tcx> {
         match predicate.skip_binder() {
             PredicateKind::Clause(Clause::Trait(t)) => Some(predicate.rebind(t)),
             PredicateKind::Clause(Clause::Projection(..))
+            | PredicateKind::AliasEq(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
             | PredicateKind::Clause(Clause::RegionOutlives(..))
@@ -1171,6 +1208,7 @@ impl<'tcx> Predicate<'tcx> {
         match predicate.skip_binder() {
             PredicateKind::Clause(Clause::Projection(t)) => Some(predicate.rebind(t)),
             PredicateKind::Clause(Clause::Trait(..))
+            | PredicateKind::AliasEq(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
             | PredicateKind::Clause(Clause::RegionOutlives(..))
@@ -1191,6 +1229,7 @@ impl<'tcx> Predicate<'tcx> {
             PredicateKind::Clause(Clause::TypeOutlives(data)) => Some(predicate.rebind(data)),
             PredicateKind::Clause(Clause::Trait(..))
             | PredicateKind::Clause(Clause::Projection(..))
+            | PredicateKind::AliasEq(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
             | PredicateKind::Clause(Clause::RegionOutlives(..))

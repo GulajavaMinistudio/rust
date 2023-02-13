@@ -169,6 +169,8 @@ top_level_options!(
         /// is currently just a hack and will be removed eventually, so please
         /// try to not rely on this too much.
         actually_rustdoc: bool [TRACKED],
+        /// Whether name resolver should resolve documentation links.
+        resolve_doc_links: ResolveDocLinks [TRACKED],
 
         /// Control path trimming.
         trimmed_def_paths: TrimmedDefPaths [TRACKED],
@@ -349,7 +351,7 @@ fn build_options<O: Default>(
 #[allow(non_upper_case_globals)]
 mod desc {
     pub const parse_no_flag: &str = "no value";
-    pub const parse_bool: &str = "one of: `y`, `yes`, `on`, `n`, `no`, or `off`";
+    pub const parse_bool: &str = "one of: `y`, `yes`, `on`, `true`, `n`, `no`, `off` or `false`";
     pub const parse_opt_bool: &str = parse_bool;
     pub const parse_string: &str = "a string";
     pub const parse_opt_string: &str = parse_string;
@@ -433,11 +435,11 @@ mod parse {
     /// Use this for any boolean option that has a static default.
     pub(crate) fn parse_bool(slot: &mut bool, v: Option<&str>) -> bool {
         match v {
-            Some("y") | Some("yes") | Some("on") | None => {
+            Some("y") | Some("yes") | Some("on") | Some("true") | None => {
                 *slot = true;
                 true
             }
-            Some("n") | Some("no") | Some("off") => {
+            Some("n") | Some("no") | Some("off") | Some("false") => {
                 *slot = false;
                 true
             }
@@ -450,11 +452,11 @@ mod parse {
     /// other factors, such as other options, or target options.)
     pub(crate) fn parse_opt_bool(slot: &mut Option<bool>, v: Option<&str>) -> bool {
         match v {
-            Some("y") | Some("yes") | Some("on") | None => {
+            Some("y") | Some("yes") | Some("on") | Some("true") | None => {
                 *slot = Some(true);
                 true
             }
-            Some("n") | Some("no") | Some("off") => {
+            Some("n") | Some("no") | Some("off") | Some("false") => {
                 *slot = Some(false);
                 true
             }

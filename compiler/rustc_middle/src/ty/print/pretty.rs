@@ -22,7 +22,6 @@ use rustc_target::spec::abi::Abi;
 use smallvec::SmallVec;
 
 use std::cell::Cell;
-use std::char;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::iter;
@@ -2114,7 +2113,7 @@ impl<'tcx> PrettyPrinter<'tcx> for FmtPrinter<'_, 'tcx> {
 
             ty::ReVar(_) if identify_regions => true,
 
-            ty::ReVar(_) | ty::ReErased => false,
+            ty::ReVar(_) | ty::ReErased | ty::ReError(_) => false,
 
             ty::ReStatic => true,
         }
@@ -2194,6 +2193,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
             }
             ty::ReVar(_) => {}
             ty::ReErased => {}
+            ty::ReError(_) => {}
             ty::ReStatic => {
                 p!("'static");
                 return Ok(self);
@@ -2841,6 +2841,7 @@ define_print_and_forward_display! {
                 p!("the type `", print(ty), "` is found in the environment")
             }
             ty::PredicateKind::Ambiguous => p!("ambiguous"),
+            ty::PredicateKind::AliasEq(t1, t2) => p!(print(t1), " == ", print(t2)),
         }
     }
 

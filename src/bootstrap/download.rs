@@ -181,8 +181,7 @@ impl Config {
             // appear to have this (even when `../lib` is redundant).
             // NOTE: there are only two paths here, delimited by a `:`
             let mut entries = OsString::from("$ORIGIN/../lib:");
-            entries.push(t!(fs::canonicalize(nix_deps_dir)));
-            entries.push("/lib");
+            entries.push(t!(fs::canonicalize(nix_deps_dir)).join("lib"));
             entries
         };
         patchelf.args(&[OsString::from("--set-rpath"), rpath_entries]);
@@ -229,10 +228,10 @@ impl Config {
             "--retry",
             "3",
             "-Sf",
-            "-o",
         ]);
-        curl.arg(tempfile);
         curl.arg(url);
+        let f = File::create(tempfile).unwrap();
+        curl.stdout(Stdio::from(f));
         if !self.check_run(&mut curl) {
             if self.build.contains("windows-msvc") {
                 println!("Fallback to PowerShell");
@@ -340,9 +339,12 @@ impl Config {
         let rustfmt_path = bin_root.join("bin").join(exe("rustfmt", host));
         let rustfmt_stamp = bin_root.join(".rustfmt-stamp");
 
-        let legacy_rustfmt = self.initial_rustc.with_file_name(exe("rustfmt", host));
-        if !legacy_rustfmt.exists() {
-            t!(self.symlink_file(&rustfmt_path, &legacy_rustfmt));
+        #[cfg(not(windows))]
+        {
+            let legacy_rustfmt = self.initial_rustc.with_file_name(exe("rustfmt", host));
+            if !legacy_rustfmt.exists() {
+                t!(self.symlink_file(&rustfmt_path, &legacy_rustfmt));
+            }
         }
 
         if rustfmt_path.exists() && !program_out_of_date(&rustfmt_stamp, &channel) {
@@ -367,6 +369,13 @@ impl Config {
         if self.should_fix_bins_and_dylibs() {
             self.fix_bin_or_dylib(&bin_root.join("bin").join("rustfmt"));
             self.fix_bin_or_dylib(&bin_root.join("bin").join("cargo-fmt"));
+            let lib_dir = bin_root.join("lib");
+            for lib in t!(fs::read_dir(&lib_dir), lib_dir.display().to_string()) {
+                let lib = t!(lib);
+                if lib.path().extension() == Some(OsStr::new("so")) {
+                    self.fix_bin_or_dylib(&lib.path());
+                }
+            }
         }
 
         self.create(&rustfmt_stamp, &channel);

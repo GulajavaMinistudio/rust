@@ -28,6 +28,7 @@
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
+pub(crate) use rustc_resolve::rustdoc::main_body_opts;
 use rustc_span::edition::Edition;
 use rustc_span::{Span, Symbol};
 
@@ -57,15 +58,6 @@ use pulldown_cmark::{
 mod tests;
 
 const MAX_HEADER_LEVEL: u32 = 6;
-
-/// Options for rendering Markdown in the main body of documentation.
-pub(crate) fn main_body_opts() -> Options {
-    Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_SMART_PUNCTUATION
-}
 
 /// Options for rendering Markdown in summaries (e.g., in search results).
 pub(crate) fn summary_opts() -> Options {
@@ -748,11 +740,7 @@ pub(crate) fn find_testable_code<T: doctest::Tester>(
             }
             Event::Text(ref s) if register_header.is_some() => {
                 let level = register_header.unwrap();
-                if s.is_empty() {
-                    tests.register_header("", level);
-                } else {
-                    tests.register_header(s, level);
-                }
+                tests.register_header(s, level);
                 register_header = None;
             }
             _ => {}
@@ -1188,14 +1176,23 @@ pub(crate) fn short_markdown_summary(markdown: &str, link_names: &[RenderedLink]
 /// - Headings, links, and formatting are stripped.
 /// - Inline code is rendered as-is, surrounded by backticks.
 /// - HTML and code blocks are ignored.
-pub(crate) fn plain_text_summary(md: &str) -> String {
+pub(crate) fn plain_text_summary(md: &str, link_names: &[RenderedLink]) -> String {
     if md.is_empty() {
         return String::new();
     }
 
     let mut s = String::with_capacity(md.len() * 3 / 2);
 
-    for event in Parser::new_ext(md, summary_opts()) {
+    let mut replacer = |broken_link: BrokenLink<'_>| {
+        link_names
+            .iter()
+            .find(|link| link.original_text.as_str() == &*broken_link.reference)
+            .map(|link| (link.href.as_str().into(), link.new_text.as_str().into()))
+    };
+
+    let p = Parser::new_with_broken_link_callback(md, summary_opts(), Some(&mut replacer));
+
+    for event in p {
         match &event {
             Event::Text(text) => s.push_str(text),
             Event::Code(code) => {
