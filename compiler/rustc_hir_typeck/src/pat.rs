@@ -1296,7 +1296,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             )
         });
         let element_tys = tcx.mk_type_list(element_tys_iter);
-        let pat_ty = tcx.mk_ty(ty::Tuple(element_tys));
+        let pat_ty = tcx.intern_tup(element_tys);
         if let Some(mut err) = self.demand_eqtype_pat_diag(span, expected, pat_ty, ti) {
             let reported = err.emit();
             // Walk subpatterns with an expected type of `err` in this case to silence
@@ -2063,7 +2063,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         len: ty::Const<'tcx>,
         min_len: u64,
     ) -> (Option<Ty<'tcx>>, Ty<'tcx>) {
-        if let Some(len) = len.try_eval_usize(self.tcx, self.param_env) {
+        if let Some(len) = len.try_eval_target_usize(self.tcx, self.param_env) {
             // Now we know the length...
             if slice.is_none() {
                 // ...and since there is no variable-length pattern,

@@ -7,10 +7,10 @@ use crate::mir::interpret::{
 };
 use crate::mir::visit::MirVisitable;
 use crate::ty::codec::{TyDecoder, TyEncoder};
-use crate::ty::fold::{FallibleTypeFolder, TypeFoldable};
+use crate::ty::fold::{ir::TypeFoldable, FallibleTypeFolder};
 use crate::ty::print::{FmtPrinter, Printer};
 use crate::ty::visit::{TypeVisitable, TypeVisitor};
-use crate::ty::{self, DefIdTree, List, Ty, TyCtxt};
+use crate::ty::{self, ir, DefIdTree, List, Ty, TyCtxt};
 use crate::ty::{AdtDef, InstanceDef, ScalarInt, UserTypeAnnotationIndex};
 use crate::ty::{GenericArg, InternalSubsts, SubstsRef};
 
@@ -705,7 +705,11 @@ pub enum BindingForm<'tcx> {
     RefForGuard,
 }
 
-TrivialTypeTraversalAndLiftImpls! { BindingForm<'tcx>, }
+TrivialTypeTraversalAndLiftImpls! {
+    for<'tcx> {
+        BindingForm<'tcx>,
+    }
+}
 
 mod binding_form_impl {
     use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -2340,9 +2344,13 @@ impl<'tcx> ConstantKind<'tcx> {
     }
 
     #[inline]
-    pub fn try_eval_usize(&self, tcx: TyCtxt<'tcx>, param_env: ty::ParamEnv<'tcx>) -> Option<u64> {
+    pub fn try_eval_target_usize(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+    ) -> Option<u64> {
         match self {
-            Self::Ty(ct) => ct.try_eval_usize(tcx, param_env),
+            Self::Ty(ct) => ct.try_eval_target_usize(tcx, param_env),
             Self::Val(val, _) => val.try_to_machine_usize(tcx),
             Self::Unevaluated(uneval, _) => {
                 match tcx.const_eval_resolve(param_env, *uneval, None) {
@@ -2742,7 +2750,7 @@ impl UserTypeProjection {
     }
 }
 
-impl<'tcx> TypeFoldable<'tcx> for UserTypeProjection {
+impl<'tcx> TypeFoldable<TyCtxt<'tcx>> for UserTypeProjection {
     fn try_fold_with<F: FallibleTypeFolder<'tcx>>(self, folder: &mut F) -> Result<Self, F::Error> {
         Ok(UserTypeProjection {
             base: self.base.try_fold_with(folder)?,
@@ -2751,7 +2759,7 @@ impl<'tcx> TypeFoldable<'tcx> for UserTypeProjection {
     }
 }
 
-impl<'tcx> TypeVisitable<'tcx> for UserTypeProjection {
+impl<'tcx> ir::TypeVisitable<TyCtxt<'tcx>> for UserTypeProjection {
     fn visit_with<Vs: TypeVisitor<'tcx>>(&self, visitor: &mut Vs) -> ControlFlow<Vs::BreakTy> {
         self.base.visit_with(visitor)
         // Note: there's nothing in `self.proj` to visit.

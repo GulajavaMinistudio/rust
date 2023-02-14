@@ -17,7 +17,7 @@ use rustc_lint::LateContext;
 use rustc_middle::mir::interpret::{ConstValue, Scalar};
 use rustc_middle::ty::{
     self, AdtDef, AliasTy, AssocKind, Binder, BoundRegion, DefIdTree, FnSig, IntTy, List, ParamEnv, Predicate,
-    PredicateKind, Region, RegionKind, SubstsRef, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitor, UintTy,
+    PredicateKind, Region, RegionKind, SubstsRef, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, ir::TypeVisitor, UintTy,
     VariantDef, VariantDiscr,
 };
 use rustc_middle::ty::{GenericArg, GenericArgKind};
@@ -838,7 +838,7 @@ pub fn for_each_top_level_late_bound_region<B>(
         index: u32,
         f: F,
     }
-    impl<'tcx, B, F: FnMut(BoundRegion) -> ControlFlow<B>> TypeVisitor<'tcx> for V<F> {
+    impl<'tcx, B, F: FnMut(BoundRegion) -> ControlFlow<B>> TypeVisitor<TyCtxt<'tcx>> for V<F> {
         type BreakTy = B;
         fn visit_region(&mut self, r: Region<'tcx>) -> ControlFlow<Self::BreakTy> {
             if let RegionKind::ReLateBound(idx, bound) = r.kind() && idx.as_u32() == self.index {
@@ -949,7 +949,7 @@ pub fn approx_ty_size<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> u64 {
         (Ok(size), _) => size,
         (Err(_), ty::Tuple(list)) => list.as_substs().types().map(|t| approx_ty_size(cx, t)).sum(),
         (Err(_), ty::Array(t, n)) => {
-            n.try_eval_usize(cx.tcx, cx.param_env).unwrap_or_default() * approx_ty_size(cx, *t)
+            n.try_eval_target_usize(cx.tcx, cx.param_env).unwrap_or_default() * approx_ty_size(cx, *t)
         },
         (Err(_), ty::Adt(def, subst)) if def.is_struct() => def
             .variants()

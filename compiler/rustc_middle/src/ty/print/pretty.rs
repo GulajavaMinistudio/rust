@@ -1209,7 +1209,7 @@ pub trait PrettyPrinter<'tcx>:
                 // in order to place the projections inside the `<...>`.
                 if !resugared {
                     // Use a type that can't appear in defaults of type parameters.
-                    let dummy_cx = cx.tcx().mk_ty_infer(ty::FreshTy(0));
+                    let dummy_cx = cx.tcx().mk_fresh_ty(0);
                     let principal = principal.with_self_ty(cx.tcx(), dummy_cx);
 
                     let args = cx
@@ -2221,8 +2221,8 @@ struct RegionFolder<'a, 'tcx> {
             ),
 }
 
-impl<'a, 'tcx> ty::TypeFolder<'tcx> for RegionFolder<'a, 'tcx> {
-    fn tcx<'b>(&'b self) -> TyCtxt<'tcx> {
+impl<'a, 'tcx> ty::ir::TypeFolder<TyCtxt<'tcx>> for RegionFolder<'a, 'tcx> {
+    fn interner(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
 
@@ -2493,7 +2493,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
             }
         }
 
-        impl<'tcx> ty::visit::TypeVisitor<'tcx> for RegionNameCollector<'tcx> {
+        impl<'tcx> ty::visit::ir::TypeVisitor<TyCtxt<'tcx>> for RegionNameCollector<'tcx> {
             type BreakTy = ();
 
             fn visit_region(&mut self, r: ty::Region<'tcx>) -> ControlFlow<Self::BreakTy> {
@@ -2696,7 +2696,7 @@ define_print_and_forward_display! {
 
     ty::ExistentialTraitRef<'tcx> {
         // Use a type that can't appear in defaults of type parameters.
-        let dummy_self = cx.tcx().mk_ty_infer(ty::FreshTy(0));
+        let dummy_self = cx.tcx().mk_fresh_ty(0);
         let trait_ref = self.with_self_ty(cx.tcx(), dummy_self);
         p!(print(trait_ref.print_only_trait_path()))
     }

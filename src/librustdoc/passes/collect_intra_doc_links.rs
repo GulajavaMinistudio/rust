@@ -24,6 +24,7 @@ use rustc_span::BytePos;
 use smallvec::{smallvec, SmallVec};
 
 use std::borrow::Cow;
+use std::mem;
 use std::ops::Range;
 
 use crate::clean::{self, utils::find_nearest_parent_module};
@@ -33,9 +34,6 @@ use crate::html::markdown::{markdown_links, MarkdownLink};
 use crate::lint::{BROKEN_INTRA_DOC_LINKS, PRIVATE_INTRA_DOC_LINKS};
 use crate::passes::Pass;
 use crate::visit::DocVisitor;
-
-mod early;
-pub(crate) use early::early_resolve_intra_doc_links;
 
 pub(crate) const COLLECT_INTRA_DOC_LINKS: Pass = Pass {
     name: "collect-intra-doc-links",
@@ -516,27 +514,27 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
         // FIXME: Only simple types are supported here, see if we can support
         // other types such as Tuple, Array, Slice, etc.
         // See https://github.com/rust-lang/rust/issues/90703#issuecomment-1004263455
-        Some(tcx.mk_ty(match prim {
-            Bool => ty::Bool,
-            Str => ty::Str,
-            Char => ty::Char,
-            Never => ty::Never,
-            I8 => ty::Int(ty::IntTy::I8),
-            I16 => ty::Int(ty::IntTy::I16),
-            I32 => ty::Int(ty::IntTy::I32),
-            I64 => ty::Int(ty::IntTy::I64),
-            I128 => ty::Int(ty::IntTy::I128),
-            Isize => ty::Int(ty::IntTy::Isize),
-            F32 => ty::Float(ty::FloatTy::F32),
-            F64 => ty::Float(ty::FloatTy::F64),
-            U8 => ty::Uint(ty::UintTy::U8),
-            U16 => ty::Uint(ty::UintTy::U16),
-            U32 => ty::Uint(ty::UintTy::U32),
-            U64 => ty::Uint(ty::UintTy::U64),
-            U128 => ty::Uint(ty::UintTy::U128),
-            Usize => ty::Uint(ty::UintTy::Usize),
+        Some(match prim {
+            Bool => tcx.types.bool,
+            Str => tcx.types.str_,
+            Char => tcx.types.char,
+            Never => tcx.types.never,
+            I8 => tcx.types.i8,
+            I16 => tcx.types.i16,
+            I32 => tcx.types.i32,
+            I64 => tcx.types.i64,
+            I128 => tcx.types.i128,
+            Isize => tcx.types.isize,
+            F32 => tcx.types.f32,
+            F64 => tcx.types.f64,
+            U8 => tcx.types.u8,
+            U16 => tcx.types.u16,
+            U32 => tcx.types.u32,
+            U64 => tcx.types.u64,
+            U128 => tcx.types.u128,
+            Usize => tcx.types.usize,
             _ => return None,
-        }))
+        })
     }
 
     /// Resolve an associated item, returning its containing page's `Res`
@@ -1616,7 +1614,7 @@ fn resolution_failure(
             // ignore duplicates
             let mut variants_seen = SmallVec::<[_; 3]>::new();
             for mut failure in kinds {
-                let variant = std::mem::discriminant(&failure);
+                let variant = mem::discriminant(&failure);
                 if variants_seen.contains(&variant) {
                     continue;
                 }
@@ -1686,7 +1684,7 @@ fn resolution_failure(
 
                         if !path_str.contains("::") {
                             if disambiguator.map_or(true, |d| d.ns() == MacroNS)
-                                && let Some(&res) = collector.cx.resolver_caches.all_macro_rules
+                                && let Some(&res) = collector.cx.tcx.resolutions(()).all_macro_rules
                                                              .get(&Symbol::intern(path_str))
                             {
                                 diag.note(format!(
