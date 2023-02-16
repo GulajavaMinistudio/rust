@@ -27,7 +27,6 @@ use polonius_engine::Atom;
 pub use rustc_ast::Mutability;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::graph::dominators::Dominators;
-use rustc_index::bit_set::BitMatrix;
 use rustc_index::vec::{Idx, IndexVec};
 use rustc_serialize::{Decodable, Encodable};
 use rustc_span::symbol::Symbol;
@@ -62,7 +61,6 @@ pub use terminator::*;
 
 pub mod traversal;
 mod type_foldable;
-mod type_visitable;
 pub mod visit;
 
 pub use self::generic_graph::graphviz_safe_def_name;
@@ -1644,6 +1642,14 @@ impl<'tcx> PlaceRef<'tcx> {
         }
     }
 
+    /// Returns `true` if this `Place` contains a `Deref` projection.
+    ///
+    /// If `Place::is_indirect` returns false, the caller knows that the `Place` refers to the
+    /// same region of memory as its base.
+    pub fn is_indirect(&self) -> bool {
+        self.projection.iter().any(|elem| elem.is_indirect())
+    }
+
     /// If MirPhase >= Derefered and if projection contains Deref,
     /// It's guaranteed to be in the first place
     pub fn has_deref(&self) -> bool {
@@ -2351,10 +2357,10 @@ impl<'tcx> ConstantKind<'tcx> {
     ) -> Option<u64> {
         match self {
             Self::Ty(ct) => ct.try_eval_target_usize(tcx, param_env),
-            Self::Val(val, _) => val.try_to_machine_usize(tcx),
+            Self::Val(val, _) => val.try_to_target_usize(tcx),
             Self::Unevaluated(uneval, _) => {
                 match tcx.const_eval_resolve(param_env, *uneval, None) {
-                    Ok(val) => val.try_to_machine_usize(tcx),
+                    Ok(val) => val.try_to_target_usize(tcx),
                     Err(_) => None,
                 }
             }

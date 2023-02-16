@@ -2143,12 +2143,12 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query permits_uninit_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
-        desc { "checking to see if `{}` permits being left uninit", key.value.ty }
+    query permits_uninit_init(key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> Result<bool, ty::layout::LayoutError<'tcx>> {
+        desc { "checking to see if `{}` permits being left uninit", key.value }
     }
 
-    query permits_zero_init(key: ty::ParamEnvAnd<'tcx, TyAndLayout<'tcx>>) -> bool {
-        desc { "checking to see if `{}` permits being left zeroed", key.value.ty }
+    query permits_zero_init(key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> Result<bool, ty::layout::LayoutError<'tcx>> {
+        desc { "checking to see if `{}` permits being left zeroed", key.value }
     }
 
     query compare_impl_const(
@@ -2172,5 +2172,12 @@ rustc_queries! {
         eval_always
         desc { "traits in scope for documentation links for a module" }
         separate_provide_extern
+    }
+
+    /// Used in `super_combine_consts` to ICE if the type of the two consts are definitely not going to end up being
+    /// equal to eachother. This might return `Ok` even if the types are unequal, but will never return `Err` if
+    /// the types might be equal.
+    query check_tys_might_be_eq(arg: Canonical<'tcx, (ty::ParamEnv<'tcx>, Ty<'tcx>, Ty<'tcx>)>) -> Result<(), NoSolution> {
+        desc { "check whether two const param are definitely not equal to eachother"}
     }
 }
