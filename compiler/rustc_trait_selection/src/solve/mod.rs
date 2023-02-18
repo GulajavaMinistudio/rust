@@ -25,7 +25,7 @@ use rustc_infer::traits::query::NoSolution;
 use rustc_infer::traits::Obligation;
 use rustc_middle::infer::canonical::Certainty as OldCertainty;
 use rustc_middle::traits::solve::{ExternalConstraints, ExternalConstraintsData};
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::ty::{
     CoercePredicate, RegionOutlivesPredicate, SubtypePredicate, ToPredicate, TypeOutlivesPredicate,
 };
@@ -290,6 +290,9 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
                 ty::PredicateKind::Clause(ty::Clause::RegionOutlives(predicate)) => {
                     self.compute_region_outlives_goal(Goal { param_env, predicate })
                 }
+                ty::PredicateKind::Clause(ty::Clause::ConstArgHasType(ct, ty)) => {
+                    self.compute_const_arg_has_type_goal(Goal { param_env, predicate: (ct, ty) })
+                }
                 ty::PredicateKind::Subtype(predicate) => {
                     self.compute_subtype_goal(Goal { param_env, predicate })
                 }
@@ -471,6 +474,16 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
             }
         }
     }
+
+    #[instrument(level = "debug", skip(self), ret)]
+    fn compute_const_arg_has_type_goal(
+        &mut self,
+        goal: Goal<'tcx, (ty::Const<'tcx>, Ty<'tcx>)>,
+    ) -> QueryResult<'tcx> {
+        let (ct, ty) = goal.predicate;
+        let nested_goals = self.infcx.eq(goal.param_env, ct.ty(), ty)?;
+        self.evaluate_all_and_make_canonical_response(nested_goals)
+    }
 }
 
 impl<'tcx> EvalCtxt<'_, 'tcx> {
@@ -547,7 +560,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             response.value.certainty == Certainty::Yes
                 && response.has_no_inference_or_external_constraints()
         }) {
-            return Ok(response.clone());
+            return Ok(*response);
         }
 
         let certainty = candidates.iter().fold(Certainty::AMBIGUOUS, |certainty, response| {

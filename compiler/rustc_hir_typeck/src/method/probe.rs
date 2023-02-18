@@ -517,8 +517,7 @@ fn method_autoderef_steps<'tcx>(
         .by_ref()
         .map(|(ty, d)| {
             let step = CandidateStep {
-                self_ty: infcx
-                    .make_query_response_ignoring_pending_obligations(inference_vars.clone(), ty),
+                self_ty: infcx.make_query_response_ignoring_pending_obligations(inference_vars, ty),
                 autoderefs: d,
                 from_unsafe_deref: reached_raw_pointer,
                 unsize: false,
@@ -736,7 +735,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             debug!("impl_ty: {:?}", impl_ty);
 
             // Determine the receiver type that the method itself expects.
-            let (xform_self_ty, xform_ret_ty) = self.xform_self_ty(&item, impl_ty, impl_substs);
+            let (xform_self_ty, xform_ret_ty) = self.xform_self_ty(item, impl_ty, impl_substs);
             debug!("xform_self_ty: {:?}, xform_ret_ty: {:?}", xform_self_ty, xform_ret_ty);
 
             // We can't use normalize_associated_types_in as it will pollute the
@@ -797,7 +796,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             let new_trait_ref = this.erase_late_bound_regions(new_trait_ref);
 
             let (xform_self_ty, xform_ret_ty) =
-                this.xform_self_ty(&item, new_trait_ref.self_ty(), new_trait_ref.substs);
+                this.xform_self_ty(item, new_trait_ref.self_ty(), new_trait_ref.substs);
             this.push_candidate(
                 Candidate {
                     xform_self_ty,
@@ -827,6 +826,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                     }
                 }
                 ty::PredicateKind::Subtype(..)
+                | ty::PredicateKind::Clause(ty::Clause::ConstArgHasType(..))
                 | ty::PredicateKind::Coerce(..)
                 | ty::PredicateKind::Clause(ty::Clause::Projection(..))
                 | ty::PredicateKind::Clause(ty::Clause::RegionOutlives(..))
@@ -846,7 +846,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             let trait_ref = this.erase_late_bound_regions(poly_trait_ref);
 
             let (xform_self_ty, xform_ret_ty) =
-                this.xform_self_ty(&item, trait_ref.self_ty(), trait_ref.substs);
+                this.xform_self_ty(item, trait_ref.self_ty(), trait_ref.substs);
 
             // Because this trait derives from a where-clause, it
             // should not contain any inference variables or other
@@ -917,7 +917,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
 
     fn matches_return_type(
         &self,
-        method: &ty::AssocItem,
+        method: ty::AssocItem,
         self_ty: Option<Ty<'tcx>>,
         expected: Ty<'tcx>,
     ) -> bool {
@@ -966,11 +966,8 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                     } else {
                         let new_trait_ref = self.erase_late_bound_regions(bound_trait_ref);
 
-                        let (xform_self_ty, xform_ret_ty) = self.xform_self_ty(
-                            &item,
-                            new_trait_ref.self_ty(),
-                            new_trait_ref.substs,
-                        );
+                        let (xform_self_ty, xform_ret_ty) =
+                            self.xform_self_ty(item, new_trait_ref.self_ty(), new_trait_ref.substs);
                         self.push_candidate(
                             Candidate {
                                 xform_self_ty,
@@ -998,7 +995,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 }
 
                 let (xform_self_ty, xform_ret_ty) =
-                    self.xform_self_ty(&item, trait_ref.self_ty(), trait_substs);
+                    self.xform_self_ty(item, trait_ref.self_ty(), trait_substs);
                 self.push_candidate(
                     Candidate {
                         xform_self_ty,
@@ -1025,7 +1022,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             .filter(|candidate| candidate_filter(&candidate.item))
             .filter(|candidate| {
                 if let Some(return_ty) = self.return_type {
-                    self.matches_return_type(&candidate.item, None, return_ty)
+                    self.matches_return_type(candidate.item, None, return_ty)
                 } else {
                     true
                 }
@@ -1577,7 +1574,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                                 traits::ImplDerivedObligation(Box::new(
                                     traits::ImplDerivedObligationCause {
                                         derived,
-                                        impl_def_id,
+                                        impl_or_alias_def_id: impl_def_id,
                                         impl_def_predicate_index: None,
                                         span,
                                     },
@@ -1884,7 +1881,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
     #[instrument(level = "debug", skip(self))]
     fn xform_self_ty(
         &self,
-        item: &ty::AssocItem,
+        item: ty::AssocItem,
         impl_ty: Ty<'tcx>,
         substs: SubstsRef<'tcx>,
     ) -> (Ty<'tcx>, Option<Ty<'tcx>>) {
@@ -1941,7 +1938,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
         &self,
         impl_def_id: DefId,
     ) -> (ty::EarlyBinder<Ty<'tcx>>, SubstsRef<'tcx>) {
-        (self.tcx.bound_type_of(impl_def_id), self.fresh_item_substs(impl_def_id))
+        (self.tcx.type_of(impl_def_id), self.fresh_item_substs(impl_def_id))
     }
 
     fn fresh_item_substs(&self, def_id: DefId) -> SubstsRef<'tcx> {
@@ -1959,7 +1956,14 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                     kind: ConstVariableOriginKind::SubstitutionPlaceholder,
                     span,
                 };
-                self.next_const_var(self.tcx.type_of(param.def_id), origin).into()
+                self.next_const_var(
+                    self.tcx
+                        .type_of(param.def_id)
+                        .no_bound_vars()
+                        .expect("const parameter types cannot be generic"),
+                    origin,
+                )
+                .into()
             }
         })
     }
