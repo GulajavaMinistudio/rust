@@ -1095,17 +1095,8 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
     }
 
     fn pick_core(&self) -> Option<PickResult<'tcx>> {
-        let pick = self.pick_all_method(Some(&mut vec![]));
-
-        // In this case unstable picking is done by `pick_method`.
-        if !self.tcx.sess.opts.unstable_opts.pick_stable_methods_before_any_unstable {
-            return pick;
-        }
-
-        if pick.is_none() {
-            return self.pick_all_method(None);
-        }
-        pick
+        // Pick stable methods only first, and consider unstable candidates if not found.
+        self.pick_all_method(Some(&mut vec![])).or_else(|| self.pick_all_method(None))
     }
 
     fn pick_all_method(
@@ -1244,54 +1235,11 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
         })
     }
 
-    fn pick_method_with_unstable(&self, self_ty: Ty<'tcx>) -> Option<PickResult<'tcx>> {
-        debug!("pick_method_with_unstable(self_ty={})", self.ty_to_string(self_ty));
-
-        let mut possibly_unsatisfied_predicates = Vec::new();
-
-        for (kind, candidates) in
-            &[("inherent", &self.inherent_candidates), ("extension", &self.extension_candidates)]
-        {
-            debug!("searching {} candidates", kind);
-            let res = self.consider_candidates(
-                self_ty,
-                candidates,
-                &mut possibly_unsatisfied_predicates,
-                Some(&mut vec![]),
-            );
-            if res.is_some() {
-                return res;
-            }
-        }
-
-        for (kind, candidates) in
-            &[("inherent", &self.inherent_candidates), ("extension", &self.extension_candidates)]
-        {
-            debug!("searching unstable {kind} candidates");
-            let res = self.consider_candidates(
-                self_ty,
-                candidates,
-                &mut possibly_unsatisfied_predicates,
-                None,
-            );
-            if res.is_some() {
-                return res;
-            }
-        }
-
-        self.unsatisfied_predicates.borrow_mut().extend(possibly_unsatisfied_predicates);
-        None
-    }
-
     fn pick_method(
         &self,
         self_ty: Ty<'tcx>,
         mut unstable_candidates: Option<&mut Vec<(Candidate<'tcx>, Symbol)>>,
     ) -> Option<PickResult<'tcx>> {
-        if !self.tcx.sess.opts.unstable_opts.pick_stable_methods_before_any_unstable {
-            return self.pick_method_with_unstable(self_ty);
-        }
-
         debug!("pick_method(self_ty={})", self.ty_to_string(self_ty));
 
         let mut possibly_unsatisfied_predicates = Vec::new();
@@ -1488,7 +1436,6 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             TraitCandidate(trait_ref) => self.probe(|_| {
                 let _ = self
                     .at(&ObligationCause::dummy(), self.param_env)
-                    .define_opaque_types(false)
                     .sup(candidate.xform_self_ty, self_ty);
                 match self.select_trait_candidate(trait_ref) {
                     Ok(Some(traits::ImplSource::UserDefined(ref impl_data))) => {
@@ -1518,7 +1465,6 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
             // First check that the self type can be related.
             let sub_obligations = match self
                 .at(&ObligationCause::dummy(), self.param_env)
-                .define_opaque_types(false)
                 .sup(probe.xform_self_ty, self_ty)
             {
                 Ok(InferOk { obligations, value: () }) => obligations,
@@ -1735,7 +1681,6 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 if let ProbeResult::Match = result
                     && self
                     .at(&ObligationCause::dummy(), self.param_env)
-                    .define_opaque_types(false)
                     .sup(return_ty, xform_ret_ty)
                     .is_err()
                 {
