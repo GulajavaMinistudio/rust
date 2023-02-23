@@ -19,7 +19,7 @@ use rustc_middle::ty::fast_reject::{simplify_type, TreatParams};
 use rustc_middle::ty::AssocItem;
 use rustc_middle::ty::GenericParamDefKind;
 use rustc_middle::ty::ToPredicate;
-use rustc_middle::ty::{self, ParamEnvAnd, Ty, TyCtxt, TypeFoldable};
+use rustc_middle::ty::{self, ParamEnvAnd, Ty, TyCtxt, TypeFoldable, TypeVisitableExt};
 use rustc_middle::ty::{InternalSubsts, SubstsRef};
 use rustc_session::lint;
 use rustc_span::def_id::DefId;
@@ -1366,8 +1366,8 @@ impl<'tcx> Pick<'tcx> {
             span,
             format!(
                 "{} {} with this name may be added to the standard library in the future",
-                def_kind.article(),
-                def_kind.descr(self.item.def_id),
+                tcx.def_kind_descr_article(def_kind, self.item.def_id),
+                tcx.def_kind_descr(def_kind, self.item.def_id),
             ),
             |lint| {
                 match (self.item.kind, self.item.container) {
@@ -1905,7 +1905,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
     ///    so forth.
     fn erase_late_bound_regions<T>(&self, value: ty::Binder<'tcx, T>) -> T
     where
-        T: TypeFoldable<'tcx>,
+        T: TypeFoldable<TyCtxt<'tcx>>,
     {
         self.tcx.erase_late_bound_regions(value)
     }

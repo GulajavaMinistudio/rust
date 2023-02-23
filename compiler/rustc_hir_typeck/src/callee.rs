@@ -21,7 +21,7 @@ use rustc_middle::ty::adjustment::{
     Adjust, Adjustment, AllowTwoPhase, AutoBorrow, AutoBorrowMutability,
 };
 use rustc_middle::ty::SubstsRef;
-use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitable};
+use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::def_id::LocalDefId;
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::Span;
@@ -671,7 +671,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 && !self.type_is_sized_modulo_regions(self.param_env, output_ty, callee_expr.span)
             {
                 let descr = match maybe_def {
-                    DefIdOrName::DefId(def_id) => self.tcx.def_kind(def_id).descr(def_id),
+                    DefIdOrName::DefId(def_id) => self.tcx.def_descr(def_id),
                     DefIdOrName::Name(name) => name,
                 };
                 err.span_label(

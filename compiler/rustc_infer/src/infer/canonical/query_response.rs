@@ -59,7 +59,7 @@ impl<'tcx> InferCtxt<'tcx> {
         fulfill_cx: &mut dyn TraitEngine<'tcx>,
     ) -> Fallible<CanonicalQueryResponse<'tcx, T>>
     where
-        T: Debug + TypeFoldable<'tcx>,
+        T: Debug + TypeFoldable<TyCtxt<'tcx>>,
         Canonical<'tcx, QueryResponse<'tcx, T>>: ArenaAllocatable<'tcx>,
     {
         let query_response = self.make_query_response(inference_vars, answer, fulfill_cx)?;
@@ -85,7 +85,7 @@ impl<'tcx> InferCtxt<'tcx> {
         answer: T,
     ) -> Canonical<'tcx, QueryResponse<'tcx, T>>
     where
-        T: Debug + TypeFoldable<'tcx>,
+        T: Debug + TypeFoldable<TyCtxt<'tcx>>,
     {
         self.canonicalize_response(QueryResponse {
             var_values: inference_vars,
@@ -106,7 +106,7 @@ impl<'tcx> InferCtxt<'tcx> {
         fulfill_cx: &mut dyn TraitEngine<'tcx>,
     ) -> Result<QueryResponse<'tcx, T>, NoSolution>
     where
-        T: Debug + TypeFoldable<'tcx>,
+        T: Debug + TypeFoldable<TyCtxt<'tcx>>,
     {
         let tcx = self.tcx;
 
@@ -180,7 +180,7 @@ impl<'tcx> InferCtxt<'tcx> {
         query_response: &Canonical<'tcx, QueryResponse<'tcx, R>>,
     ) -> InferResult<'tcx, R>
     where
-        R: Debug + TypeFoldable<'tcx>,
+        R: Debug + TypeFoldable<TyCtxt<'tcx>>,
     {
         let InferOk { value: result_subst, mut obligations } =
             self.query_response_substitution(cause, param_env, original_values, query_response)?;
@@ -242,7 +242,7 @@ impl<'tcx> InferCtxt<'tcx> {
         output_query_region_constraints: &mut QueryRegionConstraints<'tcx>,
     ) -> InferResult<'tcx, R>
     where
-        R: Debug + TypeFoldable<'tcx>,
+        R: Debug + TypeFoldable<TyCtxt<'tcx>>,
     {
         let InferOk { value: result_subst, mut obligations } = self
             .query_response_substitution_guess(cause, param_env, original_values, query_response)?;
@@ -356,7 +356,7 @@ impl<'tcx> InferCtxt<'tcx> {
         query_response: &Canonical<'tcx, QueryResponse<'tcx, R>>,
     ) -> InferResult<'tcx, CanonicalVarValues<'tcx>>
     where
-        R: Debug + TypeFoldable<'tcx>,
+        R: Debug + TypeFoldable<TyCtxt<'tcx>>,
     {
         debug!(
             "query_response_substitution(original_values={:#?}, query_response={:#?})",
@@ -393,6 +393,7 @@ impl<'tcx> InferCtxt<'tcx> {
     /// will instantiate fresh inference variables for each canonical
     /// variable instead. Therefore, the result of this method must be
     /// properly unified
+    #[instrument(level = "debug", skip(self, cause, param_env))]
     fn query_response_substitution_guess<R>(
         &self,
         cause: &ObligationCause<'tcx>,
@@ -401,13 +402,8 @@ impl<'tcx> InferCtxt<'tcx> {
         query_response: &Canonical<'tcx, QueryResponse<'tcx, R>>,
     ) -> InferResult<'tcx, CanonicalVarValues<'tcx>>
     where
-        R: Debug + TypeFoldable<'tcx>,
+        R: Debug + TypeFoldable<TyCtxt<'tcx>>,
     {
-        debug!(
-            "query_response_substitution_guess(original_values={:#?}, query_response={:#?})",
-            original_values, query_response,
-        );
-
         // For each new universe created in the query result that did
         // not appear in the original query, create a local
         // superuniverse.
@@ -502,7 +498,9 @@ impl<'tcx> InferCtxt<'tcx> {
         for &(a, b) in &query_response.value.opaque_types {
             let a = substitute_value(self.tcx, &result_subst, a);
             let b = substitute_value(self.tcx, &result_subst, b);
-            obligations.extend(self.at(cause, param_env).eq(a, b)?.obligations);
+            debug!(?a, ?b, "constrain opaque type");
+            obligations
+                .extend(self.at(cause, param_env).define_opaque_types(true).eq(a, b)?.obligations);
         }
 
         Ok(InferOk { value: result_subst, obligations })
@@ -523,7 +521,7 @@ impl<'tcx> InferCtxt<'tcx> {
         query_response: &Canonical<'tcx, QueryResponse<'tcx, R>>,
     ) -> InferResult<'tcx, ()>
     where
-        R: Debug + TypeFoldable<'tcx>,
+        R: Debug + TypeFoldable<TyCtxt<'tcx>>,
     {
         // A closure that yields the result value for the given
         // canonical variable; this is taken from
