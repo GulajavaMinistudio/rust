@@ -718,13 +718,13 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Constructs a `TyKind::Error` type with current `ErrorGuaranteed`
     #[track_caller]
-    pub fn ty_error_with_guaranteed(self, reported: ErrorGuaranteed) -> Ty<'tcx> {
+    pub fn ty_error(self, reported: ErrorGuaranteed) -> Ty<'tcx> {
         self.mk_ty(Error(reported))
     }
 
     /// Constructs a `TyKind::Error` type and registers a `delay_span_bug` to ensure it gets used.
     #[track_caller]
-    pub fn ty_error(self) -> Ty<'tcx> {
+    pub fn ty_error_misc(self) -> Ty<'tcx> {
         self.ty_error_with_message(DUMMY_SP, "TyKind::Error constructed but no error reported")
     }
 
@@ -1856,7 +1856,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_fn_def(
         self,
         def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> Ty<'tcx> {
         let substs = self.check_substs(def_id, substs);
         self.mk_ty(FnDef(def_id, substs))
@@ -1866,7 +1866,7 @@ impl<'tcx> TyCtxt<'tcx> {
     fn check_substs(
         self,
         _def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> SubstsRef<'tcx> {
         let substs = substs.into_iter().map(Into::into);
         #[cfg(debug_assertions)]
@@ -1901,7 +1901,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_projection(
         self,
         item_def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> Ty<'tcx> {
         self.mk_alias(ty::Projection, self.mk_alias_ty(item_def_id, substs))
     }
@@ -2293,7 +2293,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_trait_ref(
         self,
         trait_def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> ty::TraitRef<'tcx> {
         let substs = self.check_substs(trait_def_id, substs);
         ty::TraitRef { def_id: trait_def_id, substs, _use_mk_trait_ref_instead: () }
@@ -2302,7 +2302,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_alias_ty(
         self,
         def_id: DefId,
-        substs: impl IntoIterator<Item = impl Into<GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
     ) -> ty::AliasTy<'tcx> {
         let substs = self.check_substs(def_id, substs);
         ty::AliasTy { def_id, substs, _use_mk_alias_ty_instead: () }
@@ -2458,7 +2458,7 @@ impl<'tcx> TyCtxt<'tcx> {
 impl<'tcx> TyCtxtAt<'tcx> {
     /// Constructs a `TyKind::Error` type and registers a `delay_span_bug` to ensure it gets used.
     #[track_caller]
-    pub fn ty_error(self) -> Ty<'tcx> {
+    pub fn ty_error_misc(self) -> Ty<'tcx> {
         self.tcx.ty_error_with_message(self.span, "TyKind::Error constructed but no error reported")
     }
 
@@ -2472,7 +2472,7 @@ impl<'tcx> TyCtxtAt<'tcx> {
     pub fn mk_trait_ref(
         self,
         trait_lang_item: LangItem,
-        substs: impl IntoIterator<Item = impl Into<ty::GenericArg<'tcx>>>,
+        substs: impl IntoIterator<Item: Into<ty::GenericArg<'tcx>>>,
     ) -> ty::TraitRef<'tcx> {
         let trait_def_id = self.require_lang_item(trait_lang_item, Some(self.span));
         self.tcx.mk_trait_ref(trait_def_id, substs)
