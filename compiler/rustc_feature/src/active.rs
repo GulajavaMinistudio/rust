@@ -256,7 +256,6 @@ declare_features! (
     (active, arm_target_feature, "1.27.0", Some(44839), None),
     (active, avx512_target_feature, "1.27.0", Some(44839), None),
     (active, bpf_target_feature, "1.54.0", Some(44839), None),
-    (active, cmpxchg16b_target_feature, "1.32.0", Some(44839), None),
     (active, ermsb_target_feature, "1.49.0", Some(44839), None),
     (active, hexagon_target_feature, "1.27.0", Some(44839), None),
     (active, mips_target_feature, "1.27.0", Some(44839), None),
@@ -513,8 +512,6 @@ declare_features! (
     (active, strict_provenance, "1.61.0", Some(95228), None),
     /// Allows string patterns to dereference values to match them.
     (active, string_deref_patterns, "1.67.0", Some(87121), None),
-    /// Allows the use of `#[target_feature]` on safe functions.
-    (active, target_feature_11, "1.45.0", Some(69098), None),
     /// Allows using `#[thread_local]` on `static` items.
     (active, thread_local, "1.0.0", Some(29594), None),
     /// Allows defining `trait X = A + B;` alias items.

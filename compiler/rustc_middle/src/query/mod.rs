@@ -475,14 +475,10 @@ rustc_queries! {
         }
     }
 
-    query symbols_for_closure_captures(
-        key: (LocalDefId, LocalDefId)
-    ) -> &'tcx Vec<rustc_span::Symbol> {
-        arena_cache
+    query closure_typeinfo(key: LocalDefId) -> ty::ClosureTypeInfo<'tcx> {
         desc {
-            |tcx| "finding symbols for captures of closure `{}` in `{}`",
-            tcx.def_path_str(key.1.to_def_id()),
-            tcx.def_path_str(key.0.to_def_id())
+            |tcx| "finding symbols for captures of closure `{}`",
+            tcx.def_path_str(key.to_def_id())
         }
     }
 
@@ -1830,9 +1826,6 @@ rustc_queries! {
     query maybe_unused_trait_imports(_: ()) -> &'tcx FxIndexSet<LocalDefId> {
         desc { "fetching potentially unused trait imports" }
     }
-    query maybe_unused_extern_crates(_: ()) -> &'tcx [(LocalDefId, Span)] {
-        desc { "looking up all possibly unused extern crates" }
-    }
     query names_imported_by_glob_use(def_id: LocalDefId) -> &'tcx FxHashSet<Symbol> {
         desc { |tcx| "finding names imported by glob use for `{}`", tcx.def_path_str(def_id.to_def_id()) }
     }
@@ -2173,12 +2166,8 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query permits_uninit_init(key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> Result<bool, ty::layout::LayoutError<'tcx>> {
-        desc { "checking to see if `{}` permits being left uninit", key.value }
-    }
-
-    query permits_zero_init(key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> Result<bool, ty::layout::LayoutError<'tcx>> {
-        desc { "checking to see if `{}` permits being left zeroed", key.value }
+    query check_validity_of_init(key: (InitKind, ty::ParamEnvAnd<'tcx, Ty<'tcx>>)) -> Result<bool, ty::layout::LayoutError<'tcx>> {
+        desc { "checking to see if `{}` permits being left {}", key.1.value, key.0 }
     }
 
     query compare_impl_const(
