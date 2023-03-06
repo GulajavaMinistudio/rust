@@ -22,8 +22,7 @@ use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::subst::GenericArgKind;
 use rustc_middle::ty::util::{Discr, IntTypeExt};
 use rustc_middle::ty::{
-    self, AdtDef, DefIdTree, ParamEnv, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable,
-    TypeVisitableExt,
+    self, AdtDef, ParamEnv, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitableExt,
 };
 use rustc_session::lint::builtin::{UNINHABITED_STATIC, UNSUPPORTED_CALLING_CONVENTIONS};
 use rustc_span::symbol::sym;
@@ -1510,6 +1509,14 @@ fn opaque_type_cycle_error(
                         typeck_results.generator_interior_types.as_ref().skip_binder()
                     {
                         label_match(interior_ty.ty, interior_ty.span);
+                    }
+                    if tcx.sess.opts.unstable_opts.drop_tracking_mir
+                        && let DefKind::Generator = tcx.def_kind(closure_def_id)
+                    {
+                        let generator_layout = tcx.mir_generator_witnesses(closure_def_id);
+                        for interior_ty in &generator_layout.field_tys {
+                            label_match(interior_ty.ty, interior_ty.source_info.span);
+                        }
                     }
                 }
             }
