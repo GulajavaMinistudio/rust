@@ -118,7 +118,6 @@ pub struct Config {
     pub llvm_optimize: bool,
     pub llvm_thin_lto: bool,
     pub llvm_release_debuginfo: bool,
-    pub llvm_version_check: bool,
     pub llvm_static_stdcpp: bool,
     /// `None` if `llvm_from_ci` is true and we haven't yet downloaded llvm.
     #[cfg(not(test))]
@@ -191,6 +190,7 @@ pub struct Config {
     pub dist_sign_folder: Option<PathBuf>,
     pub dist_upload_addr: Option<String>,
     pub dist_compression_formats: Option<Vec<String>>,
+    pub dist_include_mingw_linker: bool,
 
     // libstd features
     pub backtrace: bool, // support for RUST_BACKTRACE
@@ -672,7 +672,6 @@ define_config! {
         tests: Option<bool> = "tests",
         plugins: Option<bool> = "plugins",
         ccache: Option<StringOrBool> = "ccache",
-        version_check: Option<bool> = "version-check",
         static_libstdcpp: Option<bool> = "static-libstdcpp",
         ninja: Option<bool> = "ninja",
         targets: Option<String> = "targets",
@@ -702,6 +701,7 @@ define_config! {
         src_tarball: Option<bool> = "src-tarball",
         missing_tools: Option<bool> = "missing-tools",
         compression_formats: Option<Vec<String>> = "compression-formats",
+        include_mingw_linker: Option<bool> = "include-mingw-linker",
     }
 }
 
@@ -804,7 +804,6 @@ impl Config {
         let mut config = Config::default();
         config.llvm_optimize = true;
         config.ninja_in_file = true;
-        config.llvm_version_check = true;
         config.llvm_static_stdcpp = false;
         config.backtrace = true;
         config.rust_optimize = true;
@@ -819,6 +818,7 @@ impl Config {
         config.rust_codegen_backends = vec![INTERNER.intern_str("llvm")];
         config.deny_warnings = true;
         config.bindir = "bin".into();
+        config.dist_include_mingw_linker = true;
 
         // set by build.rs
         config.build = TargetSelection::from_user(&env!("BUILD_TRIPLE"));
@@ -1166,7 +1166,6 @@ impl Config {
             set(&mut config.llvm_optimize, llvm.optimize);
             set(&mut config.llvm_thin_lto, llvm.thin_lto);
             set(&mut config.llvm_release_debuginfo, llvm.release_debuginfo);
-            set(&mut config.llvm_version_check, llvm.version_check);
             set(&mut config.llvm_static_stdcpp, llvm.static_libstdcpp);
             if let Some(v) = llvm.link_shared {
                 config.llvm_link_shared.set(Some(v));
@@ -1303,6 +1302,7 @@ impl Config {
             config.dist_compression_formats = t.compression_formats;
             set(&mut config.rust_dist_src, t.src_tarball);
             set(&mut config.missing_tools, t.missing_tools);
+            set(&mut config.dist_include_mingw_linker, t.include_mingw_linker)
         }
 
         if let Some(r) = build.rustfmt {
