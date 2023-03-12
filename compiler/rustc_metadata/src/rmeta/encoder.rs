@@ -1104,7 +1104,7 @@ fn should_encode_const(def_kind: DefKind) -> bool {
 // We only encode impl trait in trait when using `lower-impl-trait-in-trait-to-assoc-ty` unstable
 // option.
 fn should_encode_fn_impl_trait_in_trait<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
-    if tcx.sess.opts.unstable_opts.lower_impl_trait_in_trait_to_assoc_ty
+    if tcx.lower_impl_trait_in_trait_to_assoc_ty()
         && let Some(assoc_item) = tcx.opt_associated_item(def_id)
         && assoc_item.container == ty::AssocItemContainer::TraitContainer
         && assoc_item.kind == ty::AssocKind::Fn
@@ -2050,13 +2050,13 @@ fn prefetch_mir(tcx: TyCtxt<'_>) {
         let (encode_const, encode_opt) = should_encode_mir(tcx, def_id);
 
         if encode_const {
-            tcx.ensure().mir_for_ctfe(def_id);
+            tcx.ensure_with_value().mir_for_ctfe(def_id);
         }
         if encode_opt {
-            tcx.ensure().optimized_mir(def_id);
+            tcx.ensure_with_value().optimized_mir(def_id);
         }
         if encode_opt || encode_const {
-            tcx.ensure().promoted_mir(def_id);
+            tcx.ensure_with_value().promoted_mir(def_id);
         }
     })
 }

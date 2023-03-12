@@ -26,6 +26,15 @@ rustc_queries! {
         desc { "triggering a delay span bug" }
     }
 
+    query registered_tools(_: ()) -> &'tcx ty::RegisteredTools {
+        arena_cache
+        desc { "compute registered tools for crate" }
+    }
+
+    query early_lint_checks(_: ()) -> () {
+        desc { "perform lints prior to macro expansion" }
+    }
+
     query resolutions(_: ()) -> &'tcx ty::ResolverGlobalCtxt {
         feedable
         no_hash
@@ -1324,6 +1333,7 @@ rustc_queries! {
     /// might want to use `reveal_all()` method to change modes.
     query param_env(def_id: DefId) -> ty::ParamEnv<'tcx> {
         desc { |tcx| "computing normalized predicates of `{}`", tcx.def_path_str(def_id) }
+        feedable
     }
 
     /// Like `param_env`, but returns the `ParamEnv` in `Reveal::All` mode.

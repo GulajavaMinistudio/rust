@@ -100,7 +100,7 @@ use places_conflict::{places_conflict, PlaceConflictBias};
 use region_infer::RegionInferenceContext;
 use renumber::RegionCtxt;
 
-fluent_messages! { "../locales/en-US.ftl" }
+fluent_messages! { "../messages.ftl" }
 
 // FIXME(eddyb) perhaps move this somewhere more centrally.
 #[derive(Debug)]
@@ -690,6 +690,8 @@ impl<'cx, 'tcx> rustc_mir_dataflow::ResultsVisitor<'cx, 'tcx> for MirBorrowckCtx
             }
             // Only relevant for mir typeck
             StatementKind::AscribeUserType(..)
+            // Only relevant for unsafeck
+            | StatementKind::PlaceMention(..)
             // Doesn't have any language semantics
             | StatementKind::Coverage(..)
             // These do not actually affect borrowck

@@ -128,6 +128,7 @@ fn check_cfgs(
             || cfg.contains("target_env")
             || cfg.contains("target_abi")
             || cfg.contains("target_vendor")
+            || cfg.contains("target_family")
             || cfg.contains("unix")
             || cfg.contains("windows");
 
