@@ -26,7 +26,7 @@ use rustc_middle::middle::exported_symbols::{
 use rustc_middle::mir::interpret;
 use rustc_middle::traits::specialization_graph;
 use rustc_middle::ty::codec::TyEncoder;
-use rustc_middle::ty::fast_reject::{self, SimplifiedType, TreatParams};
+use rustc_middle::ty::fast_reject::{self, SimplifiedType, TreatParams, TreatProjections};
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::{self, SymbolName, Ty, TyCtxt};
 use rustc_middle::util::common::to_readable_str;
@@ -1356,13 +1356,14 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         debug!("EncodeContext::encode_info_for_impl_item({:?})", def_id);
         let tcx = self.tcx;
 
-        let ast_item = self.tcx.hir().expect_impl_item(def_id.expect_local());
-        self.tables.impl_defaultness.set_some(def_id.index, ast_item.defaultness);
+        let defaultness = self.tcx.impl_defaultness(def_id.expect_local());
+        self.tables.impl_defaultness.set_some(def_id.index, defaultness);
         let impl_item = self.tcx.associated_item(def_id);
         self.tables.assoc_container.set_some(def_id.index, impl_item.container);
 
         match impl_item.kind {
             ty::AssocKind::Fn => {
+                let ast_item = self.tcx.hir().expect_impl_item(def_id.expect_local());
                 let hir::ImplItemKind::Fn(ref sig, body) = ast_item.kind else { bug!() };
                 self.tables.asyncness.set_some(def_id.index, sig.header.asyncness);
                 record_array!(self.tables.fn_arg_names[def_id] <- self.tcx.hir().body_param_names(body));
@@ -1858,7 +1859,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     let simplified_self_ty = fast_reject::simplify_type(
                         self.tcx,
                         trait_ref.self_ty(),
-                        TreatParams::AsInfer,
+                        TreatParams::AsCandidateKey,
+                        TreatProjections::AsCandidateKey,
                     );
 
                     fx_hash_map

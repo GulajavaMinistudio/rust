@@ -75,7 +75,7 @@ pub fn overlapping_impls(
     // Before doing expensive operations like entering an inference context, do
     // a quick check via fast_reject to tell if the impl headers could possibly
     // unify.
-    let drcx = DeepRejectCtxt { treat_obligation_params: TreatParams::AsInfer };
+    let drcx = DeepRejectCtxt { treat_obligation_params: TreatParams::AsCandidateKey };
     let impl1_ref = tcx.impl_trait_ref(impl1_def_id);
     let impl2_ref = tcx.impl_trait_ref(impl2_def_id);
     let may_overlap = match (impl1_ref, impl2_ref) {
@@ -388,7 +388,6 @@ fn resolve_negative_obligation<'tcx>(
     let wf_tys = ocx.assumed_wf_types(param_env, DUMMY_SP, body_def_id);
     let outlives_env = OutlivesEnvironment::with_bounds(
         param_env,
-        Some(&infcx),
         infcx.implied_bounds_tys(param_env, body_def_id, wf_tys),
     );
 
