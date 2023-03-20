@@ -2396,13 +2396,24 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                                     tcx,
                                     infcx.fresh_substs_for_item(DUMMY_SP, impl_def_id),
                                 );
+                                // I guess we don't need to make a universe unless we need it,
+                                // but also we're on the error path, so it doesn't matter here.
+                                let universe = infcx.create_next_universe();
                                 infcx
                                     .can_eq(
                                         ty::ParamEnv::empty(),
                                         impl_.self_ty(),
-                                        // Must fold past escaping bound vars too,
-                                        // since we have those at this point in astconv.
-                                        tcx.fold_regions(qself_ty, |_, _| tcx.lifetimes.re_erased),
+                                        tcx.replace_escaping_bound_vars_uncached(qself_ty, ty::fold::FnMutDelegate {
+                                            regions: &mut |_| tcx.lifetimes.re_erased,
+                                            types: &mut |bv| tcx.mk_placeholder(ty::PlaceholderType {
+                                                universe,
+                                                name: bv.kind,
+                                            }),
+                                            consts: &mut |bv, ty| tcx.mk_const(ty::PlaceholderConst {
+                                                universe,
+                                                name: bv
+                                            }, ty),
+                                        })
                                     )
                             })
                             && tcx.impl_polarity(impl_def_id) != ty::ImplPolarity::Negative
@@ -3057,7 +3068,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         // generate the def_id of an associated type for the trait and return as
                         // type a projection.
                         let def_id = if in_trait && tcx.lower_impl_trait_in_trait_to_assoc_ty() {
-                            tcx.associated_item_for_impl_trait_in_trait(local_def_id).to_def_id()
+                            tcx.associated_type_for_impl_trait_in_trait(local_def_id).to_def_id()
                         } else {
                             local_def_id.to_def_id()
                         };
@@ -3141,8 +3152,12 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         debug!("impl_trait_ty_to_ty: generics={:?}", generics);
         let substs = InternalSubsts::for_item(tcx, def_id, |param, _| {
-            if let Some(i) = (param.index as usize).checked_sub(generics.parent_count) {
-                // Our own parameters are the resolved lifetimes.
+            // We use `generics.count() - lifetimes.len()` here instead of `generics.parent_count`
+            // since return-position impl trait in trait squashes all of the generics from its source fn
+            // into its own generics, so the opaque's "own" params isn't always just lifetimes.
+            if let Some(i) = (param.index as usize).checked_sub(generics.count() - lifetimes.len())
+            {
+                // Resolve our own lifetime parameters.
                 let GenericParamDefKind::Lifetime { .. } = param.kind else { bug!() };
                 let hir::GenericArg::Lifetime(lifetime) = &lifetimes[i] else { bug!() };
                 self.ast_region_to_region(lifetime, None).into()
@@ -3317,10 +3332,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             tcx,
             trait_ref.substs.extend_to(tcx, assoc.def_id, |param, _| tcx.mk_param_from_def(param)),
         );
+        let fn_sig = tcx.liberate_late_bound_regions(fn_hir_id.expect_owner().to_def_id(), fn_sig);
 
-        let ty = if let Some(arg_idx) = arg_idx { fn_sig.input(arg_idx) } else { fn_sig.output() };
-
-        Some(tcx.liberate_late_bound_regions(fn_hir_id.expect_owner().to_def_id(), ty))
+        Some(if let Some(arg_idx) = arg_idx {
+            *fn_sig.inputs().get(arg_idx)?
+        } else {
+            fn_sig.output()
+        })
     }
 
     #[instrument(level = "trace", skip(self, generate_err))]

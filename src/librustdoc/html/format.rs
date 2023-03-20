@@ -1480,7 +1480,7 @@ pub(crate) fn visibility_print_with_space<'a, 'tcx: 'a>(
                 debug!("path={:?}", path);
                 // modified from `resolved_path()` to work with `DefPathData`
                 let last_name = path.data.last().unwrap().data.get_opt_name().unwrap();
-                let anchor = anchor(vis_did, last_name, cx).to_string();
+                let anchor = anchor(vis_did, last_name, cx);
 
                 let mut s = "pub(in ".to_owned();
                 for seg in &path.data[..path.data.len() - 1] {
@@ -1502,9 +1502,9 @@ pub(crate) fn visibility_to_src_with_space<'a, 'tcx: 'a>(
     tcx: TyCtxt<'tcx>,
     item_did: DefId,
 ) -> impl fmt::Display + 'a + Captures<'tcx> {
-    let to_print = match visibility {
-        None => String::new(),
-        Some(ty::Visibility::Public) => "pub ".to_owned(),
+    let to_print: Cow<'static, str> = match visibility {
+        None => "".into(),
+        Some(ty::Visibility::Public) => "pub ".into(),
         Some(ty::Visibility::Restricted(vis_did)) => {
             // FIXME(camelid): This may not work correctly if `item_did` is a module.
             //                 However, rustdoc currently never displays a module's
@@ -1512,17 +1512,17 @@ pub(crate) fn visibility_to_src_with_space<'a, 'tcx: 'a>(
             let parent_module = find_nearest_parent_module(tcx, item_did);
 
             if vis_did.is_crate_root() {
-                "pub(crate) ".to_owned()
+                "pub(crate) ".into()
             } else if parent_module == Some(vis_did) {
                 // `pub(in foo)` where `foo` is the parent module
                 // is the same as no visibility modifier
-                String::new()
+                "".into()
             } else if parent_module.and_then(|parent| find_nearest_parent_module(tcx, parent))
                 == Some(vis_did)
             {
-                "pub(super) ".to_owned()
+                "pub(super) ".into()
             } else {
-                format!("pub(in {}) ", tcx.def_path_str(vis_did))
+                format!("pub(in {}) ", tcx.def_path_str(vis_did)).into()
             }
         }
     };

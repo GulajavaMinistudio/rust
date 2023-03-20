@@ -95,7 +95,7 @@
 #![warn(missing_docs)]
 #![allow(explicit_outlives_requirements)]
 #![allow(incomplete_features)]
-#![cfg_attr(not(bootstrap), warn(multiple_supertrait_upcastable))]
+#![warn(multiple_supertrait_upcastable)]
 //
 // Library features:
 #![feature(const_align_offset)]
@@ -123,9 +123,11 @@
 #![feature(const_index_range_slice_index)]
 #![feature(const_inherent_unchecked_arith)]
 #![feature(const_int_unchecked_arith)]
+#![feature(const_intoiterator_identity)]
 #![feature(const_intrinsic_forget)]
 #![feature(const_ipv4)]
 #![feature(const_ipv6)]
+#![feature(const_iter)]
 #![feature(const_likely)]
 #![feature(const_maybe_uninit_uninit_array)]
 #![feature(const_maybe_uninit_as_mut_ptr)]
@@ -241,7 +243,7 @@
 #![feature(unsized_fn_params)]
 #![feature(asm_const)]
 #![feature(const_transmute_copy)]
-#![cfg_attr(not(bootstrap), feature(multiple_supertrait_upcastable))]
+#![feature(multiple_supertrait_upcastable)]
 //
 // Target features:
 #![feature(arm_target_feature)]
@@ -254,7 +256,6 @@
 #![feature(sse4a_target_feature)]
 #![feature(tbm_target_feature)]
 #![feature(wasm_target_feature)]
-#![cfg_attr(bootstrap, feature(cmpxchg16b_target_feature))]
 
 // allow using `core::` in intra-doc links
 #[allow(unused_extern_crates)]
