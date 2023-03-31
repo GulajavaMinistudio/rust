@@ -434,11 +434,6 @@ impl Step for Llvm {
             }
         }
 
-        // Workaround for ppc32 lld limitation
-        if target == "powerpc-unknown-freebsd" {
-            ldflags.exe.push(" -fuse-ld=bfd");
-        }
-
         // https://llvm.org/docs/HowToCrossCompileLLVM.html
         if target != builder.config.build {
             let LlvmResult { llvm_config, .. } =
@@ -1006,6 +1001,9 @@ fn supported_sanitizers(
         "aarch64-apple-ios-sim" => darwin_libs("iossim", &["asan", "tsan"]),
         "aarch64-unknown-fuchsia" => common_libs("fuchsia", "aarch64", &["asan"]),
         "aarch64-unknown-linux-gnu" => {
+            common_libs("linux", "aarch64", &["asan", "lsan", "msan", "tsan", "hwasan"])
+        }
+        "aarch64-unknown-linux-ohos" => {
             common_libs("linux", "aarch64", &["asan", "lsan", "msan", "tsan", "hwasan"])
         }
         "x86_64-apple-darwin" => darwin_libs("osx", &["asan", "lsan", "tsan"]),
