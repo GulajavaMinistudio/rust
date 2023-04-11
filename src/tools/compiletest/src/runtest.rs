@@ -2135,7 +2135,7 @@ impl<'test> TestCx<'test> {
             if let Some(ref p) = self.config.nodejs {
                 args.push(p.clone());
             } else {
-                self.fatal("no NodeJS binary found (--nodejs)");
+                self.fatal("emscripten target requested and no NodeJS binary found (--nodejs)");
             }
         // If this is otherwise wasm, then run tests under nodejs with our
         // shim
@@ -2143,7 +2143,7 @@ impl<'test> TestCx<'test> {
             if let Some(ref p) = self.config.nodejs {
                 args.push(p.clone());
             } else {
-                self.fatal("no NodeJS binary found (--nodejs)");
+                self.fatal("wasm32 target requested and no NodeJS binary found (--nodejs)");
             }
 
             let src = self
@@ -2999,6 +2999,7 @@ impl<'test> TestCx<'test> {
             || host.contains("freebsd")
             || host.contains("netbsd")
             || host.contains("openbsd")
+            || host.contains("aix")
         {
             "gmake"
         } else {
