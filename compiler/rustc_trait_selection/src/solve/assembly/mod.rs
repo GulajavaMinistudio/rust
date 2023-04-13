@@ -225,6 +225,11 @@ pub(super) trait GoalKind<'tcx>: TypeFoldable<TyCtxt<'tcx>> + Copy + Eq {
         ecx: &mut EvalCtxt<'_, 'tcx>,
         goal: Goal<'tcx, Self>,
     ) -> QueryResult<'tcx>;
+
+    fn consider_builtin_transmute_candidate(
+        ecx: &mut EvalCtxt<'_, 'tcx>,
+        goal: Goal<'tcx, Self>,
+    ) -> QueryResult<'tcx>;
 }
 
 impl<'tcx> EvalCtxt<'_, 'tcx> {
@@ -373,6 +378,8 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             G::consider_builtin_discriminant_kind_candidate(self, goal)
         } else if lang_items.destruct_trait() == Some(trait_def_id) {
             G::consider_builtin_destruct_candidate(self, goal)
+        } else if lang_items.transmute_trait() == Some(trait_def_id) {
+            G::consider_builtin_transmute_candidate(self, goal)
         } else {
             Err(NoSolution)
         };
@@ -498,7 +505,10 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         let tcx = self.tcx();
         let own_bounds: FxIndexSet<_> =
             bounds.iter().map(|bound| bound.with_self_ty(tcx, self_ty)).collect();
-        for assumption in elaborate(tcx, own_bounds.iter().copied()) {
+        for assumption in elaborate(tcx, own_bounds.iter().copied())
+            // we only care about bounds that match the `Self` type
+            .filter_only_self()
+        {
             // FIXME: Predicates are fully elaborated in the object type's existential bounds
             // list. We want to only consider these pre-elaborated projections, and not other
             // projection predicates that we reach by elaborating the principal trait ref,
