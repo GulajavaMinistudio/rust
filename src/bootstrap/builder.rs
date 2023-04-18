@@ -1008,9 +1008,24 @@ impl<'a> Builder<'a> {
                 // Avoid deleting the rustlib/ directory we just copied
                 // (in `impl Step for Sysroot`).
                 if !builder.download_rustc() {
+                    builder.verbose(&format!(
+                        "Removing sysroot {} to avoid caching bugs",
+                        sysroot.display()
+                    ));
                     let _ = fs::remove_dir_all(&sysroot);
                     t!(fs::create_dir_all(&sysroot));
                 }
+
+                if self.compiler.stage == 0 {
+                    // The stage 0 compiler for the build triple is always pre-built.
+                    // Ensure that `libLLVM.so` ends up in the target libdir, so that ui-fulldeps tests can use it when run.
+                    dist::maybe_install_llvm_target(
+                        builder,
+                        self.compiler.host,
+                        &builder.sysroot(self.compiler),
+                    );
+                }
+
                 INTERNER.intern_path(sysroot)
             }
         }
@@ -2030,7 +2045,7 @@ impl<'a> Builder<'a> {
         }
 
         #[cfg(feature = "build-metrics")]
-        self.metrics.enter_step(&step);
+        self.metrics.enter_step(&step, self);
 
         let (out, dur) = {
             let start = Instant::now();
@@ -2056,7 +2071,7 @@ impl<'a> Builder<'a> {
         }
 
         #[cfg(feature = "build-metrics")]
-        self.metrics.exit_step();
+        self.metrics.exit_step(self);
 
         {
             let mut stack = self.stack.borrow_mut();
