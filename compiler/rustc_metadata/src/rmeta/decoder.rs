@@ -117,7 +117,7 @@ pub(crate) struct CrateMetadata {
 
     /// Additional data used for decoding `HygieneData` (e.g. `SyntaxContext`
     /// and `ExpnId`).
-    /// Note that we store a `HygieneDecodeContext` for each `CrateMetadat`. This is
+    /// Note that we store a `HygieneDecodeContext` for each `CrateMetadata`. This is
     /// because `SyntaxContext` ids are not globally unique, so we need
     /// to track which ids we've decoded on a per-crate basis.
     hygiene_context: HygieneDecodeContext,
@@ -627,7 +627,7 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for Symbol {
                 let pos = d.read_usize();
                 let old_pos = d.opaque.position();
 
-                // move to str ofset and read
+                // move to str offset and read
                 d.opaque.set_position(pos);
                 let s = d.read_str();
                 let sym = Symbol::intern(s);
@@ -998,9 +998,8 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         let ident = self.item_ident(id, sess);
         let res = Res::Def(self.def_kind(id), self.local_def_id(id));
         let vis = self.get_visibility(id);
-        let span = self.get_span(id, sess);
 
-        ModChild { ident, res, vis, span, reexport_chain: Default::default() }
+        ModChild { ident, res, vis, reexport_chain: Default::default() }
     }
 
     /// Iterates over all named children of the given module,

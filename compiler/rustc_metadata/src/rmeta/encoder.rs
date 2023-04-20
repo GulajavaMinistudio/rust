@@ -7,7 +7,7 @@ use rustc_ast::Attribute;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
 use rustc_data_structures::memmap::{Mmap, MmapMut};
-use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_data_structures::stable_hasher::{Hash128, HashStable, StableHasher};
 use rustc_data_structures::sync::{join, par_iter, Lrc, ParallelIterator};
 use rustc_data_structures::temp_dir::MaybeTempDir;
 use rustc_hir as hir;
@@ -531,7 +531,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                         adapted.name_hash = {
                             let mut hasher: StableHasher = StableHasher::new();
                             adapted.name.hash(&mut hasher);
-                            hasher.finish::<u128>()
+                            hasher.finish::<Hash128>()
                         };
                         Lrc::new(adapted)
                     } else {
@@ -831,6 +831,8 @@ fn should_encode_span(def_kind: DefKind) -> bool {
         | DefKind::AssocFn
         | DefKind::AssocConst
         | DefKind::Macro(_)
+        | DefKind::ExternCrate
+        | DefKind::Use
         | DefKind::AnonConst
         | DefKind::InlineConst
         | DefKind::OpaqueTy
@@ -838,9 +840,7 @@ fn should_encode_span(def_kind: DefKind) -> bool {
         | DefKind::Impl { .. }
         | DefKind::Closure
         | DefKind::Generator => true,
-        DefKind::ExternCrate
-        | DefKind::Use
-        | DefKind::ForeignMod
+        DefKind::ForeignMod
         | DefKind::ImplTraitPlaceholder
         | DefKind::LifetimeParam
         | DefKind::GlobalAsm => false,

@@ -1399,7 +1399,7 @@ impl<'a> Builder<'a> {
 
         // Add extra cfg not defined in/by rustc
         //
-        // Note: Altrough it would seems that "-Zunstable-options" to `rustflags` is useless as
+        // Note: Although it would seems that "-Zunstable-options" to `rustflags` is useless as
         // cargo would implicitly add it, it was discover that sometimes bootstrap only use
         // `rustflags` without `cargo` making it required.
         rustflags.arg("-Zunstable-options");
@@ -1589,8 +1589,8 @@ impl<'a> Builder<'a> {
         // which adds to the runtime dynamic loader path when looking for
         // dynamic libraries. We use this by default on Unix platforms to ensure
         // that our nightlies behave the same on Windows, that is they work out
-        // of the box. This can be disabled, of course, but basically that's why
-        // we're gated on RUSTC_RPATH here.
+        // of the box. This can be disabled by setting `rpath = false` in `[rust]`
+        // table of `config.toml`
         //
         // Ok, so the astute might be wondering "why isn't `-C rpath` used
         // here?" and that is indeed a good question to ask. This codegen

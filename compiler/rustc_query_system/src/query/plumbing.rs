@@ -573,7 +573,7 @@ where
             // from disk. Re-hashing results is fairly expensive, so we can't
             // currently afford to verify every hash. This subset should still
             // give us some coverage of potential bugs though.
-            let try_verify = prev_fingerprint.as_value().1 % 32 == 0;
+            let try_verify = prev_fingerprint.split().1.as_u64() % 32 == 0;
             if std::intrinsics::unlikely(
                 try_verify || qcx.dep_context().sess().opts.unstable_opts.incremental_verify_ich,
             ) {
@@ -691,7 +691,7 @@ fn incremental_verify_ich_failed<Tcx>(
     // which may result in another fingerprint mismatch while we're in the middle
     // of processing this one. To avoid a double-panic (which kills the process
     // before we can print out the query static), we print out a terse
-    // but 'safe' message if we detect a re-entrant call to this method.
+    // but 'safe' message if we detect a reentrant call to this method.
     thread_local! {
         static INSIDE_VERIFY_PANIC: Cell<bool> = const { Cell::new(false) };
     };
