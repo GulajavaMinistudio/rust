@@ -2,23 +2,21 @@ use crate::MirPass;
 use rustc_middle::mir::*;
 use rustc_middle::ty::TyCtxt;
 
-pub enum SimplifyConstConditionPassName {
+pub enum SimplifyConstCondition {
     AfterConstProp,
     Final,
 }
 /// A pass that replaces a branch with a goto when its condition is known.
-impl<'tcx> MirPass<'tcx> for SimplifyConstConditionPassName {
+impl<'tcx> MirPass<'tcx> for SimplifyConstCondition {
     fn name(&self) -> &'static str {
         match self {
-            SimplifyConstConditionPassName::AfterConstProp => {
-                "SimplifyConstCondition-after-const-prop"
-            }
-            SimplifyConstConditionPassName::Final => "SimplifyConstCondition-final",
+            SimplifyConstCondition::AfterConstProp => "SimplifyConstCondition-after-const-prop",
+            SimplifyConstCondition::Final => "SimplifyConstCondition-final",
         }
     }
 
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        let param_env = tcx.param_env(body.source.def_id());
+        let param_env = tcx.param_env_reveal_all_normalized(body.source.def_id());
         for block in body.basic_blocks_mut() {
             let terminator = block.terminator_mut();
             terminator.kind = match terminator.kind {

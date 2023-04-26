@@ -10,7 +10,6 @@ use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::{walk_block, walk_expr, Visitor};
 use rustc_hir::{AsyncGeneratorKind, GeneratorKind, LangItem};
-use rustc_infer::infer::TyCtxtInferExt;
 use rustc_infer::traits::ObligationCause;
 use rustc_middle::hir::nested_filter::OnlyBodies;
 use rustc_middle::mir::tcx::PlaceTy;
@@ -19,7 +18,7 @@ use rustc_middle::mir::{
     FakeReadCause, LocalDecl, LocalInfo, LocalKind, Location, Operand, Place, PlaceRef,
     ProjectionElem, Rvalue, Statement, StatementKind, Terminator, TerminatorKind, VarBindingForm,
 };
-use rustc_middle::ty::{self, suggest_constraining_type_params, PredicateKind, Ty, TypeckResults};
+use rustc_middle::ty::{self, suggest_constraining_type_params, PredicateKind, Ty};
 use rustc_middle::util::CallKind;
 use rustc_mir_dataflow::move_paths::{InitKind, MoveOutIndex, MovePathIndex};
 use rustc_span::def_id::LocalDefId;
@@ -643,11 +642,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             let Some(default_trait) = tcx.get_diagnostic_item(sym::Default) else {
                 return false;
             };
-            // Regions are already solved, so we must use a fresh InferCtxt,
-            // but the type has region variables, so erase those.
-            tcx.infer_ctxt()
-                .build()
-                .type_implements_trait(default_trait, [tcx.erase_regions(ty)], param_env)
+            self.infcx
+                .type_implements_trait(default_trait, [ty], param_env)
                 .must_apply_modulo_regions()
         };
 
@@ -706,7 +702,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 .copied()
                 .find_map(find_fn_kind_from_did),
             ty::Alias(ty::Opaque, ty::AliasTy { def_id, substs, .. }) => tcx
-                .bound_explicit_item_bounds(def_id)
+                .explicit_item_bounds(def_id)
                 .subst_iter_copied(tcx, substs)
                 .find_map(find_fn_kind_from_did),
             ty::Closure(_, substs) => match substs.as_closure().kind() {
@@ -740,13 +736,11 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     fn suggest_cloning(&self, err: &mut Diagnostic, ty: Ty<'tcx>, span: Span) {
         let tcx = self.infcx.tcx;
         // Try to find predicates on *generic params* that would allow copying `ty`
-        let infcx = tcx.infer_ctxt().build();
-
         if let Some(clone_trait_def) = tcx.lang_items().clone_trait()
-            && infcx
+            && self.infcx
                 .type_implements_trait(
                     clone_trait_def,
-                    [tcx.erase_regions(ty)],
+                    [ty],
                     self.param_env,
                 )
                 .must_apply_modulo_regions()
@@ -770,12 +764,11 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             .and_then(|def_id| tcx.hir().get_generics(def_id))
         else { return; };
         // Try to find predicates on *generic params* that would allow copying `ty`
-        let infcx = tcx.infer_ctxt().build();
-        let ocx = ObligationCtxt::new(&infcx);
+        let ocx = ObligationCtxt::new(&self.infcx);
         let copy_did = tcx.require_lang_item(LangItem::Copy, Some(span));
         let cause = ObligationCause::misc(span, self.mir_def_id());
 
-        ocx.register_bound(cause, self.param_env, infcx.tcx.erase_regions(ty), copy_did);
+        ocx.register_bound(cause, self.param_env, ty, copy_did);
         let errors = ocx.select_all_or_error();
 
         // Only emit suggestion if all required predicates are on generic
@@ -1350,8 +1343,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         finder.visit_expr(body_expr);
         let Some((closure_expr, closure)) = finder.res else { return };
 
-        let typeck_results: &TypeckResults<'_> =
-            tcx.typeck_opt_const_arg(self.body.source.with_opt_param().as_local().unwrap());
+        let typeck_results = tcx.typeck(self.mir_def_id());
 
         // Check that the parent of the closure is a method call,
         // with receiver matching with local's type (modulo refs)
@@ -2220,7 +2212,6 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             let tcx = self.infcx.tcx;
 
             let return_ty = self.regioncx.universal_regions().unnormalized_output_ty;
-            let return_ty = tcx.erase_regions(return_ty);
 
             // to avoid panics
             if let Some(iter_trait) = tcx.get_diagnostic_item(sym::Iterator)

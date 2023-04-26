@@ -47,7 +47,7 @@ const TYPE_TAG: usize = 0b00;
 const REGION_TAG: usize = 0b01;
 const CONST_TAG: usize = 0b10;
 
-#[derive(Debug, TyEncodable, TyDecodable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, TyEncodable, TyDecodable, PartialEq, Eq, PartialOrd, Ord, HashStable)]
 pub enum GenericArgKind<'tcx> {
     Lifetime(ty::Region<'tcx>),
     Type(Ty<'tcx>),
@@ -612,6 +612,12 @@ where
     ) -> SubstIter<'s, 'tcx, I> {
         SubstIter { it: self.0.into_iter(), tcx, substs }
     }
+
+    /// Similar to [`subst_identity`](EarlyBinder::subst_identity),
+    /// but on an iterator of `TypeFoldable` values.
+    pub fn subst_identity_iter(self) -> I::IntoIter {
+        self.0.into_iter()
+    }
 }
 
 pub struct SubstIter<'s, 'tcx, I: IntoIterator> {
@@ -663,6 +669,12 @@ where
         substs: &'s [GenericArg<'tcx>],
     ) -> SubstIterCopied<'s, 'tcx, I> {
         SubstIterCopied { it: self.0.into_iter(), tcx, substs }
+    }
+
+    /// Similar to [`subst_identity`](EarlyBinder::subst_identity),
+    /// but on an iterator of values that deref to a `TypeFoldable`.
+    pub fn subst_identity_iter_copied(self) -> impl Iterator<Item = <I::Item as Deref>::Target> {
+        self.0.into_iter().map(|v| *v)
     }
 }
 

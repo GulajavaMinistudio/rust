@@ -13,7 +13,7 @@ use crate::middle::codegen_fn_attrs::CodegenFnAttrs;
 use crate::middle::resolve_bound_vars;
 use crate::middle::stability;
 use crate::mir::interpret::{self, Allocation, ConstAllocation};
-use crate::mir::{Body, BorrowCheckResult, Local, Place, PlaceElem, ProjectionKind, Promoted};
+use crate::mir::{Body, Local, Place, PlaceElem, ProjectionKind, Promoted};
 use crate::query::LocalCrate;
 use crate::thir::Thir;
 use crate::traits;
@@ -24,7 +24,7 @@ use crate::ty::{
     self, AdtDef, AdtDefData, AdtKind, Binder, Const, ConstData, FloatTy, FloatVar, FloatVid,
     GenericParamDefKind, ImplPolarity, InferTy, IntTy, IntVar, IntVid, List, ParamConst, ParamTy,
     PolyExistentialPredicate, PolyFnSig, Predicate, PredicateKind, Region, RegionKind, ReprOptions,
-    TraitObjectVisitor, Ty, TyKind, TyVar, TyVid, TypeAndMut, TypeckResults, UintTy, Visibility,
+    TraitObjectVisitor, Ty, TyKind, TyVar, TyVid, TypeAndMut, UintTy, Visibility,
 };
 use crate::ty::{GenericArg, InternalSubsts, SubstsRef};
 use rustc_ast::{self as ast, attr};
@@ -50,7 +50,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::{
     Constness, ExprKind, HirId, ImplItemKind, ItemKind, Node, TraitCandidate, TraitItemKind,
 };
-use rustc_index::vec::IndexVec;
+use rustc_index::IndexVec;
 use rustc_macros::HashStable;
 use rustc_query_system::dep_graph::DepNodeIndex;
 use rustc_query_system::ich::StableHashingContext;
@@ -79,6 +79,8 @@ use std::hash::{Hash, Hasher};
 use std::iter;
 use std::mem;
 use std::ops::{Bound, Deref};
+
+use super::query::IntoQueryParam;
 
 const TINY_CONST_EVAL_LIMIT: Limit = Limit(20);
 
@@ -155,6 +157,7 @@ pub struct CtxtInterners<'tcx> {
     layout: InternedSet<'tcx, LayoutS>,
     adt_def: InternedSet<'tcx, AdtDefData>,
     external_constraints: InternedSet<'tcx, ExternalConstraintsData<'tcx>>,
+    fields: InternedSet<'tcx, List<FieldIdx>>,
 }
 
 impl<'tcx> CtxtInterners<'tcx> {
@@ -178,6 +181,7 @@ impl<'tcx> CtxtInterners<'tcx> {
             layout: Default::default(),
             adt_def: Default::default(),
             external_constraints: Default::default(),
+            fields: Default::default(),
         }
     }
 
@@ -449,6 +453,14 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn feed_local_crate(self) -> TyCtxtFeed<'tcx, CrateNum> {
         TyCtxtFeed { tcx: self, key: LOCAL_CRATE }
     }
+
+    /// In order to break cycles involving `AnonConst`, we need to set the expected type by side
+    /// effect. However, we do not want this as a general capability, so this interface restricts
+    /// to the only allowed case.
+    pub fn feed_anon_const_type(self, key: LocalDefId, value: ty::EarlyBinder<Ty<'tcx>>) {
+        debug_assert_eq!(self.def_kind(key), DefKind::AnonConst);
+        TyCtxtFeed { tcx: self, key }.type_of(value)
+    }
 }
 
 impl<'tcx, KEY: Copy> TyCtxtFeed<'tcx, KEY> {
@@ -580,28 +592,6 @@ impl<'tcx> TyCtxt<'tcx> {
                 def_id,
                 def_kind
             )
-        }
-    }
-
-    pub fn typeck_opt_const_arg(
-        self,
-        def: ty::WithOptConstParam<LocalDefId>,
-    ) -> &'tcx TypeckResults<'tcx> {
-        if let Some(param_did) = def.const_param_did {
-            self.typeck_const_arg((def.did, param_did))
-        } else {
-            self.typeck(def.did)
-        }
-    }
-
-    pub fn mir_borrowck_opt_const_arg(
-        self,
-        def: ty::WithOptConstParam<LocalDefId>,
-    ) -> &'tcx BorrowCheckResult<'tcx> {
-        if let Some(param_did) = def.const_param_did {
-            self.mir_borrowck_const_arg((def.did, param_did))
-        } else {
-            self.mir_borrowck(def.did)
         }
     }
 
@@ -836,7 +826,8 @@ impl<'tcx> TyCtxt<'tcx> {
         self.features_query(())
     }
 
-    pub fn def_key(self, id: DefId) -> rustc_hir::definitions::DefKey {
+    pub fn def_key(self, id: impl IntoQueryParam<DefId>) -> rustc_hir::definitions::DefKey {
+        let id = id.into_query_param();
         // Accessing the DefKey is ok, since it is part of DefPathHash.
         if let Some(id) = id.as_local() {
             self.definitions_untracked().def_key(id)
@@ -1585,6 +1576,7 @@ slice_interners!(
     projs: pub mk_projs(ProjectionKind),
     place_elems: pub mk_place_elems(PlaceElem<'tcx>),
     bound_variable_kinds: pub mk_bound_variable_kinds(ty::BoundVariableKind),
+    fields: pub mk_fields(FieldIdx),
 );
 
 impl<'tcx> TyCtxt<'tcx> {
@@ -1611,7 +1603,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let ty::Alias(ty::Opaque, ty::AliasTy { def_id, .. }) = ty.kind() else { return false };
         let future_trait = self.require_lang_item(LangItem::Future, None);
 
-        self.explicit_item_bounds(def_id).iter().any(|(predicate, _)| {
+        self.explicit_item_bounds(def_id).skip_binder().iter().any(|&(predicate, _)| {
             let ty::PredicateKind::Clause(ty::Clause::Trait(trait_predicate)) = predicate.kind().skip_binder() else {
                 return false;
             };
@@ -2251,6 +2243,14 @@ impl<'tcx> TyCtxt<'tcx> {
         T: CollectAndApply<PlaceElem<'tcx>, &'tcx List<PlaceElem<'tcx>>>,
     {
         T::collect_and_apply(iter, |xs| self.mk_place_elems(xs))
+    }
+
+    pub fn mk_fields_from_iter<I, T>(self, iter: I) -> T::Output
+    where
+        I: Iterator<Item = T>,
+        T: CollectAndApply<FieldIdx, &'tcx List<FieldIdx>>,
+    {
+        T::collect_and_apply(iter, |xs| self.mk_fields(xs))
     }
 
     pub fn mk_substs_trait(

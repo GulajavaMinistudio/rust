@@ -11,7 +11,7 @@
 use super::{CanonicalGoal, Certainty, EvalCtxt, Goal};
 use crate::solve::canonicalize::{CanonicalizeMode, Canonicalizer};
 use crate::solve::{CanonicalResponse, QueryResult, Response};
-use rustc_index::vec::IndexVec;
+use rustc_index::IndexVec;
 use rustc_infer::infer::canonical::query_response::make_query_region_constraints;
 use rustc_infer::infer::canonical::CanonicalVarValues;
 use rustc_infer::infer::canonical::{CanonicalExt, QueryRegionConstraints};
@@ -51,6 +51,13 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         certainty: Certainty,
     ) -> QueryResult<'tcx> {
         let goals_certainty = self.try_evaluate_added_goals()?;
+        assert_eq!(
+            self.tainted,
+            Ok(()),
+            "EvalCtxt is tainted -- nested goals may have been dropped in a \
+            previous call to `try_evaluate_added_goals!`"
+        );
+
         let certainty = certainty.unify_with(goals_certainty);
 
         let external_constraints = self.compute_external_query_constraints()?;

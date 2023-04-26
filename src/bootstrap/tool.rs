@@ -11,6 +11,7 @@ use crate::toolstate::ToolState;
 use crate::util::{add_dylib_path, exe, t};
 use crate::Compiler;
 use crate::Mode;
+use crate::{gha, Kind};
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum SourceType {
@@ -32,41 +33,27 @@ struct ToolBuild {
     allow_features: &'static str,
 }
 
-fn tooling_output(
-    mode: Mode,
-    tool: &str,
-    build_stage: u32,
-    host: &TargetSelection,
-    target: &TargetSelection,
-) -> String {
-    match mode {
-        // depends on compiler stage, different to host compiler
-        Mode::ToolRustc => {
-            if host == target {
-                format!("Building tool {} (stage{} -> stage{})", tool, build_stage, build_stage + 1)
-            } else {
-                format!(
-                    "Building tool {} (stage{}:{} -> stage{}:{})",
-                    tool,
-                    build_stage,
-                    host,
-                    build_stage + 1,
-                    target
-                )
-            }
+impl Builder<'_> {
+    fn msg_tool(
+        &self,
+        mode: Mode,
+        tool: &str,
+        build_stage: u32,
+        host: &TargetSelection,
+        target: &TargetSelection,
+    ) -> Option<gha::Group> {
+        match mode {
+            // depends on compiler stage, different to host compiler
+            Mode::ToolRustc => self.msg_sysroot_tool(
+                Kind::Build,
+                build_stage,
+                format_args!("tool {tool}"),
+                *host,
+                *target,
+            ),
+            // doesn't depend on compiler, same as host compiler
+            _ => self.msg(Kind::Build, build_stage, format_args!("tool {tool}"), *host, *target),
         }
-        // doesn't depend on compiler, same as host compiler
-        Mode::ToolStd => {
-            if host == target {
-                format!("Building tool {} (stage{})", tool, build_stage)
-            } else {
-                format!(
-                    "Building tool {} (stage{}:{} -> stage{}:{})",
-                    tool, build_stage, host, build_stage, target
-                )
-            }
-        }
-        _ => format!("Building tool {} (stage{})", tool, build_stage),
     }
 }
 
@@ -111,14 +98,13 @@ impl Step for ToolBuild {
         if !self.allow_features.is_empty() {
             cargo.allow_features(self.allow_features);
         }
-        let msg = tooling_output(
+        let _guard = builder.msg_tool(
             self.mode,
             self.tool,
             self.compiler.stage,
             &self.compiler.host,
             &self.target,
         );
-        builder.info(&msg);
 
         let mut cargo = Command::from(cargo);
         let is_expected = builder.try_run(&mut cargo);
@@ -492,14 +478,13 @@ impl Step for Rustdoc {
             cargo.rustflag("--cfg=parallel_compiler");
         }
 
-        let msg = tooling_output(
+        let _guard = builder.msg_tool(
             Mode::ToolRustc,
             "rustdoc",
             build_compiler.stage,
             &self.compiler.host,
             &target,
         );
-        builder.info(&msg);
         builder.run(&mut cargo.into());
 
         // Cargo adds a number of paths to the dylib search path on windows, which results in
@@ -588,18 +573,18 @@ impl Step for Cargo {
         if self.target.contains("windows") {
             build_cred(
                 "cargo-credential-wincred",
-                "src/tools/cargo/crates/credential/cargo-credential-wincred",
+                "src/tools/cargo/credential/cargo-credential-wincred",
             );
         }
         if self.target.contains("apple-darwin") {
             build_cred(
                 "cargo-credential-macos-keychain",
-                "src/tools/cargo/crates/credential/cargo-credential-macos-keychain",
+                "src/tools/cargo/credential/cargo-credential-macos-keychain",
             );
         }
         build_cred(
             "cargo-credential-1password",
-            "src/tools/cargo/crates/credential/cargo-credential-1password",
+            "src/tools/cargo/credential/cargo-credential-1password",
         );
         cargo_bin_path
     }
@@ -748,6 +733,7 @@ macro_rules! tool_extended {
        stable = $stable:expr
        $(,tool_std = $tool_std:literal)?
        $(,allow_features = $allow_features:expr)?
+       $(,add_bins_to_sysroot = $add_bins_to_sysroot:expr)?
        ;)+) => {
         $(
             #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -790,7 +776,7 @@ macro_rules! tool_extended {
 
             #[allow(unused_mut)]
             fn run(mut $sel, $builder: &Builder<'_>) -> Option<PathBuf> {
-                $builder.ensure(ToolBuild {
+                let tool = $builder.ensure(ToolBuild {
                     compiler: $sel.compiler,
                     target: $sel.target,
                     tool: $tool_name,
@@ -800,7 +786,27 @@ macro_rules! tool_extended {
                     is_optional_tool: true,
                     source_type: SourceType::InTree,
                     allow_features: concat!($($allow_features)*),
-                })
+                })?;
+
+                if (false $(|| !$add_bins_to_sysroot.is_empty())?) && $sel.compiler.stage > 0 {
+                    let bindir = $builder.sysroot($sel.compiler).join("bin");
+                    t!(fs::create_dir_all(&bindir));
+
+                    #[allow(unused_variables)]
+                    let tools_out = $builder
+                        .cargo_out($sel.compiler, Mode::ToolRustc, $sel.target);
+
+                    $(for add_bin in $add_bins_to_sysroot {
+                        let bin_source = tools_out.join(exe(add_bin, $sel.target));
+                        let bin_destination = bindir.join(exe(add_bin, $sel.compiler.host));
+                        $builder.copy(&bin_source, &bin_destination);
+                    })?
+
+                    let tool = bindir.join(exe($tool_name, $sel.compiler.host));
+                    Some(tool)
+                } else {
+                    Some(tool)
+                }
             }
         }
         )+
@@ -814,15 +820,15 @@ macro_rules! tool_extended {
 tool_extended!((self, builder),
     Cargofmt, "src/tools/rustfmt", "cargo-fmt", stable=true;
     CargoClippy, "src/tools/clippy", "cargo-clippy", stable=true;
-    Clippy, "src/tools/clippy", "clippy-driver", stable=true;
-    Miri, "src/tools/miri", "miri", stable=false;
-    CargoMiri, "src/tools/miri/cargo-miri", "cargo-miri", stable=true;
+    Clippy, "src/tools/clippy", "clippy-driver", stable=true, add_bins_to_sysroot = ["clippy-driver", "cargo-clippy"];
+    Miri, "src/tools/miri", "miri", stable=false, add_bins_to_sysroot = ["miri"];
+    CargoMiri, "src/tools/miri/cargo-miri", "cargo-miri", stable=true, add_bins_to_sysroot = ["cargo-miri"];
     // FIXME: tool_std is not quite right, we shouldn't allow nightly features.
     // But `builder.cargo` doesn't know how to handle ToolBootstrap in stages other than 0,
     // and this is close enough for now.
     Rls, "src/tools/rls", "rls", stable=true, tool_std=true;
     RustDemangler, "src/tools/rust-demangler", "rust-demangler", stable=false, tool_std=true;
-    Rustfmt, "src/tools/rustfmt", "rustfmt", stable=true;
+    Rustfmt, "src/tools/rustfmt", "rustfmt", stable=true, add_bins_to_sysroot = ["rustfmt", "cargo-fmt"];
 );
 
 impl<'a> Builder<'a> {

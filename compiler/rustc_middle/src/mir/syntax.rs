@@ -16,7 +16,7 @@ use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_hir::def_id::DefId;
 use rustc_hir::{self as hir};
 use rustc_hir::{self, GeneratorKind};
-use rustc_index::vec::IndexVec;
+use rustc_index::IndexVec;
 use rustc_target::abi::{FieldIdx, VariantIdx};
 
 use rustc_ast::Mutability;
@@ -331,9 +331,8 @@ pub enum StatementKind<'tcx> {
     /// This is especially useful for `let _ = PLACE;` bindings that desugar to a single
     /// `PlaceMention(PLACE)`.
     ///
-    /// When executed at runtime this is a nop.
-    ///
-    /// Disallowed after drop elaboration.
+    /// When executed at runtime, this computes the given place, but then discards
+    /// it without doing a load. It is UB if the place is not pointing to live memory.
     PlaceMention(Box<Place<'tcx>>),
 
     /// Encodes a user's type ascription. These need to be preserved
@@ -1115,7 +1114,7 @@ pub enum Rvalue<'tcx> {
     CheckedBinaryOp(BinOp, Box<(Operand<'tcx>, Operand<'tcx>)>),
 
     /// Computes a value as described by the operation.
-    NullaryOp(NullOp, Ty<'tcx>),
+    NullaryOp(NullOp<'tcx>, Ty<'tcx>),
 
     /// Exactly like `BinaryOp`, but less operands.
     ///
@@ -1211,12 +1210,14 @@ pub enum AggregateKind<'tcx> {
     Generator(DefId, SubstsRef<'tcx>, hir::Movability),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
-pub enum NullOp {
+#[derive(Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
+pub enum NullOp<'tcx> {
     /// Returns the size of a value of that type
     SizeOf,
     /// Returns the minimum alignment of a type
     AlignOf,
+    /// Returns the offset of a field
+    OffsetOf(&'tcx List<FieldIdx>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

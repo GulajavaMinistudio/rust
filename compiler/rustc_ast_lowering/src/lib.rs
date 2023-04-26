@@ -61,7 +61,7 @@ use rustc_hir::def::{DefKind, LifetimeRes, Namespace, PartialRes, PerNS, Res};
 use rustc_hir::def_id::{LocalDefId, CRATE_DEF_ID};
 use rustc_hir::definitions::DefPathData;
 use rustc_hir::{ConstArg, GenericArg, ItemLocalId, ParamName, TraitCandidate};
-use rustc_index::vec::{Idx, IndexSlice, IndexVec};
+use rustc_index::{Idx, IndexSlice, IndexVec};
 use rustc_middle::{
     span_bug,
     ty::{ResolverAstLowering, TyCtxt},
@@ -283,6 +283,7 @@ enum ImplTraitPosition {
     FieldTy,
     Cast,
     ImplSelf,
+    OffsetOf,
 }
 
 impl std::fmt::Display for ImplTraitPosition {
@@ -313,6 +314,7 @@ impl std::fmt::Display for ImplTraitPosition {
             ImplTraitPosition::FieldTy => "field types",
             ImplTraitPosition::Cast => "cast types",
             ImplTraitPosition::ImplSelf => "impl headers",
+            ImplTraitPosition::OffsetOf => "`offset_of!` params",
         };
 
         write!(f, "{name}")
