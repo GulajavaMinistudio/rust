@@ -606,7 +606,7 @@ impl<'a> Parser<'a> {
                     let kind = if self.eat(&token::Colon) {
                         // Parse associated type constraint bound.
 
-                        let bounds = self.parse_generic_bounds(Some(self.prev_token.span))?;
+                        let bounds = self.parse_generic_bounds()?;
                         AssocConstraintKind::Bound { bounds }
                     } else if self.eat(&token::Eq) {
                         self.parse_assoc_equality_term(ident, self.prev_token.span)?
@@ -679,14 +679,14 @@ impl<'a> Parser<'a> {
                     );
                     err.span_suggestion(
                         eq.to(before_next),
-                        &format!("remove the `=` if `{}` is a type", ident),
+                        format!("remove the `=` if `{}` is a type", ident),
                         "",
                         Applicability::MaybeIncorrect,
                     )
                 } else {
                     err.span_label(
                         self.token.span,
-                        &format!("expected type, found {}", super::token_descr(&self.token)),
+                        format!("expected type, found {}", super::token_descr(&self.token)),
                     )
                 };
                 return Err(err);
