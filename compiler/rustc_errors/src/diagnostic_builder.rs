@@ -192,6 +192,7 @@ impl EmissionGuarantee for ErrorGuaranteed {
                      became non-error ({:?}), after original `.emit()`",
                     db.inner.diagnostic.level,
                 );
+                #[allow(deprecated)]
                 ErrorGuaranteed::unchecked_claim_error_was_emitted()
             }
         }
@@ -568,6 +569,14 @@ impl<'a, G: EmissionGuarantee> DiagnosticBuilder<'a, G> {
         debug!("buffer: diagnostic={:?}", diagnostic);
 
         Some((diagnostic, handler))
+    }
+
+    /// Retrieves the [`Handler`] if available
+    pub fn handler(&self) -> Option<&Handler> {
+        match self.inner.state {
+            DiagnosticBuilderState::Emittable(handler) => Some(handler),
+            DiagnosticBuilderState::AlreadyEmittedOrDuringCancellation => None,
+        }
     }
 
     /// Buffers the diagnostic for later emission,

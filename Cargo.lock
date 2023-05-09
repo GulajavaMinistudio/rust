@@ -577,7 +577,7 @@ checksum = "8a2dd5a6fe8c6e3502f568a6353e5273bbb15193ad9a89e457b9970798efbea1"
 
 [[package]]
 name = "clippy"
-version = "0.1.70"
+version = "0.1.71"
 dependencies = [
  "clap 4.2.1",
  "clippy_lints",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_lints"
-version = "0.1.70"
+version = "0.1.71"
 dependencies = [
  "arrayvec",
  "cargo_metadata 0.15.3",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "clippy_utils"
-version = "0.1.70"
+version = "0.1.71"
 dependencies = [
  "arrayvec",
  "if_chain",
@@ -969,7 +969,7 @@ checksum = "a0afaad2b26fa326569eb264b1363e8ae3357618c43982b3f285f0774ce76b69"
 
 [[package]]
 name = "declare_clippy_lint"
-version = "0.1.70"
+version = "0.1.71"
 dependencies = [
  "itertools",
  "quote",
@@ -1546,9 +1546,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
  "ahash 0.7.4",
- "compiler_builtins",
- "rustc-std-workspace-alloc",
- "rustc-std-workspace-core",
 ]
 
 [[package]]
@@ -1558,6 +1555,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33ff8ae62cd3a9102e5637afc8452c55acf3844001bd5374e0b0bd7b6616c038"
 dependencies = [
  "ahash 0.8.2",
+ "compiler_builtins",
+ "rustc-std-workspace-alloc",
+ "rustc-std-workspace-core",
 ]
 
 [[package]]
@@ -1938,9 +1938,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.142"
+version = "0.2.143"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a987beff54b60ffa6d51982e1aa1146bc42f19bd26be28b0586f252fccf5317"
+checksum = "edc207893e85c5d6be840e969b496b53d94cec8be2d501b214f50daa97fa8024"
 dependencies = [
  "rustc-std-workspace-core",
 ]
@@ -2909,9 +2909,9 @@ dependencies = [
 
 [[package]]
 name = "rustc-build-sysroot"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d65b1271cdac365b71b59570ea35d945dea2dd2cc47eba3d33b4bd1e0190ac6d"
+checksum = "8ed2a90dfa5232ed5ff21d53d4df655f315ab316ea06fc508f1c74bcedb1ce6c"
 dependencies = [
  "anyhow",
  "rustc_version",
@@ -3353,6 +3353,7 @@ dependencies = [
  "rustc_middle",
  "rustc_mir_build",
  "rustc_mir_dataflow",
+ "rustc_mir_transform",
  "rustc_monomorphize",
  "rustc_parse",
  "rustc_passes",
@@ -3861,8 +3862,10 @@ dependencies = [
  "rustc_const_eval",
  "rustc_data_structures",
  "rustc_errors",
+ "rustc_fluent_macro",
  "rustc_hir",
  "rustc_index",
+ "rustc_macros",
  "rustc_middle",
  "rustc_mir_dataflow",
  "rustc_serialize",
@@ -4093,6 +4096,7 @@ dependencies = [
 name = "rustc_smir"
 version = "0.0.0"
 dependencies = [
+ "rustc_hir",
  "rustc_middle",
  "rustc_span",
  "tracing",
@@ -4606,7 +4610,7 @@ dependencies = [
  "core",
  "dlmalloc",
  "fortanix-sgx-abi",
- "hashbrown 0.12.3",
+ "hashbrown 0.13.1",
  "hermit-abi 0.3.0",
  "libc",
  "miniz_oxide",
