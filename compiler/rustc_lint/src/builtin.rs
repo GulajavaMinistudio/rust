@@ -647,7 +647,9 @@ declare_lint_pass!(MissingCopyImplementations => [MISSING_COPY_IMPLEMENTATIONS])
 
 impl<'tcx> LateLintPass<'tcx> for MissingCopyImplementations {
     fn check_item(&mut self, cx: &LateContext<'_>, item: &hir::Item<'_>) {
-        if !cx.effective_visibilities.is_reachable(item.owner_id.def_id) {
+        if !(cx.effective_visibilities.is_reachable(item.owner_id.def_id)
+            && cx.tcx.local_visibility(item.owner_id.def_id).is_public())
+        {
             return;
         }
         let (def, ty) = match item.kind {
@@ -766,7 +768,9 @@ impl_lint_pass!(MissingDebugImplementations => [MISSING_DEBUG_IMPLEMENTATIONS]);
 
 impl<'tcx> LateLintPass<'tcx> for MissingDebugImplementations {
     fn check_item(&mut self, cx: &LateContext<'_>, item: &hir::Item<'_>) {
-        if !cx.effective_visibilities.is_reachable(item.owner_id.def_id) {
+        if !(cx.effective_visibilities.is_reachable(item.owner_id.def_id)
+            && cx.tcx.local_visibility(item.owner_id.def_id).is_public())
+        {
             return;
         }
 
@@ -1882,8 +1886,8 @@ declare_lint_pass!(
 struct UnderMacro(bool);
 
 impl KeywordIdents {
-    fn check_tokens(&mut self, cx: &EarlyContext<'_>, tokens: TokenStream) {
-        for tt in tokens.into_trees() {
+    fn check_tokens(&mut self, cx: &EarlyContext<'_>, tokens: &TokenStream) {
+        for tt in tokens.trees() {
             match tt {
                 // Only report non-raw idents.
                 TokenTree::Token(token, _) => {
@@ -1944,10 +1948,10 @@ impl KeywordIdents {
 
 impl EarlyLintPass for KeywordIdents {
     fn check_mac_def(&mut self, cx: &EarlyContext<'_>, mac_def: &ast::MacroDef) {
-        self.check_tokens(cx, mac_def.body.tokens.clone());
+        self.check_tokens(cx, &mac_def.body.tokens);
     }
     fn check_mac(&mut self, cx: &EarlyContext<'_>, mac: &ast::MacCall) {
-        self.check_tokens(cx, mac.args.tokens.clone());
+        self.check_tokens(cx, &mac.args.tokens);
     }
     fn check_ident(&mut self, cx: &EarlyContext<'_>, ident: Ident) {
         self.check_ident_token(cx, UnderMacro(false), ident);

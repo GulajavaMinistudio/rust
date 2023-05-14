@@ -8,7 +8,7 @@ use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
 use rustc_data_structures::memmap::{Mmap, MmapMut};
 use rustc_data_structures::stable_hasher::{Hash128, HashStable, StableHasher};
-use rustc_data_structures::sync::{join, par_iter, Lrc, ParallelIterator};
+use rustc_data_structures::sync::{join, par_for_each_in, Lrc};
 use rustc_data_structures::temp_dir::MaybeTempDir;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
@@ -1375,9 +1375,10 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             // Therefore, the loop over variants will encode its fields as the adt's children.
         }
 
-        for variant in adt_def.variants().iter() {
+        for (idx, variant) in adt_def.variants().iter_enumerated() {
             let data = VariantData {
                 discr: variant.discr,
+                idx,
                 ctor: variant.ctor.map(|(kind, def_id)| (kind, def_id.index)),
                 is_non_exhaustive: variant.is_field_list_non_exhaustive(),
             };
@@ -1641,9 +1642,10 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             }
             hir::ItemKind::OpaqueTy(ref opaque) => {
                 self.encode_explicit_item_bounds(def_id);
-                self.tables
-                    .is_type_alias_impl_trait
-                    .set(def_id.index, matches!(opaque.origin, hir::OpaqueTyOrigin::TyAlias));
+                self.tables.is_type_alias_impl_trait.set(
+                    def_id.index,
+                    matches!(opaque.origin, hir::OpaqueTyOrigin::TyAlias { .. }),
+                );
             }
             hir::ItemKind::Impl(hir::Impl { defaultness, constness, .. }) => {
                 self.tables.impl_defaultness.set_some(def_id.index, *defaultness);
@@ -2129,7 +2131,7 @@ fn prefetch_mir(tcx: TyCtxt<'_>) {
         return;
     }
 
-    par_iter(tcx.mir_keys(())).for_each(|&def_id| {
+    par_for_each_in(tcx.mir_keys(()), |&def_id| {
         let (encode_const, encode_opt) = should_encode_mir(tcx, def_id);
 
         if encode_const {
