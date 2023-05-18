@@ -1245,6 +1245,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         error,
                         Some((rcvr, args)),
                         expected,
+                        false,
                     ) {
                         err.emit();
                     }
@@ -2468,7 +2469,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         {
             self.suggest_method_call(
                 &mut err,
-                &format!("a method `{field}` also exists, call it with parentheses"),
+                format!("a method `{field}` also exists, call it with parentheses"),
                 field,
                 expr_t,
                 expr,

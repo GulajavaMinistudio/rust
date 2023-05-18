@@ -25,6 +25,7 @@ use crate::mir::interpret::{
 use crate::mir::interpret::{LitToConstError, LitToConstInput};
 use crate::mir::mono::CodegenUnit;
 use crate::query::erase::{erase, restore, Erase};
+use crate::query::plumbing::{query_ensure, query_get_at, DynamicQuery};
 use crate::thir;
 use crate::traits::query::{
     CanonicalPredicateGoal, CanonicalProjectionGoal, CanonicalTyGoal,
@@ -39,10 +40,6 @@ use crate::traits::specialization_graph;
 use crate::traits::{self, ImplSource};
 use crate::ty::fast_reject::SimplifiedType;
 use crate::ty::layout::ValidityRequirement;
-use crate::ty::query::{
-    query_ensure, query_get_at, DynamicQuery, IntoQueryParam, TyCtxtAt, TyCtxtEnsure,
-    TyCtxtEnsureWithValue,
-};
 use crate::ty::subst::{GenericArg, SubstsRef};
 use crate::ty::util::AlwaysRequiresDrop;
 use crate::ty::GeneratorDiagnosticData;
@@ -90,8 +87,11 @@ use std::sync::Arc;
 
 pub mod erase;
 mod keys;
-pub mod on_disk_cache;
 pub use keys::{AsLocalKey, Key, LocalCrate};
+pub mod on_disk_cache;
+#[macro_use]
+pub mod plumbing;
+pub use plumbing::{IntoQueryParam, TyCtxtAt, TyCtxtEnsure, TyCtxtEnsureWithValue};
 
 // Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
@@ -527,7 +527,7 @@ rustc_queries! {
         }
     }
 
-    query mir_generator_witnesses(key: DefId) -> &'tcx mir::GeneratorLayout<'tcx> {
+    query mir_generator_witnesses(key: DefId) -> &'tcx Option<mir::GeneratorLayout<'tcx>> {
         arena_cache
         desc { |tcx| "generator witness types for `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { key.is_local() }
@@ -724,12 +724,6 @@ rustc_queries! {
     /// constructor function).
     query is_promotable_const_fn(key: DefId) -> bool {
         desc { |tcx| "checking if item is promotable: `{}`", tcx.def_path_str(key) }
-    }
-
-    /// Returns `true` if this is a foreign item (i.e., linked via `extern { ... }`).
-    query is_foreign_item(key: DefId) -> bool {
-        desc { |tcx| "checking if `{}` is a foreign item", tcx.def_path_str(key) }
-        separate_provide_extern
     }
 
     /// Returns `Some(generator_kind)` if the node pointed to by `def_id` is a generator.
