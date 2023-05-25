@@ -20,7 +20,7 @@ use rustc_infer::infer::outlives::env::RegionBoundPairs;
 use rustc_infer::infer::region_constraints::RegionConstraintData;
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::{
-    InferCtxt, InferOk, LateBoundRegion, LateBoundRegionConversionTime, NllRegionVariableOrigin,
+    InferCtxt, LateBoundRegion, LateBoundRegionConversionTime, NllRegionVariableOrigin,
 };
 use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::mir::visit::{NonMutatingUseContext, PlaceContext, Visitor};
@@ -183,17 +183,10 @@ pub(crate) fn type_check<'mir, 'tcx>(
         &mut borrowck_context,
     );
 
-    let errors_reported = {
-        let mut verifier = TypeVerifier::new(&mut checker, promoted);
-        verifier.visit_body(&body);
-        verifier.errors_reported
-    };
+    let mut verifier = TypeVerifier::new(&mut checker, promoted);
+    verifier.visit_body(&body);
 
-    if !errors_reported {
-        // if verifier failed, don't do further checks to avoid ICEs
-        checker.typeck_mir(body);
-    }
-
+    checker.typeck_mir(body);
     checker.equate_inputs_and_outputs(&body, universal_regions, &normalized_inputs_and_output);
     checker.check_signature_annotation(&body);
 
@@ -218,16 +211,16 @@ pub(crate) fn type_check<'mir, 'tcx>(
                     Locations::All(body.span),
                     ConstraintCategory::OpaqueType,
                     CustomTypeOp::new(
-                        |infcx| {
-                            infcx.register_member_constraints(
+                        |ocx| {
+                            ocx.infcx.register_member_constraints(
                                 param_env,
                                 opaque_type_key,
                                 decl.hidden_type.ty,
                                 decl.hidden_type.span,
                             );
-                            Ok(InferOk { value: (), obligations: vec![] })
+                            Ok(())
                         },
-                        || "opaque_type_map".to_string(),
+                        "opaque_type_map",
                     ),
                 )
                 .unwrap();
@@ -294,7 +287,6 @@ struct TypeVerifier<'a, 'b, 'tcx> {
     cx: &'a mut TypeChecker<'b, 'tcx>,
     promoted: &'b IndexSlice<Promoted, Body<'tcx>>,
     last_span: Span,
-    errors_reported: bool,
 }
 
 impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
@@ -383,13 +375,11 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
                         };
                     };
 
-                    if !self.errors_reported {
-                        let promoted_body = &self.promoted[promoted];
-                        self.sanitize_promoted(promoted_body, location);
+                    let promoted_body = &self.promoted[promoted];
+                    self.sanitize_promoted(promoted_body, location);
 
-                        let promoted_ty = promoted_body.return_ty();
-                        check_err(self, promoted_body, ty, promoted_ty);
-                    }
+                    let promoted_ty = promoted_body.return_ty();
+                    check_err(self, promoted_body, ty, promoted_ty);
                 } else {
                     self.cx.ascribe_user_type(
                         constant.literal.ty(),
@@ -483,9 +473,6 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
         for local_decl in &body.local_decls {
             self.sanitize_type(local_decl, local_decl.ty);
         }
-        if self.errors_reported {
-            return;
-        }
         self.super_body(body);
     }
 }
@@ -495,7 +482,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
         cx: &'a mut TypeChecker<'b, 'tcx>,
         promoted: &'b IndexSlice<Promoted, Body<'tcx>>,
     ) -> Self {
-        TypeVerifier { promoted, last_span: cx.body.span, cx, errors_reported: false }
+        TypeVerifier { promoted, last_span: cx.body.span, cx }
     }
 
     fn body(&self) -> &Body<'tcx> {
@@ -529,7 +516,6 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
         for elem in place.projection.iter() {
             if place_ty.variant_index.is_none() {
                 if let Err(guar) = place_ty.ty.error_reported() {
-                    assert!(self.errors_reported);
                     return PlaceTy::from_ty(self.tcx().ty_error(guar));
                 }
             }
@@ -593,10 +579,7 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
 
         self.visit_body(&promoted_body);
 
-        if !self.errors_reported {
-            // if verifier failed, don't do further checks to avoid ICEs
-            self.cx.typeck_mir(promoted_body);
-        }
+        self.cx.typeck_mir(promoted_body);
 
         self.cx.body = parent_body;
         // Merge the outlives constraints back in, at the given location.
@@ -762,7 +745,6 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
     }
 
     fn error(&mut self) -> Ty<'tcx> {
-        self.errors_reported = true;
         self.tcx().ty_error_misc()
     }
 
@@ -2713,8 +2695,9 @@ impl<'tcx> TypeOp<'tcx> for InstantiateOpaqueType<'tcx> {
     type ErrorInfo = InstantiateOpaqueType<'tcx>;
 
     fn fully_perform(mut self, infcx: &InferCtxt<'tcx>) -> Fallible<TypeOpOutput<'tcx, Self>> {
-        let (mut output, region_constraints) = scrape_region_constraints(infcx, || {
-            Ok(InferOk { value: (), obligations: self.obligations.clone() })
+        let (mut output, region_constraints) = scrape_region_constraints(infcx, |ocx| {
+            ocx.register_obligations(self.obligations.clone());
+            Ok(())
         })?;
         self.region_constraints = Some(region_constraints);
         output.error_info = Some(self);

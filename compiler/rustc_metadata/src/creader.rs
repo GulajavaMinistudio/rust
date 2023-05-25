@@ -148,11 +148,15 @@ impl CStore {
         assert_eq!(self.metas.len(), self.stable_crate_ids.len());
         let num = CrateNum::new(self.stable_crate_ids.len());
         if let Some(&existing) = self.stable_crate_ids.get(&root.stable_crate_id()) {
-            let crate_name0 = root.name();
-            if let Some(crate_name1) = self.metas[existing].as_ref().map(|data| data.name()) {
+            // Check for (potential) conflicts with the local crate
+            if existing == LOCAL_CRATE {
+                Err(CrateError::SymbolConflictsCurrent(root.name()))
+            } else if let Some(crate_name1) = self.metas[existing].as_ref().map(|data| data.name())
+            {
+                let crate_name0 = root.name();
                 Err(CrateError::StableCrateIdCollision(crate_name0, crate_name1))
             } else {
-                Err(CrateError::SymbolConflictsCurrent(crate_name0))
+                Err(CrateError::NotFound(root.name()))
             }
         } else {
             self.metas.push(None);
@@ -369,7 +373,7 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
         let host_hash = host_lib.as_ref().map(|lib| lib.metadata.get_root().hash());
 
         let private_dep =
-            self.sess.opts.externs.get(name.as_str()).map_or(false, |e| e.is_private_dep);
+            self.sess.opts.externs.get(name.as_str()).is_some_and(|e| e.is_private_dep);
 
         // Claim this crate number and cache it
         let cnum = self.cstore.intern_stable_crate_id(&crate_root)?;
