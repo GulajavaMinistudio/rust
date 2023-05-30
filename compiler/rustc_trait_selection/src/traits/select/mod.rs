@@ -2149,13 +2149,11 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
             ty::Adt(def, substs) => {
                 let sized_crit = def.sized_constraint(self.tcx());
                 // (*) binder moved here
-                Where(obligation.predicate.rebind({
-                    sized_crit
-                        .0
-                        .iter()
-                        .map(|ty| sized_crit.rebind(*ty).subst(self.tcx(), substs))
-                        .collect()
-                }))
+                Where(
+                    obligation
+                        .predicate
+                        .rebind(sized_crit.subst_iter_copied(self.tcx(), substs).collect()),
+                )
             }
 
             ty::Alias(..) | ty::Param(_) | ty::Placeholder(..) => None,
@@ -3029,7 +3027,7 @@ fn bind_generator_hidden_types_above<'tcx>(
                             kind: ty::BrAnon(None),
                         };
                         counter += 1;
-                        tcx.mk_re_late_bound(current_depth, br)
+                        ty::Region::new_late_bound(tcx, current_depth, br)
                     }
                     r => bug!("unexpected region: {r:?}"),
                 })
