@@ -4,6 +4,7 @@ use std::mem;
 
 use either::{Either, Left, Right};
 
+use hir::CRATE_HIR_ID;
 use rustc_hir::{self as hir, def_id::DefId, definitions::DefPathData};
 use rustc_index::IndexVec;
 use rustc_middle::mir;
@@ -406,6 +407,15 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
     }
 
     #[inline(always)]
+    /// Find the first stack frame that is within the current crate, if any, otherwise return the crate's HirId
+    pub fn best_lint_scope(&self) -> hir::HirId {
+        self.stack()
+            .iter()
+            .find_map(|frame| frame.body.source.def_id().as_local())
+            .map_or(CRATE_HIR_ID, |def_id| self.tcx.hir().local_def_id_to_hir_id(def_id))
+    }
+
+    #[inline(always)]
     pub(crate) fn stack(&self) -> &[Frame<'mir, 'tcx, M::Provenance, M::FrameExtra>] {
         M::stack(self)
     }
@@ -497,7 +507,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             .try_subst_mir_and_normalize_erasing_regions(
                 *self.tcx,
                 self.param_env,
-                ty::EarlyBinder::new(value),
+                ty::EarlyBinder::bind(value),
             )
             .map_err(|_| err_inval!(TooGeneric))
     }
