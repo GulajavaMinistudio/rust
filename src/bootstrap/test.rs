@@ -1772,6 +1772,14 @@ impl Step for BookTest {
     ///
     /// This uses the `rustdoc` that sits next to `compiler`.
     fn run(self, builder: &Builder<'_>) {
+        let host = self.compiler.host;
+        let _guard = builder.msg(
+            Kind::Test,
+            self.compiler.stage,
+            &format!("book {}", self.name),
+            host,
+            host,
+        );
         // External docs are different from local because:
         // - Some books need pre-processing by mdbook before being tested.
         // - They need to save their state to toolstate.
@@ -1963,7 +1971,7 @@ fn markdown_test(builder: &Builder<'_>, compiler: Compiler, markdown: &Path) -> 
         }
     }
 
-    builder.info(&format!("doc tests for: {}", markdown.display()));
+    builder.verbose(&format!("doc tests for: {}", markdown.display()));
     let mut cmd = builder.rustdoc_cmd(compiler);
     builder.add_rust_test_threads(&mut cmd);
     // allow for unstable options such as new editions
@@ -2196,7 +2204,8 @@ impl Step for Crate {
         let target = self.target;
         let mode = self.mode;
 
-        builder.ensure(compile::Std::new(compiler, target));
+        // See [field@compile::Std::force_recompile].
+        builder.ensure(compile::Std::force_recompile(compiler, target));
         builder.ensure(RemoteCopyLibs { compiler, target });
 
         // If we're not doing a full bootstrap but we're testing a stage2
@@ -2210,6 +2219,16 @@ impl Step for Crate {
         match mode {
             Mode::Std => {
                 compile::std_cargo(builder, target, compiler.stage, &mut cargo);
+                // `std_cargo` actually does the wrong thing: it passes `--sysroot build/host/stage2`,
+                // but we want to use the force-recompile std we just built in `build/host/stage2-test-sysroot`.
+                // Override it.
+                if builder.download_rustc() {
+                    let sysroot = builder
+                        .out
+                        .join(compiler.host.triple)
+                        .join(format!("stage{}-test-sysroot", compiler.stage));
+                    cargo.env("RUSTC_SYSROOT", sysroot);
+                }
             }
             Mode::Rustc => {
                 compile::rustc_cargo(builder, &mut cargo, target, compiler.stage);
@@ -2261,6 +2280,11 @@ impl Step for CrateRustdoc {
             // isn't really necessary.
             builder.compiler_for(builder.top_stage, target, target)
         };
+        // NOTE: normally `ensure(Rustc)` automatically runs `ensure(Std)` for us. However, when
+        // using `download-rustc`, the rustc_private artifacts may be in a *different sysroot* from
+        // the target rustdoc (`ci-rustc-sysroot` vs `stage2`). In that case, we need to ensure this
+        // explicitly to make sure it ends up in the stage2 sysroot.
+        builder.ensure(compile::Std::new(compiler, target));
         builder.ensure(compile::Rustc::new(compiler, target));
 
         let mut cargo = tool::prepare_tool_cargo(
@@ -2312,7 +2336,13 @@ impl Step for CrateRustdoc {
         dylib_path.insert(0, PathBuf::from(&*libdir));
         cargo.env(dylib_path_var(), env::join_paths(&dylib_path).unwrap());
 
-        let _guard = builder.msg(builder.kind, compiler.stage, "rustdoc", compiler.host, target);
+        let _guard = builder.msg_sysroot_tool(
+            builder.kind,
+            compiler.stage,
+            "rustdoc",
+            compiler.host,
+            target,
+        );
         run_cargo_test(
             cargo,
             &[],

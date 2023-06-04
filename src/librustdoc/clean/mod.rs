@@ -1224,7 +1224,7 @@ pub(crate) fn clean_impl_item<'tcx>(
             }
             hir::ImplItemKind::Fn(ref sig, body) => {
                 let m = clean_function(cx, sig, impl_.generics, FunctionArgs::Body(body));
-                let defaultness = cx.tcx.impl_defaultness(impl_.owner_id);
+                let defaultness = cx.tcx.defaultness(impl_.owner_id);
                 MethodItem(m, Some(defaultness))
             }
             hir::ImplItemKind::Type(hir_ty) => {
@@ -1258,7 +1258,7 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
 
             let provided = match assoc_item.container {
                 ty::ImplContainer => true,
-                ty::TraitContainer => tcx.impl_defaultness(assoc_item.def_id).has_value(),
+                ty::TraitContainer => tcx.defaultness(assoc_item.def_id).has_value(),
             };
             if provided {
                 AssocConstItem(ty, ConstantKind::Extern { def_id: assoc_item.def_id })
@@ -1440,7 +1440,7 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                 }
                 generics.where_predicates = where_predicates;
 
-                if tcx.impl_defaultness(assoc_item.def_id).has_value() {
+                if tcx.defaultness(assoc_item.def_id).has_value() {
                     AssocTypeItem(
                         Box::new(Typedef {
                             type_: clean_middle_ty(
@@ -2180,7 +2180,8 @@ fn get_all_import_attributes<'hir>(
             // This is the "original" reexport so we get all its attributes without filtering them.
             attrs = import_attrs.iter().map(|attr| (Cow::Borrowed(attr), Some(def_id))).collect();
             first = false;
-        } else {
+        // We don't add attributes of an intermediate re-export if it has `#[doc(hidden)]`.
+        } else if !cx.tcx.is_doc_hidden(def_id) {
             add_without_unwanted_attributes(&mut attrs, import_attrs, is_inline, Some(def_id));
         }
     }

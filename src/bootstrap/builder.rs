@@ -571,7 +571,7 @@ impl<'a> ShouldRun<'a> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, ValueEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Kind {
     #[clap(alias = "b")]
     Build,
@@ -642,7 +642,10 @@ impl Kind {
             Kind::Doc => "Documenting",
             Kind::Run => "Running",
             Kind::Suggest => "Suggesting",
-            _ => return format!("{self:?}"),
+            _ => {
+                let title_letter = self.as_str()[0..1].to_ascii_uppercase();
+                return format!("{title_letter}{}ing", &self.as_str()[1..]);
+            }
         }
         .to_owned()
     }
@@ -992,7 +995,7 @@ impl<'a> Builder<'a> {
     }
 
     pub fn sysroot(&self, compiler: Compiler) -> Interned<PathBuf> {
-        self.ensure(compile::Sysroot { compiler })
+        self.ensure(compile::Sysroot::new(compiler))
     }
 
     /// Returns the libdir where the standard library and other artifacts are
@@ -1632,7 +1635,7 @@ impl<'a> Builder<'a> {
                 // flesh out rpath support more fully in the future.
                 rustflags.arg("-Zosx-rpath-install-name");
                 Some("-Wl,-rpath,@loader_path/../lib")
-            } else if !target.contains("windows") {
+            } else if !target.contains("windows") && !target.contains("aix") {
                 rustflags.arg("-Clink-args=-Wl,-z,origin");
                 Some("-Wl,-rpath,$ORIGIN/../lib")
             } else {
@@ -1783,7 +1786,10 @@ impl<'a> Builder<'a> {
             cargo.env("RUSTC_TLS_MODEL_INITIAL_EXEC", "1");
         }
 
-        if self.config.incremental {
+        // Ignore incremental modes except for stage0, since we're
+        // not guaranteeing correctness across builds if the compiler
+        // is changing under your feet.
+        if self.config.incremental && compiler.stage == 0 {
             cargo.env("CARGO_INCREMENTAL", "1");
         } else {
             // Don't rely on any default setting for incr. comp. in Cargo

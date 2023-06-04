@@ -680,7 +680,7 @@ impl Step for Rustc {
         let compiler = builder.compiler(stage, builder.config.build);
         builder.ensure(compile::Std::new(compiler, builder.config.build));
 
-        let _guard = builder.msg(
+        let _guard = builder.msg_sysroot_tool(
             Kind::Doc,
             stage,
             &format!("compiler{}", crate_description(&self.crates)),
@@ -834,6 +834,7 @@ macro_rules! tool_doc {
                 cargo.arg("-Zskip-rustdoc-fingerprint");
                 // Only include compiler crates, no dependencies of those, such as `libc`.
                 cargo.arg("--no-deps");
+                cargo.arg("--lib");
                 $(
                     cargo.arg("-p").arg($krate);
                 )+
