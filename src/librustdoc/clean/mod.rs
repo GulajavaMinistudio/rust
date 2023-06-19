@@ -344,8 +344,8 @@ pub(crate) fn clean_predicate<'tcx>(
             Some(clean_projection_predicate(bound_predicate.rebind(pred), cx))
         }
         // FIXME(generic_const_exprs): should this do something?
-        ty::PredicateKind::ConstEvaluatable(..) => None,
-        ty::PredicateKind::WellFormed(..) => None,
+        ty::PredicateKind::Clause(ty::Clause::ConstEvaluatable(..)) => None,
+        ty::PredicateKind::Clause(ty::Clause::WellFormed(..)) => None,
         ty::PredicateKind::Clause(ty::Clause::ConstArgHasType(..)) => None,
 
         ty::PredicateKind::Subtype(..)
@@ -2050,6 +2050,11 @@ pub(crate) fn clean_middle_ty<'tcx>(
                 self_type,
                 trait_: None,
             }))
+        }
+
+        ty::Alias(ty::Weak, data) => {
+            let ty = cx.tcx.type_of(data.def_id).subst(cx.tcx, data.substs);
+            clean_middle_ty(bound_ty.rebind(ty), cx, None, None)
         }
 
         ty::Param(ref p) => {

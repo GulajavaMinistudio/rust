@@ -44,7 +44,8 @@ const MIR_OPT_BLESS_TARGET_MAPPING: &[(&str, &str)] = &[
     ("i686-pc-windows-msvc", "x86_64-pc-windows-msvc"),
     ("i686-pc-windows-gnu", "x86_64-pc-windows-gnu"),
     ("i686-apple-darwin", "x86_64-apple-darwin"),
-    ("i686-apple-darwin", "aarch64-apple-darwin"),
+    // ARM Macs don't have a corresponding 32-bit target that they can (easily)
+    // build for, so there is no entry for "aarch64-apple-darwin" here.
 ];
 
 fn try_run(builder: &Builder<'_>, cmd: &mut Command) -> bool {
@@ -1766,7 +1767,7 @@ note: if you're sure you want to do this, please open an issue as to why. In the
         //
         // Note that if we encounter `PATH` we make sure to append to our own `PATH`
         // rather than stomp over it.
-        if target.contains("msvc") {
+        if !builder.config.dry_run() && target.contains("msvc") {
             for &(ref k, ref v) in builder.cc.borrow()[&target].env() {
                 if k != "PATH" {
                     cmd.env(k, v);
