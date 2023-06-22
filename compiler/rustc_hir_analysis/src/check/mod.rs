@@ -304,7 +304,7 @@ fn bounds_from_generic_predicates<'tcx>(
         debug!("predicate {:?}", predicate);
         let bound_predicate = predicate.kind();
         match bound_predicate.skip_binder() {
-            ty::PredicateKind::Clause(ty::Clause::Trait(trait_predicate)) => {
+            ty::PredicateKind::Clause(ty::ClauseKind::Trait(trait_predicate)) => {
                 let entry = types.entry(trait_predicate.self_ty()).or_default();
                 let def_id = trait_predicate.def_id();
                 if Some(def_id) != tcx.lang_items().sized_trait() {
@@ -313,7 +313,7 @@ fn bounds_from_generic_predicates<'tcx>(
                     entry.push(trait_predicate.def_id());
                 }
             }
-            ty::PredicateKind::Clause(ty::Clause::Projection(projection_pred)) => {
+            ty::PredicateKind::Clause(ty::ClauseKind::Projection(projection_pred)) => {
                 projections.push(bound_predicate.rebind(projection_pred));
             }
             _ => {}
@@ -470,19 +470,16 @@ fn suggestion_signature<'tcx>(
     );
 
     match assoc.kind {
-        ty::AssocKind::Fn => {
-            // We skip the binder here because the binder would deanonymize all
-            // late-bound regions, and we don't want method signatures to show up
-            // `as for<'r> fn(&'r MyType)`. Pretty-printing handles late-bound
-            // regions just fine, showing `fn(&MyType)`.
-            fn_sig_suggestion(
-                tcx,
-                tcx.fn_sig(assoc.def_id).subst(tcx, substs).skip_binder(),
-                assoc.ident(tcx),
-                tcx.predicates_of(assoc.def_id).instantiate_own(tcx, substs),
-                assoc,
-            )
-        }
+        ty::AssocKind::Fn => fn_sig_suggestion(
+            tcx,
+            tcx.liberate_late_bound_regions(
+                assoc.def_id,
+                tcx.fn_sig(assoc.def_id).subst(tcx, substs),
+            ),
+            assoc.ident(tcx),
+            tcx.predicates_of(assoc.def_id).instantiate_own(tcx, substs),
+            assoc,
+        ),
         ty::AssocKind::Type => {
             let (generics, where_clauses) = bounds_from_generic_predicates(
                 tcx,

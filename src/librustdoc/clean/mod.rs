@@ -331,22 +331,22 @@ pub(crate) fn clean_predicate<'tcx>(
 ) -> Option<WherePredicate> {
     let bound_predicate = predicate.kind();
     match bound_predicate.skip_binder() {
-        ty::PredicateKind::Clause(ty::Clause::Trait(pred)) => {
+        ty::PredicateKind::Clause(ty::ClauseKind::Trait(pred)) => {
             clean_poly_trait_predicate(bound_predicate.rebind(pred), cx)
         }
-        ty::PredicateKind::Clause(ty::Clause::RegionOutlives(pred)) => {
+        ty::PredicateKind::Clause(ty::ClauseKind::RegionOutlives(pred)) => {
             clean_region_outlives_predicate(pred)
         }
-        ty::PredicateKind::Clause(ty::Clause::TypeOutlives(pred)) => {
+        ty::PredicateKind::Clause(ty::ClauseKind::TypeOutlives(pred)) => {
             clean_type_outlives_predicate(bound_predicate.rebind(pred), cx)
         }
-        ty::PredicateKind::Clause(ty::Clause::Projection(pred)) => {
+        ty::PredicateKind::Clause(ty::ClauseKind::Projection(pred)) => {
             Some(clean_projection_predicate(bound_predicate.rebind(pred), cx))
         }
         // FIXME(generic_const_exprs): should this do something?
-        ty::PredicateKind::Clause(ty::Clause::ConstEvaluatable(..)) => None,
-        ty::PredicateKind::Clause(ty::Clause::WellFormed(..)) => None,
-        ty::PredicateKind::Clause(ty::Clause::ConstArgHasType(..)) => None,
+        ty::PredicateKind::Clause(ty::ClauseKind::ConstEvaluatable(..)) => None,
+        ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(..)) => None,
+        ty::PredicateKind::Clause(ty::ClauseKind::ConstArgHasType(..)) => None,
 
         ty::PredicateKind::Subtype(..)
         | ty::PredicateKind::AliasRelate(..)
@@ -805,20 +805,19 @@ fn clean_ty_generics<'tcx>(
             let param_idx = (|| {
                 let bound_p = p.kind();
                 match bound_p.skip_binder() {
-                    ty::PredicateKind::Clause(ty::Clause::Trait(pred)) => {
+                    ty::PredicateKind::Clause(ty::ClauseKind::Trait(pred)) => {
                         if let ty::Param(param) = pred.self_ty().kind() {
                             return Some(param.index);
                         }
                     }
-                    ty::PredicateKind::Clause(ty::Clause::TypeOutlives(ty::OutlivesPredicate(
-                        ty,
-                        _reg,
-                    ))) => {
+                    ty::PredicateKind::Clause(ty::ClauseKind::TypeOutlives(
+                        ty::OutlivesPredicate(ty, _reg),
+                    )) => {
                         if let ty::Param(param) = ty.kind() {
                             return Some(param.index);
                         }
                     }
-                    ty::PredicateKind::Clause(ty::Clause::Projection(p)) => {
+                    ty::PredicateKind::Clause(ty::ClauseKind::Projection(p)) => {
                         if let ty::Param(param) = p.projection_ty.self_ty().kind() {
                             projection = Some(bound_p.rebind(p));
                             return Some(param.index);
@@ -2024,8 +2023,8 @@ pub(crate) fn clean_middle_ty<'tcx>(
             Tuple(t.iter().map(|t| clean_middle_ty(bound_ty.rebind(t), cx, None, None)).collect())
         }
 
-        ty::Alias(ty::Projection, ref data) => {
-            clean_projection(bound_ty.rebind(*data), cx, parent_def_id)
+        ty::Alias(ty::Projection, data) => {
+            clean_projection(bound_ty.rebind(data), cx, parent_def_id)
         }
 
         ty::Alias(ty::Inherent, alias_ty) => {
@@ -2053,8 +2052,21 @@ pub(crate) fn clean_middle_ty<'tcx>(
         }
 
         ty::Alias(ty::Weak, data) => {
-            let ty = cx.tcx.type_of(data.def_id).subst(cx.tcx, data.substs);
-            clean_middle_ty(bound_ty.rebind(ty), cx, None, None)
+            if cx.tcx.features().lazy_type_alias {
+                // Weak type alias `data` represents the `type X` in `type X = Y`. If we need `Y`,
+                // we need to use `type_of`.
+                let path = external_path(
+                    cx,
+                    data.def_id,
+                    false,
+                    ThinVec::new(),
+                    bound_ty.rebind(data.substs),
+                );
+                Type::Path { path }
+            } else {
+                let ty = cx.tcx.type_of(data.def_id).subst(cx.tcx, data.substs);
+                clean_middle_ty(bound_ty.rebind(ty), cx, None, None)
+            }
         }
 
         ty::Param(ref p) => {
@@ -2114,10 +2126,10 @@ fn clean_middle_opaque_bounds<'tcx>(
         .filter_map(|bound| {
             let bound_predicate = bound.kind();
             let trait_ref = match bound_predicate.skip_binder() {
-                ty::PredicateKind::Clause(ty::Clause::Trait(tr)) => {
+                ty::PredicateKind::Clause(ty::ClauseKind::Trait(tr)) => {
                     bound_predicate.rebind(tr.trait_ref)
                 }
-                ty::PredicateKind::Clause(ty::Clause::TypeOutlives(ty::OutlivesPredicate(
+                ty::PredicateKind::Clause(ty::ClauseKind::TypeOutlives(ty::OutlivesPredicate(
                     _ty,
                     reg,
                 ))) => {
@@ -2137,7 +2149,7 @@ fn clean_middle_opaque_bounds<'tcx>(
             let bindings: ThinVec<_> = bounds
                 .iter()
                 .filter_map(|bound| {
-                    if let ty::PredicateKind::Clause(ty::Clause::Projection(proj)) =
+                    if let ty::PredicateKind::Clause(ty::ClauseKind::Projection(proj)) =
                         bound.kind().skip_binder()
                     {
                         if proj.projection_ty.trait_ref(cx.tcx) == trait_ref.skip_binder() {

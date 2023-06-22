@@ -3,10 +3,10 @@
 #![crate_name = "foo"]
 
 // @!has 'foo/hidden/index.html'
-// FIXME: add missing `@` for the two next tests once issue is fixed!
-// To be done in <https://github.com/rust-lang/rust/issues/111249>.
-// !has 'foo/hidden/inner/index.html'
-// !has 'foo/hidden/inner/trait.Foo.html'
+// @!has 'foo/hidden/inner/index.html'
+// FIXME: Should be `@!has`: https://github.com/rust-lang/rust/issues/111249
+// @has 'foo/hidden/inner/trait.Foo.html'
+// @matchesraw - '<meta http-equiv="refresh" content="0;URL=../../../foo/visible/trait.Foo.html">'
 #[doc(hidden)]
 pub mod hidden {
     pub mod inner {
