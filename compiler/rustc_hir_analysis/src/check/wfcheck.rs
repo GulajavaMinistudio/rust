@@ -1086,7 +1086,7 @@ fn check_associated_type_bounds(wfcx: &WfCheckingCtxt<'_, '_>, item: ty::AssocIt
             wfcx.infcx,
             wfcx.param_env,
             wfcx.body_def_id,
-            normalized_bound,
+            normalized_bound.as_predicate(),
             bound_span,
         )
     });
@@ -1543,13 +1543,13 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ImplTraitInTraitFinder<'_, 'tcx> {
         if let ty::Alias(ty::Opaque, unshifted_opaque_ty) = *ty.kind()
             && self.seen.insert(unshifted_opaque_ty.def_id)
             && let Some(opaque_def_id) = unshifted_opaque_ty.def_id.as_local()
-            && let opaque = tcx.hir().expect_item(opaque_def_id).expect_opaque_ty()
-            && let hir::OpaqueTyOrigin::FnReturn(source) | hir::OpaqueTyOrigin::AsyncFn(source) = opaque.origin
+            && let origin = tcx.opaque_type_origin(opaque_def_id)
+            && let hir::OpaqueTyOrigin::FnReturn(source) | hir::OpaqueTyOrigin::AsyncFn(source) = origin
             && source == self.fn_def_id
         {
             let opaque_ty = tcx.fold_regions(unshifted_opaque_ty, |re, _depth| {
                 match re.kind() {
-                    ty::ReEarlyBound(_) | ty::ReFree(_) | ty::ReError(_) => re,
+                    ty::ReEarlyBound(_) | ty::ReFree(_) | ty::ReError(_) | ty::ReStatic => re,
                     r => bug!("unexpected region: {r:?}"),
                 }
             });
@@ -1562,7 +1562,7 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ImplTraitInTraitFinder<'_, 'tcx> {
                     self.wfcx.infcx,
                     self.wfcx.param_env,
                     self.wfcx.body_def_id,
-                    bound,
+                    bound.as_predicate(),
                     bound_span,
                 ));
                 // Set the debruijn index back to innermost here, since we already eagerly
