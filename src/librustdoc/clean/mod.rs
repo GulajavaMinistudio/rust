@@ -326,36 +326,24 @@ fn clean_where_predicate<'tcx>(
 }
 
 pub(crate) fn clean_predicate<'tcx>(
-    predicate: ty::Predicate<'tcx>,
+    predicate: ty::Clause<'tcx>,
     cx: &mut DocContext<'tcx>,
 ) -> Option<WherePredicate> {
     let bound_predicate = predicate.kind();
     match bound_predicate.skip_binder() {
-        ty::PredicateKind::Clause(ty::ClauseKind::Trait(pred)) => {
-            clean_poly_trait_predicate(bound_predicate.rebind(pred), cx)
-        }
-        ty::PredicateKind::Clause(ty::ClauseKind::RegionOutlives(pred)) => {
-            clean_region_outlives_predicate(pred)
-        }
-        ty::PredicateKind::Clause(ty::ClauseKind::TypeOutlives(pred)) => {
+        ty::ClauseKind::Trait(pred) => clean_poly_trait_predicate(bound_predicate.rebind(pred), cx),
+        ty::ClauseKind::RegionOutlives(pred) => clean_region_outlives_predicate(pred),
+        ty::ClauseKind::TypeOutlives(pred) => {
             clean_type_outlives_predicate(bound_predicate.rebind(pred), cx)
         }
-        ty::PredicateKind::Clause(ty::ClauseKind::Projection(pred)) => {
+        ty::ClauseKind::Projection(pred) => {
             Some(clean_projection_predicate(bound_predicate.rebind(pred), cx))
         }
         // FIXME(generic_const_exprs): should this do something?
-        ty::PredicateKind::Clause(ty::ClauseKind::ConstEvaluatable(..)) => None,
-        ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(..)) => None,
-        ty::PredicateKind::Clause(ty::ClauseKind::ConstArgHasType(..)) => None,
-
-        ty::PredicateKind::Subtype(..)
-        | ty::PredicateKind::AliasRelate(..)
-        | ty::PredicateKind::Coerce(..)
-        | ty::PredicateKind::ObjectSafe(..)
-        | ty::PredicateKind::ClosureKind(..)
-        | ty::PredicateKind::ConstEquate(..)
-        | ty::PredicateKind::Ambiguous
-        | ty::PredicateKind::TypeWellFormedFromEnv(..) => panic!("not user writable"),
+        ty::ClauseKind::ConstEvaluatable(..)
+        | ty::ClauseKind::WellFormed(..)
+        | ty::ClauseKind::ConstArgHasType(..)
+        | ty::ClauseKind::TypeWellFormedFromEnv(..) => None,
     }
 }
 
@@ -805,19 +793,17 @@ fn clean_ty_generics<'tcx>(
             let param_idx = (|| {
                 let bound_p = p.kind();
                 match bound_p.skip_binder() {
-                    ty::PredicateKind::Clause(ty::ClauseKind::Trait(pred)) => {
+                    ty::ClauseKind::Trait(pred) => {
                         if let ty::Param(param) = pred.self_ty().kind() {
                             return Some(param.index);
                         }
                     }
-                    ty::PredicateKind::Clause(ty::ClauseKind::TypeOutlives(
-                        ty::OutlivesPredicate(ty, _reg),
-                    )) => {
+                    ty::ClauseKind::TypeOutlives(ty::OutlivesPredicate(ty, _reg)) => {
                         if let ty::Param(param) = ty.kind() {
                             return Some(param.index);
                         }
                     }
-                    ty::PredicateKind::Clause(ty::ClauseKind::Projection(p)) => {
+                    ty::ClauseKind::Projection(p) => {
                         if let ty::Param(param) = p.projection_ty.self_ty().kind() {
                             projection = Some(bound_p.rebind(p));
                             return Some(param.index);
@@ -1352,21 +1338,51 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                 }
             }
 
+            let mut predicates = tcx.explicit_predicates_of(assoc_item.def_id).predicates;
             if let ty::TraitContainer = assoc_item.container {
-                let bounds = tcx
-                    .explicit_item_bounds(assoc_item.def_id)
-                    .subst_identity_iter_copied()
-                    .map(|(c, s)| (c.as_predicate(), s));
-                let predicates = tcx.explicit_predicates_of(assoc_item.def_id).predicates;
-                let predicates =
-                    tcx.arena.alloc_from_iter(bounds.chain(predicates.iter().copied()));
-                let mut generics = clean_ty_generics(
-                    cx,
-                    tcx.generics_of(assoc_item.def_id),
-                    ty::GenericPredicates { parent: None, predicates },
-                );
-                // Filter out the bounds that are (likely?) directly attached to the associated type,
-                // as opposed to being located in the where clause.
+                let bounds =
+                    tcx.explicit_item_bounds(assoc_item.def_id).subst_identity_iter_copied();
+                predicates = tcx.arena.alloc_from_iter(bounds.chain(predicates.iter().copied()));
+            }
+            let mut generics = clean_ty_generics(
+                cx,
+                tcx.generics_of(assoc_item.def_id),
+                ty::GenericPredicates { parent: None, predicates },
+            );
+            // Move bounds that are (likely) directly attached to the parameters of the
+            // (generic) associated type from the where clause to the respective parameter.
+            // There is no guarantee that this is what the user actually wrote but we have
+            // no way of knowing.
+            let mut where_predicates = ThinVec::new();
+            for mut pred in generics.where_predicates {
+                if let WherePredicate::BoundPredicate { ty: Generic(arg), bounds, .. } = &mut pred
+                    && let Some(GenericParamDef {
+                        kind: GenericParamDefKind::Type { bounds: param_bounds, .. },
+                        ..
+                    }) = generics.params.iter_mut().find(|param| &param.name == arg)
+                {
+                    param_bounds.append(bounds);
+                } else if let WherePredicate::RegionPredicate { lifetime: Lifetime(arg), bounds } = &mut pred
+                    && let Some(GenericParamDef {
+                        kind: GenericParamDefKind::Lifetime { outlives: param_bounds },
+                        ..
+                    }) = generics.params.iter_mut().find(|param| &param.name == arg)
+                {
+                    param_bounds.extend(bounds.drain(..).map(|bound| match bound {
+                        GenericBound::Outlives(lifetime) => lifetime,
+                        _ => unreachable!(),
+                    }));
+                } else {
+                    where_predicates.push(pred);
+                }
+            }
+            generics.where_predicates = where_predicates;
+
+            if let ty::TraitContainer = assoc_item.container {
+                // Move bounds that are (likely) directly attached to the associated type
+                // from the where-clause to the associated type.
+                // There is no guarantee that this is what the user actually wrote but we have
+                // no way of knowing.
                 let mut bounds: Vec<GenericBound> = Vec::new();
                 generics.where_predicates.retain_mut(|pred| match *pred {
                     WherePredicate::BoundPredicate {
@@ -1423,33 +1439,6 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                     }
                     None => bounds.push(GenericBound::maybe_sized(cx)),
                 }
-                // Move bounds that are (likely) directly attached to the parameters of the
-                // (generic) associated type from the where clause to the respective parameter.
-                // There is no guarantee that this is what the user actually wrote but we have
-                // no way of knowing.
-                let mut where_predicates = ThinVec::new();
-                for mut pred in generics.where_predicates {
-                    if let WherePredicate::BoundPredicate { ty: Generic(arg), bounds, .. } = &mut pred
-                    && let Some(GenericParamDef {
-                        kind: GenericParamDefKind::Type { bounds: param_bounds, .. },
-                        ..
-                    }) = generics.params.iter_mut().find(|param| &param.name == arg)
-                    {
-                        param_bounds.append(bounds);
-                    } else if let WherePredicate::RegionPredicate { lifetime: Lifetime(arg), bounds } = &mut pred
-                    && let Some(GenericParamDef {
-                        kind: GenericParamDefKind::Lifetime { outlives: param_bounds },
-                        ..
-                    }) = generics.params.iter_mut().find(|param| &param.name == arg) {
-                        param_bounds.extend(bounds.drain(..).map(|bound| match bound {
-                            GenericBound::Outlives(lifetime) => lifetime,
-                            _ => unreachable!(),
-                        }));
-                    } else {
-                        where_predicates.push(pred);
-                    }
-                }
-                generics.where_predicates = where_predicates;
 
                 if tcx.defaultness(assoc_item.def_id).has_value() {
                     AssocTypeItem(
@@ -1461,7 +1450,6 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                                 None,
                             ),
                             generics,
-                            // FIXME: should we obtain the Type from HIR and pass it on here?
                             item_type: None,
                         }),
                         bounds,
@@ -1470,7 +1458,6 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                     TyAssocTypeItem(generics, bounds)
                 }
             } else {
-                // FIXME: when could this happen? Associated items in inherent impls?
                 AssocTypeItem(
                     Box::new(Typedef {
                         type_: clean_middle_ty(
@@ -1479,12 +1466,11 @@ pub(crate) fn clean_middle_assoc_item<'tcx>(
                             Some(assoc_item.def_id),
                             None,
                         ),
-                        generics: Generics {
-                            params: ThinVec::new(),
-                            where_predicates: ThinVec::new(),
-                        },
+                        generics,
                         item_type: None,
                     }),
+                    // Associated types inside trait or inherent impls are not allowed to have
+                    // item bounds. Thus we don't attempt to move any bounds there.
                     Vec::new(),
                 )
             }
@@ -2369,7 +2355,7 @@ fn filter_tokens_from_list(
     tokens
 }
 
-/// When inlining items, we merge its attributes (and all the reexports attributes too) with the
+/// When inlining items, we merge their attributes (and all the reexports attributes too) with the
 /// final reexport. For example:
 ///
 /// ```ignore (just an example)
