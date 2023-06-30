@@ -58,6 +58,24 @@ pub struct PathSeg(pub DefId, pub usize);
 #[derive(Copy, Clone, Debug)]
 pub struct OnlySelfBounds(pub bool);
 
+#[derive(Copy, Clone, Debug)]
+pub enum PredicateFilter {
+    /// All predicates may be implied by the trait.
+    All,
+
+    /// Only traits that reference `Self: ..` are implied by the trait.
+    SelfOnly,
+
+    /// Only traits that reference `Self: ..` and define an associated type
+    /// with the given ident are implied by the trait.
+    SelfThatDefines(Ident),
+
+    /// Only traits that reference `Self: ..` and their associated type bounds.
+    /// For example, given `Self: Tr<A: B>`, this would expand to `Self: Tr`
+    /// and `<Self as Tr>::A: B`.
+    SelfAndAssociatedTypeBounds,
+}
+
 pub trait AstConv<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx>;
 
@@ -2791,7 +2809,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let opaque_ty = tcx.hir().item(item_id);
 
                 match opaque_ty.kind {
-                    hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) => {
+                    hir::ItemKind::OpaqueTy(&hir::OpaqueTy { origin, .. }) => {
                         let local_def_id = item_id.owner_id.def_id;
                         // If this is an RPITIT and we are using the new RPITIT lowering scheme, we
                         // generate the def_id of an associated type for the trait and return as
