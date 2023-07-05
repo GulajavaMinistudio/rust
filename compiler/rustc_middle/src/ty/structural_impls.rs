@@ -189,9 +189,6 @@ impl<'tcx> fmt::Debug for ty::ClauseKind<'tcx> {
             ty::ClauseKind::ConstEvaluatable(ct) => {
                 write!(f, "ConstEvaluatable({ct:?})")
             }
-            ty::ClauseKind::TypeWellFormedFromEnv(ty) => {
-                write!(f, "TypeWellFormedFromEnv({:?})", ty)
-            }
         }
     }
 }
@@ -733,7 +730,7 @@ impl<'tcx> TypeSuperFoldable<TyCtxt<'tcx>> for ty::Const<'tcx> {
         let ty = self.ty().try_fold_with(folder)?;
         let kind = self.kind().try_fold_with(folder)?;
         if ty != self.ty() || kind != self.kind() {
-            Ok(folder.interner().mk_const(kind, ty))
+            Ok(folder.interner().mk_ct_from_kind(kind, ty))
         } else {
             Ok(self)
         }

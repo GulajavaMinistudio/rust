@@ -10,6 +10,7 @@ use super::{
 use crate::infer::error_reporting::{TyCategory, TypeAnnotationNeeded as ErrorCode};
 use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use crate::infer::{self, InferCtxt};
+use crate::solve::{GenerateProofTree, InferCtxtEvalExt, UseGlobalCache};
 use crate::traits::query::evaluate_obligation::InferCtxtExt as _;
 use crate::traits::query::normalize::QueryNormalizeExt as _;
 use crate::traits::specialize::to_pretty_impl_header;
@@ -28,6 +29,7 @@ use rustc_hir::{GenericParam, Item, Node};
 use rustc_infer::infer::error_reporting::TypeErrCtxt;
 use rustc_infer::infer::{InferOk, TypeTrace};
 use rustc_middle::traits::select::OverflowError;
+use rustc_middle::traits::solve::Goal;
 use rustc_middle::traits::SelectionOutputTypeParameterMismatch;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
@@ -37,13 +39,14 @@ use rustc_middle::ty::{
     self, SubtypePredicate, ToPolyTraitRef, ToPredicate, TraitRef, Ty, TyCtxt, TypeFoldable,
     TypeVisitable, TypeVisitableExt,
 };
-use rustc_session::config::TraitSolver;
+use rustc_session::config::{DumpSolverProofTree, TraitSolver};
 use rustc_session::Limit;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::symbol::sym;
 use rustc_span::{ExpnKind, Span, DUMMY_SP};
 use std::borrow::Cow;
 use std::fmt;
+use std::io::Write;
 use std::iter;
 use std::ops::ControlFlow;
 use suggestions::TypeErrCtxtExt as _;
@@ -630,6 +633,11 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         error: &SelectionError<'tcx>,
     ) {
         let tcx = self.tcx;
+
+        if tcx.sess.opts.unstable_opts.dump_solver_proof_tree == DumpSolverProofTree::OnError {
+            dump_proof_tree(root_obligation, self.infcx);
+        }
+
         let mut span = obligation.cause.span;
         // FIXME: statically guarantee this by tainting after the diagnostic is emitted
         self.set_tainted_by_errors(
@@ -1059,7 +1067,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 // (which may fail).
                                 span_bug!(span, "WF predicate not satisfied for {:?}", ty);
                             }
-                            TraitSolver::Chalk | TraitSolver::Next | TraitSolver::NextCoherence => {
+                            TraitSolver::Next | TraitSolver::NextCoherence => {
                                 // FIXME: we'll need a better message which takes into account
                                 // which bounds actually failed to hold.
                                 self.tcx.sess.struct_span_err(
@@ -1093,13 +1101,6 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     }
 
                     ty::PredicateKind::Ambiguous => span_bug!(span, "ambiguous"),
-
-                    ty::PredicateKind::Clause(ty::ClauseKind::TypeWellFormedFromEnv(..)) => {
-                        span_bug!(
-                            span,
-                            "TypeWellFormedFromEnv predicate should only exist in the environment"
-                        )
-                    }
 
                     ty::PredicateKind::AliasRelate(..) => span_bug!(
                         span,
@@ -1529,6 +1530,10 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
     #[instrument(skip(self), level = "debug")]
     fn report_fulfillment_error(&self, error: &FulfillmentError<'tcx>) {
+        if self.tcx.sess.opts.unstable_opts.dump_solver_proof_tree == DumpSolverProofTree::OnError {
+            dump_proof_tree(&error.root_obligation, self.infcx);
+        }
+
         match error.code {
             FulfillmentErrorCode::CodeSelectionError(ref selection_error) => {
                 self.report_selection_error(
@@ -1619,16 +1624,15 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         .tcx
                         .mk_projection(data.projection_ty.def_id, data.projection_ty.substs)
                         .into(),
-                    ty::TermKind::Const(ct) => self
-                        .tcx
-                        .mk_const(
-                            ty::UnevaluatedConst {
-                                def: data.projection_ty.def_id,
-                                substs: data.projection_ty.substs,
-                            },
-                            ct.ty(),
-                        )
-                        .into(),
+                    ty::TermKind::Const(ct) => ty::Const::new_unevaluated(
+                        self.tcx,
+                        ty::UnevaluatedConst {
+                            def: data.projection_ty.def_id,
+                            substs: data.projection_ty.substs,
+                        },
+                        ct.ty(),
+                    )
+                    .into(),
                 };
                 let normalized_term =
                     ocx.normalize(&obligation.cause, obligation.param_env, unnormalized_term);
@@ -3498,4 +3502,17 @@ impl<'tcx> ty::TypeVisitor<TyCtxt<'tcx>> for HasNumericInferVisitor {
 pub enum DefIdOrName {
     DefId(DefId),
     Name(&'static str),
+}
+
+pub fn dump_proof_tree<'tcx>(o: &Obligation<'tcx, ty::Predicate<'tcx>>, infcx: &InferCtxt<'tcx>) {
+    infcx.probe(|_| {
+        let goal = Goal { predicate: o.predicate, param_env: o.param_env };
+        let tree = infcx
+            .evaluate_root_goal(goal, GenerateProofTree::Yes(UseGlobalCache::No))
+            .1
+            .expect("proof tree should have been generated");
+        let mut lock = std::io::stdout().lock();
+        let _ = lock.write_fmt(format_args!("{tree:?}"));
+        let _ = lock.flush();
+    });
 }
