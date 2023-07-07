@@ -1087,11 +1087,13 @@ rustc_queries! {
     }
 
     /// Tries to destructure an `mir::ConstantKind` ADT or array into its variant index
-    /// and its field values.
-    query try_destructure_mir_constant(
-        key: ty::ParamEnvAnd<'tcx, mir::ConstantKind<'tcx>>
+    /// and its field values. This should only be used for pretty printing.
+    query try_destructure_mir_constant_for_diagnostics(
+        key: (ConstValue<'tcx>, Ty<'tcx>)
     ) -> Option<mir::DestructuredConstant<'tcx>> {
         desc { "destructuring MIR constant"}
+        no_hash
+        eval_always
     }
 
     query const_caller_location(key: (rustc_span::Symbol, u32, u32)) -> ConstValue<'tcx> {
@@ -2196,6 +2198,10 @@ rustc_queries! {
         feedable
         desc { "getting cfg-ed out item names" }
         separate_provide_extern
+    }
+
+    query generics_require_sized_self(def_id: DefId) -> bool {
+        desc { "check whether the item has a `where Self: Sized` bound" }
     }
 }
 
