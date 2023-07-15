@@ -383,7 +383,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
             ExprKind::Adt(box AdtExpr {
                 adt_def,
                 variant_index: _,
-                substs: _,
+                args: _,
                 user_ty: _,
                 fields: _,
                 base: _,
@@ -393,14 +393,14 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
             },
             ExprKind::Closure(box ClosureExpr {
                 closure_id,
-                substs: _,
+                args: _,
                 upvars: _,
                 movability: _,
                 fake_reads: _,
             }) => {
                 self.visit_inner_body(closure_id);
             }
-            ExprKind::ConstBlock { did, substs: _ } => {
+            ExprKind::ConstBlock { did, args: _ } => {
                 let def_id = did.expect_local();
                 self.visit_inner_body(def_id);
             }
@@ -712,9 +712,7 @@ pub fn thir_check_unsafety(tcx: TyCtxt<'_>, def: LocalDefId) {
         return;
     }
 
-    let Ok((thir, expr)) = tcx.thir_body(def) else {
-        return
-    };
+    let Ok((thir, expr)) = tcx.thir_body(def) else { return };
     let thir = &thir.borrow();
     // If `thir` is empty, a type error occurred, skip this body.
     if thir.exprs.is_empty() {

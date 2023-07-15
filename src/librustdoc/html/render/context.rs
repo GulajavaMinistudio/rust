@@ -349,7 +349,12 @@ impl<'tcx> Context<'tcx> {
                     let e = ExternalCrate { crate_num: cnum };
                     (e.name(self.tcx()), e.src_root(self.tcx()))
                 }
-                ExternalLocation::Unknown => return None,
+                ExternalLocation::Unknown => {
+                    let e = ExternalCrate { crate_num: cnum };
+                    let name = e.name(self.tcx());
+                    root = name.to_string();
+                    (name, e.src_root(self.tcx()))
+                }
             };
 
             let href = RefCell::new(PathBuf::new());
@@ -805,8 +810,11 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
 
         // Render sidebar-items.js used throughout this module.
         if !self.render_redirect_pages {
-            let (clean::StrippedItem(box clean::ModuleItem(ref module)) | clean::ModuleItem(ref module)) = *item.kind
-            else { unreachable!() };
+            let (clean::StrippedItem(box clean::ModuleItem(ref module))
+            | clean::ModuleItem(ref module)) = *item.kind
+            else {
+                unreachable!()
+            };
             let items = self.build_sidebar_items(module);
             let js_dst = self.dst.join(&format!("sidebar-items{}.js", self.shared.resource_suffix));
             let v = format!("window.SIDEBAR_ITEMS = {};", serde_json::to_string(&items).unwrap());
