@@ -677,7 +677,7 @@ impl Session {
     pub fn delay_span_bug<S: Into<MultiSpan>>(
         &self,
         sp: S,
-        msg: impl Into<DiagnosticMessage>,
+        msg: impl Into<String>,
     ) -> ErrorGuaranteed {
         self.diagnostic().delay_span_bug(sp, msg)
     }
@@ -1055,6 +1055,10 @@ impl Session {
 impl Session {
     pub fn verbose(&self) -> bool {
         self.opts.unstable_opts.verbose
+    }
+
+    pub fn print_llvm_stats(&self) -> bool {
+        self.opts.unstable_opts.print_codegen_stats
     }
 
     pub fn verify_llvm_ir(&self) -> bool {
