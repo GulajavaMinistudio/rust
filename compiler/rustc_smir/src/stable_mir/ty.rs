@@ -12,10 +12,12 @@ impl Ty {
 
 type Const = Opaque;
 pub(crate) type Region = Opaque;
+type Span = Opaque;
 
 #[derive(Clone, Debug)]
 pub enum TyKind {
     RigidTy(RigidTy),
+    Alias(AliasKind, AliasTy),
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +35,7 @@ pub enum RigidTy {
     RawPtr(Ty, Mutability),
     Ref(Region, Ty, Mutability),
     FnDef(FnDef, GenericArgs),
+    FnPtr(PolyFnSig),
     Closure(ClosureDef, GenericArgs),
     Generator(GeneratorDef, GenericArgs, Movability),
     Never,
@@ -84,7 +87,16 @@ pub struct ClosureDef(pub(crate) DefId);
 pub struct GeneratorDef(pub(crate) DefId);
 
 #[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ParamDef(pub(crate) DefId);
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BrNamedDef(pub(crate) DefId);
+
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AdtDef(pub(crate) DefId);
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AliasDef(pub(crate) DefId);
 
 #[derive(Clone, Debug)]
 pub struct GenericArgs(pub Vec<GenericArgKind>);
@@ -94,4 +106,89 @@ pub enum GenericArgKind {
     Lifetime(Region),
     Type(Ty),
     Const(Const),
+}
+
+#[derive(Clone, Debug)]
+pub enum AliasKind {
+    Projection,
+    Inherent,
+    Opaque,
+    Weak,
+}
+
+#[derive(Clone, Debug)]
+pub struct AliasTy {
+    pub def_id: AliasDef,
+    pub args: GenericArgs,
+}
+
+pub type PolyFnSig = Binder<FnSig>;
+
+#[derive(Clone, Debug)]
+pub struct FnSig {
+    pub inputs_and_output: Vec<Ty>,
+    pub c_variadic: bool,
+    pub unsafety: Unsafety,
+    pub abi: Abi,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Unsafety {
+    Unsafe,
+    Normal,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Abi {
+    Rust,
+    C { unwind: bool },
+    Cdecl { unwind: bool },
+    Stdcall { unwind: bool },
+    Fastcall { unwind: bool },
+    Vectorcall { unwind: bool },
+    Thiscall { unwind: bool },
+    Aapcs { unwind: bool },
+    Win64 { unwind: bool },
+    SysV64 { unwind: bool },
+    PtxKernel,
+    Msp430Interrupt,
+    X86Interrupt,
+    AmdGpuKernel,
+    EfiApi,
+    AvrInterrupt,
+    AvrNonBlockingInterrupt,
+    CCmseNonSecureCall,
+    Wasm,
+    System { unwind: bool },
+    RustIntrinsic,
+    RustCall,
+    PlatformIntrinsic,
+    Unadjusted,
+    RustCold,
+}
+
+#[derive(Clone, Debug)]
+pub struct Binder<T> {
+    pub value: T,
+    pub bound_vars: Vec<BoundVariableKind>,
+}
+
+#[derive(Clone, Debug)]
+pub enum BoundVariableKind {
+    Ty(BoundTyKind),
+    Region(BoundRegionKind),
+    Const,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum BoundTyKind {
+    Anon,
+    Param(ParamDef, String),
+}
+
+#[derive(Clone, Debug)]
+pub enum BoundRegionKind {
+    BrAnon(Option<Span>),
+    BrNamed(BrNamedDef, String),
+    BrEnv,
 }
