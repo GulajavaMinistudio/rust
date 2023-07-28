@@ -1219,15 +1219,24 @@ pub(crate) enum GenericBound {
 }
 
 impl GenericBound {
+    pub(crate) fn sized(cx: &mut DocContext<'_>) -> GenericBound {
+        Self::sized_with(cx, hir::TraitBoundModifier::None)
+    }
+
     pub(crate) fn maybe_sized(cx: &mut DocContext<'_>) -> GenericBound {
+        Self::sized_with(cx, hir::TraitBoundModifier::Maybe)
+    }
+
+    fn sized_with(cx: &mut DocContext<'_>, modifier: hir::TraitBoundModifier) -> GenericBound {
         let did = cx.tcx.require_lang_item(LangItem::Sized, None);
         let empty = ty::Binder::dummy(ty::GenericArgs::empty());
         let path = external_path(cx, did, false, ThinVec::new(), empty);
         inline::record_extern_fqn(cx, did, ItemType::Trait);
-        GenericBound::TraitBound(
-            PolyTrait { trait_: path, generic_params: Vec::new() },
-            hir::TraitBoundModifier::Maybe,
-        )
+        GenericBound::TraitBound(PolyTrait { trait_: path, generic_params: Vec::new() }, modifier)
+    }
+
+    pub(crate) fn is_trait_bound(&self) -> bool {
+        matches!(self, Self::TraitBound(..))
     }
 
     pub(crate) fn is_sized_bound(&self, cx: &DocContext<'_>) -> bool {
@@ -2201,6 +2210,17 @@ pub(crate) enum GenericArg {
 pub(crate) enum GenericArgs {
     AngleBracketed { args: Box<[GenericArg]>, bindings: ThinVec<TypeBinding> },
     Parenthesized { inputs: Box<[Type]>, output: Option<Box<Type>> },
+}
+
+impl GenericArgs {
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            GenericArgs::AngleBracketed { args, bindings } => {
+                args.is_empty() && bindings.is_empty()
+            }
+            GenericArgs::Parenthesized { inputs, output } => inputs.is_empty() && output.is_none(),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
