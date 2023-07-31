@@ -743,10 +743,10 @@ pub enum InvalidFromUtf8Diag {
     },
 }
 
-// cast_ref_to_mut.rs
+// reference_casting.rs
 #[derive(LintDiagnostic)]
-#[diag(lint_cast_ref_to_mut)]
-pub struct CastRefToMutDiag;
+#[diag(lint_invalid_reference_casting)]
+pub struct InvalidReferenceCastingDiag;
 
 // hidden_unicode_codepoints.rs
 #[derive(LintDiagnostic)]
@@ -1231,8 +1231,9 @@ pub enum NonUpperCaseGlobalSub {
 #[note]
 pub struct NoopMethodCallDiag<'a> {
     pub method: Symbol,
-    pub receiver_ty: Ty<'a>,
-    #[label]
+    pub orig_ty: Ty<'a>,
+    pub trait_: Symbol,
+    #[suggestion(code = "", applicability = "machine-applicable")]
     pub label: Span,
 }
 

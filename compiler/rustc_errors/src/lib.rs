@@ -1655,11 +1655,11 @@ impl HandlerInner {
         let backtrace = std::env::var_os("RUST_BACKTRACE").map_or(true, |x| &x != "0");
         for bug in bugs {
             if let Some(file) = self.ice_file.as_ref()
-                && let Ok(mut out) = std::fs::File::options().append(true).open(file)
+                && let Ok(mut out) = std::fs::File::options().create(true).append(true).open(file)
             {
                 let _ = write!(
                     &mut out,
-                    "\n\ndelayed span bug: {}\n{}",
+                    "delayed span bug: {}\n{}\n",
                     bug.inner.styled_message().iter().filter_map(|(msg, _)| msg.as_str()).collect::<String>(),
                     &bug.note
                 );
@@ -1720,13 +1720,11 @@ impl HandlerInner {
                 (count, delayed_count, as_bug) => {
                     if delayed_count > 0 {
                         panic!(
-                            "aborting after {} errors and {} delayed bugs due to `-Z treat-err-as-bug={}`",
-                            count, delayed_count, as_bug,
+                            "aborting after {count} errors and {delayed_count} delayed bugs due to `-Z treat-err-as-bug={as_bug}`",
                         )
                     } else {
                         panic!(
-                            "aborting after {} errors due to `-Z treat-err-as-bug={}`",
-                            count, as_bug,
+                            "aborting after {count} errors due to `-Z treat-err-as-bug={as_bug}`",
                         )
                     }
                 }
@@ -1862,13 +1860,29 @@ pub fn add_elided_lifetime_in_path_suggestion(
     }
     let anon_lts = vec!["'_"; n].join(", ");
     let suggestion =
-        if incl_angl_brckt { format!("<{}>", anon_lts) } else { format!("{}, ", anon_lts) };
+        if incl_angl_brckt { format!("<{anon_lts}>") } else { format!("{anon_lts}, ") };
 
     diag.subdiagnostic(IndicateAnonymousLifetime {
         span: insertion_span.shrink_to_hi(),
         count: n,
         suggestion,
     });
+}
+
+pub fn report_ambiguity_error<'a, G: EmissionGuarantee>(
+    db: &mut DiagnosticBuilder<'a, G>,
+    ambiguity: rustc_lint_defs::AmbiguityErrorDiag,
+) {
+    db.span_label(ambiguity.label_span, ambiguity.label_msg);
+    db.note(ambiguity.note_msg);
+    db.span_note(ambiguity.b1_span, ambiguity.b1_note_msg);
+    for help_msg in ambiguity.b1_help_msgs {
+        db.help(help_msg);
+    }
+    db.span_note(ambiguity.b2_span, ambiguity.b2_note_msg);
+    for help_msg in ambiguity.b2_help_msgs {
+        db.help(help_msg);
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]

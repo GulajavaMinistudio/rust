@@ -189,7 +189,7 @@ impl Flags {
             let build = Build::new(config);
             let paths = Builder::get_help(&build, subcommand);
             if let Some(s) = paths {
-                println!("{}", s);
+                println!("{s}");
             } else {
                 panic!("No paths available for subcommand `{}`", subcommand.as_str());
             }
@@ -366,7 +366,11 @@ pub enum Subcommand {
     /// Clean out build directories
     Clean {
         #[arg(long)]
+        /// Clean the entire build directory (not used by default)
         all: bool,
+        #[arg(long, value_name = "N")]
+        /// Clean a specific stage without touching other artifacts. By default, every stage is cleaned if this option is not used.
+        stage: Option<u32>,
     },
     /// Build distribution artifacts
     Dist,

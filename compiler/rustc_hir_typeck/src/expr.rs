@@ -1334,7 +1334,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 t_cast,
                 t.span,
                 expr.span,
-                self.param_env.constness(),
+                hir::Constness::NotConst,
             ) {
                 Ok(cast_check) => {
                     debug!(
@@ -1394,7 +1394,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let Some((
             _,
             hir::Node::Local(hir::Local { ty: Some(ty), .. })
-            | hir::Node::Item(hir::Item { kind: hir::ItemKind::Const(ty, _), .. }),
+            | hir::Node::Item(hir::Item { kind: hir::ItemKind::Const(ty, _, _), .. }),
         )) = parent_node
         else {
             return;
@@ -1428,7 +1428,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         // Create a new function context.
         let def_id = block.def_id;
-        let fcx = FnCtxt::new(self, self.param_env.with_const(), def_id);
+        let fcx = FnCtxt::new(self, self.param_env, def_id);
         crate::GatherLocalsVisitor::new(&fcx).visit_body(body);
 
         let ty = fcx.check_expr_with_expectation(&body.value, expected);
