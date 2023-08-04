@@ -1167,7 +1167,7 @@ impl<'a> Parser<'a> {
             DestructuredFloat::TrailingDot(sym, sym_span, dot_span) => {
                 assert!(suffix.is_none());
                 // Analogous to `Self::break_and_eat`
-                self.token_cursor.break_last_token = true;
+                self.break_last_token = true;
                 // This might work, in cases like `1. 2`, and might not,
                 // in cases like `offset_of!(Ty, 1.)`. It depends on what comes
                 // after the float-like token, and therefore we have to make
@@ -2338,7 +2338,7 @@ impl<'a> Parser<'a> {
         let lo = self.token.span;
         let attrs = self.parse_outer_attributes()?;
         self.collect_tokens_trailing_token(attrs, ForceCollect::No, |this, attrs| {
-            let pat = this.parse_pat_no_top_alt(Some(Expected::ParameterName))?;
+            let pat = this.parse_pat_no_top_alt(Some(Expected::ParameterName), None)?;
             let ty = if this.eat(&token::Colon) {
                 this.parse_ty()?
             } else {
@@ -2599,7 +2599,7 @@ impl<'a> Parser<'a> {
 
         // Recover from missing expression in `for` loop
         if matches!(expr.kind, ExprKind::Block(..))
-            && !matches!(self.token.kind, token::OpenDelim(token::Delimiter::Brace))
+            && !matches!(self.token.kind, token::OpenDelim(Delimiter::Brace))
             && self.may_recover()
         {
             self.sess
@@ -2781,7 +2781,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
             let pre_pat_snapshot = self.create_snapshot_for_diagnostic();
-            match self.parse_pat_no_top_alt(None) {
+            match self.parse_pat_no_top_alt(None, None) {
                 Ok(_pat) => {
                     if self.token.kind == token::FatArrow {
                         // Reached arm end.
