@@ -8,7 +8,7 @@ fi
 
 if [ "$NO_CHANGE_USER" = "" ]; then
   if [ "$LOCAL_USER_ID" != "" ]; then
-    useradd --shell /bin/bash -u $LOCAL_USER_ID -o -c "" -m user
+    id -u user &>/dev/null || useradd --shell /bin/bash -u $LOCAL_USER_ID -o -c "" -m user
     export HOME=/home/user
     unset LOCAL_USER_ID
 
@@ -170,6 +170,9 @@ trap datecheck EXIT
 # hasn't finished yet. Try to solve that problem by starting a very long-lived
 # sccache server at the start of the build, but no need to worry if this fails.
 SCCACHE_IDLE_TIMEOUT=10800 sccache --start-server || true
+
+# Our build may overwrite config.toml, so we remove it here
+rm -f config.toml
 
 $SRC/configure $RUST_CONFIGURE_ARGS
 
