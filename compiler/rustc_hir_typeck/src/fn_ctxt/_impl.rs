@@ -1349,7 +1349,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                     GenericParamDefKind::Const { has_default } => {
-                        if !infer_args && has_default {
+                        if !infer_args
+                            && has_default
+                            && !tcx.has_attr(param.def_id, sym::rustc_host)
+                        {
                             tcx.const_param_default(param.def_id)
                                 .instantiate(tcx, args.unwrap())
                                 .into()
@@ -1474,7 +1477,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let ty = self.resolve_vars_with_obligations(ty);
 
         if self.next_trait_solver()
-            && let ty::Alias(ty::Projection, _) = ty.kind()
+            && let ty::Alias(ty::Projection | ty::Inherent | ty::Weak, _) = ty.kind()
         {
             match self
                 .at(&self.misc(sp), self.param_env)
