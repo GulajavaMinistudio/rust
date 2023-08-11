@@ -9,11 +9,14 @@
 
 use crate::rustc_internal::{self, opaque};
 use crate::stable_mir::mir::{CopyNonOverlapping, UserTypeProjection, VariantIdx};
-use crate::stable_mir::ty::{FloatTy, IntTy, Movability, RigidTy, TyKind, UintTy};
+use crate::stable_mir::ty::{
+    allocation_filter, new_allocation, FloatTy, IntTy, Movability, RigidTy, TyKind, UintTy,
+};
 use crate::stable_mir::{self, Context};
 use rustc_hir as hir;
 use rustc_middle::mir::coverage::CodeRegion;
-use rustc_middle::mir::{self};
+use rustc_middle::mir::interpret::alloc_range;
+use rustc_middle::mir::{self, ConstantKind};
 use rustc_middle::ty::{self, Ty, TyCtxt, Variance};
 use rustc_span::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc_target::abi::FieldIdx;
@@ -54,6 +57,20 @@ impl<'tcx> Context for Tables<'tcx> {
         let def_id = self.trait_def_id(trait_def);
         let trait_def = self.tcx.trait_def(def_id);
         trait_def.stable(self)
+    }
+
+    fn all_trait_impls(&mut self) -> stable_mir::ImplTraitDecls {
+        self.tcx
+            .trait_impls_in_crate(LOCAL_CRATE)
+            .iter()
+            .map(|impl_def_id| self.impl_def(*impl_def_id))
+            .collect()
+    }
+
+    fn trait_impl(&mut self, impl_def: &stable_mir::ty::ImplDef) -> stable_mir::ty::ImplTrait {
+        let def_id = self.impl_trait_def_id(impl_def);
+        let impl_trait = self.tcx.impl_trait_ref(def_id).unwrap();
+        impl_trait.stable(self)
     }
 
     fn mir_body(&mut self, item: &stable_mir::CrateItem) -> stable_mir::mir::Body {
@@ -837,6 +854,19 @@ where
     }
 }
 
+impl<'tcx, S, V> Stable<'tcx> for ty::EarlyBinder<S>
+where
+    S: Stable<'tcx, T = V>,
+{
+    type T = stable_mir::ty::EarlyBinder<V>;
+
+    fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
+        use stable_mir::ty::EarlyBinder;
+
+        EarlyBinder { value: self.as_ref().skip_binder().stable(tables) }
+    }
+}
+
 impl<'tcx> Stable<'tcx> for ty::FnSig<'tcx> {
     type T = stable_mir::ty::FnSig;
     fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
@@ -877,6 +907,8 @@ impl<'tcx> Stable<'tcx> for ty::FnSig<'tcx> {
                 abi::Abi::PlatformIntrinsic => Abi::PlatformIntrinsic,
                 abi::Abi::Unadjusted => Abi::Unadjusted,
                 abi::Abi::RustCold => Abi::RustCold,
+                abi::Abi::RiscvInterruptM => Abi::RiscvInterruptM,
+                abi::Abi::RiscvInterruptS => Abi::RiscvInterruptS,
             },
         }
     }
@@ -1080,30 +1112,7 @@ impl<'tcx> Stable<'tcx> for mir::interpret::Allocation {
     type T = stable_mir::ty::Allocation;
 
     fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
-        let size = self.size();
-        let mut bytes: Vec<Option<u8>> = self
-            .inspect_with_uninit_and_ptr_outside_interpreter(0..size.bytes_usize())
-            .iter()
-            .copied()
-            .map(Some)
-            .collect();
-        for (i, b) in bytes.iter_mut().enumerate() {
-            if !self.init_mask().get(rustc_target::abi::Size::from_bytes(i)) {
-                *b = None;
-            }
-        }
-        stable_mir::ty::Allocation {
-            bytes: bytes,
-            provenance: {
-                let mut ptrs = Vec::new();
-                for (size, prov) in self.provenance().ptrs().iter() {
-                    ptrs.push((size.bytes_usize(), opaque(prov)));
-                }
-                stable_mir::ty::ProvenanceMap { ptrs }
-            },
-            align: self.align.bytes(),
-            mutability: self.mutability.stable(tables),
-        }
+        allocation_filter(self, alloc_range(rustc_target::abi::Size::ZERO, self.size()), tables)
     }
 }
 
@@ -1143,5 +1152,41 @@ impl<'tcx> Stable<'tcx> for ty::TraitDef {
             implement_via_object: self.implement_via_object,
             deny_explicit_impl: self.deny_explicit_impl,
         }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for rustc_middle::mir::ConstantKind<'tcx> {
+    type T = stable_mir::ty::ConstantKind;
+
+    fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
+        match self {
+            ConstantKind::Ty(c) => match c.kind() {
+                ty::Value(val) => {
+                    let const_val = tables.tcx.valtree_to_const_val((c.ty(), val));
+                    stable_mir::ty::ConstantKind::Allocated(new_allocation(self, const_val, tables))
+                }
+                _ => todo!(),
+            },
+            ConstantKind::Unevaluated(unev_const, ty) => {
+                stable_mir::ty::ConstantKind::Unevaluated(stable_mir::ty::UnevaluatedConst {
+                    ty: tables.intern_ty(*ty),
+                    def: tables.const_def(unev_const.def),
+                    args: unev_const.args.stable(tables),
+                    promoted: unev_const.promoted.map(|u| u.as_u32()),
+                })
+            }
+            ConstantKind::Val(val, _) => {
+                stable_mir::ty::ConstantKind::Allocated(new_allocation(self, *val, tables))
+            }
+        }
+    }
+}
+
+impl<'tcx> Stable<'tcx> for ty::TraitRef<'tcx> {
+    type T = stable_mir::ty::TraitRef;
+    fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
+        use stable_mir::ty::TraitRef;
+
+        TraitRef { def_id: rustc_internal::trait_def(self.def_id), args: self.args.stable(tables) }
     }
 }

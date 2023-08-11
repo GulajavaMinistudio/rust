@@ -510,9 +510,11 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         success(adjustments, ty, obligations)
     }
 
-    // &[T; n] or &mut [T; n] -> &[T]
-    // or &mut [T; n] -> &mut [T]
-    // or &Concrete -> &Trait, etc.
+    /// Performs [unsized coercion] by emulating a fulfillment loop on a
+    /// `CoerceUnsized` goal until all `CoerceUnsized` and `Unsize` goals
+    /// are successfully selected.
+    ///
+    /// [unsized coercion](https://doc.rust-lang.org/reference/type-coercions.html#unsized-coercions)
     #[instrument(skip(self), level = "debug")]
     fn coerce_unsized(&self, mut source: Ty<'tcx>, mut target: Ty<'tcx>) -> CoerceResult<'tcx> {
         source = self.shallow_resolve(source);
@@ -1007,15 +1009,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         expr: &hir::Expr<'_>,
         expr_ty: Ty<'tcx>,
-        target: Ty<'tcx>,
+        mut target: Ty<'tcx>,
         allow_two_phase: AllowTwoPhase,
         cause: Option<ObligationCause<'tcx>>,
     ) -> RelateResult<'tcx, Ty<'tcx>> {
         let source = self.try_structurally_resolve_type(expr.span, expr_ty);
-        let target = self.try_structurally_resolve_type(
-            cause.as_ref().map_or(expr.span, |cause| cause.span),
-            target,
-        );
+        if self.next_trait_solver() {
+            target = self.try_structurally_resolve_type(
+                cause.as_ref().map_or(expr.span, |cause| cause.span),
+                target,
+            );
+        }
         debug!("coercion::try({:?}: {:?} -> {:?})", expr, source, target);
 
         let cause =
@@ -1037,6 +1041,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// Returns false if the coercion creates any obligations that result in
     /// errors.
     pub fn can_coerce(&self, expr_ty: Ty<'tcx>, target: Ty<'tcx>) -> bool {
+        // FIXME(-Ztrait-solver=next): We need to structurally resolve both types here.
         let source = self.resolve_vars_with_obligations(expr_ty);
         debug!("coercion::can_with_predicates({:?} -> {:?})", source, target);
 
