@@ -1457,7 +1457,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // bound regions.
         let trait_ref = predicate.skip_binder().trait_ref;
 
-        coherence::trait_ref_is_knowable(self.tcx(), trait_ref)
+        coherence::trait_ref_is_knowable::<!>(self.tcx(), trait_ref, |ty| Ok(ty)).unwrap()
     }
 
     /// Returns `true` if the global caches can be used.
@@ -2118,14 +2118,11 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
         use self::BuiltinImplConditions::{Ambiguous, None, Where};
 
         match *self_ty.kind() {
-            ty::Infer(ty::IntVar(_))
-            | ty::Infer(ty::FloatVar(_))
-            | ty::FnDef(..)
-            | ty::FnPtr(_)
-            | ty::Error(_) => Where(ty::Binder::dummy(Vec::new())),
+            ty::FnDef(..) | ty::FnPtr(_) | ty::Error(_) => Where(ty::Binder::dummy(Vec::new())),
 
             ty::Uint(_)
             | ty::Int(_)
+            | ty::Infer(ty::IntVar(_) | ty::FloatVar(_))
             | ty::Bool
             | ty::Float(_)
             | ty::Char
