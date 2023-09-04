@@ -20,6 +20,7 @@ use crate::rustc_smir::Tables;
 
 pub mod mir;
 pub mod ty;
+pub mod visitor;
 
 /// Use String for now but we should replace it.
 pub type Symbol = String;
@@ -30,6 +31,10 @@ pub type CrateNum = usize;
 /// A unique identification number for each item accessible for the current compilation unit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DefId(pub(crate) usize);
+
+/// A unique identification number for each provenance
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AllocId(pub(crate) usize);
 
 /// A list of crate items.
 pub type CrateItems = Vec<CrateItem>;

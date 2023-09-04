@@ -2,12 +2,13 @@ use std::borrow::Cow;
 
 use either::Either;
 use rustc_ast::ast::InlineAsmOptions;
-use rustc_middle::mir::ProjectionElem;
-use rustc_middle::ty::layout::{FnAbiOf, LayoutOf, TyAndLayout};
-use rustc_middle::ty::Instance;
 use rustc_middle::{
     mir,
-    ty::{self, Ty},
+    ty::{
+        self,
+        layout::{FnAbiOf, LayoutOf, TyAndLayout},
+        Instance, Ty,
+    },
 };
 use rustc_target::abi::call::{ArgAbi, ArgAttribute, ArgAttributes, FnAbi, PassMode};
 use rustc_target::abi::{self, FieldIdx};
@@ -252,53 +253,93 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             .collect()
     }
 
+    /// Find the wrapped inner type of a transparent wrapper.
+    /// Must not be called on 1-ZST (as they don't have a uniquely defined "wrapped field").
+    fn unfold_transparent(&self, layout: TyAndLayout<'tcx>) -> TyAndLayout<'tcx> {
+        match layout.ty.kind() {
+            ty::Adt(adt_def, _) if adt_def.repr().transparent() => {
+                assert!(!adt_def.is_enum());
+                // Find the non-1-ZST field.
+                let mut non_1zst_fields = (0..layout.fields.count()).filter_map(|idx| {
+                    let field = layout.field(self, idx);
+                    if field.is_1zst() { None } else { Some(field) }
+                });
+                let first = non_1zst_fields.next().expect("`unfold_transparent` called on 1-ZST");
+                assert!(
+                    non_1zst_fields.next().is_none(),
+                    "more than one non-1-ZST field in a transparent type"
+                );
+
+                // Found it!
+                self.unfold_transparent(first)
+            }
+            // Not a transparent type, no further unfolding.
+            _ => layout,
+        }
+    }
+
+    /// Check if these two layouts look like they are fn-ABI-compatible.
+    /// (We also compare the `PassMode`, so this doesn't have to check everything. But it turns out
+    /// that only checking the `PassMode` is insufficient.)
+    fn layout_compat(
+        &self,
+        caller_layout: TyAndLayout<'tcx>,
+        callee_layout: TyAndLayout<'tcx>,
+    ) -> bool {
+        if caller_layout.ty == callee_layout.ty {
+            // Fast path: equal types are definitely compatible.
+            return true;
+        }
+
+        match (caller_layout.abi, callee_layout.abi) {
+            // If both sides have Scalar/Vector/ScalarPair ABI, we can easily directly compare them.
+            // Different valid ranges are okay (the validity check will complain if this leads to
+            // invalid transmutes). Different signs are *not* okay on some targets (e.g. `extern
+            // "C"` on `s390x` where small integers are passed zero/sign-extended in large
+            // registers), so we generally reject them to increase portability.
+            // NOTE: this is *not* a stable guarantee! It just reflects a property of our current
+            // ABIs. It's also fragile; the same pair of types might be considered ABI-compatible
+            // when used directly by-value but not considered compatible as a struct field or array
+            // element.
+            (abi::Abi::Scalar(caller), abi::Abi::Scalar(callee)) => {
+                caller.primitive() == callee.primitive()
+            }
+            (
+                abi::Abi::Vector { element: caller_element, count: caller_count },
+                abi::Abi::Vector { element: callee_element, count: callee_count },
+            ) => {
+                caller_element.primitive() == callee_element.primitive()
+                    && caller_count == callee_count
+            }
+            (abi::Abi::ScalarPair(caller1, caller2), abi::Abi::ScalarPair(callee1, callee2)) => {
+                caller1.primitive() == callee1.primitive()
+                    && caller2.primitive() == callee2.primitive()
+            }
+            (abi::Abi::Aggregate { .. }, abi::Abi::Aggregate { .. }) => {
+                // Aggregates are compatible only if they newtype-wrap the same type, or if they are both 1-ZST.
+                // (The latter part is needed to ensure e.g. that `struct Zst` is compatible with `struct Wrap((), Zst)`.)
+                // This is conservative, but also means that our check isn't quite so heavily dependent on the `PassMode`,
+                // which means having ABI-compatibility on one target is much more likely to imply compatibility for other targets.
+                if caller_layout.is_1zst() || callee_layout.is_1zst() {
+                    // If either is a 1-ZST, both must be.
+                    caller_layout.is_1zst() && callee_layout.is_1zst()
+                } else {
+                    // Neither is a 1-ZST, so we can check what they are wrapping.
+                    self.unfold_transparent(caller_layout).ty
+                        == self.unfold_transparent(callee_layout).ty
+                }
+            }
+            // What remains is `Abi::Uninhabited` (which can never be passed anyway) and
+            // mismatching ABIs, that should all be rejected.
+            _ => false,
+        }
+    }
+
     fn check_argument_compat(
+        &self,
         caller_abi: &ArgAbi<'tcx, Ty<'tcx>>,
         callee_abi: &ArgAbi<'tcx, Ty<'tcx>>,
     ) -> bool {
-        let primitive_abi_compat = |a1: abi::Primitive, a2: abi::Primitive| -> bool {
-            match (a1, a2) {
-                // For integers, ignore the sign.
-                (abi::Primitive::Int(int_ty1, _sign1), abi::Primitive::Int(int_ty2, _sign2)) => {
-                    int_ty1 == int_ty2
-                }
-                // For everything else we require full equality.
-                _ => a1 == a2,
-            }
-        };
-        // Heuristic for type comparison.
-        let layout_compat = || {
-            if caller_abi.layout.ty == callee_abi.layout.ty {
-                // No question
-                return true;
-            }
-            if caller_abi.layout.is_unsized() || callee_abi.layout.is_unsized() {
-                // No, no, no. We require the types to *exactly* match for unsized arguments. If
-                // these are somehow unsized "in a different way" (say, `dyn Trait` vs `[i32]`),
-                // then who knows what happens.
-                return false;
-            }
-            // This is tricky. Some ABIs split aggregates up into multiple registers etc, so we have
-            // to be super careful here. For the scalar ABIs we conveniently already have all the
-            // newtypes unwrapped etc, so in those cases we can just compare the scalar components.
-            // Everything else we just reject for now.
-            match (caller_abi.layout.abi, callee_abi.layout.abi) {
-                // Different valid ranges are okay (the validity check will complain if this leads
-                // to invalid transmutes).
-                (abi::Abi::Scalar(caller), abi::Abi::Scalar(callee)) => {
-                    primitive_abi_compat(caller.primitive(), callee.primitive())
-                }
-                (
-                    abi::Abi::ScalarPair(caller1, caller2),
-                    abi::Abi::ScalarPair(callee1, callee2),
-                ) => {
-                    primitive_abi_compat(caller1.primitive(), callee1.primitive())
-                        && primitive_abi_compat(caller2.primitive(), callee2.primitive())
-                }
-                // Be conservative.
-                _ => false,
-            }
-        };
         // When comparing the PassMode, we have to be smart about comparing the attributes.
         let arg_attr_compat = |a1: &ArgAttributes, a2: &ArgAttributes| {
             // There's only one regular attribute that matters for the call ABI: InReg.
@@ -333,23 +374,29 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             _ => false,
         };
 
-        // We have to check both. `layout_compat` is needed to reject e.g. `i32` vs `f32`,
-        // which is not reflected in `PassMode`. `mode_compat` is needed to reject `u8` vs `bool`,
-        // which have the same `abi::Primitive` but different `arg_ext`.
-        if layout_compat() && mode_compat() {
+        // Ideally `PassMode` would capture everything there is about argument passing, but that is
+        // not the case: in `FnAbi::llvm_type`, also parts of the layout and type information are
+        // used. So we need to check that *both* sufficiently agree to ensures the arguments are
+        // compatible.
+        // For instance, `layout_compat` is needed to reject `i32` vs `f32`, which is not reflected
+        // in `PassMode`. `mode_compat` is needed to reject `u8` vs `bool`, which have the same
+        // `abi::Primitive` but different `arg_ext`.
+        if self.layout_compat(caller_abi.layout, callee_abi.layout) && mode_compat() {
             // Something went very wrong if our checks don't even imply that the layout is the same.
             assert!(
                 caller_abi.layout.size == callee_abi.layout.size
                     && caller_abi.layout.align.abi == callee_abi.layout.align.abi
+                    && caller_abi.layout.is_sized() == callee_abi.layout.is_sized()
             );
             return true;
+        } else {
+            trace!(
+                "check_argument_compat: incompatible ABIs:\ncaller: {:?}\ncallee: {:?}",
+                caller_abi,
+                callee_abi
+            );
+            return false;
         }
-        trace!(
-            "check_argument_compat: incompatible ABIs:\ncaller: {:?}\ncallee: {:?}",
-            caller_abi,
-            callee_abi
-        );
-        return false;
     }
 
     /// Initialize a single callee argument, checking the types for compatibility.
@@ -379,7 +426,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             throw_ub_custom!(fluent::const_eval_not_enough_caller_args);
         };
         // Check compatibility
-        if !Self::check_argument_compat(caller_abi, callee_abi) {
+        if !self.check_argument_compat(caller_abi, callee_abi) {
             let callee_ty = format!("{}", callee_ty);
             let caller_ty = format!("{}", caller_arg.layout().ty);
             throw_ub_custom!(
@@ -612,7 +659,10 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                             };
                             for (i, field_ty) in fields.iter().enumerate() {
                                 let dest = dest.project_deeper(
-                                    &[ProjectionElem::Field(FieldIdx::from_usize(i), field_ty)],
+                                    &[mir::ProjectionElem::Field(
+                                        FieldIdx::from_usize(i),
+                                        field_ty,
+                                    )],
                                     *self.tcx,
                                 );
                                 let callee_abi = callee_args_abis.next().unwrap();
@@ -649,7 +699,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                         throw_ub_custom!(fluent::const_eval_too_many_caller_args);
                     }
                     // Don't forget to check the return type!
-                    if !Self::check_argument_compat(&caller_fn_abi.ret, &callee_fn_abi.ret) {
+                    if !self.check_argument_compat(&caller_fn_abi.ret, &callee_fn_abi.ret) {
                         let callee_ty = format!("{}", callee_fn_abi.ret.layout.ty);
                         let caller_ty = format!("{}", caller_fn_abi.ret.layout.ty);
                         throw_ub_custom!(

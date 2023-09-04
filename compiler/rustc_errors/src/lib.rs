@@ -55,7 +55,9 @@ use std::num::NonZeroUsize;
 use std::panic;
 use std::path::{Path, PathBuf};
 
-use termcolor::{Color, ColorSpec};
+// Used by external projects such as `rust-gpu`.
+// See https://github.com/rust-lang/rust/pull/115393.
+pub use termcolor::{Color, ColorSpec, WriteColor};
 
 pub mod annotate_snippet_emitter_writer;
 mod diagnostic;

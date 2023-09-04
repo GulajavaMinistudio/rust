@@ -1,5 +1,5 @@
 //! Module that implements what will become the rustc side of Stable MIR.
-//!
+
 //! This module is responsible for building Stable MIR components from internal components.
 //!
 //! This module is not intended to be invoked directly by users. It will eventually
@@ -9,18 +9,17 @@
 
 use crate::rustc_internal::{self, opaque};
 use crate::stable_mir::mir::{CopyNonOverlapping, UserTypeProjection, VariantIdx};
-use crate::stable_mir::ty::{
-    allocation_filter, new_allocation, Const, FloatTy, GenericParamDef, IntTy, Movability, RigidTy,
-    TyKind, UintTy,
-};
+use crate::stable_mir::ty::{FloatTy, GenericParamDef, IntTy, Movability, RigidTy, TyKind, UintTy};
 use crate::stable_mir::{self, Context};
 use rustc_hir as hir;
-use rustc_middle::mir::interpret::alloc_range;
+use rustc_middle::mir::interpret::{alloc_range, AllocId};
 use rustc_middle::mir::{self, ConstantKind};
 use rustc_middle::ty::{self, Ty, TyCtxt, Variance};
 use rustc_span::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc_target::abi::FieldIdx;
 use tracing::debug;
+
+mod alloc;
 
 impl<'tcx> Context for Tables<'tcx> {
     fn local_crate(&self) -> stable_mir::Crate {
@@ -126,6 +125,7 @@ impl<'tcx> Context for Tables<'tcx> {
 pub struct Tables<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub def_ids: Vec<DefId>,
+    pub alloc_ids: Vec<AllocId>,
     pub types: Vec<Ty<'tcx>>,
 }
 
@@ -205,8 +205,7 @@ impl<'tcx> Stable<'tcx> for mir::Rvalue<'tcx> {
         match self {
             Use(op) => stable_mir::mir::Rvalue::Use(op.stable(tables)),
             Repeat(op, len) => {
-                let cnst = ConstantKind::from_const(*len, tables.tcx);
-                let len = Const { literal: cnst.stable(tables) };
+                let len = len.stable(tables);
                 stable_mir::mir::Rvalue::Repeat(op.stable(tables), len)
             }
             Ref(region, kind, place) => stable_mir::mir::Rvalue::Ref(
@@ -394,8 +393,7 @@ impl<'tcx> Stable<'tcx> for ty::TermKind<'tcx> {
         match self {
             ty::TermKind::Ty(ty) => TermKind::Type(tables.intern_ty(*ty)),
             ty::TermKind::Const(cnst) => {
-                let cnst = ConstantKind::from_const(*cnst, tables.tcx);
-                let cnst = Const { literal: cnst.stable(tables) };
+                let cnst = cnst.stable(tables);
                 TermKind::Const(cnst)
             }
         }
@@ -1083,8 +1081,32 @@ impl<'tcx> Stable<'tcx> for ty::Const<'tcx> {
     type T = stable_mir::ty::Const;
 
     fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
-        let cnst = ConstantKind::from_const(*self, tables.tcx);
-        stable_mir::ty::Const { literal: cnst.stable(tables) }
+        stable_mir::ty::Const {
+            literal: match self.kind() {
+                ty::Value(val) => {
+                    let const_val = tables.tcx.valtree_to_const_val((self.ty(), val));
+                    stable_mir::ty::ConstantKind::Allocated(alloc::new_allocation(
+                        self.ty(),
+                        const_val,
+                        tables,
+                    ))
+                }
+                ty::ParamCt(param) => stable_mir::ty::ConstantKind::ParamCt(opaque(&param)),
+                ty::ErrorCt(_) => unreachable!(),
+                ty::InferCt(_) => unreachable!(),
+                ty::BoundCt(_, _) => unimplemented!(),
+                ty::PlaceholderCt(_) => unimplemented!(),
+                ty::Unevaluated(uv) => {
+                    stable_mir::ty::ConstantKind::Unevaluated(stable_mir::ty::UnevaluatedConst {
+                        ty: tables.intern_ty(self.ty()),
+                        def: tables.const_def(uv.def),
+                        args: uv.args.stable(tables),
+                        promoted: None,
+                    })
+                }
+                ty::ExprCt(_) => unimplemented!(),
+            },
+        }
     }
 }
 
@@ -1108,7 +1130,11 @@ impl<'tcx> Stable<'tcx> for mir::interpret::Allocation {
     type T = stable_mir::ty::Allocation;
 
     fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
-        allocation_filter(self, alloc_range(rustc_target::abi::Size::ZERO, self.size()), tables)
+        alloc::allocation_filter(
+            self,
+            alloc_range(rustc_target::abi::Size::ZERO, self.size()),
+            tables,
+        )
     }
 }
 
@@ -1155,26 +1181,18 @@ impl<'tcx> Stable<'tcx> for rustc_middle::mir::ConstantKind<'tcx> {
     type T = stable_mir::ty::ConstantKind;
 
     fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
-        match self {
-            ConstantKind::Ty(c) => match c.kind() {
-                ty::Value(val) => {
-                    let const_val = tables.tcx.valtree_to_const_val((c.ty(), val));
-                    stable_mir::ty::ConstantKind::Allocated(new_allocation(self, const_val, tables))
-                }
-                ty::ParamCt(param) => stable_mir::ty::ConstantKind::ParamCt(opaque(&param)),
-                ty::ErrorCt(_) => unreachable!(),
-                _ => unimplemented!(),
-            },
+        match *self {
+            ConstantKind::Ty(c) => c.stable(tables).literal,
             ConstantKind::Unevaluated(unev_const, ty) => {
                 stable_mir::ty::ConstantKind::Unevaluated(stable_mir::ty::UnevaluatedConst {
-                    ty: tables.intern_ty(*ty),
+                    ty: tables.intern_ty(ty),
                     def: tables.const_def(unev_const.def),
                     args: unev_const.args.stable(tables),
                     promoted: unev_const.promoted.map(|u| u.as_u32()),
                 })
             }
-            ConstantKind::Val(val, _) => {
-                stable_mir::ty::ConstantKind::Allocated(new_allocation(self, *val, tables))
+            ConstantKind::Val(val, ty) => {
+                stable_mir::ty::ConstantKind::Allocated(alloc::new_allocation(ty, val, tables))
             }
         }
     }
