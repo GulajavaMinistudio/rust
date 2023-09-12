@@ -84,7 +84,7 @@ impl<'tcx> Context for Tables<'tcx> {
 
     fn mir_body(&mut self, item: stable_mir::DefId) -> stable_mir::mir::Body {
         let def_id = self[item];
-        let mir = self.tcx.optimized_mir(def_id);
+        let mir = self.tcx.instance_mir(ty::InstanceDef::Item(def_id));
         stable_mir::mir::Body {
             blocks: mir
                 .basic_blocks
@@ -1297,7 +1297,7 @@ impl<'tcx> Stable<'tcx> for rustc_middle::ty::GenericParamDefKind {
             ty::GenericParamDefKind::Type { has_default, synthetic } => {
                 GenericParamDefKind::Type { has_default: *has_default, synthetic: *synthetic }
             }
-            ty::GenericParamDefKind::Const { has_default } => {
+            ty::GenericParamDefKind::Const { has_default, is_host_effect: _ } => {
                 GenericParamDefKind::Const { has_default: *has_default }
             }
         }
