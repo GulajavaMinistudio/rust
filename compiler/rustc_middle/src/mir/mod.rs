@@ -2297,7 +2297,11 @@ pub struct Constant<'tcx> {
 #[derive(Clone, Copy, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable, Debug)]
 #[derive(Lift, TypeFoldable, TypeVisitable)]
 pub enum ConstantKind<'tcx> {
-    /// This constant came from the type system
+    /// This constant came from the type system.
+    ///
+    /// Any way of turning `ty::Const` into `ConstValue` should go through `valtree_to_const_val`;
+    /// this ensures that we consistently produce "clean" values without data in the padding or
+    /// anything like that.
     Ty(ty::Const<'tcx>),
 
     /// An unevaluated mir constant which is not part of the type system.
@@ -2373,23 +2377,19 @@ impl<'tcx> ConstantKind<'tcx> {
         param_env: ty::ParamEnv<'tcx>,
         span: Option<Span>,
     ) -> Result<interpret::ConstValue<'tcx>, ErrorHandled> {
-        let (uneval, param_env) = match self {
+        match self {
             ConstantKind::Ty(c) => {
-                if let ty::ConstKind::Unevaluated(uneval) = c.kind() {
-                    // Avoid the round-trip via valtree, evaluate directly to ConstValue.
-                    let (param_env, uneval) = uneval.prepare_for_eval(tcx, param_env);
-                    (uneval.expand(), param_env)
-                } else {
-                    // It's already a valtree, or an error.
-                    let val = c.eval(tcx, param_env, span)?;
-                    return Ok(tcx.valtree_to_const_val((self.ty(), val)));
-                }
+                // We want to consistently have a "clean" value for type system constants (i.e., no
+                // data hidden in the padding), so we always go through a valtree here.
+                let val = c.eval(tcx, param_env, span)?;
+                Ok(tcx.valtree_to_const_val((self.ty(), val)))
             }
-            ConstantKind::Unevaluated(uneval, _) => (uneval, param_env),
-            ConstantKind::Val(val, _) => return Ok(val),
-        };
-        // FIXME: We might want to have a `try_eval`-like function on `Unevaluated`
-        tcx.const_eval_resolve(param_env, uneval, span)
+            ConstantKind::Unevaluated(uneval, _) => {
+                // FIXME: We might want to have a `try_eval`-like function on `Unevaluated`
+                tcx.const_eval_resolve(param_env, uneval, span)
+            }
+            ConstantKind::Val(val, _) => Ok(val),
+        }
     }
 
     /// Normalizes the constant to a value or an error if possible.
@@ -2605,10 +2605,10 @@ impl<'tcx> ConstantKind<'tcx> {
     pub fn from_ty_const(c: ty::Const<'tcx>, tcx: TyCtxt<'tcx>) -> Self {
         match c.kind() {
             ty::ConstKind::Value(valtree) => {
+                // Make sure that if `c` is normalized, then the return value is normalized.
                 let const_val = tcx.valtree_to_const_val((c.ty(), valtree));
                 Self::Val(const_val, c.ty())
             }
-            ty::ConstKind::Unevaluated(uv) => Self::Unevaluated(uv.expand(), c.ty()),
             _ => Self::Ty(c),
         }
     }
@@ -2887,35 +2887,21 @@ fn pretty_print_const_value<'tcx>(
         let u8_type = tcx.types.u8;
         match (ct, ty.kind()) {
             // Byte/string slices, printed as (byte) string literals.
-            (ConstValue::Slice { data, start, end }, ty::Ref(_, inner, _)) => {
-                match inner.kind() {
-                    ty::Slice(t) => {
-                        if *t == u8_type {
-                            // The `inspect` here is okay since we checked the bounds, and `u8` carries
-                            // no provenance (we have an active slice reference here). We don't use
-                            // this result to affect interpreter execution.
-                            let byte_str = data
-                                .inner()
-                                .inspect_with_uninit_and_ptr_outside_interpreter(start..end);
-                            pretty_print_byte_str(fmt, byte_str)?;
-                            return Ok(());
-                        }
-                    }
-                    ty::Str => {
-                        // The `inspect` here is okay since we checked the bounds, and `str` carries
-                        // no provenance (we have an active `str` reference here). We don't use this
-                        // result to affect interpreter execution.
-                        let slice = data
-                            .inner()
-                            .inspect_with_uninit_and_ptr_outside_interpreter(start..end);
-                        fmt.write_str(&format!("{:?}", String::from_utf8_lossy(slice)))?;
-                        return Ok(());
-                    }
-                    _ => {}
+            (_, ty::Ref(_, inner_ty, _)) if matches!(inner_ty.kind(), ty::Str) => {
+                if let Some(data) = ct.try_get_slice_bytes_for_diagnostics(tcx) {
+                    fmt.write_str(&format!("{:?}", String::from_utf8_lossy(data)))?;
+                    return Ok(());
                 }
             }
-            (ConstValue::ByRef { alloc, offset }, ty::Array(t, n)) if *t == u8_type => {
+            (_, ty::Ref(_, inner_ty, _)) if matches!(inner_ty.kind(), ty::Slice(t) if *t == u8_type) => {
+                if let Some(data) = ct.try_get_slice_bytes_for_diagnostics(tcx) {
+                    pretty_print_byte_str(fmt, data)?;
+                    return Ok(());
+                }
+            }
+            (ConstValue::Indirect { alloc_id, offset }, ty::Array(t, n)) if *t == u8_type => {
                 let n = n.try_to_target_usize(tcx).unwrap();
+                let alloc = tcx.global_alloc(alloc_id).unwrap_memory();
                 // cast is ok because we already checked for pointer size (32 or 64 bit) above
                 let range = AllocRange { start: offset, size: Size::from_bytes(n) };
                 let byte_str = alloc.inner().get_bytes_strip_provenance(&tcx, range).unwrap();
