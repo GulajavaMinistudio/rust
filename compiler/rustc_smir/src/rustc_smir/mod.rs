@@ -979,13 +979,11 @@ impl<'tcx> Stable<'tcx> for ty::BoundTyKind {
 impl<'tcx> Stable<'tcx> for ty::BoundRegionKind {
     type T = stable_mir::ty::BoundRegionKind;
 
-    fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
+    fn stable(&self, _: &mut Tables<'tcx>) -> Self::T {
         use stable_mir::ty::BoundRegionKind;
 
         match self {
-            ty::BoundRegionKind::BrAnon(option_span) => {
-                BoundRegionKind::BrAnon(option_span.map(|span| span.stable(tables)))
-            }
+            ty::BoundRegionKind::BrAnon => BoundRegionKind::BrAnon,
             ty::BoundRegionKind::BrNamed(def_id, symbol) => {
                 BoundRegionKind::BrNamed(rustc_internal::br_named_def(*def_id), symbol.to_string())
             }
@@ -1128,11 +1126,7 @@ impl<'tcx> Stable<'tcx> for Ty<'tcx> {
             ty::Bound(debruijn_idx, bound_ty) => {
                 TyKind::Bound(debruijn_idx.as_usize(), bound_ty.stable(tables))
             }
-            ty::Placeholder(..)
-            | ty::GeneratorWitness(_)
-            | ty::GeneratorWitnessMIR(_, _)
-            | ty::Infer(_)
-            | ty::Error(_) => {
+            ty::Placeholder(..) | ty::GeneratorWitness(..) | ty::Infer(_) | ty::Error(_) => {
                 unreachable!();
             }
         }

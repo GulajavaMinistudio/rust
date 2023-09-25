@@ -1001,11 +1001,11 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     AggregateKind::Closure(def_id, args) => ty::tls::with(|tcx| {
                         let name = if tcx.sess.opts.unstable_opts.span_free_formats {
                             let args = tcx.lift(args).unwrap();
-                            format!("[closure@{}]", tcx.def_path_str_with_args(def_id, args),)
+                            format!("{{closure@{}}}", tcx.def_path_str_with_args(def_id, args),)
                         } else {
                             let span = tcx.def_span(def_id);
                             format!(
-                                "[closure@{}]",
+                                "{{closure@{}}}",
                                 tcx.sess.source_map().span_to_diagnostic_string(span)
                             )
                         };
@@ -1029,7 +1029,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     }),
 
                     AggregateKind::Generator(def_id, _, _) => ty::tls::with(|tcx| {
-                        let name = format!("[generator@{:?}]", tcx.def_span(def_id));
+                        let name = format!("{{generator@{:?}}}", tcx.def_span(def_id));
                         let mut struct_fmt = fmt.debug_struct(&name);
 
                         // FIXME(project-rfc-2229#48): This should be a list of capture names/places
@@ -1691,7 +1691,7 @@ fn pretty_print_const_value_tcx<'tcx>(
         (_, ty::Array(..) | ty::Tuple(..) | ty::Adt(..)) if !ty.has_non_region_param() => {
             let ct = tcx.lift(ct).unwrap();
             let ty = tcx.lift(ty).unwrap();
-            if let Some(contents) = tcx.try_destructure_mir_constant_for_diagnostics((ct, ty)) {
+            if let Some(contents) = tcx.try_destructure_mir_constant_for_diagnostics(ct, ty) {
                 let fields: Vec<(ConstValue<'_>, Ty<'_>)> = contents.fields.to_vec();
                 match *ty.kind() {
                     ty::Array(..) => {
