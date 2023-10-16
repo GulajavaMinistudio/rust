@@ -121,16 +121,14 @@ impl EarlyLintPass for WhileTrue {
         {
             let condition_span = e.span.with_hi(cond.span.hi());
             let replace = format!(
-                            "{}loop",
-                            label.map_or_else(String::new, |label| format!(
-                                "{}: ",
-                                label.ident,
-                            ))
-                        );
-            cx.emit_spanned_lint(WHILE_TRUE, condition_span, BuiltinWhileTrue {
-                suggestion: condition_span,
-                replace,
-            });
+                "{}loop",
+                label.map_or_else(String::new, |label| format!("{}: ", label.ident,))
+            );
+            cx.emit_spanned_lint(
+                WHILE_TRUE,
+                condition_span,
+                BuiltinWhileTrue { suggestion: condition_span, replace },
+            );
         }
     }
 }
@@ -164,7 +162,9 @@ declare_lint_pass!(BoxPointers => [BOX_POINTERS]);
 impl BoxPointers {
     fn check_heap_type(&self, cx: &LateContext<'_>, span: Span, ty: Ty<'_>) {
         for leaf in ty.walk() {
-            if let GenericArgKind::Type(leaf_ty) = leaf.unpack() && leaf_ty.is_box() {
+            if let GenericArgKind::Type(leaf_ty) = leaf.unpack()
+                && leaf_ty.is_box()
+            {
                 cx.emit_spanned_lint(BOX_POINTERS, span, BuiltinBoxPointers { ty });
             }
         }
@@ -681,7 +681,8 @@ impl<'tcx> LateLintPass<'tcx> for MissingCopyImplementations {
         // We shouldn't recommend implementing `Copy` on stateful things,
         // such as iterators.
         if let Some(iter_trait) = cx.tcx.get_diagnostic_item(sym::Iterator)
-            && cx.tcx
+            && cx
+                .tcx
                 .infer_ctxt()
                 .build()
                 .type_implements_trait(iter_trait, [ty], param_env)
@@ -1298,10 +1299,14 @@ impl<'tcx> LateLintPass<'tcx> for UngatedAsyncFnTrackCaller {
             // Now, check if the function has the `#[track_caller]` attribute
             && let Some(attr) = cx.tcx.get_attr(def_id, sym::track_caller)
         {
-            cx.emit_spanned_lint(UNGATED_ASYNC_FN_TRACK_CALLER, attr.span, BuiltinUngatedAsyncFnTrackCaller {
-                label: span,
-                parse_sess: &cx.tcx.sess.parse_sess,
-            });
+            cx.emit_spanned_lint(
+                UNGATED_ASYNC_FN_TRACK_CALLER,
+                attr.span,
+                BuiltinUngatedAsyncFnTrackCaller {
+                    label: span,
+                    parse_sess: &cx.tcx.sess.parse_sess,
+                },
+            );
         }
     }
 }
@@ -2258,23 +2263,19 @@ impl EarlyLintPass for IncompleteInternalFeatures {
             .chain(features.declared_lib_features.iter().map(|(name, span)| (name, span)))
             .filter(|(&name, _)| features.incomplete(name) || features.internal(name))
             .for_each(|(&name, &span)| {
-                let note = rustc_feature::find_feature_issue(name, GateIssue::Language)
-                    .map(|n| BuiltinFeatureIssueNote { n });
-
                 if features.incomplete(name) {
+                    let note = rustc_feature::find_feature_issue(name, GateIssue::Language)
+                        .map(|n| BuiltinFeatureIssueNote { n });
                     let help =
                         HAS_MIN_FEATURES.contains(&name).then_some(BuiltinIncompleteFeaturesHelp);
+
                     cx.emit_spanned_lint(
                         INCOMPLETE_FEATURES,
                         span,
                         BuiltinIncompleteFeatures { name, note, help },
                     );
                 } else {
-                    cx.emit_spanned_lint(
-                        INTERNAL_FEATURES,
-                        span,
-                        BuiltinInternalFeatures { name, note },
-                    );
+                    cx.emit_spanned_lint(INTERNAL_FEATURES, span, BuiltinInternalFeatures { name });
                 }
             });
     }

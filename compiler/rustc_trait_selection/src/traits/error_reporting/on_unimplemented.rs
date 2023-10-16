@@ -1,6 +1,6 @@
 use super::{ObligationCauseCode, PredicateObligation};
 use crate::infer::error_reporting::TypeErrCtxt;
-use rustc_ast::{MetaItem, NestedMetaItem};
+use rustc_ast::{Attribute, MetaItem, NestedMetaItem};
 use rustc_attr as attr;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::{struct_span_err, ErrorGuaranteed};
@@ -368,7 +368,9 @@ impl<'tcx> OnUnimplementedDirective {
                 .meta_item()
                 .ok_or_else(|| tcx.sess.emit_err(InvalidOnClauseInOnUnimplemented { span }))?;
             attr::eval_condition(cond, &tcx.sess.parse_sess, Some(tcx.features()), &mut |cfg| {
-                if let Some(value) = cfg.value && let Err(guar) = parse_value(value) {
+                if let Some(value) = cfg.value
+                    && let Err(guar) = parse_value(value)
+                {
                     errored = Some(guar);
                 }
                 true
@@ -474,18 +476,40 @@ impl<'tcx> OnUnimplementedDirective {
     }
 
     pub fn of_item(tcx: TyCtxt<'tcx>, item_def_id: DefId) -> Result<Option<Self>, ErrorGuaranteed> {
-        let mut is_diagnostic_namespace_variant = false;
-        let Some(attr) = tcx.get_attr(item_def_id, sym::rustc_on_unimplemented).or_else(|| {
-            if tcx.features().diagnostic_namespace {
-                is_diagnostic_namespace_variant = true;
-                tcx.get_attrs_by_path(item_def_id, &[sym::diagnostic, sym::on_unimplemented]).next()
-            } else {
-                None
-            }
-        }) else {
-            return Ok(None);
-        };
+        if let Some(attr) = tcx.get_attr(item_def_id, sym::rustc_on_unimplemented) {
+            return Self::parse_attribute(attr, false, tcx, item_def_id);
+        } else if tcx.features().diagnostic_namespace {
+            tcx.get_attrs_by_path(item_def_id, &[sym::diagnostic, sym::on_unimplemented])
+                .filter_map(|attr| Self::parse_attribute(attr, true, tcx, item_def_id).transpose())
+                .try_fold(None, |aggr: Option<Self>, directive| {
+                    let directive = directive?;
+                    if let Some(aggr) = aggr {
+                        let mut subcommands = aggr.subcommands;
+                        subcommands.extend(directive.subcommands);
+                        Ok(Some(Self {
+                            condition: aggr.condition.or(directive.condition),
+                            subcommands,
+                            message: aggr.message.or(directive.message),
+                            label: aggr.label.or(directive.label),
+                            note: aggr.note.or(directive.note),
+                            parent_label: aggr.parent_label.or(directive.parent_label),
+                            append_const_msg: aggr.append_const_msg.or(directive.append_const_msg),
+                        }))
+                    } else {
+                        Ok(Some(directive))
+                    }
+                })
+        } else {
+            Ok(None)
+        }
+    }
 
+    fn parse_attribute(
+        attr: &Attribute,
+        is_diagnostic_namespace_variant: bool,
+        tcx: TyCtxt<'tcx>,
+        item_def_id: DefId,
+    ) -> Result<Option<Self>, ErrorGuaranteed> {
         let result = if let Some(items) = attr.meta_item_list() {
             Self::parse(tcx, item_def_id, &items, attr.span, true, is_diagnostic_namespace_variant)
         } else if let Some(value) = attr.value_str() {
@@ -547,18 +571,20 @@ impl<'tcx> OnUnimplementedDirective {
             options.iter().filter_map(|(k, v)| v.clone().map(|v| (*k, v))).collect();
 
         for command in self.subcommands.iter().chain(Some(self)).rev() {
-            if let Some(ref condition) = command.condition && !attr::eval_condition(
-                condition,
-                &tcx.sess.parse_sess,
-                Some(tcx.features()),
-                &mut |cfg| {
-                    let value = cfg.value.map(|v| {
-                        OnUnimplementedFormatString(v).format(tcx, trait_ref, &options_map)
-                    });
+            if let Some(ref condition) = command.condition
+                && !attr::eval_condition(
+                    condition,
+                    &tcx.sess.parse_sess,
+                    Some(tcx.features()),
+                    &mut |cfg| {
+                        let value = cfg.value.map(|v| {
+                            OnUnimplementedFormatString(v).format(tcx, trait_ref, &options_map)
+                        });
 
-                    options.contains(&(cfg.name, value))
-                },
-            ) {
+                        options.contains(&(cfg.name, value))
+                    },
+                )
+            {
                 debug!("evaluate: skipping {:?} due to condition", command);
                 continue;
             }

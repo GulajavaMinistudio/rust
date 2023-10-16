@@ -406,16 +406,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     .borrow_mut()
                     .treat_byte_string_as_slice
                     .insert(lt.hir_id.local_id);
-                pat_ty = Ty::new_imm_ref(tcx,tcx.lifetimes.re_static, Ty::new_slice(tcx,tcx.types.u8));
+                pat_ty =
+                    Ty::new_imm_ref(tcx, tcx.lifetimes.re_static, Ty::new_slice(tcx, tcx.types.u8));
             }
         }
 
-        if self.tcx.features().string_deref_patterns && let hir::ExprKind::Lit(Spanned { node: ast::LitKind::Str(..), .. }) = lt.kind {
+        if self.tcx.features().string_deref_patterns
+            && let hir::ExprKind::Lit(Spanned { node: ast::LitKind::Str(..), .. }) = lt.kind
+        {
             let tcx = self.tcx;
             let expected = self.resolve_vars_if_possible(expected);
             pat_ty = match expected.kind() {
                 ty::Adt(def, _) if Some(def.did()) == tcx.lang_items().string() => expected,
-                ty::Str => Ty::new_static_str(tcx,),
+                ty::Str => Ty::new_static_str(tcx),
                 _ => pat_ty,
             };
         }
@@ -707,7 +710,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     fn borrow_pat_suggestion(&self, err: &mut Diagnostic, pat: &Pat<'_>) {
         let tcx = self.tcx;
         if let PatKind::Ref(inner, mutbl) = pat.kind
-        && let PatKind::Binding(_, _, binding, ..) = inner.kind {
+            && let PatKind::Binding(_, _, binding, ..) = inner.kind
+        {
             let binding_parent_id = tcx.hir().parent_id(pat.hir_id);
             let binding_parent = tcx.hir().get(binding_parent_id);
             debug!(?inner, ?pat, ?binding_parent);
@@ -754,7 +758,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     format!("to declare a mutable {ident_kind} use"),
                     format!("mut {binding}"),
                 ))
-
             };
 
             match binding_parent {
@@ -777,7 +780,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 hir::Node::Pat(pt) if let PatKind::TupleStruct(_, pat_arr, _) = pt.kind => {
                     for i in pat_arr.iter() {
                         if let PatKind::Ref(the_ref, _) = i.kind
-                        && let PatKind::Binding(mt, _, ident, _) = the_ref.kind {
+                            && let PatKind::Binding(mt, _, ident, _) = the_ref.kind
+                        {
                             let hir::BindingAnnotation(_, mtblty) = mt;
                             err.span_suggestion_verbose(
                                 i.span,
@@ -1480,7 +1484,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             (Some(mut err), None) => {
                 err.emit();
             }
-            (None, None) if let Some(mut err) =
+            (None, None)
+                if let Some(mut err) =
                     self.error_tuple_variant_index_shorthand(variant, pat, fields) =>
             {
                 err.emit();
@@ -1504,9 +1509,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         {
             let has_shorthand_field_name = field_patterns.iter().any(|field| field.is_shorthand);
             if has_shorthand_field_name {
-                let path = rustc_hir_pretty::to_string(rustc_hir_pretty::NO_ANN, |s| {
-                    s.print_qpath(qpath, false)
-                });
+                let path = rustc_hir_pretty::qpath_to_string(qpath);
                 let mut err = struct_span_err!(
                     self.tcx.sess,
                     pat.span,
@@ -1688,9 +1691,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 return None;
             }
 
-            let path = rustc_hir_pretty::to_string(rustc_hir_pretty::NO_ANN, |s| {
-                s.print_qpath(qpath, false)
-            });
+            let path = rustc_hir_pretty::qpath_to_string(qpath);
             let mut err = struct_span_err!(
                 self.tcx.sess,
                 pat.span,
@@ -1740,9 +1741,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             f
                         }
                     }
-                    Err(_) => rustc_hir_pretty::to_string(rustc_hir_pretty::NO_ANN, |s| {
-                        s.print_pat(field.pat)
-                    }),
+                    Err(_) => rustc_hir_pretty::pat_to_string(field.pat),
                 }
             })
             .collect::<Vec<String>>()
@@ -2269,7 +2268,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             && let ty::Array(..) | ty::Slice(..) = ty.kind()
         {
             err.help("the semantics of slice patterns changed recently; see issue #62254");
-        } else if self.autoderef(span, expected_ty)
+        } else if self
+            .autoderef(span, expected_ty)
             .any(|(ty, _)| matches!(ty.kind(), ty::Slice(..) | ty::Array(..)))
             && let Some(span) = ti.span
             && let Some(_) = ti.origin_expr
@@ -2290,7 +2290,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         Applicability::MaybeIncorrect,
                     );
                 }
-                _ => ()
+                _ => (),
             }
             if is_slice_or_array_or_vector.0 {
                 err.span_suggestion(

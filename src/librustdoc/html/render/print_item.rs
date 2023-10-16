@@ -7,6 +7,7 @@ use rustc_hir::def::CtorKind;
 use rustc_hir::def_id::DefId;
 use rustc_index::IndexVec;
 use rustc_middle::middle::stability;
+use rustc_middle::query::Key;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::hygiene::MacroKind;
 use rustc_span::symbol::{kw, sym, Symbol};
@@ -119,8 +120,7 @@ macro_rules! item_template_methods {
         fn render_attributes_in_pre<'b>(&'b self) -> impl fmt::Display + Captures<'a> + 'b + Captures<'cx> {
             display_fn(move |f| {
                 let (item, cx) = self.item_and_mut_cx();
-                let tcx = cx.tcx();
-                let v = render_attributes_in_pre(item, "", tcx);
+                let v = render_attributes_in_pre(item, "", &cx);
                 write!(f, "{v}")
             })
         }
@@ -658,7 +658,7 @@ fn item_function(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, f: &cle
             w,
             "{attrs}{vis}{constness}{asyncness}{unsafety}{abi}fn \
                 {name}{generics}{decl}{notable_traits}{where_clause}",
-            attrs = render_attributes_in_pre(it, "", tcx),
+            attrs = render_attributes_in_pre(it, "", cx),
             vis = visibility,
             constness = constness,
             asyncness = asyncness,
@@ -693,7 +693,7 @@ fn item_trait(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &clean:
         write!(
             w,
             "{attrs}{vis}{unsafety}{is_auto}trait {name}{generics}{bounds}",
-            attrs = render_attributes_in_pre(it, "", tcx),
+            attrs = render_attributes_in_pre(it, "", cx),
             vis = visibility_print_with_space(it.visibility(tcx), it.item_id, cx),
             unsafety = t.unsafety(tcx).print_with_space(),
             is_auto = if t.is_auto(tcx) { "auto " } else { "" },
@@ -1172,7 +1172,7 @@ fn item_trait_alias(
         write!(
             w,
             "{attrs}trait {name}{generics}{where_b} = {bounds};",
-            attrs = render_attributes_in_pre(it, "", cx.tcx()),
+            attrs = render_attributes_in_pre(it, "", cx),
             name = it.name.unwrap(),
             generics = t.generics.print(cx),
             where_b = print_where_clause(&t.generics, cx, 0, Ending::Newline),
@@ -1200,7 +1200,7 @@ fn item_opaque_ty(
         write!(
             w,
             "{attrs}type {name}{generics}{where_clause} = impl {bounds};",
-            attrs = render_attributes_in_pre(it, "", cx.tcx()),
+            attrs = render_attributes_in_pre(it, "", cx),
             name = it.name.unwrap(),
             generics = t.generics.print(cx),
             where_clause = print_where_clause(&t.generics, cx, 0, Ending::Newline),
@@ -1225,7 +1225,7 @@ fn item_type_alias(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &c
             write!(
                 w,
                 "{attrs}{vis}type {name}{generics}{where_clause} = {type_};",
-                attrs = render_attributes_in_pre(it, "", cx.tcx()),
+                attrs = render_attributes_in_pre(it, "", cx),
                 vis = visibility_print_with_space(it.visibility(cx.tcx()), it.item_id, cx),
                 name = it.name.unwrap(),
                 generics = t.generics.print(cx),
@@ -1249,6 +1249,9 @@ fn item_type_alias(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &c
         match inner_type {
             clean::TypeAliasInnerType::Enum { variants, is_non_exhaustive } => {
                 let variants_iter = || variants.iter().filter(|i| !i.is_stripped());
+                let ty = cx.tcx().type_of(it.def_id().unwrap()).instantiate_identity();
+                let enum_def_id = ty.ty_adt_id().unwrap();
+
                 wrap_item(w, |w| {
                     let variants_len = variants.len();
                     let variants_count = variants_iter().count();
@@ -1263,10 +1266,10 @@ fn item_type_alias(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, t: &c
                         variants_count,
                         has_stripped_entries,
                         *is_non_exhaustive,
-                        it.def_id().unwrap(),
+                        enum_def_id,
                     )
                 });
-                item_variants(w, cx, it, &variants);
+                item_variants(w, cx, it, &variants, enum_def_id);
             }
             clean::TypeAliasInnerType::Union { fields } => {
                 wrap_item(w, |w| {
@@ -1411,7 +1414,7 @@ fn item_enum(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, e: &clean::
     let tcx = cx.tcx();
     let count_variants = e.variants().count();
     wrap_item(w, |w| {
-        render_attributes_in_code(w, it, tcx);
+        render_attributes_in_code(w, it, cx);
         write!(
             w,
             "{}enum {}{}",
@@ -1435,16 +1438,21 @@ fn item_enum(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, e: &clean::
     write!(w, "{}", document(cx, it, None, HeadingOffset::H2));
 
     if count_variants != 0 {
-        item_variants(w, cx, it, &e.variants);
+        item_variants(w, cx, it, &e.variants, it.def_id().unwrap());
     }
     let def_id = it.item_id.expect_def_id();
     write!(w, "{}", render_assoc_items(cx, it, def_id, AssocItemRender::All));
     write!(w, "{}", document_type_layout(cx, def_id));
 }
 
-/// It'll return true if all variants are C-like variants and if at least one of them has a value
-/// set.
-fn should_show_enum_discriminant(variants: &IndexVec<VariantIdx, clean::Item>) -> bool {
+/// It'll return false if any variant is not a C-like variant. Otherwise it'll return true if at
+/// least one of them has an explicit discriminant or if the enum has `#[repr(C)]` or an integer
+/// `repr`.
+fn should_show_enum_discriminant(
+    cx: &Context<'_>,
+    enum_def_id: DefId,
+    variants: &IndexVec<VariantIdx, clean::Item>,
+) -> bool {
     let mut has_variants_with_value = false;
     for variant in variants {
         if let clean::VariantItem(ref var) = *variant.kind &&
@@ -1455,7 +1463,11 @@ fn should_show_enum_discriminant(variants: &IndexVec<VariantIdx, clean::Item>) -
             return false;
         }
     }
-    has_variants_with_value
+    if has_variants_with_value {
+        return true;
+    }
+    let repr = cx.tcx().adt_def(enum_def_id).repr();
+    repr.c() || repr.int.is_some()
 }
 
 fn display_c_like_variant(
@@ -1493,7 +1505,7 @@ fn render_enum_fields(
     is_non_exhaustive: bool,
     enum_def_id: DefId,
 ) {
-    let should_show_enum_discriminant = should_show_enum_discriminant(variants);
+    let should_show_enum_discriminant = should_show_enum_discriminant(cx, enum_def_id, variants);
     if !g.is_some_and(|g| print_where_clause_and_check(w, g, cx)) {
         // If there wasn't a `where` clause, we add a whitespace.
         w.write_str(" ");
@@ -1552,6 +1564,7 @@ fn item_variants(
     cx: &mut Context<'_>,
     it: &clean::Item,
     variants: &IndexVec<VariantIdx, clean::Item>,
+    enum_def_id: DefId,
 ) {
     let tcx = cx.tcx();
     write!(
@@ -1564,7 +1577,7 @@ fn item_variants(
         document_non_exhaustive_header(it),
         document_non_exhaustive(it)
     );
-    let should_show_enum_discriminant = should_show_enum_discriminant(variants);
+    let should_show_enum_discriminant = should_show_enum_discriminant(cx, enum_def_id, variants);
     for (index, variant) in variants.iter_enumerated() {
         if variant.is_stripped() {
             continue;
@@ -1594,7 +1607,7 @@ fn item_variants(
                 var,
                 index,
                 should_show_enum_discriminant,
-                it.def_id().unwrap(),
+                enum_def_id,
             );
         } else {
             w.write_str(variant.name.unwrap().as_str());
@@ -1720,7 +1733,7 @@ fn item_primitive(w: &mut impl fmt::Write, cx: &mut Context<'_>, it: &clean::Ite
 fn item_constant(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, c: &clean::Constant) {
     wrap_item(w, |w| {
         let tcx = cx.tcx();
-        render_attributes_in_code(w, it, tcx);
+        render_attributes_in_code(w, it, cx);
 
         write!(
             w,
@@ -1769,7 +1782,7 @@ fn item_constant(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, c: &cle
 
 fn item_struct(w: &mut Buffer, cx: &mut Context<'_>, it: &clean::Item, s: &clean::Struct) {
     wrap_item(w, |w| {
-        render_attributes_in_code(w, it, cx.tcx());
+        render_attributes_in_code(w, it, cx);
         render_struct(w, it, Some(&s.generics), s.ctor_kind, &s.fields, "", true, cx);
     });
 
@@ -1829,7 +1842,7 @@ fn item_fields(
 
 fn item_static(w: &mut impl fmt::Write, cx: &mut Context<'_>, it: &clean::Item, s: &clean::Static) {
     wrap_item(w, |buffer| {
-        render_attributes_in_code(buffer, it, cx.tcx());
+        render_attributes_in_code(buffer, it, cx);
         write!(
             buffer,
             "{vis}static {mutability}{name}: {typ}",
@@ -1847,7 +1860,7 @@ fn item_static(w: &mut impl fmt::Write, cx: &mut Context<'_>, it: &clean::Item, 
 fn item_foreign_type(w: &mut impl fmt::Write, cx: &mut Context<'_>, it: &clean::Item) {
     wrap_item(w, |buffer| {
         buffer.write_str("extern {\n").unwrap();
-        render_attributes_in_code(buffer, it, cx.tcx());
+        render_attributes_in_code(buffer, it, cx);
         write!(
             buffer,
             "    {}type {};\n}}",

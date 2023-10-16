@@ -197,10 +197,10 @@ impl Attribute {
                 .unwrap_or_else(|| panic!("attribute is missing tokens: {self:?}"))
                 .to_attr_token_stream()
                 .to_tokenstream(),
-            &AttrKind::DocComment(comment_kind, data) => TokenStream::new(vec![TokenTree::Token(
-                Token::new(token::DocComment(comment_kind, self.style, data), self.span),
-                Spacing::Alone,
-            )]),
+            &AttrKind::DocComment(comment_kind, data) => TokenStream::token_alone(
+                token::DocComment(comment_kind, self.style, data),
+                self.span,
+            ),
         }
     }
 }
@@ -520,9 +520,7 @@ impl NestedMetaItem {
         I: Iterator<Item = &'a TokenTree>,
     {
         match tokens.peek() {
-            Some(TokenTree::Token(token, _))
-                if let Some(lit) = MetaItemLit::from_token(token) =>
-            {
+            Some(TokenTree::Token(token, _)) if let Some(lit) = MetaItemLit::from_token(token) => {
                 tokens.next();
                 return Some(NestedMetaItem::Lit(lit));
             }
