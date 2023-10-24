@@ -25,7 +25,9 @@ use crate::mir::interpret::{
 use crate::mir::interpret::{LitToConstError, LitToConstInput};
 use crate::mir::mono::CodegenUnit;
 use crate::query::erase::{erase, restore, Erase};
-use crate::query::plumbing::{query_ensure, query_get_at, CyclePlaceholder, DynamicQuery};
+use crate::query::plumbing::{
+    query_ensure, query_ensure_error_guaranteed, query_get_at, CyclePlaceholder, DynamicQuery,
+};
 use crate::thir;
 use crate::traits::query::{
     CanonicalPredicateGoal, CanonicalProjectionGoal, CanonicalTyGoal,
@@ -541,28 +543,28 @@ rustc_queries! {
         }
     }
 
-    /// Returns names of captured upvars for closures and generators.
+    /// Returns names of captured upvars for closures and coroutines.
     ///
     /// Here are some examples:
     ///  - `name__field1__field2` when the upvar is captured by value.
     ///  - `_ref__name__field` when the upvar is captured by reference.
     ///
-    /// For generators this only contains upvars that are shared by all states.
+    /// For coroutines this only contains upvars that are shared by all states.
     query closure_saved_names_of_captured_variables(def_id: DefId) -> &'tcx IndexVec<abi::FieldIdx, Symbol> {
         arena_cache
         desc { |tcx| "computing debuginfo for closure `{}`", tcx.def_path_str(def_id) }
         separate_provide_extern
     }
 
-    query mir_generator_witnesses(key: DefId) -> &'tcx Option<mir::GeneratorLayout<'tcx>> {
+    query mir_coroutine_witnesses(key: DefId) -> &'tcx Option<mir::CoroutineLayout<'tcx>> {
         arena_cache
-        desc { |tcx| "generator witness types for `{}`", tcx.def_path_str(key) }
+        desc { |tcx| "coroutine witness types for `{}`", tcx.def_path_str(key) }
         cache_on_disk_if { key.is_local() }
         separate_provide_extern
     }
 
-    query check_generator_obligations(key: LocalDefId) {
-        desc { |tcx| "verify auto trait bounds for generator interior type `{}`", tcx.def_path_str(key) }
+    query check_coroutine_obligations(key: LocalDefId) {
+        desc { |tcx| "verify auto trait bounds for coroutine interior type `{}`", tcx.def_path_str(key) }
     }
 
     /// MIR after our optimization passes have run. This is MIR that is ready
@@ -743,9 +745,9 @@ rustc_queries! {
         desc { |tcx| "checking if item is promotable: `{}`", tcx.def_path_str(key) }
     }
 
-    /// Returns `Some(generator_kind)` if the node pointed to by `def_id` is a generator.
-    query generator_kind(def_id: DefId) -> Option<hir::GeneratorKind> {
-        desc { |tcx| "looking up generator kind of `{}`", tcx.def_path_str(def_id) }
+    /// Returns `Some(coroutine_kind)` if the node pointed to by `def_id` is a coroutine.
+    query coroutine_kind(def_id: DefId) -> Option<hir::CoroutineKind> {
+        desc { |tcx| "looking up coroutine kind of `{}`", tcx.def_path_str(def_id) }
         separate_provide_extern
     }
 
@@ -965,8 +967,9 @@ rustc_queries! {
         desc { |tcx| "checking that impls are well-formed in {}", describe_as_module(key, tcx) }
     }
 
-    query check_mod_type_wf(key: LocalModDefId) -> () {
+    query check_mod_type_wf(key: LocalModDefId) -> Result<(), ErrorGuaranteed> {
         desc { |tcx| "checking that types are well-formed in {}", describe_as_module(key, tcx) }
+        ensure_forwards_result_if_red
     }
 
     query collect_mod_item_types(key: LocalModDefId) -> () {
@@ -1499,8 +1502,9 @@ rustc_queries! {
         feedable
     }
 
-    query check_well_formed(key: hir::OwnerId) -> () {
+    query check_well_formed(key: hir::OwnerId) -> Result<(), ErrorGuaranteed> {
         desc { |tcx| "checking that `{}` is well-formed", tcx.def_path_str(key) }
+        ensure_forwards_result_if_red
     }
 
     // The `DefId`s of all non-generic functions and statics in the given crate
@@ -1880,12 +1884,6 @@ rustc_queries! {
 
     query is_codegened_item(def_id: DefId) -> bool {
         desc { |tcx| "determining whether `{}` needs codegen", tcx.def_path_str(def_id) }
-    }
-
-    /// All items participating in code generation together with items inlined into them.
-    query codegened_and_inlined_items(_: ()) -> &'tcx DefIdSet {
-        eval_always
-        desc { "collecting codegened and inlined items" }
     }
 
     query codegen_unit(sym: Symbol) -> &'tcx CodegenUnit<'tcx> {

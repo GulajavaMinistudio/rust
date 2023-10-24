@@ -9,7 +9,7 @@ use rustc_middle::ty::{self, ImplSubject, ToPredicate, Ty, TyCtxt, TypeVisitable
 use rustc_span::Span;
 use smallvec::SmallVec;
 
-pub use rustc_infer::traits::{self, util::*};
+pub use rustc_infer::traits::util::*;
 
 ///////////////////////////////////////////////////////////////////////////
 // `TraitAliasExpander` iterator
@@ -275,7 +275,7 @@ pub fn closure_trait_ref_and_return_type<'tcx>(
     sig.map_bound(|sig| (trait_ref, sig.output()))
 }
 
-pub fn generator_trait_ref_and_outputs<'tcx>(
+pub fn coroutine_trait_ref_and_outputs<'tcx>(
     tcx: TyCtxt<'tcx>,
     fn_trait_def_id: DefId,
     self_ty: Ty<'tcx>,

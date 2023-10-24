@@ -130,8 +130,8 @@ fn dump_matched_mir_node<'tcx, F>(
             Some(promoted) => write!(file, "::{promoted:?}`")?,
         }
         writeln!(file, " {disambiguator} {pass_name}")?;
-        if let Some(ref layout) = body.generator_layout() {
-            writeln!(file, "/* generator_layout = {layout:#?} */")?;
+        if let Some(ref layout) = body.coroutine_layout() {
+            writeln!(file, "/* coroutine_layout = {layout:#?} */")?;
         }
         writeln!(file)?;
         extra_data(PassWhere::BeforeCFG, &mut file)?;
@@ -782,7 +782,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             Goto { .. } => write!(fmt, "goto"),
             SwitchInt { discr, .. } => write!(fmt, "switchInt({discr:?})"),
             Return => write!(fmt, "return"),
-            GeneratorDrop => write!(fmt, "generator_drop"),
+            CoroutineDrop => write!(fmt, "coroutine_drop"),
             UnwindResume => write!(fmt, "resume"),
             UnwindTerminate(reason) => {
                 write!(fmt, "abort({})", reason.as_short_str())
@@ -865,7 +865,7 @@ impl<'tcx> TerminatorKind<'tcx> {
     pub fn fmt_successor_labels(&self) -> Vec<Cow<'static, str>> {
         use self::TerminatorKind::*;
         match *self {
-            Return | UnwindResume | UnwindTerminate(_) | Unreachable | GeneratorDrop => vec![],
+            Return | UnwindResume | UnwindTerminate(_) | Unreachable | CoroutineDrop => vec![],
             Goto { .. } => vec!["".into()],
             SwitchInt { ref targets, .. } => targets
                 .values
@@ -998,9 +998,9 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                         ty::tls::with(|tcx| {
                             let variant_def = &tcx.adt_def(adt_did).variant(variant);
                             let args = tcx.lift(args).expect("could not lift for printing");
-                            let name = FmtPrinter::new(tcx, Namespace::ValueNS)
-                                .print_def_path(variant_def.def_id, args)?
-                                .into_buffer();
+                            let name = FmtPrinter::print_string(tcx, Namespace::ValueNS, |cx| {
+                                cx.print_def_path(variant_def.def_id, args)
+                            })?;
 
                             match variant_def.ctor_kind() {
                                 Some(CtorKind::Const) => fmt.write_str(&name),
@@ -1046,8 +1046,8 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                         struct_fmt.finish()
                     }),
 
-                    AggregateKind::Generator(def_id, _, _) => ty::tls::with(|tcx| {
-                        let name = format!("{{generator@{:?}}}", tcx.def_span(def_id));
+                    AggregateKind::Coroutine(def_id, _, _) => ty::tls::with(|tcx| {
+                        let name = format!("{{coroutine@{:?}}}", tcx.def_span(def_id));
                         let mut struct_fmt = fmt.debug_struct(&name);
 
                         // FIXME(project-rfc-2229#48): This should be a list of capture names/places
@@ -1301,8 +1301,8 @@ impl<'tcx> Visitor<'tcx> for ExtraComments<'tcx> {
                     self.push(&format!("+ args: {args:#?}"));
                 }
 
-                AggregateKind::Generator(def_id, args, movability) => {
-                    self.push("generator");
+                AggregateKind::Coroutine(def_id, args, movability) => {
+                    self.push("coroutine");
                     self.push(&format!("+ def_id: {def_id:?}"));
                     self.push(&format!("+ args: {args:#?}"));
                     self.push(&format!("+ movability: {movability:?}"));
@@ -1740,7 +1740,7 @@ fn pretty_print_const_value_tcx<'tcx>(
                         let args = tcx.lift(args).unwrap();
                         let mut cx = FmtPrinter::new(tcx, Namespace::ValueNS);
                         cx.print_alloc_ids = true;
-                        let cx = cx.print_value_path(variant_def.def_id, args)?;
+                        cx.print_value_path(variant_def.def_id, args)?;
                         fmt.write_str(&cx.into_buffer())?;
 
                         match variant_def.ctor_kind() {
@@ -1775,14 +1775,14 @@ fn pretty_print_const_value_tcx<'tcx>(
             let mut cx = FmtPrinter::new(tcx, Namespace::ValueNS);
             cx.print_alloc_ids = true;
             let ty = tcx.lift(ty).unwrap();
-            cx = cx.pretty_print_const_scalar(scalar, ty)?;
+            cx.pretty_print_const_scalar(scalar, ty)?;
             fmt.write_str(&cx.into_buffer())?;
             return Ok(());
         }
         (ConstValue::ZeroSized, ty::FnDef(d, s)) => {
             let mut cx = FmtPrinter::new(tcx, Namespace::ValueNS);
             cx.print_alloc_ids = true;
-            let cx = cx.print_value_path(*d, s)?;
+            cx.print_value_path(*d, s)?;
             fmt.write_str(&cx.into_buffer())?;
             return Ok(());
         }

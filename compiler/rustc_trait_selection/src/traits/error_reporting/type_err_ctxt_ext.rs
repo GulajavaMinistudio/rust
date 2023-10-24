@@ -246,14 +246,10 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         if pred_str.len() > 50 {
             // We don't need to save the type to a file, we will be talking about this type already
             // in a separate note when we explain the obligation, so it will be available that way.
-            pred_str = predicate
-                .print(FmtPrinter::new_with_limit(
-                    self.tcx,
-                    Namespace::TypeNS,
-                    rustc_session::Limit(6),
-                ))
-                .unwrap()
-                .into_buffer();
+            let mut cx: FmtPrinter<'_, '_> =
+                FmtPrinter::new_with_limit(self.tcx, Namespace::TypeNS, rustc_session::Limit(6));
+            predicate.print(&mut cx).unwrap();
+            pred_str = cx.into_buffer();
         }
         let mut err = struct_span_err!(
             self.tcx.sess,
@@ -1036,7 +1032,7 @@ pub(super) trait InferCtxtPrivExt<'tcx> {
         ignoring_lifetimes: bool,
     ) -> Option<CandidateSimilarity>;
 
-    fn describe_generator(&self, body_id: hir::BodyId) -> Option<&'static str>;
+    fn describe_coroutine(&self, body_id: hir::BodyId) -> Option<&'static str>;
 
     fn find_similar_impl_candidates(
         &self,
@@ -1408,17 +1404,15 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     self.maybe_detailed_projection_msg(predicate, normalized_term, expected_term)
                 })
                 .unwrap_or_else(|| {
-                    with_forced_trimmed_paths!(format!(
-                        "type mismatch resolving `{}`",
-                        self.resolve_vars_if_possible(predicate)
-                            .print(FmtPrinter::new_with_limit(
-                                self.tcx,
-                                Namespace::TypeNS,
-                                rustc_session::Limit(10),
-                            ))
-                            .unwrap()
-                            .into_buffer()
-                    ))
+                    let mut cx = FmtPrinter::new_with_limit(
+                        self.tcx,
+                        Namespace::TypeNS,
+                        rustc_session::Limit(10),
+                    );
+                    with_forced_trimmed_paths!(format!("type mismatch resolving `{}`", {
+                        self.resolve_vars_if_possible(predicate).print(&mut cx).unwrap();
+                        cx.into_buffer()
+                    }))
                 });
             let mut diag = struct_span_err!(self.tcx.sess, obligation.cause.span, E0271, "{msg}");
 
@@ -1463,14 +1457,15 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         ty.span,
                         with_forced_trimmed_paths!(Cow::from(format!(
                             "type mismatch resolving `{}`",
-                            self.resolve_vars_if_possible(predicate)
-                                .print(FmtPrinter::new_with_limit(
+                            {
+                                let mut cx = FmtPrinter::new_with_limit(
                                     self.tcx,
                                     Namespace::TypeNS,
                                     rustc_session::Limit(5),
-                                ))
-                                .unwrap()
-                                .into_buffer()
+                                );
+                                self.resolve_vars_if_possible(predicate).print(&mut cx).unwrap();
+                                cx.into_buffer()
+                            }
                         ))),
                     )),
                     _ => None,
@@ -1564,9 +1559,9 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 ty::Alias(ty::Weak, ..) => Some(15),
                 ty::Never => Some(16),
                 ty::Adt(..) => Some(17),
-                ty::Generator(..) => Some(18),
+                ty::Coroutine(..) => Some(18),
                 ty::Foreign(..) => Some(19),
-                ty::GeneratorWitness(..) => Some(20),
+                ty::CoroutineWitness(..) => Some(20),
                 ty::Placeholder(..) | ty::Bound(..) | ty::Infer(..) | ty::Error(_) => None,
             }
         }
@@ -1613,12 +1608,12 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         }
     }
 
-    fn describe_generator(&self, body_id: hir::BodyId) -> Option<&'static str> {
-        self.tcx.hir().body(body_id).generator_kind.map(|gen_kind| match gen_kind {
-            hir::GeneratorKind::Gen => "a generator",
-            hir::GeneratorKind::Async(hir::AsyncGeneratorKind::Block) => "an async block",
-            hir::GeneratorKind::Async(hir::AsyncGeneratorKind::Fn) => "an async function",
-            hir::GeneratorKind::Async(hir::AsyncGeneratorKind::Closure) => "an async closure",
+    fn describe_coroutine(&self, body_id: hir::BodyId) -> Option<&'static str> {
+        self.tcx.hir().body(body_id).coroutine_kind.map(|gen_kind| match gen_kind {
+            hir::CoroutineKind::Coroutine => "a coroutine",
+            hir::CoroutineKind::Async(hir::AsyncCoroutineKind::Block) => "an async block",
+            hir::CoroutineKind::Async(hir::AsyncCoroutineKind::Fn) => "an async function",
+            hir::CoroutineKind::Async(hir::AsyncCoroutineKind::Closure) => "an async closure",
         })
     }
 
@@ -3098,7 +3093,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         };
 
         let found_did = match *found_trait_ty.kind() {
-            ty::Closure(did, _) | ty::Foreign(did) | ty::FnDef(did, _) | ty::Generator(did, ..) => {
+            ty::Closure(did, _) | ty::Foreign(did) | ty::FnDef(did, _) | ty::Coroutine(did, ..) => {
                 Some(did)
             }
             ty::Adt(def, _) => Some(def.did()),

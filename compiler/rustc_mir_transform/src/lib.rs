@@ -61,6 +61,8 @@ mod const_goto;
 mod const_prop;
 mod const_prop_lint;
 mod copy_prop;
+mod coroutine;
+mod cost_checker;
 mod coverage;
 mod cross_crate_inline;
 mod ctfe_limit;
@@ -77,10 +79,10 @@ mod elaborate_drops;
 mod errors;
 mod ffi_unwind_calls;
 mod function_item_references;
-mod generator;
 mod gvn;
 pub mod inline;
 mod instsimplify;
+mod jump_threading;
 mod large_enums;
 mod lower_intrinsics;
 mod lower_slice_len;
@@ -132,7 +134,7 @@ pub fn provide(providers: &mut Providers) {
         mir_promoted,
         mir_drops_elaborated_and_const_checked,
         mir_for_ctfe,
-        mir_generator_witnesses: generator::mir_generator_witnesses,
+        mir_coroutine_witnesses: coroutine::mir_coroutine_witnesses,
         optimized_mir,
         is_mir_available,
         is_ctfe_mir_available: |tcx, did| is_mir_available(tcx, did),
@@ -375,8 +377,8 @@ fn inner_mir_for_ctfe(tcx: TyCtxt<'_>, def: LocalDefId) -> Body<'_> {
 /// mir borrowck *before* doing so in order to ensure that borrowck can be run and doesn't
 /// end up missing the source MIR due to stealing happening.
 fn mir_drops_elaborated_and_const_checked(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<Body<'_>> {
-    if let DefKind::Generator = tcx.def_kind(def) {
-        tcx.ensure_with_value().mir_generator_witnesses(def);
+    if let DefKind::Coroutine = tcx.def_kind(def) {
+        tcx.ensure_with_value().mir_coroutine_witnesses(def);
     }
     let mir_borrowck = tcx.mir_borrowck(def);
 
@@ -509,7 +511,7 @@ fn run_runtime_lowering_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         // `AddRetag` needs to run after `ElaborateDrops`. Otherwise it should run fairly late,
         // but before optimizations begin.
         &elaborate_box_derefs::ElaborateBoxDerefs,
-        &generator::StateTransform,
+        &coroutine::StateTransform,
         &add_retag::AddRetag,
         &Lint(const_prop_lint::ConstPropLint),
     ];
@@ -571,6 +573,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             &dataflow_const_prop::DataflowConstProp,
             &const_debuginfo::ConstDebugInfo,
             &o1(simplify_branches::SimplifyConstCondition::AfterConstProp),
+            &jump_threading::JumpThreading,
             &early_otherwise_branch::EarlyOtherwiseBranch,
             &simplify_comparison_integral::SimplifyComparisonIntegral,
             &dead_store_elimination::DeadStoreElimination,

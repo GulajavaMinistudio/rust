@@ -3,12 +3,10 @@ use rustc_hir::LangItem;
 use smallvec::SmallVec;
 
 use super::{BasicBlock, InlineAsmOperand, Operand, SourceInfo, TerminatorKind, UnwindAction};
-pub use rustc_ast::Mutability;
 use rustc_macros::HashStable;
 use std::iter;
 use std::slice;
 
-pub use super::query::*;
 use super::*;
 
 impl SwitchTargets {
@@ -26,6 +24,15 @@ impl SwitchTargets {
     /// and to `else_` if not.
     pub fn static_if(value: u128, then: BasicBlock, else_: BasicBlock) -> Self {
         Self { values: smallvec![value], targets: smallvec![then, else_] }
+    }
+
+    /// Inverse of `SwitchTargets::static_if`.
+    pub fn as_static_if(&self) -> Option<(u128, BasicBlock, BasicBlock)> {
+        if let &[value] = &self.values[..] && let &[then, else_] = &self.targets[..] {
+            Some((value, then, else_))
+        } else {
+            None
+        }
     }
 
     /// Returns the fallback target that is jumped to when none of the values match the operand.
@@ -139,10 +146,10 @@ impl<O> AssertKind<O> {
             Overflow(op, _, _) => bug!("{:?} cannot overflow", op),
             DivisionByZero(_) => "attempt to divide by zero",
             RemainderByZero(_) => "attempt to calculate the remainder with a divisor of zero",
-            ResumedAfterReturn(GeneratorKind::Gen) => "generator resumed after completion",
-            ResumedAfterReturn(GeneratorKind::Async(_)) => "`async fn` resumed after completion",
-            ResumedAfterPanic(GeneratorKind::Gen) => "generator resumed after panicking",
-            ResumedAfterPanic(GeneratorKind::Async(_)) => "`async fn` resumed after panicking",
+            ResumedAfterReturn(CoroutineKind::Coroutine) => "coroutine resumed after completion",
+            ResumedAfterReturn(CoroutineKind::Async(_)) => "`async fn` resumed after completion",
+            ResumedAfterPanic(CoroutineKind::Coroutine) => "coroutine resumed after panicking",
+            ResumedAfterPanic(CoroutineKind::Async(_)) => "`async fn` resumed after panicking",
             BoundsCheck { .. } | MisalignedPointerDereference { .. } => {
                 bug!("Unexpected AssertKind")
             }
@@ -228,10 +235,14 @@ impl<O> AssertKind<O> {
             OverflowNeg(_) => middle_assert_overflow_neg,
             DivisionByZero(_) => middle_assert_divide_by_zero,
             RemainderByZero(_) => middle_assert_remainder_by_zero,
-            ResumedAfterReturn(GeneratorKind::Async(_)) => middle_assert_async_resume_after_return,
-            ResumedAfterReturn(GeneratorKind::Gen) => middle_assert_generator_resume_after_return,
-            ResumedAfterPanic(GeneratorKind::Async(_)) => middle_assert_async_resume_after_panic,
-            ResumedAfterPanic(GeneratorKind::Gen) => middle_assert_generator_resume_after_panic,
+            ResumedAfterReturn(CoroutineKind::Async(_)) => middle_assert_async_resume_after_return,
+            ResumedAfterReturn(CoroutineKind::Coroutine) => {
+                middle_assert_coroutine_resume_after_return
+            }
+            ResumedAfterPanic(CoroutineKind::Async(_)) => middle_assert_async_resume_after_panic,
+            ResumedAfterPanic(CoroutineKind::Coroutine) => {
+                middle_assert_coroutine_resume_after_panic
+            }
 
             MisalignedPointerDereference { .. } => middle_assert_misaligned_ptr_deref,
         }
@@ -331,7 +342,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             }
             UnwindResume
             | UnwindTerminate(_)
-            | GeneratorDrop
+            | CoroutineDrop
             | Return
             | Unreachable
             | Call { target: None, unwind: _, .. }
@@ -373,7 +384,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             }
             UnwindResume
             | UnwindTerminate(_)
-            | GeneratorDrop
+            | CoroutineDrop
             | Return
             | Unreachable
             | Call { target: None, unwind: _, .. }
@@ -392,7 +403,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             | TerminatorKind::UnwindTerminate(_)
             | TerminatorKind::Return
             | TerminatorKind::Unreachable
-            | TerminatorKind::GeneratorDrop
+            | TerminatorKind::CoroutineDrop
             | TerminatorKind::Yield { .. }
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::FalseEdge { .. } => None,
@@ -411,7 +422,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             | TerminatorKind::UnwindTerminate(_)
             | TerminatorKind::Return
             | TerminatorKind::Unreachable
-            | TerminatorKind::GeneratorDrop
+            | TerminatorKind::CoroutineDrop
             | TerminatorKind::Yield { .. }
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::FalseEdge { .. } => None,
@@ -493,7 +504,7 @@ impl<'tcx> TerminatorKind<'tcx> {
     pub fn edges(&self) -> TerminatorEdges<'_, 'tcx> {
         use TerminatorKind::*;
         match *self {
-            Return | UnwindResume | UnwindTerminate(_) | GeneratorDrop | Unreachable => {
+            Return | UnwindResume | UnwindTerminate(_) | CoroutineDrop | Unreachable => {
                 TerminatorEdges::None
             }
 

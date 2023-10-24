@@ -101,7 +101,7 @@ pub(super) fn trace<'mir, 'tcx>(
     results.dropck_boring_locals(boring_locals);
 }
 
-/// Contextual state for the type-liveness generator.
+/// Contextual state for the type-liveness coroutine.
 struct LivenessContext<'me, 'typeck, 'flow, 'tcx> {
     /// Current type-checker, giving us our inference context etc.
     typeck: &'me mut TypeChecker<'typeck, 'tcx>,
@@ -317,7 +317,7 @@ impl<'me, 'typeck, 'flow, 'tcx> LivenessResults<'me, 'typeck, 'flow, 'tcx> {
     fn compute_drop_live_points_for(&mut self, local: Local) {
         debug!("compute_drop_live_points_for(local={:?})", local);
 
-        let mpi = self.cx.move_data.rev_lookup.find_local(local);
+        let Some(mpi) = self.cx.move_data.rev_lookup.find_local(local) else { return };
         debug!("compute_drop_live_points_for: mpi = {:?}", mpi);
 
         // Find the drops where `local` is initialized.

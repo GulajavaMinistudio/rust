@@ -22,11 +22,10 @@ impl fmt::Debug for ty::TraitDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         ty::tls::with(|tcx| {
             with_no_trimmed_paths!({
-                f.write_str(
-                    &FmtPrinter::new(tcx, Namespace::TypeNS)
-                        .print_def_path(self.def_id, &[])?
-                        .into_buffer(),
-                )
+                let s = FmtPrinter::print_string(tcx, Namespace::TypeNS, |cx| {
+                    cx.print_def_path(self.def_id, &[])
+                })?;
+                f.write_str(&s)
             })
         })
     }
@@ -36,11 +35,10 @@ impl<'tcx> fmt::Debug for ty::AdtDef<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         ty::tls::with(|tcx| {
             with_no_trimmed_paths!({
-                f.write_str(
-                    &FmtPrinter::new(tcx, Namespace::TypeNS)
-                        .print_def_path(self.did(), &[])?
-                        .into_buffer(),
-                )
+                let s = FmtPrinter::print_string(tcx, Namespace::TypeNS, |cx| {
+                    cx.print_def_path(self.did(), &[])
+                })?;
+                f.write_str(&s)
             })
         })
     }
@@ -350,9 +348,8 @@ impl<'tcx> DebugWithInfcx<TyCtxt<'tcx>> for ty::Const<'tcx> {
                 let ConstKind::Value(valtree) = lifted.kind() else {
                     bug!("we checked that this is a valtree")
                 };
-                let cx = FmtPrinter::new(tcx, Namespace::ValueNS);
-                let cx =
-                    cx.pretty_print_const_valtree(valtree, lifted.ty(), /*print_ty*/ true)?;
+                let mut cx = FmtPrinter::new(tcx, Namespace::ValueNS);
+                cx.pretty_print_const_valtree(valtree, lifted.ty(), /*print_ty*/ true)?;
                 f.write_str(&cx.into_buffer())
             });
         }
@@ -654,11 +651,11 @@ impl<'tcx> TypeSuperFoldable<TyCtxt<'tcx>> for Ty<'tcx> {
             ty::Ref(r, ty, mutbl) => {
                 ty::Ref(r.try_fold_with(folder)?, ty.try_fold_with(folder)?, mutbl)
             }
-            ty::Generator(did, args, movability) => {
-                ty::Generator(did, args.try_fold_with(folder)?, movability)
+            ty::Coroutine(did, args, movability) => {
+                ty::Coroutine(did, args.try_fold_with(folder)?, movability)
             }
-            ty::GeneratorWitness(did, args) => {
-                ty::GeneratorWitness(did, args.try_fold_with(folder)?)
+            ty::CoroutineWitness(did, args) => {
+                ty::CoroutineWitness(did, args.try_fold_with(folder)?)
             }
             ty::Closure(did, args) => ty::Closure(did, args.try_fold_with(folder)?),
             ty::Alias(kind, data) => ty::Alias(kind, data.try_fold_with(folder)?),
@@ -706,8 +703,8 @@ impl<'tcx> TypeSuperVisitable<TyCtxt<'tcx>> for Ty<'tcx> {
                 r.visit_with(visitor)?;
                 ty.visit_with(visitor)
             }
-            ty::Generator(_did, ref args, _) => args.visit_with(visitor),
-            ty::GeneratorWitness(_did, ref args) => args.visit_with(visitor),
+            ty::Coroutine(_did, ref args, _) => args.visit_with(visitor),
+            ty::CoroutineWitness(_did, ref args) => args.visit_with(visitor),
             ty::Closure(_did, ref args) => args.visit_with(visitor),
             ty::Alias(_, ref data) => data.visit_with(visitor),
 
