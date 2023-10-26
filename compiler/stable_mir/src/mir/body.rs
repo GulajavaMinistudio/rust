@@ -135,12 +135,12 @@ pub enum UnOp {
 
 #[derive(Clone, Debug)]
 pub enum CoroutineKind {
-    Async(AsyncCoroutineKind),
+    Async(CoroutineSource),
     Coroutine,
 }
 
 #[derive(Clone, Debug)]
-pub enum AsyncCoroutineKind {
+pub enum CoroutineSource {
     Block,
     Closure,
     Fn,
@@ -477,7 +477,7 @@ impl Operand {
 
 impl Constant {
     pub fn ty(&self) -> Ty {
-        self.literal.ty
+        self.literal.ty()
     }
 }
 
