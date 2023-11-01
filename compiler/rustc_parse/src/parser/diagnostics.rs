@@ -504,8 +504,10 @@ impl<'a> Parser<'a> {
 
         // Special-case "expected `;`" errors
         if expected.contains(&TokenType::Token(token::Semi)) {
-            if self.prev_token == token::Question && self.maybe_recover_from_ternary_operator() {
-                return Ok(true);
+            // If the user is trying to write a ternary expression, recover it and
+            // return an Err to prevent a cascade of irrelevant diagnostics
+            if self.prev_token == token::Question && let Err(e) = self.maybe_recover_from_ternary_operator() {
+                return Err(e);
             }
 
             if self.token.span == DUMMY_SP || self.prev_token.span == DUMMY_SP {
@@ -1428,10 +1430,10 @@ impl<'a> Parser<'a> {
 
     /// Rust has no ternary operator (`cond ? then : else`). Parse it and try
     /// to recover from it if `then` and `else` are valid expressions. Returns
-    /// whether it was a ternary operator.
-    pub(super) fn maybe_recover_from_ternary_operator(&mut self) -> bool {
+    /// an err if this appears to be a ternary expression.
+    pub(super) fn maybe_recover_from_ternary_operator(&mut self) -> PResult<'a, ()> {
         if self.prev_token != token::Question {
-            return false;
+            return PResult::Ok(());
         }
 
         let lo = self.prev_token.span.lo();
@@ -1449,20 +1451,18 @@ impl<'a> Parser<'a> {
             if self.eat_noexpect(&token::Colon) {
                 match self.parse_expr() {
                     Ok(_) => {
-                        self.sess.emit_err(TernaryOperator { span: self.token.span.with_lo(lo) });
-                        return true;
+                        return Err(self
+                            .sess
+                            .create_err(TernaryOperator { span: self.token.span.with_lo(lo) }));
                     }
                     Err(err) => {
                         err.cancel();
-                        self.restore_snapshot(snapshot);
                     }
                 };
             }
-        } else {
-            self.restore_snapshot(snapshot);
-        };
-
-        false
+        }
+        self.restore_snapshot(snapshot);
+        Ok(())
     }
 
     pub(super) fn maybe_recover_from_bad_type_plus(&mut self, ty: &Ty) -> PResult<'a, ()> {
@@ -2808,8 +2808,15 @@ impl<'a> Parser<'a> {
     }
 
     pub fn recover_diff_marker(&mut self) {
+        if let Err(mut err) = self.err_diff_marker() {
+            err.emit();
+            FatalError.raise();
+        }
+    }
+
+    pub fn err_diff_marker(&mut self) -> PResult<'a, ()> {
         let Some(start) = self.diff_marker(&TokenKind::BinOp(token::Shl), &TokenKind::Lt) else {
-            return;
+            return Ok(());
         };
         let mut spans = Vec::with_capacity(3);
         spans.push(start);
@@ -2856,8 +2863,7 @@ impl<'a> Parser<'a> {
             "for an explanation on these markers from the `git` documentation, visit \
              <https://git-scm.com/book/en/v2/Git-Tools-Advanced-Merging#_checking_out_conflicts>",
         );
-        err.emit();
-        FatalError.raise()
+        Err(err)
     }
 
     /// Parse and throw away a parenthesized comma separated

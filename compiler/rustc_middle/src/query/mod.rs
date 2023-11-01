@@ -251,6 +251,7 @@ rustc_queries! {
             "computing type of opaque `{path}`",
             path = tcx.def_path_str(key),
         }
+        cycle_stash
     }
 
     query type_alias_is_lazy(key: DefId) -> bool {
@@ -1098,10 +1099,6 @@ rustc_queries! {
     /// of their fields.
     query destructure_const(key: ty::Const<'tcx>) -> ty::DestructuredConst<'tcx> {
         desc { "destructuring type level constant"}
-    }
-
-    query const_caller_location(key: (rustc_span::Symbol, u32, u32)) -> mir::ConstValue<'tcx> {
-        desc { "getting a &core::panic::Location referring to a span" }
     }
 
     // FIXME get rid of this with valtrees

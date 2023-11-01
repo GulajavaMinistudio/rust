@@ -475,8 +475,9 @@ fn projection_to_path_segment<'tcx>(
     ty: ty::Binder<'tcx, ty::AliasTy<'tcx>>,
     cx: &mut DocContext<'tcx>,
 ) -> PathSegment {
-    let item = cx.tcx.associated_item(ty.skip_binder().def_id);
-    let generics = cx.tcx.generics_of(ty.skip_binder().def_id);
+    let def_id = ty.skip_binder().def_id;
+    let item = cx.tcx.associated_item(def_id);
+    let generics = cx.tcx.generics_of(def_id);
     PathSegment {
         name: item.name,
         args: GenericArgs::AngleBracketed {
@@ -484,7 +485,7 @@ fn projection_to_path_segment<'tcx>(
                 cx,
                 ty.map_bound(|ty| &ty.args[generics.parent_count..]),
                 false,
-                None,
+                def_id,
             )
             .into(),
             bindings: Default::default(),
@@ -498,7 +499,7 @@ fn clean_generic_param_def<'tcx>(
 ) -> GenericParamDef {
     let (name, kind) = match def.kind {
         ty::GenericParamDefKind::Lifetime => {
-            (def.name, GenericParamDefKind::Lifetime { outlives: vec![] })
+            (def.name, GenericParamDefKind::Lifetime { outlives: ThinVec::new() })
         }
         ty::GenericParamDefKind::Type { has_default, synthetic, .. } => {
             let default = if has_default {
@@ -515,7 +516,7 @@ fn clean_generic_param_def<'tcx>(
                 def.name,
                 GenericParamDefKind::Type {
                     did: def.def_id,
-                    bounds: vec![], // These are filled in from the where-clauses.
+                    bounds: ThinVec::new(), // These are filled in from the where-clauses.
                     default: default.map(Box::new),
                     synthetic,
                 },
@@ -567,7 +568,7 @@ fn clean_generic_param<'tcx>(
                     })
                     .collect()
             } else {
-                Vec::new()
+                ThinVec::new()
             };
             (param.name.ident().name, GenericParamDefKind::Lifetime { outlives })
         }
@@ -580,7 +581,7 @@ fn clean_generic_param<'tcx>(
                     .filter_map(|x| clean_generic_bound(x, cx))
                     .collect()
             } else {
-                Vec::new()
+                ThinVec::new()
             };
             (
                 param.name.ident().name,
@@ -636,7 +637,7 @@ pub(crate) fn clean_generics<'tcx>(
             match param.kind {
                 GenericParamDefKind::Lifetime { .. } => unreachable!(),
                 GenericParamDefKind::Type { did, ref bounds, .. } => {
-                    cx.impl_trait_bounds.insert(did.into(), bounds.clone());
+                    cx.impl_trait_bounds.insert(did.into(), bounds.to_vec());
                 }
                 GenericParamDefKind::Const { .. } => unreachable!(),
             }
@@ -934,10 +935,15 @@ fn clean_ty_generics<'tcx>(
 fn clean_ty_alias_inner_type<'tcx>(
     ty: Ty<'tcx>,
     cx: &mut DocContext<'tcx>,
+    ret: &mut Vec<Item>,
 ) -> Option<TypeAliasInnerType> {
     let ty::Adt(adt_def, args) = ty.kind() else {
         return None;
     };
+
+    if !adt_def.did().is_local() {
+        inline::build_impls(cx, adt_def.did(), None, ret);
+    }
 
     Some(if adt_def.is_enum() {
         let variants: rustc_index::IndexVec<_, _> = adt_def
@@ -945,6 +951,10 @@ fn clean_ty_alias_inner_type<'tcx>(
             .iter()
             .map(|variant| clean_variant_def_with_args(variant, args, cx))
             .collect();
+
+        if !adt_def.did().is_local() {
+            inline::record_extern_fqn(cx, adt_def.did(), ItemType::Enum);
+        }
 
         TypeAliasInnerType::Enum {
             variants,
@@ -961,8 +971,14 @@ fn clean_ty_alias_inner_type<'tcx>(
             clean_variant_def_with_args(variant, args, cx).kind.inner_items().cloned().collect();
 
         if adt_def.is_struct() {
+            if !adt_def.did().is_local() {
+                inline::record_extern_fqn(cx, adt_def.did(), ItemType::Struct);
+            }
             TypeAliasInnerType::Struct { ctor_kind: variant.ctor_kind(), fields }
         } else {
+            if !adt_def.did().is_local() {
+                inline::record_extern_fqn(cx, adt_def.did(), ItemType::Union);
+            }
             TypeAliasInnerType::Union { fields }
         }
     })
@@ -2185,18 +2201,19 @@ pub(crate) fn clean_middle_ty<'tcx>(
         }
 
         ty::Alias(ty::Inherent, alias_ty) => {
+            let def_id = alias_ty.def_id;
             let alias_ty = bound_ty.rebind(alias_ty);
             let self_type = clean_middle_ty(alias_ty.map_bound(|ty| ty.self_ty()), cx, None, None);
 
             Type::QPath(Box::new(QPathData {
                 assoc: PathSegment {
-                    name: cx.tcx.associated_item(alias_ty.skip_binder().def_id).name,
+                    name: cx.tcx.associated_item(def_id).name,
                     args: GenericArgs::AngleBracketed {
                         args: ty_args_to_args(
                             cx,
                             alias_ty.map_bound(|ty| ty.args.as_slice()),
                             true,
-                            None,
+                            def_id,
                         )
                         .into(),
                         bindings: Default::default(),
@@ -2744,14 +2761,24 @@ fn clean_maybe_renamed_item<'tcx>(
                 }
 
                 let ty = cx.tcx.type_of(def_id).instantiate_identity();
-                let inner_type = clean_ty_alias_inner_type(ty, cx);
 
-                TypeAliasItem(Box::new(TypeAlias {
-                    generics,
-                    inner_type,
-                    type_: rustdoc_ty,
-                    item_type: Some(type_),
-                }))
+                let mut ret = Vec::new();
+                let inner_type = clean_ty_alias_inner_type(ty, cx, &mut ret);
+
+                ret.push(generate_item_with_correct_attrs(
+                    cx,
+                    TypeAliasItem(Box::new(TypeAlias {
+                        generics,
+                        inner_type,
+                        type_: rustdoc_ty,
+                        item_type: Some(type_),
+                    })),
+                    item.owner_id.def_id.to_def_id(),
+                    name,
+                    import_id,
+                    renamed,
+                ));
+                return ret;
             }
             ItemKind::Enum(ref def, generics) => EnumItem(Enum {
                 variants: def.variants.iter().map(|v| clean_variant(v, cx)).collect(),
@@ -3121,7 +3148,7 @@ fn clean_bound_vars<'tcx>(
                 name,
                 kind: GenericParamDefKind::Type {
                     did,
-                    bounds: Vec::new(),
+                    bounds: ThinVec::new(),
                     default: None,
                     synthetic: false,
                 },

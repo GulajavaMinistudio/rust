@@ -29,7 +29,8 @@ use crate::utils;
 use crate::utils::cache::{Interned, INTERNER};
 use crate::utils::exec::BootstrapCommand;
 use crate::utils::helpers::{
-    self, add_link_lib_path, dylib_path, dylib_path_var, output, t, up_to_date,
+    self, add_link_lib_path, dylib_path, dylib_path_var, output, t,
+    target_supports_cranelift_backend, up_to_date,
 };
 use crate::utils::render_tests::{add_flags_and_try_run_tests, try_run_tests};
 use crate::{envify, CLang, DocTests, GitRepo, Mode};
@@ -630,7 +631,7 @@ impl Step for Miri {
             SourceType::InTree,
             &[],
         );
-        let _guard = builder.msg_sysroot_tool(Kind::Test, compiler.stage, "miri", host, host);
+        let _guard = builder.msg_sysroot_tool(Kind::Test, compiler.stage, "miri", host, target);
 
         cargo.add_rustc_lib_path(builder, compiler);
 
@@ -1567,10 +1568,12 @@ note: if you're sure you want to do this, please open an issue as to why. In the
             cmd.arg("--coverage-dump-path").arg(coverage_dump);
         }
 
-        if mode == "run-make" || mode == "run-coverage" {
+        if mode == "run-coverage" {
+            // The demangler doesn't need the current compiler, so we can avoid
+            // unnecessary rebuilds by using the bootstrap compiler instead.
             let rust_demangler = builder
                 .ensure(tool::RustDemangler {
-                    compiler,
+                    compiler: compiler.with_stage(0),
                     target: compiler.host,
                     extra_features: Vec::new(),
                 })
@@ -2998,18 +3001,7 @@ impl Step for CodegenCranelift {
             return;
         }
 
-        let triple = run.target.triple;
-        let target_supported = if triple.contains("linux") {
-            triple.contains("x86_64")
-                || triple.contains("aarch64")
-                || triple.contains("s390x")
-                || triple.contains("riscv64gc")
-        } else if triple.contains("darwin") || triple.contains("windows") {
-            triple.contains("x86_64")
-        } else {
-            false
-        };
-        if !target_supported {
+        if !target_supports_cranelift_backend(run.target) {
             builder.info("target not supported by rustc_codegen_cranelift. skipping");
             return;
         }
