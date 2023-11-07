@@ -77,7 +77,7 @@ const LLD_FILE_NAMES: &[&str] = &["ld.lld", "ld64.lld", "lld-link", "wasm-ld"];
 ///
 /// If you make any major changes (such as adding new values or changing default values), please
 /// ensure that the associated PR ID is added to the end of this list.
-pub const CONFIG_CHANGE_HISTORY: &[usize] = &[115898, 116998];
+pub const CONFIG_CHANGE_HISTORY: &[usize] = &[115898, 116998, 117435];
 
 /// Extra --check-cfg to add when building
 /// (Mode restriction, config name, config values (if any))
@@ -1197,11 +1197,10 @@ impl Build {
             .filter(|s| !s.starts_with("-O") && !s.starts_with("/O"))
             .collect::<Vec<String>>();
 
-        // If we're compiling on macOS then we add a few unconditional flags
-        // indicating that we want libc++ (more filled out than libstdc++) and
-        // we want to compile for 10.7. This way we can ensure that
+        // If we're compiling C++ on macOS then we add a flag indicating that
+        // we want libc++ (more filled out than libstdc++), ensuring that
         // LLVM/etc are all properly compiled.
-        if target.contains("apple-darwin") {
+        if matches!(c, CLang::Cxx) && target.contains("apple-darwin") {
             base.push("-stdlib=libc++".into());
         }
 
