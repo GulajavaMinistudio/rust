@@ -21,7 +21,7 @@ use crate::{
     TupleArgumentsFlag::DontTupleArguments,
 };
 use rustc_ast as ast;
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{
     pluralize, struct_span_err, AddToDiagnostic, Applicability, Diagnostic, DiagnosticBuilder,
@@ -564,7 +564,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let span = args.get(i).map(|a| a.span).unwrap_or(expr.span);
                     let input = self.instantiate_binder_with_fresh_vars(
                         span,
-                        infer::LateBoundRegionConversionTime::FnCall,
+                        infer::BoundRegionConversionTime::FnCall,
                         fn_sig.input(i),
                     );
                     self.require_type_is_sized_deferred(
@@ -582,7 +582,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // with fresh vars.
             let output = self.instantiate_binder_with_fresh_vars(
                 expr.span,
-                infer::LateBoundRegionConversionTime::FnCall,
+                infer::BoundRegionConversionTime::FnCall,
                 fn_sig.output(),
             );
             self.require_type_is_sized_deferred(output, expr.span, traits::SizedReturnType);
@@ -2877,7 +2877,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     // two-phase not needed because index_ty is never mutable
                     self.demand_coerce(idx, idx_t, index_ty, None, AllowTwoPhase::No);
                     self.select_obligations_where_possible(|errors| {
-                        self.point_at_index_if_possible(errors, idx.span)
+                        self.point_at_index(errors, idx.span);
                     });
                     element_ty
                 }
@@ -3036,16 +3036,28 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         .ok()
     }
 
-    fn point_at_index_if_possible(
-        &self,
-        errors: &mut Vec<traits::FulfillmentError<'tcx>>,
-        span: Span,
-    ) {
+    fn point_at_index(&self, errors: &mut Vec<traits::FulfillmentError<'tcx>>, span: Span) {
+        let mut seen_preds = FxHashSet::default();
+        // We re-sort here so that the outer most root obligations comes first, as we have the
+        // subsequent weird logic to identify *every* relevant obligation for proper deduplication
+        // of diagnostics.
+        errors.sort_by_key(|error| error.root_obligation.recursion_depth);
         for error in errors {
-            match error.obligation.predicate.kind().skip_binder() {
-                ty::PredicateKind::Clause(ty::ClauseKind::Trait(predicate))
-                    if self.tcx.is_diagnostic_item(sym::SliceIndex, predicate.trait_ref.def_id) => {
+            match (
+                error.root_obligation.predicate.kind().skip_binder(),
+                error.obligation.predicate.kind().skip_binder(),
+            ) {
+                (ty::PredicateKind::Clause(ty::ClauseKind::Trait(predicate)), _)
+                    if self.tcx.lang_items().index_trait() == Some(predicate.trait_ref.def_id) =>
+                {
+                    seen_preds.insert(error.obligation.predicate.kind().skip_binder());
                 }
+                (_, ty::PredicateKind::Clause(ty::ClauseKind::Trait(predicate)))
+                    if self.tcx.is_diagnostic_item(sym::SliceIndex, predicate.trait_ref.def_id) =>
+                {
+                    seen_preds.insert(error.obligation.predicate.kind().skip_binder());
+                }
+                (root, pred) if seen_preds.contains(&pred) || seen_preds.contains(&root) => {}
                 _ => continue,
             }
             error.obligation.cause.span = span;

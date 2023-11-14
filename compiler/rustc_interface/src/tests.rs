@@ -679,7 +679,6 @@ fn test_unstable_options_tracking_hash() {
     untracked!(incremental_info, true);
     untracked!(incremental_verify_ich, true);
     untracked!(input_stats, true);
-    untracked!(keep_hygiene_data, true);
     untracked!(link_native_libraries, false);
     untracked!(llvm_time_trace, true);
     untracked!(ls, vec!["all".to_owned()]);
@@ -691,7 +690,6 @@ fn test_unstable_options_tracking_hash() {
     untracked!(no_leak_check, true);
     untracked!(no_parallel_llvm, true);
     untracked!(parse_only, true);
-    untracked!(perf_stats, true);
     // `pre_link_arg` is omitted because it just forwards to `pre_link_args`.
     untracked!(pre_link_args, vec![String::from("abc"), String::from("def")]);
     untracked!(print_codegen_stats, true);
