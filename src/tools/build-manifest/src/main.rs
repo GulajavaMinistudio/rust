@@ -50,7 +50,9 @@ static HOSTS: &[&str] = &[
 
 static TARGETS: &[&str] = &[
     "aarch64-apple-darwin",
+    "arm64e-apple-darwin",
     "aarch64-apple-ios",
+    "arm64e-apple-ios",
     "aarch64-apple-ios-sim",
     "aarch64-unknown-fuchsia",
     "aarch64-linux-android",
@@ -82,7 +84,6 @@ static TARGETS: &[&str] = &[
     "armv7r-none-eabi",
     "armv7r-none-eabihf",
     "armv7s-apple-ios",
-    "asmjs-unknown-emscripten",
     "bpfeb-unknown-none",
     "bpfel-unknown-none",
     "i386-apple-ios",
