@@ -42,7 +42,6 @@ use rustc_errors::{DiagnosticBuilder, ErrorGuaranteed, StashKey};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, DocLinkResMap, LifetimeRes, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LocalDefId, LocalDefIdMap};
-use rustc_hir::Node;
 use rustc_index::IndexVec;
 use rustc_macros::HashStable;
 use rustc_query_system::ich::StableHashingContext;
@@ -900,7 +899,7 @@ impl<'tcx> Term<'tcx> {
                     &*((ptr & !TAG_MASK) as *const WithCachedTypeInfo<ty::TyKind<'tcx>>),
                 ))),
                 CONST_TAG => TermKind::Const(ty::Const(Interned::new_unchecked(
-                    &*((ptr & !TAG_MASK) as *const ty::ConstData<'tcx>),
+                    &*((ptr & !TAG_MASK) as *const WithCachedTypeInfo<ty::ConstData<'tcx>>),
                 ))),
                 _ => core::intrinsics::unreachable(),
             }
@@ -967,7 +966,7 @@ impl<'tcx> TermKind<'tcx> {
             TermKind::Const(ct) => {
                 // Ensure we can use the tag bits.
                 assert_eq!(mem::align_of_val(&*ct.0.0) & TAG_MASK, 0);
-                (CONST_TAG, ct.0.0 as *const ty::ConstData<'tcx> as usize)
+                (CONST_TAG, ct.0.0 as *const WithCachedTypeInfo<ty::ConstData<'tcx>> as usize)
             }
         };
 
@@ -1295,25 +1294,6 @@ impl<'tcx> Predicate<'tcx> {
             | PredicateKind::Clause(ClauseKind::WellFormed(..))
             | PredicateKind::ObjectSafe(..)
             | PredicateKind::Clause(ClauseKind::TypeOutlives(..))
-            | PredicateKind::Clause(ClauseKind::ConstEvaluatable(..))
-            | PredicateKind::ConstEquate(..)
-            | PredicateKind::Ambiguous => None,
-        }
-    }
-
-    pub fn to_opt_type_outlives(self) -> Option<PolyTypeOutlivesPredicate<'tcx>> {
-        let predicate = self.kind();
-        match predicate.skip_binder() {
-            PredicateKind::Clause(ClauseKind::TypeOutlives(data)) => Some(predicate.rebind(data)),
-            PredicateKind::Clause(ClauseKind::Trait(..))
-            | PredicateKind::Clause(ClauseKind::ConstArgHasType(..))
-            | PredicateKind::Clause(ClauseKind::Projection(..))
-            | PredicateKind::AliasRelate(..)
-            | PredicateKind::Subtype(..)
-            | PredicateKind::Coerce(..)
-            | PredicateKind::Clause(ClauseKind::RegionOutlives(..))
-            | PredicateKind::Clause(ClauseKind::WellFormed(..))
-            | PredicateKind::ObjectSafe(..)
             | PredicateKind::Clause(ClauseKind::ConstEvaluatable(..))
             | PredicateKind::ConstEquate(..)
             | PredicateKind::Ambiguous => None,
@@ -2293,7 +2273,7 @@ impl<'tcx> TyCtxt<'tcx> {
     // FIXME(@lcnr): Remove this function.
     pub fn get_attrs_unchecked(self, did: DefId) -> &'tcx [ast::Attribute] {
         if let Some(did) = did.as_local() {
-            self.hir().attrs(self.hir().local_def_id_to_hir_id(did))
+            self.hir().attrs(self.local_def_id_to_hir_id(did))
         } else {
             self.item_attrs(did)
         }
@@ -2308,7 +2288,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let did: DefId = did.into();
         let filter_fn = move |a: &&ast::Attribute| a.has_name(attr);
         if let Some(did) = did.as_local() {
-            self.hir().attrs(self.hir().local_def_id_to_hir_id(did)).iter().filter(filter_fn)
+            self.hir().attrs(self.local_def_id_to_hir_id(did)).iter().filter(filter_fn)
         } else if cfg!(debug_assertions) && rustc_feature::is_builtin_only_local(attr) {
             bug!("tried to access the `only_local` attribute `{}` from an extern crate", attr);
         } else {
@@ -2326,7 +2306,7 @@ impl<'tcx> TyCtxt<'tcx> {
     {
         let filter_fn = move |a: &&ast::Attribute| a.path_matches(attr);
         if let Some(did) = did.as_local() {
-            self.hir().attrs(self.hir().local_def_id_to_hir_id(did)).iter().filter(filter_fn)
+            self.hir().attrs(self.local_def_id_to_hir_id(did)).iter().filter(filter_fn)
         } else {
             self.item_attrs(did).iter().filter(filter_fn)
         }
@@ -2530,22 +2510,6 @@ impl<'tcx> TyCtxt<'tcx> {
             .associated_types_for_impl_traits_in_associated_fn(trait_item_def_id)
             .is_empty();
     }
-}
-
-/// Yields the parent function's `LocalDefId` if `def_id` is an `impl Trait` definition.
-pub fn is_impl_trait_defn(tcx: TyCtxt<'_>, def_id: DefId) -> Option<LocalDefId> {
-    let def_id = def_id.as_local()?;
-    if let Node::Item(item) = tcx.hir().get_by_def_id(def_id) {
-        if let hir::ItemKind::OpaqueTy(opaque_ty) = item.kind {
-            return match opaque_ty.origin {
-                hir::OpaqueTyOrigin::FnReturn(parent) | hir::OpaqueTyOrigin::AsyncFn(parent) => {
-                    Some(parent)
-                }
-                hir::OpaqueTyOrigin::TyAlias { .. } => None,
-            };
-        }
-    }
-    None
 }
 
 pub fn int_ty(ity: ast::IntTy) -> IntTy {

@@ -70,7 +70,7 @@ impl<'tcx> GenericArgKind<'tcx> {
             GenericArgKind::Const(ct) => {
                 // Ensure we can use the tag bits.
                 assert_eq!(mem::align_of_val(&*ct.0.0) & TAG_MASK, 0);
-                (CONST_TAG, ct.0.0 as *const ty::ConstData<'tcx> as usize)
+                (CONST_TAG, ct.0.0 as *const WithCachedTypeInfo<ty::ConstData<'tcx>> as usize)
             }
         };
 
@@ -136,7 +136,7 @@ impl<'tcx> GenericArg<'tcx> {
                     &*((ptr & !TAG_MASK) as *const WithCachedTypeInfo<ty::TyKind<'tcx>>),
                 ))),
                 CONST_TAG => GenericArgKind::Const(ty::Const(Interned::new_unchecked(
-                    &*((ptr & !TAG_MASK) as *const ty::ConstData<'tcx>),
+                    &*((ptr & !TAG_MASK) as *const WithCachedTypeInfo<ty::ConstData<'tcx>>),
                 ))),
                 _ => intrinsics::unreachable(),
             }
@@ -601,13 +601,6 @@ impl<T> EarlyBinder<T> {
 impl<T> EarlyBinder<Option<T>> {
     pub fn transpose(self) -> Option<EarlyBinder<T>> {
         self.value.map(|value| EarlyBinder { value })
-    }
-}
-
-impl<T, U> EarlyBinder<(T, U)> {
-    pub fn transpose_tuple2(self) -> (EarlyBinder<T>, EarlyBinder<U>) {
-        let EarlyBinder { value: (lhs, rhs) } = self;
-        (EarlyBinder { value: lhs }, EarlyBinder { value: rhs })
     }
 }
 

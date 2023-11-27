@@ -27,7 +27,7 @@
 //!   the `n` parameter is 0, the function is assumed to not be UB. Furthermore, for `memcpy`, if
 //!   source and target pointer are equal, the function is assumed to not be UB.
 //!   (Note that these are standard assumptions among compilers:
-//!   [clang](https://reviews.llvm.org/D86993) and [GCC](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=32667) do the same.)
+//!   [clang](https://reviews.llvm.org/D86993) and [GCC](https://gcc.gnu.org/onlinedocs/gcc/Standards.html#C-Language) do the same.)
 //!   These functions are often provided by the system libc, but can also be provided by the
 //!   [compiler-builtins crate](https://crates.io/crates/compiler_builtins).
 //!   Note that the library does not guarantee that it will always make these assumptions, so Rust
@@ -178,6 +178,7 @@
 #![feature(is_ascii_octdigit)]
 #![feature(isqrt)]
 #![feature(maybe_uninit_uninit_array)]
+#![feature(non_null_convenience)]
 #![feature(offset_of)]
 #![feature(offset_of_enum)]
 #![feature(ptr_alignment_type)]

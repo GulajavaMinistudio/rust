@@ -289,8 +289,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ExprKind::AddrOf(kind, mutbl, oprnd) => {
                 self.check_expr_addr_of(kind, mutbl, oprnd, expected, expr)
             }
-            ExprKind::Path(QPath::LangItem(lang_item, _, hir_id)) => {
-                self.check_lang_item_path(lang_item, expr, hir_id)
+            ExprKind::Path(QPath::LangItem(lang_item, _)) => {
+                self.check_lang_item_path(lang_item, expr)
             }
             ExprKind::Path(ref qpath) => self.check_expr_path(qpath, expr, &[]),
             ExprKind::InlineAsm(asm) => {
@@ -497,9 +497,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         lang_item: hir::LangItem,
         expr: &'tcx hir::Expr<'tcx>,
-        hir_id: Option<hir::HirId>,
     ) -> Ty<'tcx> {
-        self.resolve_lang_item_path(lang_item, expr.span, expr.hir_id, hir_id).1
+        self.resolve_lang_item_path(lang_item, expr.span, expr.hir_id).1
     }
 
     pub(crate) fn check_expr_path(
@@ -526,14 +525,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             _ => self.instantiate_value_path(segs, opt_ty, res, expr.span, expr.hir_id).0,
         };
 
-        if let ty::FnDef(did, callee_args) = *ty.kind() {
+        if let ty::FnDef(did, _) = *ty.kind() {
             let fn_sig = ty.fn_sig(tcx);
 
-            // HACK: whenever we get a FnDef in a non-const context, enforce effects to get the
-            // default `host = true` to avoid inference errors later.
-            if tcx.hir().body_const_context(self.body_id).is_none() {
-                self.enforce_context_effects(expr.hir_id, qpath.span(), did, callee_args);
-            }
             if tcx.fn_sig(did).skip_binder().abi() == RustIntrinsic
                 && tcx.item_name(did) == sym::transmute
             {
@@ -1932,7 +1926,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// 8 |     foo::Foo {};
     ///   |     ^^^^^^^^ missing `you_can_use_this_field`
     ///
-    /// error: aborting due to previous error
+    /// error: aborting due to 1 previous error
     /// ```
     fn report_missing_fields(
         &self,
@@ -2049,7 +2043,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// 8 |     foo::Foo {};
     ///   |     ^^^^^^^^
     ///
-    /// error: aborting due to previous error
+    /// error: aborting due to 1 previous error
     /// ```
     fn report_private_fields(
         &self,
@@ -2350,7 +2344,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             match deref_base_ty.kind() {
                 ty::Adt(base_def, args) if !base_def.is_enum() => {
                     debug!("struct named {:?}", deref_base_ty);
-                    let body_hir_id = self.tcx.hir().local_def_id_to_hir_id(self.body_id);
+                    let body_hir_id = self.tcx.local_def_id_to_hir_id(self.body_id);
                     let (ident, def_scope) =
                         self.tcx.adjust_ident_and_get_scope(field, base_def.did(), body_hir_id);
                     let fields = &base_def.non_enum_variant().fields;
@@ -2697,7 +2691,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
         let param_def_id = generic_param.def_id;
         let param_hir_id = match param_def_id.as_local() {
-            Some(x) => self.tcx.hir().local_def_id_to_hir_id(x),
+            Some(x) => self.tcx.local_def_id_to_hir_id(x),
             None => return,
         };
         let param_span = self.tcx.hir().span(param_hir_id);
@@ -3274,7 +3268,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             match container.kind() {
                 ty::Adt(container_def, args) if container_def.is_enum() => {
-                    let block = self.tcx.hir().local_def_id_to_hir_id(self.body_id);
+                    let block = self.tcx.local_def_id_to_hir_id(self.body_id);
                     let (ident, _def_scope) =
                         self.tcx.adjust_ident_and_get_scope(field, container_def.did(), block);
 
@@ -3356,7 +3350,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     continue;
                 }
                 ty::Adt(container_def, args) => {
-                    let block = self.tcx.hir().local_def_id_to_hir_id(self.body_id);
+                    let block = self.tcx.local_def_id_to_hir_id(self.body_id);
                     let (ident, def_scope) =
                         self.tcx.adjust_ident_and_get_scope(field, container_def.did(), block);
 

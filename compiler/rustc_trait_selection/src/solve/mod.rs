@@ -64,19 +64,12 @@ enum GoalEvaluationKind {
 
 trait CanonicalResponseExt {
     fn has_no_inference_or_external_constraints(&self) -> bool;
-
-    fn has_only_region_constraints(&self) -> bool;
 }
 
 impl<'tcx> CanonicalResponseExt for Canonical<'tcx, Response<'tcx>> {
     fn has_no_inference_or_external_constraints(&self) -> bool {
         self.value.external_constraints.region_constraints.is_empty()
             && self.value.var_values.is_identity()
-            && self.value.external_constraints.opaque_types.is_empty()
-    }
-
-    fn has_only_region_constraints(&self) -> bool {
-        self.value.var_values.is_identity_modulo_regions()
             && self.value.external_constraints.opaque_types.is_empty()
     }
 }
@@ -334,11 +327,6 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             }
         }
 
-        // FIXME(@lcnr): If the normalization of the alias adds an inference constraint which
-        // causes a previously added goal to fail, then we treat the alias as rigid.
-        //
-        // These feels like a potential issue, I should look into writing some tests here
-        // and then probably changing `commit_if_ok` to not inherit the parent goals.
         match self.commit_if_ok(|this| {
             let normalized_ty = this.next_ty_infer();
             let normalizes_to_goal = Goal::new(
