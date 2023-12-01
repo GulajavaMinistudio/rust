@@ -141,7 +141,19 @@ impl<'a> Parser<'a> {
         };
 
         // Parse the first pattern (`p_0`).
-        let mut first_pat = self.parse_pat_no_top_alt(expected, syntax_loc)?;
+        let mut first_pat = match self.parse_pat_no_top_alt(expected, syntax_loc) {
+            Ok(pat) => pat,
+            Err(mut err)
+                if self.token.is_reserved_ident()
+                    && !self.token.is_keyword(kw::In)
+                    && !self.token.is_keyword(kw::If) =>
+            {
+                err.emit();
+                self.bump();
+                self.mk_pat(self.token.span, PatKind::Wild)
+            }
+            Err(err) => return Err(err),
+        };
         if rc == RecoverComma::Yes {
             self.maybe_recover_unexpected_comma(
                 first_pat.span,
@@ -368,17 +380,21 @@ impl<'a> Parser<'a> {
             self.recover_dotdotdot_rest_pat(lo)
         } else if let Some(form) = self.parse_range_end() {
             self.parse_pat_range_to(form)? // `..=X`, `...X`, or `..X`.
+        } else if self.eat(&token::Not) {
+            // Parse `!`
+            self.sess.gated_spans.gate(sym::never_patterns, self.prev_token.span);
+            PatKind::Never
         } else if self.eat_keyword(kw::Underscore) {
-            // Parse _
+            // Parse `_`
             PatKind::Wild
         } else if self.eat_keyword(kw::Mut) {
             self.parse_pat_ident_mut(syntax_loc)?
         } else if self.eat_keyword(kw::Ref) {
             if self.check_keyword(kw::Box) {
-                // Suggest `box ref` and quit parsing pattern to prevent series of
-                // misguided diagnostics from later stages of the compiler.
+                // Suggest `box ref`.
                 let span = self.prev_token.span.to(self.token.span);
-                return Err(self.sess.create_err(SwitchRefBoxOrder { span }));
+                self.bump();
+                self.sess.emit_err(SwitchRefBoxOrder { span });
             }
             // Parse ref ident @ pat / ref mut ident @ pat
             let mutbl = self.parse_mutability();
@@ -835,7 +851,7 @@ impl<'a> Parser<'a> {
         binding_annotation: BindingAnnotation,
         syntax_loc: Option<PatternLocation>,
     ) -> PResult<'a, PatKind> {
-        let ident = self.parse_ident()?;
+        let ident = self.parse_ident_common(false)?;
 
         if self.may_recover()
             && !matches!(syntax_loc, Some(PatternLocation::FunctionParameter))

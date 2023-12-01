@@ -492,8 +492,12 @@ parse_match_arm_body_without_braces = `match` arm body without braces
         } with a body
     .suggestion_use_comma_not_semicolon = replace `;` with `,` to end a `match` arm expression
 
+parse_maybe_comparison = you might have meant to compare for equality
+
 parse_maybe_fn_typo_with_impl = you might have meant to write `impl` instead of `fn`
     .suggestion = replace `fn` with `impl` here
+
+parse_maybe_missing_let = you might have meant to continue the let-chain
 
 parse_maybe_recover_from_bad_qpath_stage_2 =
     missing angle brackets in associated item path
@@ -772,6 +776,9 @@ parse_unexpected_lifetime_in_pattern = unexpected lifetime `{$symbol}` in patter
 
 parse_unexpected_parentheses_in_for_head = unexpected parentheses surrounding `for` loop head
     .suggestion = remove parentheses in `for` loop
+
+parse_unexpected_parentheses_in_match_arm_pattern = unexpected parentheses surrounding `match` arm pattern
+    .suggestion = remove parentheses surrounding the pattern
 
 parse_unexpected_self_in_generic_parameters = unexpected keyword `Self` in generic parameters
     .note = you cannot use `Self` as a generic parameter because it is reserved for associated items
