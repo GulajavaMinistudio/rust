@@ -98,6 +98,8 @@ pub(crate) type UnificationTable<'a, 'tcx, T> = ut::UnificationTable<
 /// call to `start_snapshot` and `rollback_to`.
 #[derive(Clone)]
 pub struct InferCtxtInner<'tcx> {
+    undo_log: InferCtxtUndoLogs<'tcx>,
+
     /// Cache for projections.
     ///
     /// This cache is snapshotted along with the infcx.
@@ -162,8 +164,6 @@ pub struct InferCtxtInner<'tcx> {
     /// that all type inference variables have been bound and so forth.
     region_obligations: Vec<RegionObligation<'tcx>>,
 
-    undo_log: InferCtxtUndoLogs<'tcx>,
-
     /// Caches for opaque type inference.
     opaque_type_storage: OpaqueTypeStorage<'tcx>,
 }
@@ -171,9 +171,10 @@ pub struct InferCtxtInner<'tcx> {
 impl<'tcx> InferCtxtInner<'tcx> {
     fn new() -> InferCtxtInner<'tcx> {
         InferCtxtInner {
+            undo_log: InferCtxtUndoLogs::default(),
+
             projection_cache: Default::default(),
             type_variable_storage: type_variable::TypeVariableStorage::new(),
-            undo_log: InferCtxtUndoLogs::default(),
             const_unification_storage: ut::UnificationTableStorage::new(),
             int_unification_storage: ut::UnificationTableStorage::new(),
             float_unification_storage: ut::UnificationTableStorage::new(),
@@ -345,36 +346,60 @@ pub struct InferCtxt<'tcx> {
 impl<'tcx> ty::InferCtxtLike for InferCtxt<'tcx> {
     type Interner = TyCtxt<'tcx>;
 
-    fn universe_of_ty(&self, ty: ty::InferTy) -> Option<ty::UniverseIndex> {
-        use InferTy::*;
-        match ty {
-            // FIXME(BoxyUwU): this is kind of jank and means that printing unresolved
-            // ty infers will give you the universe of the var it resolved to not the universe
-            // it actually had. It also means that if you have a `?0.1` and infer it to `u8` then
-            // try to print out `?0.1` it will just print `?0`.
-            TyVar(ty_vid) => match self.probe_ty_var(ty_vid) {
-                Err(universe) => Some(universe),
-                Ok(_) => None,
-            },
-            IntVar(_) | FloatVar(_) | FreshTy(_) | FreshIntTy(_) | FreshFloatTy(_) => None,
+    fn interner(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn universe_of_ty(&self, vid: TyVid) -> Option<ty::UniverseIndex> {
+        // FIXME(BoxyUwU): this is kind of jank and means that printing unresolved
+        // ty infers will give you the universe of the var it resolved to not the universe
+        // it actually had. It also means that if you have a `?0.1` and infer it to `u8` then
+        // try to print out `?0.1` it will just print `?0`.
+        match self.probe_ty_var(vid) {
+            Err(universe) => Some(universe),
+            Ok(_) => None,
         }
     }
 
-    fn universe_of_ct(&self, ct: ty::InferConst) -> Option<ty::UniverseIndex> {
-        use ty::InferConst::*;
-        match ct {
-            // Same issue as with `universe_of_ty`
-            Var(ct_vid) => match self.probe_const_var(ct_vid) {
-                Err(universe) => Some(universe),
-                Ok(_) => None,
-            },
-            EffectVar(_) => None,
-            Fresh(_) => None,
+    fn universe_of_ct(&self, ct: ConstVid) -> Option<ty::UniverseIndex> {
+        // Same issue as with `universe_of_ty`
+        match self.probe_const_var(ct) {
+            Err(universe) => Some(universe),
+            Ok(_) => None,
         }
     }
 
     fn universe_of_lt(&self, lt: ty::RegionVid) -> Option<ty::UniverseIndex> {
         Some(self.universe_of_region_vid(lt))
+    }
+
+    fn root_ty_var(&self, vid: TyVid) -> TyVid {
+        self.root_var(vid)
+    }
+
+    fn probe_ty_var(&self, vid: TyVid) -> Option<Ty<'tcx>> {
+        self.probe_ty_var(vid).ok()
+    }
+
+    fn root_lt_var(&self, vid: ty::RegionVid) -> ty::RegionVid {
+        self.root_region_var(vid)
+    }
+
+    fn probe_lt_var(&self, vid: ty::RegionVid) -> Option<ty::Region<'tcx>> {
+        let re = self
+            .inner
+            .borrow_mut()
+            .unwrap_region_constraints()
+            .opportunistic_resolve_var(self.tcx, vid);
+        if re.is_var() { None } else { Some(re) }
+    }
+
+    fn root_ct_var(&self, vid: ConstVid) -> ConstVid {
+        self.root_const_var(vid)
+    }
+
+    fn probe_ct_var(&self, vid: ConstVid) -> Option<ty::Const<'tcx>> {
+        self.probe_const_var(vid).ok()
     }
 }
 
@@ -759,7 +784,7 @@ impl<'tcx> InferCtxt<'tcx> {
     pub fn type_var_origin(&self, ty: Ty<'tcx>) -> Option<TypeVariableOrigin> {
         match *ty.kind() {
             ty::Infer(ty::TyVar(vid)) => {
-                Some(*self.inner.borrow_mut().type_variables().var_origin(vid))
+                Some(self.inner.borrow_mut().type_variables().var_origin(vid))
             }
             _ => None,
         }
@@ -769,11 +794,11 @@ impl<'tcx> InferCtxt<'tcx> {
         freshen::TypeFreshener::new(self)
     }
 
-    pub fn unsolved_variables(&self) -> Vec<Ty<'tcx>> {
+    pub fn unresolved_variables(&self) -> Vec<Ty<'tcx>> {
         let mut inner = self.inner.borrow_mut();
         let mut vars: Vec<Ty<'_>> = inner
             .type_variables()
-            .unsolved_variables()
+            .unresolved_variables()
             .into_iter()
             .map(|t| Ty::new_var(self.tcx, t))
             .collect();
@@ -1282,12 +1307,7 @@ impl<'tcx> InferCtxt<'tcx> {
     pub fn region_var_origin(&self, vid: ty::RegionVid) -> RegionVariableOrigin {
         let mut inner = self.inner.borrow_mut();
         let inner = &mut *inner;
-        inner
-            .region_constraint_storage
-            .as_mut()
-            .expect("regions already resolved")
-            .with_log(&mut inner.undo_log)
-            .var_origin(vid)
+        inner.unwrap_region_constraints().var_origin(vid)
     }
 
     /// Clone the list of variable regions. This is used only during NLL processing
@@ -1345,6 +1365,10 @@ impl<'tcx> InferCtxt<'tcx> {
 
     pub fn root_var(&self, var: ty::TyVid) -> ty::TyVid {
         self.inner.borrow_mut().type_variables().root_var(var)
+    }
+
+    pub fn root_region_var(&self, var: ty::RegionVid) -> ty::RegionVid {
+        self.inner.borrow_mut().unwrap_region_constraints().root_var(var)
     }
 
     pub fn root_const_var(&self, var: ty::ConstVid) -> ty::ConstVid {

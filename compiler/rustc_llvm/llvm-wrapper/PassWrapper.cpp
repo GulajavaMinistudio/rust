@@ -410,7 +410,7 @@ extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
     const char *SplitDwarfFile,
     const char *OutputObjFile,
     const char *DebugInfoCompression,
-    bool ForceEmulatedTls,
+    bool UseEmulatedTls,
     const char *ArgsCstrBuff, size_t ArgsCstrBuffLen) {
 
   auto OptLevel = fromRust(RustOptLevel);
@@ -456,13 +456,9 @@ extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
   Options.UseInitArray = UseInitArray;
 
 #if LLVM_VERSION_LT(17, 0)
-  if (ForceEmulatedTls) {
-    Options.ExplicitEmulatedTLS = true;
-    Options.EmulatedTLS = true;
-  }
-#else
-  Options.EmulatedTLS = ForceEmulatedTls || Trip.hasDefaultEmulatedTLS();
+  Options.ExplicitEmulatedTLS = true;
 #endif
+  Options.EmulatedTLS = UseEmulatedTls;
 
   if (TrapUnreachable) {
     // Tell LLVM to codegen `unreachable` into an explicit trap instruction.
@@ -845,7 +841,11 @@ LLVMRustOptimize(
         // cargo run tests in multhreading mode by default
         // so use atomics for coverage counters
         Options.Atomic = true;
+#if LLVM_VERSION_GE(18, 0)
+        MPM.addPass(InstrProfilingLoweringPass(Options, false));
+#else
         MPM.addPass(InstrProfiling(Options, false));
+#endif
       }
     );
   }

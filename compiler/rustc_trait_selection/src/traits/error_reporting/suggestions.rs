@@ -2587,6 +2587,23 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         CoroutineKind::Async(CoroutineSource::Closure) => {
                             format!("future created by async closure is not {trait_name}")
                         }
+                        CoroutineKind::AsyncGen(CoroutineSource::Fn) => self
+                            .tcx
+                            .parent(coroutine_did)
+                            .as_local()
+                            .map(|parent_did| self.tcx.local_def_id_to_hir_id(parent_did))
+                            .and_then(|parent_hir_id| hir.opt_name(parent_hir_id))
+                            .map(|name| {
+                                format!("async iterator returned by `{name}` is not {trait_name}")
+                            })?,
+                        CoroutineKind::AsyncGen(CoroutineSource::Block) => {
+                            format!("async iterator created by async gen block is not {trait_name}")
+                        }
+                        CoroutineKind::AsyncGen(CoroutineSource::Closure) => {
+                            format!(
+                                "async iterator created by async gen closure is not {trait_name}"
+                            )
+                        }
                         CoroutineKind::Gen(CoroutineSource::Fn) => self
                             .tcx
                             .parent(coroutine_did)
@@ -3129,6 +3146,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     | Some(hir::CoroutineKind::Coroutine)
                     | Some(hir::CoroutineKind::Gen(_)) => "yield",
                     Some(hir::CoroutineKind::Async(..)) => "await",
+                    Some(hir::CoroutineKind::AsyncGen(_)) => "yield`/`await",
                 };
                 err.note(format!(
                     "all values live across `{what}` must have a statically known size"
@@ -3610,17 +3628,19 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             is_derivable_trait &&
                 // Ensure all fields impl the trait.
                 adt.all_fields().all(|field| {
-                    let field_ty = field.ty(self.tcx, args);
+                    let field_ty = ty::GenericArg::from(field.ty(self.tcx, args));
                     let trait_args = match diagnostic_name {
                         sym::PartialEq | sym::PartialOrd => {
                             Some(field_ty)
                         }
                         _ => None,
                     };
+                    // Also add host param, if present
+                    let host = self.tcx.generics_of(trait_pred.def_id()).host_effect_index.map(|idx| trait_pred.skip_binder().trait_ref.args[idx]);
                     let trait_pred = trait_pred.map_bound_ref(|tr| ty::TraitPredicate {
                         trait_ref: ty::TraitRef::new(self.tcx,
                             trait_pred.def_id(),
-                            [field_ty].into_iter().chain(trait_args),
+                            [field_ty].into_iter().chain(trait_args).chain(host),
                         ),
                         ..*tr
                     });
@@ -3641,6 +3661,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     trait_pred.skip_binder().self_ty(),
                     diagnostic_name,
                 ),
+                // FIXME(effects, const_trait_impl) derive_const as suggestion?
                 format!("#[derive({diagnostic_name})]\n"),
                 Applicability::MaybeIncorrect,
             );
