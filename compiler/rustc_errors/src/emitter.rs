@@ -581,7 +581,7 @@ impl Emitter for SilentEmitter {
             if let Some(ref note) = self.fatal_note {
                 d.note(note.clone());
             }
-            self.fatal_handler.emit_diagnostic(&mut d);
+            self.fatal_handler.emit_diagnostic(d);
         }
     }
 }
@@ -2674,6 +2674,14 @@ fn from_stderr(color: ColorConfig) -> Destination {
     }
 }
 
+/// On Windows, BRIGHT_BLUE is hard to read on black. Use cyan instead.
+///
+/// See #36178.
+#[cfg(windows)]
+const BRIGHT_BLUE: Color = Color::Cyan;
+#[cfg(not(windows))]
+const BRIGHT_BLUE: Color = Color::Blue;
+
 impl Style {
     fn color_spec(&self, lvl: Level) -> ColorSpec {
         let mut spec = ColorSpec::new();
@@ -2688,11 +2696,7 @@ impl Style {
             Style::LineNumber => {
                 spec.set_bold(true);
                 spec.set_intense(true);
-                if cfg!(windows) {
-                    spec.set_fg(Some(Color::Cyan));
-                } else {
-                    spec.set_fg(Some(Color::Blue));
-                }
+                spec.set_fg(Some(BRIGHT_BLUE));
             }
             Style::Quotation => {}
             Style::MainHeaderMsg => {
@@ -2707,11 +2711,7 @@ impl Style {
             }
             Style::UnderlineSecondary | Style::LabelSecondary => {
                 spec.set_bold(true).set_intense(true);
-                if cfg!(windows) {
-                    spec.set_fg(Some(Color::Cyan));
-                } else {
-                    spec.set_fg(Some(Color::Blue));
-                }
+                spec.set_fg(Some(BRIGHT_BLUE));
             }
             Style::HeaderMsg | Style::NoStyle => {}
             Style::Level(lvl) => {
@@ -2719,7 +2719,7 @@ impl Style {
                 spec.set_bold(true);
             }
             Style::Highlight => {
-                spec.set_bold(true);
+                spec.set_bold(true).set_fg(Some(Color::Magenta));
             }
         }
         spec

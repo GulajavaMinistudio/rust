@@ -320,7 +320,7 @@ fn compare_method_predicate_entailment<'tcx>(
     if check_implied_wf == CheckImpliedWfMode::Check && !(impl_sig, trait_sig).references_error() {
         // Select obligations to make progress on inference before processing
         // the wf obligation below.
-        // FIXME(-Ztrait-solver=next): Not needed when the hack below is removed.
+        // FIXME(-Znext-solver): Not needed when the hack below is removed.
         let errors = ocx.select_where_possible();
         if !errors.is_empty() {
             let reported = infcx.err_ctxt().report_fulfillment_errors(errors);
@@ -333,7 +333,7 @@ fn compare_method_predicate_entailment<'tcx>(
         // trigger the lint. Instead, let's only consider type outlives and
         // region outlives obligations.
         //
-        // FIXME(-Ztrait-solver=next): Try removing this hack again once
+        // FIXME(-Znext-solver): Try removing this hack again once
         // the new solver is stable.
         let mut wf_args: smallvec::SmallVec<[_; 4]> =
             unnormalized_impl_sig.inputs_and_output.iter().map(|ty| ty.into()).collect();
@@ -2181,7 +2181,7 @@ pub(super) fn check_type_bounds<'tcx>(
     let impl_ty_span = if impl_ty.is_impl_trait_in_trait() {
         tcx.def_span(impl_ty_def_id)
     } else {
-        match tcx.hir().get_by_def_id(impl_ty_def_id) {
+        match tcx.hir_node_by_def_id(impl_ty_def_id) {
             hir::Node::TraitItem(hir::TraitItem {
                 kind: hir::TraitItemKind::Type(_, Some(ty)),
                 ..

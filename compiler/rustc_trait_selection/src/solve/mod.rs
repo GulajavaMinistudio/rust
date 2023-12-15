@@ -1,7 +1,6 @@
 //! The next-generation trait solver, currently still WIP.
 //!
-//! As a user of rust, you can use `-Ztrait-solver=next` or `next-coherence`
-//! to enable the new trait solver always, or just within coherence, respectively.
+//! As a user of rust, you can use `-Znext-solver` to enable the new trait solver.
 //!
 //! As a developer of rustc, you shouldn't be using the new trait
 //! solver without asking the trait-system-refactor-initiative, but it can
@@ -41,9 +40,8 @@ mod trait_goals;
 
 pub use eval_ctxt::{EvalCtxt, GenerateProofTree, InferCtxtEvalExt, InferCtxtSelectExt};
 pub use fulfill::FulfillmentCtxt;
-pub(crate) use normalize::{
-    deeply_normalize, deeply_normalize_for_diagnostics, deeply_normalize_with_skipped_universes,
-};
+pub(crate) use normalize::deeply_normalize_for_diagnostics;
+pub use normalize::{deeply_normalize, deeply_normalize_with_skipped_universes};
 
 #[derive(Debug, Clone, Copy)]
 enum SolverMode {
@@ -249,7 +247,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             return None;
         }
 
-        // FIXME(-Ztrait-solver=next): We should instead try to find a `Certainty::Yes` response with
+        // FIXME(-Znext-solver): We should instead try to find a `Certainty::Yes` response with
         // a subset of the constraints that all the other responses have.
         let one = responses[0];
         if responses[1..].iter().all(|&resp| resp == one) {
