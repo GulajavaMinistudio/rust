@@ -86,6 +86,7 @@ pub mod inline;
 mod instsimplify;
 mod jump_threading;
 mod large_enums;
+mod lint;
 mod lower_intrinsics;
 mod lower_slice_len;
 mod match_branches;
@@ -266,7 +267,7 @@ fn mir_const_qualif(tcx: TyCtxt<'_>, def: LocalDefId) -> ConstQualifs {
     let body = &tcx.mir_const(def).borrow();
 
     if body.return_ty().references_error() {
-        tcx.sess.span_delayed_bug(body.span, "mir_const_qualif: MIR had errors");
+        tcx.dcx().span_delayed_bug(body.span, "mir_const_qualif: MIR had errors");
         return Default::default();
     }
 
@@ -587,7 +588,6 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             // destroy the SSA property. It should still happen before const-propagation, so the
             // latter pass will leverage the created opportunities.
             &separate_const_switch::SeparateConstSwitch,
-            &const_prop::ConstProp,
             &gvn::GVN,
             &simplify::SimplifyLocals::AfterGVN,
             &dataflow_const_prop::DataflowConstProp,

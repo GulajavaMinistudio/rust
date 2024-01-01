@@ -32,9 +32,7 @@ use rustc_ast::{HasAttrs, HasTokens, Unsafe, Visibility, VisibilityKind};
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::PResult;
-use rustc_errors::{
-    Applicability, DiagnosticBuilder, ErrorGuaranteed, FatalError, IntoDiagnostic, MultiSpan,
-};
+use rustc_errors::{Applicability, DiagnosticBuilder, FatalError, MultiSpan};
 use rustc_session::parse::ParseSess;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
@@ -48,6 +46,7 @@ use crate::errors::{
 };
 
 bitflags::bitflags! {
+    #[derive(Clone, Copy)]
     struct Restrictions: u8 {
         const STMT_EXPR         = 1 << 0;
         const NO_STRUCT_LITERAL = 1 << 1;
@@ -322,9 +321,15 @@ impl TokenType {
     }
 }
 
+/// Used by [`Parser::expect_any_with_type`].
 #[derive(Copy, Clone, Debug)]
 enum TokenExpectType {
+    /// Unencountered tokens are inserted into [`Parser::expected_tokens`].
+    /// See [`Parser::check`].
     Expect,
+
+    /// Unencountered tokens are not inserted into [`Parser::expected_tokens`].
+    /// See [`Parser::check_noexpect`].
     NoExpect,
 }
 
@@ -506,18 +511,10 @@ impl<'a> Parser<'a> {
     }
 
     fn ident_or_err(&mut self, recover: bool) -> PResult<'a, (Ident, /* is_raw */ bool)> {
-        let result = self.token.ident().ok_or_else(|| self.expected_ident_found(recover));
-
-        let (ident, is_raw) = match result {
-            Ok(ident) => ident,
-            Err(err) => match err {
-                // we recovered!
-                Ok(ident) => ident,
-                Err(err) => return Err(err),
-            },
-        };
-
-        Ok((ident, is_raw))
+        match self.token.ident() {
+            Some(ident) => Ok(ident),
+            None => self.expected_ident_found(recover),
+        }
     }
 
     /// Checks if the next token is `tok`, and returns `true` if so.
@@ -603,7 +600,7 @@ impl<'a> Parser<'a> {
             && let Some((ident, /* is_raw */ false)) = self.token.ident()
             && ident.as_str().to_lowercase() == kw.as_str().to_lowercase()
         {
-            self.sess.emit_err(errors::KwBadCase { span: ident.span, kw: kw.as_str() });
+            self.dcx().emit_err(errors::KwBadCase { span: ident.span, kw: kw.as_str() });
             self.bump();
             return true;
         }
@@ -768,13 +765,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Checks if the next token is contained within `kets`, and returns `true` if so.
     fn expect_any_with_type(&mut self, kets: &[&TokenKind], expect: TokenExpectType) -> bool {
         kets.iter().any(|k| match expect {
             TokenExpectType::Expect => self.check(k),
-            TokenExpectType::NoExpect => self.token == **k,
+            TokenExpectType::NoExpect => self.check_noexpect(k),
         })
     }
 
+    /// Parses a sequence until the specified delimiters. The function
+    /// `f` must consume tokens until reaching the next separator or
+    /// closing bracket.
     fn parse_seq_to_before_tokens<T>(
         &mut self,
         kets: &[&TokenKind],
@@ -793,13 +794,15 @@ impl<'a> Parser<'a> {
             }
             if let Some(t) = &sep.sep {
                 if first {
+                    // no separator for the first element
                     first = false;
                 } else {
+                    // check for separator
                     match self.expect(t) {
-                        Ok(false) => {
+                        Ok(false) /* not recovered */ => {
                             self.current_closure.take();
                         }
-                        Ok(true) => {
+                        Ok(true) /* recovered */ => {
                             self.current_closure.take();
                             recovered = true;
                             break;
@@ -910,7 +913,7 @@ impl<'a> Parser<'a> {
     fn recover_missing_braces_around_closure_body(
         &mut self,
         closure_spans: ClosureSpans,
-        mut expect_err: DiagnosticBuilder<'_, ErrorGuaranteed>,
+        mut expect_err: DiagnosticBuilder<'_>,
     ) -> PResult<'a, ()> {
         let initial_semicolon = self.token.span;
 
@@ -967,7 +970,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Parses a sequence, not including the closing delimiter. The function
+    /// Parses a sequence, not including the delimiters. The function
     /// `f` must consume tokens until reaching the next separator or
     /// closing bracket.
     fn parse_seq_to_before_end<T>(
@@ -975,11 +978,11 @@ impl<'a> Parser<'a> {
         ket: &TokenKind,
         sep: SeqSep,
         f: impl FnMut(&mut Parser<'a>) -> PResult<'a, T>,
-    ) -> PResult<'a, (ThinVec<T>, bool, bool)> {
+    ) -> PResult<'a, (ThinVec<T>, bool /* trailing */, bool /* recovered */)> {
         self.parse_seq_to_before_tokens(&[ket], sep, TokenExpectType::Expect, f)
     }
 
-    /// Parses a sequence, including the closing delimiter. The function
+    /// Parses a sequence, including only the closing delimiter. The function
     /// `f` must consume tokens until reaching the next separator or
     /// closing bracket.
     fn parse_seq_to_end<T>(
@@ -995,7 +998,7 @@ impl<'a> Parser<'a> {
         Ok((val, trailing))
     }
 
-    /// Parses a sequence, including the closing delimiter. The function
+    /// Parses a sequence, including both delimiters. The function
     /// `f` must consume tokens until reaching the next separator or
     /// closing bracket.
     fn parse_unspanned_seq<T>(
@@ -1004,16 +1007,19 @@ impl<'a> Parser<'a> {
         ket: &TokenKind,
         sep: SeqSep,
         f: impl FnMut(&mut Parser<'a>) -> PResult<'a, T>,
-    ) -> PResult<'a, (ThinVec<T>, bool)> {
+    ) -> PResult<'a, (ThinVec<T>, bool /* trailing */)> {
         self.expect(bra)?;
         self.parse_seq_to_end(ket, sep, f)
     }
 
+    /// Parses a comma-separated sequence, including both delimiters.
+    /// The function `f` must consume tokens until reaching the next separator or
+    /// closing bracket.
     fn parse_delim_comma_seq<T>(
         &mut self,
         delim: Delimiter,
         f: impl FnMut(&mut Parser<'a>) -> PResult<'a, T>,
-    ) -> PResult<'a, (ThinVec<T>, bool)> {
+    ) -> PResult<'a, (ThinVec<T>, bool /* trailing */)> {
         self.parse_unspanned_seq(
             &token::OpenDelim(delim),
             &token::CloseDelim(delim),
@@ -1022,10 +1028,13 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parses a comma-separated sequence delimited by parentheses (e.g. `(x, y)`).
+    /// The function `f` must consume tokens until reaching the next separator or
+    /// closing bracket.
     fn parse_paren_comma_seq<T>(
         &mut self,
         f: impl FnMut(&mut Parser<'a>) -> PResult<'a, T>,
-    ) -> PResult<'a, (ThinVec<T>, bool)> {
+    ) -> PResult<'a, (ThinVec<T>, bool /* trailing */)> {
         self.parse_delim_comma_seq(Delimiter::Parenthesis, f)
     }
 
@@ -1425,7 +1434,8 @@ impl<'a> Parser<'a> {
         self.expect(&token::CloseDelim(Delimiter::Parenthesis))?; // `)`
 
         let path_str = pprust::path_to_string(&path);
-        self.sess.emit_err(IncorrectVisibilityRestriction { span: path.span, inner_str: path_str });
+        self.dcx()
+            .emit_err(IncorrectVisibilityRestriction { span: path.span, inner_str: path_str });
 
         Ok(())
     }
@@ -1451,7 +1461,7 @@ impl<'a> Parser<'a> {
             Err(Some(lit)) => match lit.kind {
                 ast::LitKind::Err => None,
                 _ => {
-                    self.sess.emit_err(NonStringAbiLiteral { span: lit.span });
+                    self.dcx().emit_err(NonStringAbiLiteral { span: lit.span });
                     None
                 }
             },
@@ -1492,7 +1502,7 @@ impl<'a> Parser<'a> {
 pub(crate) fn make_unclosed_delims_error(
     unmatched: UnmatchedDelim,
     sess: &ParseSess,
-) -> Option<DiagnosticBuilder<'_, ErrorGuaranteed>> {
+) -> Option<DiagnosticBuilder<'_>> {
     // `None` here means an `Eof` was found. We already emit those errors elsewhere, we add them to
     // `unmatched_delims` only for error recovery in the `Parser`.
     let found_delim = unmatched.found_delim?;
@@ -1500,14 +1510,13 @@ pub(crate) fn make_unclosed_delims_error(
     if let Some(sp) = unmatched.unclosed_span {
         spans.push(sp);
     };
-    let err = MismatchedClosingDelimiter {
+    let err = sess.dcx.create_err(MismatchedClosingDelimiter {
         spans,
         delimiter: pprust::token_kind_to_string(&token::CloseDelim(found_delim)).to_string(),
         unmatched: unmatched.found_span,
         opening_candidate: unmatched.candidate_span,
         unclosed: unmatched.unclosed_span,
-    }
-    .into_diagnostic(&sess.dcx);
+    });
     Some(err)
 }
 

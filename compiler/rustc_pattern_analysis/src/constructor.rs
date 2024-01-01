@@ -642,7 +642,8 @@ impl OpaqueId {
 /// `specialize_constructor` returns the list of fields corresponding to a pattern, given a
 /// constructor. `Constructor::apply` reconstructs the pattern from a pair of `Constructor` and
 /// `Fields`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(derivative::Derivative)]
+#[derivative(Debug(bound = ""), Clone(bound = ""), PartialEq(bound = ""))]
 pub enum Constructor<Cx: TypeCx> {
     /// Tuples and structs.
     Struct,
@@ -860,12 +861,9 @@ impl<Cx: TypeCx> ConstructorSet<Cx> {
     #[instrument(level = "debug", skip(self, pcx, ctors), ret)]
     pub(crate) fn split<'a>(
         &self,
-        pcx: &PlaceCtxt<'_, '_, Cx>,
+        pcx: &PlaceCtxt<'a, '_, Cx>,
         ctors: impl Iterator<Item = &'a Constructor<Cx>> + Clone,
-    ) -> SplitConstructorSet<Cx>
-    where
-        Cx: 'a,
-    {
+    ) -> SplitConstructorSet<Cx> {
         let mut present: SmallVec<[_; 1]> = SmallVec::new();
         // Empty constructors found missing.
         let mut missing_empty = Vec::new();

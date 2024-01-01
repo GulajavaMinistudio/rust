@@ -14,7 +14,7 @@ use rustc_data_structures::sync::{AppendOnlyVec, Lock, Lrc};
 use rustc_errors::{emitter::SilentEmitter, DiagCtxt};
 use rustc_errors::{
     fallback_fluent_bundle, Diagnostic, DiagnosticBuilder, DiagnosticId, DiagnosticMessage,
-    ErrorGuaranteed, IntoDiagnostic, MultiSpan, Noted, StashKey,
+    MultiSpan, StashKey,
 };
 use rustc_feature::{find_feature_issue, GateIssue, UnstableFeatures};
 use rustc_span::edition::Edition;
@@ -83,7 +83,7 @@ pub fn feature_err(
     feature: Symbol,
     span: impl Into<MultiSpan>,
     explain: impl Into<DiagnosticMessage>,
-) -> DiagnosticBuilder<'_, ErrorGuaranteed> {
+) -> DiagnosticBuilder<'_> {
     feature_err_issue(sess, feature, span, GateIssue::Language, explain)
 }
 
@@ -98,7 +98,7 @@ pub fn feature_err_issue(
     span: impl Into<MultiSpan>,
     issue: GateIssue,
     explain: impl Into<DiagnosticMessage>,
-) -> DiagnosticBuilder<'_, ErrorGuaranteed> {
+) -> DiagnosticBuilder<'_> {
     let span = span.into();
 
     // Cancel an earlier warning for this same error, if it exists.
@@ -108,7 +108,7 @@ pub fn feature_err_issue(
         }
     }
 
-    let mut err = sess.create_err(FeatureGateError { span, explain: explain.into() });
+    let mut err = sess.dcx.create_err(FeatureGateError { span, explain: explain.into() });
     add_feature_diagnostics_for_issue(&mut err, sess, feature, issue, false);
     err
 }
@@ -315,78 +315,5 @@ impl ParseSess {
         // This is equivalent to `.iter().copied().enumerate()`, but that isn't possible for
         // AppendOnlyVec, so we resort to this scheme.
         self.proc_macro_quoted_spans.iter_enumerated()
-    }
-
-    #[track_caller]
-    pub fn create_err<'a>(
-        &'a self,
-        err: impl IntoDiagnostic<'a>,
-    ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
-        err.into_diagnostic(&self.dcx)
-    }
-
-    #[track_caller]
-    pub fn emit_err<'a>(&'a self, err: impl IntoDiagnostic<'a>) -> ErrorGuaranteed {
-        self.create_err(err).emit()
-    }
-
-    #[track_caller]
-    pub fn create_warning<'a>(
-        &'a self,
-        warning: impl IntoDiagnostic<'a, ()>,
-    ) -> DiagnosticBuilder<'a, ()> {
-        warning.into_diagnostic(&self.dcx)
-    }
-
-    #[track_caller]
-    pub fn emit_warning<'a>(&'a self, warning: impl IntoDiagnostic<'a, ()>) {
-        self.create_warning(warning).emit()
-    }
-
-    #[track_caller]
-    pub fn create_note<'a>(
-        &'a self,
-        note: impl IntoDiagnostic<'a, Noted>,
-    ) -> DiagnosticBuilder<'a, Noted> {
-        note.into_diagnostic(&self.dcx)
-    }
-
-    #[track_caller]
-    pub fn emit_note<'a>(&'a self, note: impl IntoDiagnostic<'a, Noted>) -> Noted {
-        self.create_note(note).emit()
-    }
-
-    #[track_caller]
-    pub fn create_fatal<'a>(
-        &'a self,
-        fatal: impl IntoDiagnostic<'a, !>,
-    ) -> DiagnosticBuilder<'a, !> {
-        fatal.into_diagnostic(&self.dcx)
-    }
-
-    #[track_caller]
-    pub fn emit_fatal<'a>(&'a self, fatal: impl IntoDiagnostic<'a, !>) -> ! {
-        self.create_fatal(fatal).emit()
-    }
-
-    #[rustc_lint_diagnostics]
-    #[track_caller]
-    pub fn struct_err(
-        &self,
-        msg: impl Into<DiagnosticMessage>,
-    ) -> DiagnosticBuilder<'_, ErrorGuaranteed> {
-        self.dcx.struct_err(msg)
-    }
-
-    #[rustc_lint_diagnostics]
-    #[track_caller]
-    pub fn struct_warn(&self, msg: impl Into<DiagnosticMessage>) -> DiagnosticBuilder<'_, ()> {
-        self.dcx.struct_warn(msg)
-    }
-
-    #[rustc_lint_diagnostics]
-    #[track_caller]
-    pub fn struct_fatal(&self, msg: impl Into<DiagnosticMessage>) -> DiagnosticBuilder<'_, !> {
-        self.dcx.struct_fatal(msg)
     }
 }

@@ -33,6 +33,7 @@
 #![allow(internal_features)]
 #![feature(rustdoc_internals)]
 #![doc(rust_logo)]
+#![feature(if_let_guard)]
 #![feature(box_patterns)]
 #![feature(let_chains)]
 #![recursion_limit = "256"]
@@ -53,7 +54,7 @@ use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::sorted_map::SortedMap;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::Lrc;
-use rustc_errors::{DiagnosticArgFromDisplay, StashKey};
+use rustc_errors::{DiagCtxt, DiagnosticArgFromDisplay, StashKey};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, LifetimeRes, Namespace, PartialRes, PerNS, Res};
 use rustc_hir::def_id::{LocalDefId, LocalDefIdMap, CRATE_DEF_ID, LOCAL_CRATE};
@@ -65,6 +66,7 @@ use rustc_session::parse::{add_feature_diagnostics, feature_err};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{DesugaringKind, Span, DUMMY_SP};
 use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use thin_vec::ThinVec;
 
@@ -130,6 +132,7 @@ struct LoweringContext<'a, 'hir> {
     allow_try_trait: Lrc<[Symbol]>,
     allow_gen_future: Lrc<[Symbol]>,
     allow_async_iterator: Lrc<[Symbol]>,
+    allow_for_await: Lrc<[Symbol]>,
 
     /// Mapping from generics `def_id`s to TAIT generics `def_id`s.
     /// For each captured lifetime (e.g., 'a), we create a new lifetime parameter that is a generic
@@ -174,12 +177,17 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             } else {
                 [sym::gen_future].into()
             },
+            allow_for_await: [sym::async_iterator].into(),
             // FIXME(gen_blocks): how does `closure_track_caller`/`async_fn_track_caller`
             // interact with `gen`/`async gen` blocks
             allow_async_iterator: [sym::gen_future, sym::async_iterator].into(),
             generics_def_id_map: Default::default(),
             host_param_id: None,
         }
+    }
+
+    pub(crate) fn dcx(&self) -> &'hir DiagCtxt {
+        self.tcx.dcx()
     }
 }
 
@@ -764,6 +772,10 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         self.resolver.get_import_res(id).present_items()
     }
 
+    fn make_lang_item_qpath(&mut self, lang_item: hir::LangItem, span: Span) -> hir::QPath<'hir> {
+        hir::QPath::Resolved(None, self.make_lang_item_path(lang_item, span, None))
+    }
+
     fn make_lang_item_path(
         &mut self,
         lang_item: hir::LangItem,
@@ -781,7 +793,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 hir_id: self.next_id(),
                 res,
                 args,
-                infer_args: false,
+                infer_args: args.is_none(),
             }]),
         })
     }
@@ -872,8 +884,27 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         binder: NodeId,
         generic_params: &[GenericParam],
     ) -> &'hir [hir::GenericParam<'hir>] {
-        let mut generic_params: Vec<_> = self
-            .lower_generic_params_mut(generic_params, hir::GenericParamSource::Binder)
+        let mut generic_params: Vec<_> = generic_params
+            .iter()
+            .map(|param| {
+                let param = match param.kind {
+                    GenericParamKind::Type { ref default } if let Some(ty) = default => {
+                        // Default type is not permitted in non-lifetime binders.
+                        // So we emit an error and default to `None` to prevent
+                        // potential ice.
+                        self.dcx().emit_err(errors::UnexpectedDefaultParameterInBinder {
+                            span: ty.span(),
+                        });
+                        let param = GenericParam {
+                            kind: GenericParamKind::Type { default: None },
+                            ..param.clone()
+                        };
+                        Cow::Owned(param)
+                    }
+                    _ => Cow::Borrowed(param),
+                };
+                self.lower_generic_param(param.as_ref(), hir::GenericParamSource::Binder)
+            })
             .collect();
         let extra_lifetimes = self.resolver.take_extra_lifetime_params(binder);
         debug!(?extra_lifetimes);
@@ -1033,11 +1064,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         && first_char.is_ascii_lowercase()
                     {
                         let mut err = if !data.inputs.is_empty() {
-                            self.tcx.sess.create_err(errors::BadReturnTypeNotation::Inputs {
+                            self.dcx().create_err(errors::BadReturnTypeNotation::Inputs {
                                 span: data.inputs_span,
                             })
                         } else if let FnRetTy::Ty(ty) = &data.output {
-                            self.tcx.sess.create_err(errors::BadReturnTypeNotation::Output {
+                            self.dcx().create_err(errors::BadReturnTypeNotation::Output {
                                 span: data.inputs_span.shrink_to_hi().to(ty.span),
                             })
                         } else {
@@ -1161,7 +1192,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         hir::TypeBindingKind::Constraint { bounds }
                     }
                     DesugarKind::Error(position) => {
-                        let guar = self.tcx.sess.emit_err(errors::MisplacedAssocTyBinding {
+                        let guar = self.dcx().emit_err(errors::MisplacedAssocTyBinding {
                             span: constraint.span,
                             position: DiagnosticArgFromDisplay(position),
                         });
@@ -1203,7 +1234,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 data.inputs.last().unwrap().span.shrink_to_hi().to(data.inputs_span.shrink_to_hi());
             AssocTyParenthesesSub::NotEmpty { open_param, close_param }
         };
-        self.tcx.sess.emit_err(AssocTyParentheses { span: data.span, sub });
+        self.dcx().emit_err(AssocTyParentheses { span: data.span, sub });
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -1318,7 +1349,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         span: t.span,
                     },
                     itctx,
-                    ast::Const::No,
+                    ast::BoundConstness::Never,
                 );
                 let bounds = this.arena.alloc_from_iter([bound]);
                 let lifetime_bound = this.elided_dyn_bound(t.span);
@@ -1345,20 +1376,20 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let kind = match &t.kind {
             TyKind::Infer => hir::TyKind::Infer,
             TyKind::Err => {
-                hir::TyKind::Err(self.tcx.sess.span_delayed_bug(t.span, "TyKind::Err lowered"))
+                hir::TyKind::Err(self.dcx().span_delayed_bug(t.span, "TyKind::Err lowered"))
             }
             // FIXME(unnamed_fields): IMPLEMENTATION IN PROGRESS
             #[allow(rustc::untranslatable_diagnostic)]
             #[allow(rustc::diagnostic_outside_of_impl)]
-            TyKind::AnonStruct(ref _fields) => hir::TyKind::Err(
-                self.tcx.sess.span_err(t.span, "anonymous structs are unimplemented"),
-            ),
+            TyKind::AnonStruct(ref _fields) => {
+                hir::TyKind::Err(self.dcx().span_err(t.span, "anonymous structs are unimplemented"))
+            }
             // FIXME(unnamed_fields): IMPLEMENTATION IN PROGRESS
             #[allow(rustc::untranslatable_diagnostic)]
             #[allow(rustc::diagnostic_outside_of_impl)]
-            TyKind::AnonUnion(ref _fields) => hir::TyKind::Err(
-                self.tcx.sess.span_err(t.span, "anonymous unions are unimplemented"),
-            ),
+            TyKind::AnonUnion(ref _fields) => {
+                hir::TyKind::Err(self.dcx().span_err(t.span, "anonymous unions are unimplemented"))
+            }
             TyKind::Slice(ty) => hir::TyKind::Slice(self.lower_ty(ty, itctx)),
             TyKind::Ptr(mt) => hir::TyKind::Ptr(self.lower_mt(mt, itctx)),
             TyKind::Ref(region, mt) => {
@@ -1425,19 +1456,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         this.arena.alloc_from_iter(bounds.iter().filter_map(|bound| match bound {
                             GenericBound::Trait(
                                 ty,
-                                modifier @ (TraitBoundModifier::None
-                                | TraitBoundModifier::MaybeConst(_)
-                                | TraitBoundModifier::Negative),
-                            ) => {
-                                Some(this.lower_poly_trait_ref(ty, itctx, modifier.to_constness()))
-                            }
-                            // `~const ?Bound` will cause an error during AST validation
-                            // anyways, so treat it like `?Bound` as compilation proceeds.
+                                TraitBoundModifiers {
+                                    polarity: BoundPolarity::Positive | BoundPolarity::Negative(_),
+                                    constness,
+                                },
+                            ) => Some(this.lower_poly_trait_ref(ty, itctx, *constness)),
+                            // We can safely ignore constness here, since AST validation
+                            // will take care of invalid modifier combinations.
                             GenericBound::Trait(
                                 _,
-                                TraitBoundModifier::Maybe
-                                | TraitBoundModifier::MaybeConstMaybe
-                                | TraitBoundModifier::MaybeConstNegative,
+                                TraitBoundModifiers { polarity: BoundPolarity::Maybe(_), .. },
                             ) => None,
                             GenericBound::Outlives(lifetime) => {
                                 if lifetime_bound.is_none() {
@@ -1519,7 +1547,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         hir::TyKind::Err(guar)
                     }
                     ImplTraitContext::Disallowed(position) => {
-                        let guar = self.tcx.sess.emit_err(MisplacedImplTrait {
+                        let guar = self.dcx().emit_err(MisplacedImplTrait {
                             span: t.span,
                             position: DiagnosticArgFromDisplay(position),
                         });
@@ -1529,7 +1557,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             }
             TyKind::MacCall(_) => panic!("`TyKind::MacCall` should have been expanded by now"),
             TyKind::CVarArgs => {
-                let guar = self.tcx.sess.span_delayed_bug(
+                let guar = self.dcx().span_delayed_bug(
                     t.span,
                     "`TyKind::CVarArgs` should have been handled elsewhere",
                 );
@@ -1673,8 +1701,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     if let Some(old_def_id) = self.orig_opt_local_def_id(param) {
                         old_def_id
                     } else {
-                        self.tcx
-                            .sess
+                        self.dcx()
                             .span_delayed_bug(lifetime.ident.span, "no def-id for fresh lifetime");
                         continue;
                     }
@@ -2028,9 +2055,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         itctx: &ImplTraitContext,
     ) -> hir::GenericBound<'hir> {
         match tpb {
-            GenericBound::Trait(p, modifier) => hir::GenericBound::Trait(
-                self.lower_poly_trait_ref(p, itctx, modifier.to_constness()),
-                self.lower_trait_bound_modifier(*modifier),
+            GenericBound::Trait(p, modifiers) => hir::GenericBound::Trait(
+                self.lower_poly_trait_ref(p, itctx, modifiers.constness.into()),
+                self.lower_trait_bound_modifiers(*modifiers),
             ),
             GenericBound::Outlives(lifetime) => {
                 hir::GenericBound::Outlives(self.lower_lifetime(lifetime))
@@ -2172,7 +2199,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
     fn lower_trait_ref(
         &mut self,
-        constness: ast::Const,
+        constness: ast::BoundConstness,
         p: &TraitRef,
         itctx: &ImplTraitContext,
     ) -> hir::TraitRef<'hir> {
@@ -2195,7 +2222,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         &mut self,
         p: &PolyTraitRef,
         itctx: &ImplTraitContext,
-        constness: ast::Const,
+        constness: ast::BoundConstness,
     ) -> hir::PolyTraitRef<'hir> {
         let bound_generic_params =
             self.lower_lifetime_binder(p.trait_ref.ref_id, &p.bound_generic_params);
@@ -2316,25 +2343,24 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         }
     }
 
-    fn lower_trait_bound_modifier(&mut self, f: TraitBoundModifier) -> hir::TraitBoundModifier {
-        match f {
-            TraitBoundModifier::None => hir::TraitBoundModifier::None,
-            TraitBoundModifier::MaybeConst(_) => hir::TraitBoundModifier::MaybeConst,
-
-            TraitBoundModifier::Negative => {
+    fn lower_trait_bound_modifiers(
+        &mut self,
+        modifiers: TraitBoundModifiers,
+    ) -> hir::TraitBoundModifier {
+        // Invalid modifier combinations will cause an error during AST validation.
+        // Arbitrarily pick a placeholder for them to make compilation proceed.
+        match (modifiers.constness, modifiers.polarity) {
+            (BoundConstness::Never, BoundPolarity::Positive) => hir::TraitBoundModifier::None,
+            (_, BoundPolarity::Maybe(_)) => hir::TraitBoundModifier::Maybe,
+            (BoundConstness::Never, BoundPolarity::Negative(_)) => {
                 if self.tcx.features().negative_bounds {
                     hir::TraitBoundModifier::Negative
                 } else {
                     hir::TraitBoundModifier::None
                 }
             }
-
-            // `MaybeConstMaybe` will cause an error during AST validation, but we need to pick a
-            // placeholder for compilation to proceed.
-            TraitBoundModifier::MaybeConstMaybe | TraitBoundModifier::Maybe => {
-                hir::TraitBoundModifier::Maybe
-            }
-            TraitBoundModifier::MaybeConstNegative => hir::TraitBoundModifier::MaybeConst,
+            (BoundConstness::Always(_), _) => hir::TraitBoundModifier::Const,
+            (BoundConstness::Maybe(_), _) => hir::TraitBoundModifier::MaybeConst,
         }
     }
 
@@ -2552,45 +2578,62 @@ struct GenericArgsCtor<'hir> {
 }
 
 impl<'hir> GenericArgsCtor<'hir> {
-    fn push_constness(&mut self, lcx: &mut LoweringContext<'_, 'hir>, constness: ast::Const) {
+    fn push_constness(
+        &mut self,
+        lcx: &mut LoweringContext<'_, 'hir>,
+        constness: ast::BoundConstness,
+    ) {
         if !lcx.tcx.features().effects {
             return;
         }
 
-        // if bound is non-const, don't add host effect param
-        let ast::Const::Yes(span) = constness else { return };
+        let (span, body) = match constness {
+            BoundConstness::Never => return,
+            BoundConstness::Always(span) => {
+                let span = lcx.lower_span(span);
 
-        let span = lcx.lower_span(span);
+                let body = hir::ExprKind::Lit(
+                    lcx.arena.alloc(hir::Lit { node: LitKind::Bool(false), span }),
+                );
 
-        let id = lcx.next_node_id();
-        let hir_id = lcx.next_id();
+                (span, body)
+            }
+            BoundConstness::Maybe(span) => {
+                let span = lcx.lower_span(span);
 
-        let Some(host_param_id) = lcx.host_param_id else {
-            lcx.tcx.sess.span_delayed_bug(
-                span,
-                "no host param id for call in const yet no errors reported",
-            );
-            return;
-        };
+                let Some(host_param_id) = lcx.host_param_id else {
+                    lcx.dcx().span_delayed_bug(
+                        span,
+                        "no host param id for call in const yet no errors reported",
+                    );
+                    return;
+                };
 
-        let body = lcx.lower_body(|lcx| {
-            (&[], {
                 let hir_id = lcx.next_id();
                 let res = Res::Def(DefKind::ConstParam, host_param_id.to_def_id());
-                let expr_kind = hir::ExprKind::Path(hir::QPath::Resolved(
+                let body = hir::ExprKind::Path(hir::QPath::Resolved(
                     None,
                     lcx.arena.alloc(hir::Path {
                         span,
                         res,
-                        segments: arena_vec![lcx; hir::PathSegment::new(Ident {
-                            name: sym::host,
-                            span,
-                        }, hir_id, res)],
+                        segments: arena_vec![
+                            lcx;
+                            hir::PathSegment::new(
+                                Ident { name: sym::host, span },
+                                hir_id,
+                                res
+                            )
+                        ],
                     }),
                 ));
-                lcx.expr(span, expr_kind)
-            })
-        });
+
+                (span, body)
+            }
+        };
+        let body = lcx.lower_body(|lcx| (&[], lcx.expr(span, body)));
+
+        let id = lcx.next_node_id();
+        let hir_id = lcx.next_id();
 
         let def_id = lcx.create_def(
             lcx.current_hir_id_owner.def_id,

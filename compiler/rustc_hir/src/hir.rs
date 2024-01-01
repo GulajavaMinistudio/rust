@@ -417,13 +417,18 @@ pub enum GenericArgsParentheses {
     ParenSugar,
 }
 
-/// A modifier on a bound, currently this is only used for `?Sized`, where the
-/// modifier is `Maybe`. Negative bounds should also be handled here.
+/// A modifier on a trait bound.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
 pub enum TraitBoundModifier {
+    /// `Type: Trait`
     None,
+    /// `Type: !Trait`
     Negative,
+    /// `Type: ?Trait`
     Maybe,
+    /// `Type: const Trait`
+    Const,
+    /// `Type: ~const Trait`
     MaybeConst,
 }
 
@@ -946,7 +951,18 @@ pub struct Closure<'hir> {
     pub fn_decl_span: Span,
     /// The span of the argument block `|...|`
     pub fn_arg_span: Option<Span>,
-    pub movability: Option<Movability>,
+    pub kind: ClosureKind,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Copy, Hash, HashStable_Generic, Encodable, Decodable)]
+pub enum ClosureKind {
+    /// This is a plain closure expression.
+    Closure,
+    /// This is a coroutine expression -- i.e. a closure expression in which
+    /// we've found a `yield`. These can arise either from "plain" coroutine
+    ///  usage (e.g. `let x = || { yield (); }`) or from a desugared expression
+    /// (e.g. `async` and `gen` blocks).
+    Coroutine(CoroutineKind),
 }
 
 /// A block of statements `{ .. }`, which may have a label (in this case the
@@ -1336,64 +1352,43 @@ pub struct BodyId {
 pub struct Body<'hir> {
     pub params: &'hir [Param<'hir>],
     pub value: &'hir Expr<'hir>,
-    pub coroutine_kind: Option<CoroutineKind>,
 }
 
 impl<'hir> Body<'hir> {
     pub fn id(&self) -> BodyId {
         BodyId { hir_id: self.value.hir_id }
     }
-
-    pub fn coroutine_kind(&self) -> Option<CoroutineKind> {
-        self.coroutine_kind
-    }
 }
 
 /// The type of source expression that caused this coroutine to be created.
 #[derive(Clone, PartialEq, Eq, Debug, Copy, Hash, HashStable_Generic, Encodable, Decodable)]
 pub enum CoroutineKind {
-    /// An explicit `async` block or the body of an `async` function.
-    Async(CoroutineSource),
-
-    /// An explicit `gen` block or the body of a `gen` function.
-    Gen(CoroutineSource),
-
-    /// An explicit `async gen` block or the body of an `async gen` function,
-    /// which is able to both `yield` and `.await`.
-    AsyncGen(CoroutineSource),
+    /// A coroutine that comes from a desugaring.
+    Desugared(CoroutineDesugaring, CoroutineSource),
 
     /// A coroutine literal created via a `yield` inside a closure.
-    Coroutine,
+    Coroutine(Movability),
+}
+
+impl CoroutineKind {
+    pub fn movability(self) -> Movability {
+        match self {
+            CoroutineKind::Desugared(CoroutineDesugaring::Async, _)
+            | CoroutineKind::Desugared(CoroutineDesugaring::AsyncGen, _) => Movability::Static,
+            CoroutineKind::Desugared(CoroutineDesugaring::Gen, _) => Movability::Movable,
+            CoroutineKind::Coroutine(mov) => mov,
+        }
+    }
 }
 
 impl fmt::Display for CoroutineKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CoroutineKind::Async(k) => {
-                if f.alternate() {
-                    f.write_str("`async` ")?;
-                } else {
-                    f.write_str("async ")?
-                }
+            CoroutineKind::Desugared(d, k) => {
+                d.fmt(f)?;
                 k.fmt(f)
             }
-            CoroutineKind::Coroutine => f.write_str("coroutine"),
-            CoroutineKind::Gen(k) => {
-                if f.alternate() {
-                    f.write_str("`gen` ")?;
-                } else {
-                    f.write_str("gen ")?
-                }
-                k.fmt(f)
-            }
-            CoroutineKind::AsyncGen(k) => {
-                if f.alternate() {
-                    f.write_str("`async gen` ")?;
-                } else {
-                    f.write_str("async gen ")?
-                }
-                k.fmt(f)
-            }
+            CoroutineKind::Coroutine(_) => f.write_str("coroutine"),
         }
     }
 }
@@ -1423,6 +1418,49 @@ impl fmt::Display for CoroutineSource {
             CoroutineSource::Fn => "fn body",
         }
         .fmt(f)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Copy, Hash, HashStable_Generic, Encodable, Decodable)]
+pub enum CoroutineDesugaring {
+    /// An explicit `async` block or the body of an `async` function.
+    Async,
+
+    /// An explicit `gen` block or the body of a `gen` function.
+    Gen,
+
+    /// An explicit `async gen` block or the body of an `async gen` function,
+    /// which is able to both `yield` and `.await`.
+    AsyncGen,
+}
+
+impl fmt::Display for CoroutineDesugaring {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CoroutineDesugaring::Async => {
+                if f.alternate() {
+                    f.write_str("`async` ")?;
+                } else {
+                    f.write_str("async ")?
+                }
+            }
+            CoroutineDesugaring::Gen => {
+                if f.alternate() {
+                    f.write_str("`gen` ")?;
+                } else {
+                    f.write_str("gen ")?
+                }
+            }
+            CoroutineDesugaring::AsyncGen => {
+                if f.alternate() {
+                    f.write_str("`async gen` ")?;
+                } else {
+                    f.write_str("async gen ")?
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -3646,7 +3684,7 @@ mod size_asserts {
     use super::*;
     // tidy-alphabetical-start
     static_assert_size!(Block<'_>, 48);
-    static_assert_size!(Body<'_>, 32);
+    static_assert_size!(Body<'_>, 24);
     static_assert_size!(Expr<'_>, 64);
     static_assert_size!(ExprKind<'_>, 48);
     static_assert_size!(FnDecl<'_>, 40);

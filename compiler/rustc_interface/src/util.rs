@@ -164,13 +164,13 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce() -> R + Send, R: Send>(
 fn load_backend_from_dylib(early_dcx: &EarlyDiagCtxt, path: &Path) -> MakeBackendFn {
     let lib = unsafe { Library::new(path) }.unwrap_or_else(|err| {
         let err = format!("couldn't load codegen backend {path:?}: {err}");
-        early_dcx.early_error(err);
+        early_dcx.early_fatal(err);
     });
 
     let backend_sym = unsafe { lib.get::<MakeBackendFn>(b"__rustc_codegen_backend") }
         .unwrap_or_else(|e| {
             let err = format!("couldn't load codegen backend: {e}");
-            early_dcx.early_error(err);
+            early_dcx.early_fatal(err);
         });
 
     // Intentionally leak the dynamic library. We can't ever unload it
@@ -271,7 +271,7 @@ fn get_codegen_sysroot(
             "failed to find a `codegen-backends` folder \
                            in the sysroot candidates:\n* {candidates}"
         );
-        early_dcx.early_error(err);
+        early_dcx.early_fatal(err);
     });
     info!("probing {} for a codegen backend", sysroot.display());
 
@@ -282,7 +282,7 @@ fn get_codegen_sysroot(
             sysroot.display(),
             e
         );
-        early_dcx.early_error(err);
+        early_dcx.early_fatal(err);
     });
 
     let mut file: Option<PathBuf> = None;
@@ -310,7 +310,7 @@ fn get_codegen_sysroot(
                 prev.display(),
                 path.display()
             );
-            early_dcx.early_error(err);
+            early_dcx.early_fatal(err);
         }
         file = Some(path.clone());
     }
@@ -319,7 +319,7 @@ fn get_codegen_sysroot(
         Some(ref s) => load_backend_from_dylib(early_dcx, s),
         None => {
             let err = format!("unsupported builtin codegen backend `{backend_name}`");
-            early_dcx.early_error(err);
+            early_dcx.early_fatal(err);
         }
     }
 }
@@ -431,7 +431,7 @@ pub fn collect_crate_types(session: &Session, attrs: &[ast::Attribute]) -> Vec<C
 
     base.retain(|crate_type| {
         if output::invalid_output_for_target(session, *crate_type) {
-            session.emit_warning(errors::UnsupportedCrateTypeForTarget {
+            session.dcx().emit_warning(errors::UnsupportedCrateTypeForTarget {
                 crate_type: *crate_type,
                 target_triple: &session.opts.target_triple,
             });
@@ -473,7 +473,7 @@ pub fn build_output_filenames(attrs: &[ast::Attribute], sess: &Session) -> Outpu
         &sess.opts.output_types,
         sess.io.output_file == Some(OutFileName::Stdout),
     ) {
-        sess.emit_fatal(errors::MultipleOutputTypesToStdout);
+        sess.dcx().emit_fatal(errors::MultipleOutputTypesToStdout);
     }
 
     let crate_name = sess
@@ -507,16 +507,16 @@ pub fn build_output_filenames(attrs: &[ast::Attribute], sess: &Session) -> Outpu
             let unnamed_output_types =
                 sess.opts.output_types.values().filter(|a| a.is_none()).count();
             let ofile = if unnamed_output_types > 1 {
-                sess.emit_warning(errors::MultipleOutputTypesAdaption);
+                sess.dcx().emit_warning(errors::MultipleOutputTypesAdaption);
                 None
             } else {
                 if !sess.opts.cg.extra_filename.is_empty() {
-                    sess.emit_warning(errors::IgnoringExtraFilename);
+                    sess.dcx().emit_warning(errors::IgnoringExtraFilename);
                 }
                 Some(out_file.clone())
             };
             if sess.io.output_dir != None {
-                sess.emit_warning(errors::IgnoringOutDir);
+                sess.dcx().emit_warning(errors::IgnoringOutDir);
             }
 
             let out_filestem =

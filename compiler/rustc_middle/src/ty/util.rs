@@ -223,8 +223,9 @@ impl<'tcx> TyCtxt<'tcx> {
                     Limit(0) => Limit(2),
                     limit => limit * 2,
                 };
-                let reported =
-                    self.sess.emit_err(crate::error::RecursionLimitReached { ty, suggested_limit });
+                let reported = self
+                    .dcx()
+                    .emit_err(crate::error::RecursionLimitReached { ty, suggested_limit });
                 return Ty::new_error(self, reported);
             }
             match *ty.kind() {
@@ -360,13 +361,13 @@ impl<'tcx> TyCtxt<'tcx> {
             }
 
             let Some(item_id) = self.associated_item_def_ids(impl_did).first() else {
-                self.sess
+                self.dcx()
                     .span_delayed_bug(self.def_span(impl_did), "Drop impl without drop function");
                 return;
             };
 
             if let Some((old_item_id, _)) = dtor_candidate {
-                self.sess
+                self.dcx()
                     .struct_span_err(self.def_span(item_id), "multiple drop impls found")
                     .span_note(self.def_span(old_item_id), "other impl here")
                     .delay_as_bug();
@@ -728,10 +729,16 @@ impl<'tcx> TyCtxt<'tcx> {
             DefKind::AssocFn if self.associated_item(def_id).fn_has_self_parameter => "method",
             DefKind::Closure if let Some(coroutine_kind) = self.coroutine_kind(def_id) => {
                 match coroutine_kind {
-                    rustc_hir::CoroutineKind::Async(..) => "async closure",
-                    rustc_hir::CoroutineKind::AsyncGen(..) => "async gen closure",
-                    rustc_hir::CoroutineKind::Coroutine => "coroutine",
-                    rustc_hir::CoroutineKind::Gen(..) => "gen closure",
+                    hir::CoroutineKind::Desugared(hir::CoroutineDesugaring::Async, _) => {
+                        "async closure"
+                    }
+                    hir::CoroutineKind::Desugared(hir::CoroutineDesugaring::AsyncGen, _) => {
+                        "async gen closure"
+                    }
+                    hir::CoroutineKind::Coroutine(_) => "coroutine",
+                    hir::CoroutineKind::Desugared(hir::CoroutineDesugaring::Gen, _) => {
+                        "gen closure"
+                    }
                 }
             }
             _ => def_kind.descr(def_id),
@@ -749,10 +756,10 @@ impl<'tcx> TyCtxt<'tcx> {
             DefKind::AssocFn if self.associated_item(def_id).fn_has_self_parameter => "a",
             DefKind::Closure if let Some(coroutine_kind) = self.coroutine_kind(def_id) => {
                 match coroutine_kind {
-                    rustc_hir::CoroutineKind::Async(..) => "an",
-                    rustc_hir::CoroutineKind::AsyncGen(..) => "an",
-                    rustc_hir::CoroutineKind::Coroutine => "a",
-                    rustc_hir::CoroutineKind::Gen(..) => "a",
+                    hir::CoroutineKind::Desugared(hir::CoroutineDesugaring::Async, ..) => "an",
+                    hir::CoroutineKind::Desugared(hir::CoroutineDesugaring::AsyncGen, ..) => "an",
+                    hir::CoroutineKind::Desugared(hir::CoroutineDesugaring::Gen, ..) => "a",
+                    hir::CoroutineKind::Coroutine(_) => "a",
                 }
             }
             _ => def_kind.article(),

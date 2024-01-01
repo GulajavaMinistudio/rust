@@ -265,6 +265,7 @@
 //
 // Language features:
 // tidy-alphabetical-start
+#![cfg_attr(not(bootstrap), feature(cfg_sanitizer_cfi))]
 #![feature(alloc_error_handler)]
 #![feature(allocator_internals)]
 #![feature(allow_internal_unsafe)]
@@ -308,7 +309,6 @@
 //
 // Library features (core):
 // tidy-alphabetical-start
-#![cfg_attr(bootstrap, feature(c_str_literals))]
 #![feature(char_internals)]
 #![feature(core_intrinsics)]
 #![feature(core_io_borrowed_buf)]
@@ -326,7 +326,6 @@
 #![feature(hasher_prefixfree_extras)]
 #![feature(hashmap_internals)]
 #![feature(ip)]
-#![feature(ip_in_core)]
 #![feature(maybe_uninit_slice)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_write_slice)]

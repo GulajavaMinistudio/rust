@@ -152,8 +152,8 @@ impl<'a> PostExpansionVisitor<'a> {
     }
 
     fn check_late_bound_lifetime_defs(&self, params: &[ast::GenericParam]) {
-        // Check only lifetime parameters are present and that the lifetime
-        // parameters that are present have no bounds.
+        // Check only lifetime parameters are present and that the
+        // generic parameters that are present have no bounds.
         let non_lt_param_spans = params.iter().filter_map(|param| match param.kind {
             ast::GenericParamKind::Lifetime { .. } => None,
             _ => Some(param.ident.span),
@@ -164,10 +164,11 @@ impl<'a> PostExpansionVisitor<'a> {
             non_lt_param_spans,
             crate::fluent_generated::ast_passes_forbidden_non_lifetime_param
         );
+
         for param in params {
             if !param.bounds.is_empty() {
                 let spans: Vec<_> = param.bounds.iter().map(|b| b.span()).collect();
-                self.sess.emit_err(errors::ForbiddenLifetimeBound { spans });
+                self.sess.dcx().emit_err(errors::ForbiddenBound { spans });
             }
         }
     }
@@ -225,7 +226,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
                 || attr.has_name(sym::rustc_const_stable)
                 || attr.has_name(sym::rustc_default_body_unstable)
             {
-                self.sess.emit_err(errors::StabilityOutsideStd { span: attr.span });
+                self.sess.dcx().emit_err(errors::StabilityOutsideStd { span: attr.span });
             }
         }
     }
@@ -526,6 +527,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session, features: &Features) {
         "async closures are unstable",
         "to use an async block, remove the `||`: `async {`"
     );
+    gate_all!(async_for_loop, "`for await` loops are experimental");
     gate_all!(
         closure_lifetime_binder,
         "`for<...>` binders for closures are experimental",
@@ -577,7 +579,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session, features: &Features) {
                     .emit();
                 } else {
                     let suggestion = span.shrink_to_hi();
-                    sess.emit_err(errors::MatchArmWithNoBody { span, suggestion });
+                    sess.dcx().emit_err(errors::MatchArmWithNoBody { span, suggestion });
                 }
             }
         }
@@ -585,7 +587,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session, features: &Features) {
 
     if !visitor.features.negative_bounds {
         for &span in spans.get(&sym::negative_bounds).iter().copied().flatten() {
-            sess.emit_err(errors::NegativeBoundUnsupported { span });
+            sess.dcx().emit_err(errors::NegativeBoundUnsupported { span });
         }
     }
 
@@ -675,7 +677,11 @@ fn check_incompatible_features(sess: &Session, features: &Features) {
             if let Some((f2_name, f2_span)) = declared_features.clone().find(|(name, _)| name == f2)
             {
                 let spans = vec![f1_span, f2_span];
-                sess.emit_err(errors::IncompatibleFeatures { spans, f1: f1_name, f2: f2_name });
+                sess.dcx().emit_err(errors::IncompatibleFeatures {
+                    spans,
+                    f1: f1_name,
+                    f2: f2_name,
+                });
             }
         }
     }

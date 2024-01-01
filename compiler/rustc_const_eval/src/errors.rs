@@ -1,6 +1,6 @@
 use rustc_errors::{
     DiagCtxt, DiagnosticArgValue, DiagnosticBuilder, DiagnosticMessage, EmissionGuarantee,
-    IntoDiagnostic,
+    IntoDiagnostic, Level,
 };
 use rustc_hir::ConstContext;
 use rustc_macros::{Diagnostic, LintDiagnostic, Subdiagnostic};
@@ -439,8 +439,8 @@ pub trait ReportErrorExt {
         Self: Sized,
     {
         ty::tls::with(move |tcx| {
-            let mut builder = tcx.sess.struct_allow(DiagnosticMessage::Str(String::new().into()));
-            let dcx = tcx.sess.dcx();
+            let dcx = tcx.dcx();
+            let mut builder = dcx.struct_allow(DiagnosticMessage::Str(String::new().into()));
             let message = self.diagnostic_message();
             self.add_args(dcx, &mut builder);
             let s = dcx.eagerly_translate_to_string(message, builder.args());
@@ -875,7 +875,10 @@ impl<'tcx> ReportErrorExt for InvalidProgramInfo<'tcx> {
             | InvalidProgramInfo::AlreadyReported(_)
             | InvalidProgramInfo::ConstPropNonsense => {}
             InvalidProgramInfo::Layout(e) => {
-                let diag: DiagnosticBuilder<'_, ()> = e.into_diagnostic().into_diagnostic(dcx);
+                // The level doesn't matter, `diag` is consumed without it being used.
+                let dummy_level = Level::Bug;
+                let diag: DiagnosticBuilder<'_, ()> =
+                    e.into_diagnostic().into_diagnostic(dcx, dummy_level);
                 for (name, val) in diag.args() {
                     builder.set_arg(name.clone(), val.clone());
                 }

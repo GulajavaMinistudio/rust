@@ -2,7 +2,10 @@ use std::borrow::Cow;
 
 use rustc_ast::token::Token;
 use rustc_ast::{Path, Visibility};
-use rustc_errors::{AddToDiagnostic, Applicability, ErrorGuaranteed, IntoDiagnostic};
+use rustc_errors::{
+    AddToDiagnostic, Applicability, DiagCtxt, DiagnosticBuilder, IntoDiagnostic, Level,
+    SubdiagnosticMessage,
+};
 use rustc_macros::{Diagnostic, Subdiagnostic};
 use rustc_session::errors::ExprParenthesesNeeded;
 use rustc_span::edition::{Edition, LATEST_STABLE_EDITION};
@@ -1040,25 +1043,28 @@ pub(crate) struct ExpectedIdentifier {
 
 impl<'a> IntoDiagnostic<'a> for ExpectedIdentifier {
     #[track_caller]
-    fn into_diagnostic(
-        self,
-        dcx: &'a rustc_errors::DiagCtxt,
-    ) -> rustc_errors::DiagnosticBuilder<'a, ErrorGuaranteed> {
+    fn into_diagnostic(self, dcx: &'a DiagCtxt, level: Level) -> DiagnosticBuilder<'a> {
         let token_descr = TokenDescription::from_token(&self.token);
 
-        let mut diag = dcx.struct_err(match token_descr {
-            Some(TokenDescription::ReservedIdentifier) => {
-                fluent::parse_expected_identifier_found_reserved_identifier_str
-            }
-            Some(TokenDescription::Keyword) => fluent::parse_expected_identifier_found_keyword_str,
-            Some(TokenDescription::ReservedKeyword) => {
-                fluent::parse_expected_identifier_found_reserved_keyword_str
-            }
-            Some(TokenDescription::DocComment) => {
-                fluent::parse_expected_identifier_found_doc_comment_str
-            }
-            None => fluent::parse_expected_identifier_found_str,
-        });
+        let mut diag = DiagnosticBuilder::new(
+            dcx,
+            level,
+            match token_descr {
+                Some(TokenDescription::ReservedIdentifier) => {
+                    fluent::parse_expected_identifier_found_reserved_identifier_str
+                }
+                Some(TokenDescription::Keyword) => {
+                    fluent::parse_expected_identifier_found_keyword_str
+                }
+                Some(TokenDescription::ReservedKeyword) => {
+                    fluent::parse_expected_identifier_found_reserved_keyword_str
+                }
+                Some(TokenDescription::DocComment) => {
+                    fluent::parse_expected_identifier_found_doc_comment_str
+                }
+                None => fluent::parse_expected_identifier_found_str,
+            },
+        );
         diag.set_span(self.span);
         diag.set_arg("token", self.token);
 
@@ -1097,23 +1103,26 @@ pub(crate) struct ExpectedSemi {
 
 impl<'a> IntoDiagnostic<'a> for ExpectedSemi {
     #[track_caller]
-    fn into_diagnostic(
-        self,
-        dcx: &'a rustc_errors::DiagCtxt,
-    ) -> rustc_errors::DiagnosticBuilder<'a, ErrorGuaranteed> {
+    fn into_diagnostic(self, dcx: &'a DiagCtxt, level: Level) -> DiagnosticBuilder<'a> {
         let token_descr = TokenDescription::from_token(&self.token);
 
-        let mut diag = dcx.struct_err(match token_descr {
-            Some(TokenDescription::ReservedIdentifier) => {
-                fluent::parse_expected_semi_found_reserved_identifier_str
-            }
-            Some(TokenDescription::Keyword) => fluent::parse_expected_semi_found_keyword_str,
-            Some(TokenDescription::ReservedKeyword) => {
-                fluent::parse_expected_semi_found_reserved_keyword_str
-            }
-            Some(TokenDescription::DocComment) => fluent::parse_expected_semi_found_doc_comment_str,
-            None => fluent::parse_expected_semi_found_str,
-        });
+        let mut diag = DiagnosticBuilder::new(
+            dcx,
+            level,
+            match token_descr {
+                Some(TokenDescription::ReservedIdentifier) => {
+                    fluent::parse_expected_semi_found_reserved_identifier_str
+                }
+                Some(TokenDescription::Keyword) => fluent::parse_expected_semi_found_keyword_str,
+                Some(TokenDescription::ReservedKeyword) => {
+                    fluent::parse_expected_semi_found_reserved_keyword_str
+                }
+                Some(TokenDescription::DocComment) => {
+                    fluent::parse_expected_semi_found_doc_comment_str
+                }
+                None => fluent::parse_expected_semi_found_str,
+            },
+        );
         diag.set_span(self.span);
         diag.set_arg("token", self.token);
 
@@ -1436,10 +1445,7 @@ pub(crate) struct FnTraitMissingParen {
 impl AddToDiagnostic for FnTraitMissingParen {
     fn add_to_diagnostic_with<F>(self, diag: &mut rustc_errors::Diagnostic, _: F)
     where
-        F: Fn(
-            &mut rustc_errors::Diagnostic,
-            rustc_errors::SubdiagnosticMessage,
-        ) -> rustc_errors::SubdiagnosticMessage,
+        F: Fn(&mut rustc_errors::Diagnostic, SubdiagnosticMessage) -> SubdiagnosticMessage,
     {
         diag.span_label(self.span, crate::fluent_generated::parse_fn_trait_missing_paren);
         let applicability = if self.machine_applicable {
@@ -2550,19 +2556,12 @@ pub(crate) struct AssocLifetime {
 }
 
 #[derive(Diagnostic)]
-#[diag(parse_tilde_const_lifetime)]
-pub(crate) struct TildeConstLifetime {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
 #[diag(parse_modifier_lifetime)]
 pub(crate) struct ModifierLifetime {
     #[primary_span]
     #[suggestion(style = "tool-only", applicability = "maybe-incorrect", code = "")]
     pub span: Span,
-    pub sigil: &'static str,
+    pub modifier: &'static str,
 }
 
 #[derive(Diagnostic)]
@@ -2573,15 +2572,6 @@ pub(crate) struct ParenthesizedLifetime {
     #[suggestion(style = "short", applicability = "machine-applicable", code = "{snippet}")]
     pub sugg: Option<Span>,
     pub snippet: String,
-}
-
-#[derive(Diagnostic)]
-#[diag(parse_const_bounds_missing_tilde)]
-pub(crate) struct ConstMissingTilde {
-    #[primary_span]
-    pub span: Span,
-    #[suggestion(code = "~", applicability = "machine-applicable")]
-    pub start: Span,
 }
 
 #[derive(Diagnostic)]

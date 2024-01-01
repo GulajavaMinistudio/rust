@@ -2,7 +2,7 @@ use super::ObjectSafetyViolation;
 
 use crate::infer::InferCtxt;
 use rustc_data_structures::fx::FxIndexSet;
-use rustc_errors::{struct_span_err, DiagnosticBuilder, ErrorGuaranteed, MultiSpan};
+use rustc_errors::{struct_span_err, DiagnosticBuilder, MultiSpan};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::print::with_no_trimmed_paths;
@@ -18,9 +18,9 @@ impl<'tcx> InferCtxt<'tcx> {
         impl_item_def_id: LocalDefId,
         trait_item_def_id: DefId,
         requirement: &dyn fmt::Display,
-    ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
+    ) -> DiagnosticBuilder<'tcx> {
         let mut err = struct_span_err!(
-            self.tcx.sess,
+            self.tcx.dcx(),
             error_span,
             E0276,
             "impl has stricter requirements than trait"
@@ -44,14 +44,14 @@ pub fn report_object_safety_error<'tcx>(
     span: Span,
     trait_def_id: DefId,
     violations: &[ObjectSafetyViolation],
-) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
+) -> DiagnosticBuilder<'tcx> {
     let trait_str = tcx.def_path_str(trait_def_id);
     let trait_span = tcx.hir().get_if_local(trait_def_id).and_then(|node| match node {
         hir::Node::Item(item) => Some(item.ident.span),
         _ => None,
     });
     let mut err = struct_span_err!(
-        tcx.sess,
+        tcx.dcx(),
         span,
         E0038,
         "the trait `{}` cannot be made into an object",

@@ -52,8 +52,8 @@ pub struct TraitFnConst {
 }
 
 #[derive(Diagnostic)]
-#[diag(ast_passes_forbidden_lifetime_bound)]
-pub struct ForbiddenLifetimeBound {
+#[diag(ast_passes_forbidden_bound)]
+pub struct ForbiddenBound {
     #[primary_span]
     pub spans: Vec<Span>,
 }
@@ -541,6 +541,13 @@ pub struct OptionalTraitObject {
 }
 
 #[derive(Diagnostic)]
+#[diag(ast_passes_const_bound_trait_object)]
+pub struct ConstBoundTraitObject {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag(ast_passes_tilde_const_disallowed)]
 pub struct TildeConstDisallowed {
     #[primary_span]
@@ -580,11 +587,12 @@ pub enum TildeConstReason {
 }
 
 #[derive(Diagnostic)]
-#[diag(ast_passes_optional_const_exclusive)]
-pub struct OptionalConstExclusive {
+#[diag(ast_passes_incompatible_trait_bound_modifiers)]
+pub struct IncompatibleTraitBoundModifiers {
     #[primary_span]
     pub span: Span,
-    pub modifier: &'static str,
+    pub left: &'static str,
+    pub right: &'static str,
 }
 
 #[derive(Diagnostic)]
