@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use base_db::fixture::WithFixture;
 use chalk_ir::{AdtId, TyKind};
 use either::Either;
 use hir_def::db::DefDatabase;
+use test_fixture::WithFixture;
 use triomphe::Arc;
 
 use crate::{
@@ -218,6 +218,36 @@ fn recursive() {
         "#,
         LayoutError::RecursiveTypeWithoutIndirection,
     );
+}
+
+#[test]
+fn repr_packed() {
+    size_and_align! {
+        #[repr(packed)]
+        struct Goal;
+    }
+    size_and_align! {
+        #[repr(packed(2))]
+        struct Goal;
+    }
+    size_and_align! {
+        #[repr(packed(4))]
+        struct Goal;
+    }
+    size_and_align! {
+        #[repr(packed)]
+        struct Goal(i32);
+    }
+    size_and_align! {
+        #[repr(packed(2))]
+        struct Goal(i32);
+    }
+    size_and_align! {
+        #[repr(packed(4))]
+        struct Goal(i32);
+    }
+
+    check_size_and_align("#[repr(packed(5))] struct Goal(i32);", "", 4, 1);
 }
 
 #[test]

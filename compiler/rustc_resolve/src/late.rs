@@ -2600,7 +2600,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
                     E0637,
                     "`'_` cannot be used here"
                 )
-                .span_label(param.ident.span, "`'_` is a reserved lifetime name")
+                .span_label_mv(param.ident.span, "`'_` is a reserved lifetime name")
                 .emit();
                 // Record lifetime res, so lowering knows there is something fishy.
                 self.record_lifetime_param(param.id, LifetimeRes::Error);
@@ -2615,7 +2615,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
                     "invalid lifetime parameter name: `{}`",
                     param.ident,
                 )
-                .span_label(param.ident.span, "'static is a reserved lifetime name")
+                .span_label_mv(param.ident.span, "'static is a reserved lifetime name")
                 .emit();
                 // Record lifetime res, so lowering knows there is something fishy.
                 self.record_lifetime_param(param.id, LifetimeRes::Error);
@@ -3076,7 +3076,16 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
         }
 
         let feed_visibility = |this: &mut Self, def_id| {
-            let vis = this.r.tcx.visibility(def_id).expect_local();
+            let vis = this.r.tcx.visibility(def_id);
+            let vis = if vis.is_visible_locally() {
+                vis.expect_local()
+            } else {
+                this.r.dcx().span_delayed_bug(
+                    span,
+                    "error should be emitted when an unexpected trait item is used",
+                );
+                rustc_middle::ty::Visibility::Public
+            };
             this.r.feed_visibility(this.r.local_def_id(id), vis);
         };
 

@@ -66,6 +66,7 @@ mod check;
 mod compare_impl_item;
 pub mod dropck;
 mod entry;
+mod errs;
 pub mod intrinsic;
 pub mod intrinsicck;
 mod region;
@@ -75,7 +76,6 @@ pub use check::check_abi;
 
 use std::num::NonZeroU32;
 
-use check::check_mod_item_types;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::ErrorGuaranteed;
 use rustc_errors::{pluralize, struct_span_err, Diagnostic, DiagnosticBuilder};
@@ -110,7 +110,6 @@ pub fn provide(providers: &mut Providers) {
     wfcheck::provide(providers);
     *providers = Providers {
         adt_destructor,
-        check_mod_item_types,
         region_scope_tree,
         collect_return_position_impl_trait_in_trait_tys,
         compare_impl_const: compare_impl_item::compare_impl_const_raw,

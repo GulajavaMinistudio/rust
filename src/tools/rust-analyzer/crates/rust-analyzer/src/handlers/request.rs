@@ -453,12 +453,11 @@ pub(crate) fn handle_document_symbol(
 pub(crate) fn handle_workspace_symbol(
     snap: GlobalStateSnapshot,
     params: WorkspaceSymbolParams,
-) -> anyhow::Result<Option<Vec<SymbolInformation>>> {
+) -> anyhow::Result<Option<lsp_types::WorkspaceSymbolResponse>> {
     let _p = profile::span("handle_workspace_symbol");
 
     let config = snap.config.workspace_symbol();
     let (all_symbols, libs) = decide_search_scope_and_kind(&params, &config);
-    let limit = config.search_limit;
 
     let query = {
         let query: String = params.query.chars().filter(|&c| c != '#' && c != '*').collect();
@@ -469,17 +468,14 @@ pub(crate) fn handle_workspace_symbol(
         if libs {
             q.libs();
         }
-        q.limit(limit);
         q
     };
-    let mut res = exec_query(&snap, query)?;
+    let mut res = exec_query(&snap, query, config.search_limit)?;
     if res.is_empty() && !all_symbols {
-        let mut query = Query::new(params.query);
-        query.limit(limit);
-        res = exec_query(&snap, query)?;
+        res = exec_query(&snap, Query::new(params.query), config.search_limit)?;
     }
 
-    return Ok(Some(res));
+    return Ok(Some(lsp_types::WorkspaceSymbolResponse::Nested(res)));
 
     fn decide_search_scope_and_kind(
         params: &WorkspaceSymbolParams,
@@ -519,13 +515,13 @@ pub(crate) fn handle_workspace_symbol(
     fn exec_query(
         snap: &GlobalStateSnapshot,
         query: Query,
-    ) -> anyhow::Result<Vec<SymbolInformation>> {
+        limit: usize,
+    ) -> anyhow::Result<Vec<lsp_types::WorkspaceSymbol>> {
         let mut res = Vec::new();
-        for nav in snap.analysis.symbol_search(query)? {
+        for nav in snap.analysis.symbol_search(query, limit)? {
             let container_name = nav.container_name.as_ref().map(|v| v.to_string());
 
-            #[allow(deprecated)]
-            let info = SymbolInformation {
+            let info = lsp_types::WorkspaceSymbol {
                 name: match &nav.alias {
                     Some(alias) => format!("{} (alias for {})", alias, nav.name),
                     None => format!("{}", nav.name),
@@ -534,10 +530,11 @@ pub(crate) fn handle_workspace_symbol(
                     .kind
                     .map(to_proto::symbol_kind)
                     .unwrap_or(lsp_types::SymbolKind::VARIABLE),
+                // FIXME: Set deprecation
                 tags: None,
-                location: to_proto::location_from_nav(snap, nav)?,
                 container_name,
-                deprecated: None,
+                location: lsp_types::OneOf::Left(to_proto::location_from_nav(snap, nav)?),
+                data: None,
             };
             res.push(info);
         }
@@ -801,7 +798,7 @@ pub(crate) fn handle_runnables(
             }
         }
         None => {
-            if !snap.config.linked_projects().is_empty() {
+            if !snap.config.linked_or_discovered_projects().is_empty() {
                 res.push(lsp_ext::Runnable {
                     label: "cargo check --workspace".to_string(),
                     location: None,

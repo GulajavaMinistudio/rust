@@ -193,7 +193,7 @@ fn typeck_with_fallback<'tcx>(
         let fn_sig = tcx.liberate_late_bound_regions(def_id.to_def_id(), fn_sig);
         let fn_sig = fcx.normalize(body.value.span, fn_sig);
 
-        check_fn(&mut fcx, fn_sig, decl, def_id, body, None, tcx.features().unsized_fn_params);
+        check_fn(&mut fcx, fn_sig, None, decl, def_id, body, tcx.features().unsized_fn_params);
     } else {
         let expected_type = if let Some(&hir::Ty { kind: hir::TyKind::Infer, span, .. }) = body_ty {
             Some(fcx.next_ty_var(TypeVariableOrigin {
@@ -295,15 +295,13 @@ fn typeck_with_fallback<'tcx>(
 /// When `check_fn` is invoked on a coroutine (i.e., a body that
 /// includes yield), it returns back some information about the yield
 /// points.
+#[derive(Debug, PartialEq, Copy, Clone)]
 struct CoroutineTypes<'tcx> {
     /// Type of coroutine argument / values returned by `yield`.
     resume_ty: Ty<'tcx>,
 
     /// Type of value that is yielded.
     yield_ty: Ty<'tcx>,
-
-    /// Types that are captured (see `CoroutineInterior` for more).
-    interior: Ty<'tcx>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -368,18 +366,17 @@ fn report_unexpected_variant_res(
         _ => res.descr(),
     };
     let path_str = rustc_hir_pretty::qpath_to_string(qpath);
-    let mut err = tcx.dcx().struct_span_err_with_code(
-        span,
-        format!("expected {expected}, found {res_descr} `{path_str}`"),
-        DiagnosticId::Error(err_code.into()),
-    );
+    let err = tcx
+        .dcx()
+        .struct_span_err(span, format!("expected {expected}, found {res_descr} `{path_str}`"))
+        .code_mv(DiagnosticId::Error(err_code.into()));
     match res {
         Res::Def(DefKind::Fn | DefKind::AssocFn, _) if err_code == "E0164" => {
             let patterns_url = "https://doc.rust-lang.org/book/ch18-00-patterns.html";
-            err.span_label(span, "`fn` calls are not allowed in patterns");
-            err.help(format!("for more information, visit {patterns_url}"))
+            err.span_label_mv(span, "`fn` calls are not allowed in patterns")
+                .help_mv(format!("for more information, visit {patterns_url}"))
         }
-        _ => err.span_label(span, format!("not a {expected}")),
+        _ => err.span_label_mv(span, format!("not a {expected}")),
     }
     .emit()
 }
