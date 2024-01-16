@@ -16,7 +16,7 @@ use rustc_ast::{
 use rustc_ast_pretty::pprust::where_bound_predicate_to_string;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{
-    pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
+    pluralize, struct_span_code_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
     MultiSpan, SuggestionStyle,
 };
 use rustc_hir as hir;
@@ -656,7 +656,10 @@ impl<'a: 'ast, 'ast, 'tcx> LateResolutionVisitor<'a, '_, 'ast, 'tcx> {
         let typo_sugg = self
             .lookup_typo_candidate(path, following_seg, source.namespace(), is_expected)
             .to_opt_suggestion();
-        if path.len() == 1 && self.self_type_is_available() {
+        if path.len() == 1
+            && !matches!(source, PathSource::Delegation)
+            && self.self_type_is_available()
+        {
             if let Some(candidate) =
                 self.lookup_assoc_candidate(ident, ns, is_expected, source.is_call())
             {
@@ -1899,6 +1902,7 @@ impl<'a: 'ast, 'ast, 'tcx> LateResolutionVisitor<'a, '_, 'ast, 'tcx> {
                 (AssocItemKind::Const(..), Res::Def(DefKind::AssocConst, _)) => true,
                 (AssocItemKind::Fn(_), Res::Def(DefKind::AssocFn, _)) => true,
                 (AssocItemKind::Type(..), Res::Def(DefKind::AssocTy, _)) => true,
+                (AssocItemKind::Delegation(_), Res::Def(DefKind::AssocFn, _)) => true,
                 _ => false,
             })
             .map(|(key, _)| key.ident.name)
@@ -1960,6 +1964,12 @@ impl<'a: 'ast, 'ast, 'tcx> LateResolutionVisitor<'a, '_, 'ast, 'tcx> {
                         }
                         ast::AssocItemKind::Fn(..) => AssocSuggestion::AssocFn { called },
                         ast::AssocItemKind::Type(..) => AssocSuggestion::AssocType,
+                        ast::AssocItemKind::Delegation(..)
+                            if self.r.has_self.contains(&self.r.local_def_id(assoc_item.id)) =>
+                        {
+                            AssocSuggestion::MethodWithSelf { called }
+                        }
+                        ast::AssocItemKind::Delegation(..) => AssocSuggestion::AssocFn { called },
                         ast::AssocItemKind::MacCall(_) => continue,
                     });
                 }
@@ -2603,23 +2613,23 @@ impl<'a: 'ast, 'ast, 'tcx> LateResolutionVisitor<'a, '_, 'ast, 'tcx> {
     ) {
         debug_assert_ne!(lifetime_ref.ident.name, kw::UnderscoreLifetime);
         let mut err = if let Some(outer) = outer_lifetime_ref {
-            struct_span_err!(
+            struct_span_code_err!(
                 self.r.dcx(),
                 lifetime_ref.ident.span,
                 E0401,
                 "can't use generic parameters from outer item",
             )
-            .span_label_mv(lifetime_ref.ident.span, "use of generic parameter from outer item")
-            .span_label_mv(outer.span, "lifetime parameter from outer item")
+            .with_span_label(lifetime_ref.ident.span, "use of generic parameter from outer item")
+            .with_span_label(outer.span, "lifetime parameter from outer item")
         } else {
-            struct_span_err!(
+            struct_span_code_err!(
                 self.r.dcx(),
                 lifetime_ref.ident.span,
                 E0261,
                 "use of undeclared lifetime name `{}`",
                 lifetime_ref.ident
             )
-            .span_label_mv(lifetime_ref.ident.span, "undeclared lifetime")
+            .with_span_label(lifetime_ref.ident.span, "undeclared lifetime")
         };
         self.suggest_introducing_lifetime(
             &mut err,
@@ -2777,7 +2787,7 @@ impl<'a: 'ast, 'ast, 'tcx> LateResolutionVisitor<'a, '_, 'ast, 'tcx> {
         let num_lifetimes: usize = lifetime_refs.iter().map(|lt| lt.count).sum();
         let spans: Vec<_> = lifetime_refs.iter().map(|lt| lt.span).collect();
 
-        let mut err = struct_span_err!(
+        let mut err = struct_span_code_err!(
             self.r.dcx(),
             spans,
             E0106,
@@ -3282,15 +3292,15 @@ fn mk_where_bound_predicate(
 
 /// Report lifetime/lifetime shadowing as an error.
 pub(super) fn signal_lifetime_shadowing(sess: &Session, orig: Ident, shadower: Ident) {
-    struct_span_err!(
+    struct_span_code_err!(
         sess.dcx(),
         shadower.span,
         E0496,
         "lifetime name `{}` shadows a lifetime name that is already in scope",
         orig.name,
     )
-    .span_label_mv(orig.span, "first declared here")
-    .span_label_mv(shadower.span, format!("lifetime `{}` already in scope", orig.name))
+    .with_span_label(orig.span, "first declared here")
+    .with_span_label(shadower.span, format!("lifetime `{}` already in scope", orig.name))
     .emit();
 }
 
@@ -3322,7 +3332,7 @@ pub(super) fn signal_label_shadowing(sess: &Session, orig: Span, shadower: Ident
             shadower,
             format!("label name `{name}` shadows a label name that is already in scope"),
         )
-        .span_label_mv(orig, "first declared here")
-        .span_label_mv(shadower, format!("label `{name}` already in scope"))
+        .with_span_label(orig, "first declared here")
+        .with_span_label(shadower, format!("label `{name}` already in scope"))
         .emit();
 }

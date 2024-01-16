@@ -6,8 +6,10 @@ use crate::method::MethodCallee;
 use crate::TupleArgumentsFlag::*;
 use crate::{errors, Expectation::*};
 use crate::{
-    struct_span_err, BreakableCtxt, Diverges, Expectation, FnCtxt, Needs, RawTy, TupleArgumentsFlag,
+    struct_span_code_err, BreakableCtxt, Diverges, Expectation, FnCtxt, Needs, RawTy,
+    TupleArgumentsFlag,
 };
+use itertools::Itertools;
 use rustc_ast as ast;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_errors::{
@@ -204,7 +206,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 _ => {
                     // Otherwise, there's a mismatch, so clear out what we're expecting, and set
                     // our input types to err_args so we don't blow up the error messages
-                    struct_span_err!(
+                    struct_span_code_err!(
                         tcx.dcx(),
                         call_span,
                         E0059,
@@ -420,7 +422,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 formal_input_tys
                     .iter()
                     .copied()
-                    .zip(expected_input_tys.iter().copied())
+                    .zip_eq(expected_input_tys.iter().copied())
                     .map(|vars| self.resolve_vars_if_possible(vars)),
             );
 
@@ -807,7 +809,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         let mut err = if formal_and_expected_inputs.len() == provided_args.len() {
-            struct_span_err!(
+            struct_span_code_err!(
                 tcx.dcx(),
                 full_call_span,
                 E0308,
@@ -827,7 +829,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         pluralize!("was", provided_args.len())
                     ),
                 )
-                .code_mv(DiagnosticId::Error(err_code.to_owned()))
+                .with_code(DiagnosticId::Error(err_code.to_owned()))
         };
 
         // As we encounter issues, keep track of what we want to provide for the suggestion
@@ -1378,14 +1380,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     // (issue #88844).
                     guar
                 }
-                _ => struct_span_err!(
+                _ => struct_span_code_err!(
                     self.dcx(),
                     path_span,
                     E0071,
                     "expected struct, variant or union type, found {}",
                     ty.normalized.sort_string(self.tcx)
                 )
-                .span_label_mv(path_span, "not a struct")
+                .with_span_label(path_span, "not a struct")
                 .emit(),
             })
         }

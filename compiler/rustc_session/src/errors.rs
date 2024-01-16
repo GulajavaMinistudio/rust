@@ -1,6 +1,5 @@
 use std::num::NonZeroU32;
 
-use crate::parse::ParseSess;
 use rustc_ast::token;
 use rustc_ast::util::literal::LitError;
 use rustc_errors::{
@@ -9,6 +8,8 @@ use rustc_errors::{
 use rustc_macros::Diagnostic;
 use rustc_span::{BytePos, Span, Symbol};
 use rustc_target::spec::{SplitDebuginfo, StackProtector, TargetTriple};
+
+use crate::parse::ParseSess;
 
 pub struct FeatureGateError {
     pub span: MultiSpan,
@@ -19,8 +20,8 @@ impl<'a> IntoDiagnostic<'a> for FeatureGateError {
     #[track_caller]
     fn into_diagnostic(self, dcx: &'a DiagCtxt, level: Level) -> DiagnosticBuilder<'a> {
         DiagnosticBuilder::new(dcx, level, self.explain)
-            .span_mv(self.span)
-            .code_mv(error_code!(E0658))
+            .with_span(self.span)
+            .with_code(error_code!(E0658))
     }
 }
 
@@ -28,6 +29,24 @@ impl<'a> IntoDiagnostic<'a> for FeatureGateError {
 #[note(session_feature_diagnostic_for_issue)]
 pub struct FeatureDiagnosticForIssue {
     pub n: NonZeroU32,
+}
+
+#[derive(Subdiagnostic)]
+#[note(session_feature_suggest_upgrade_compiler)]
+pub struct SuggestUpgradeCompiler {
+    date: &'static str,
+}
+
+impl SuggestUpgradeCompiler {
+    pub fn ui_testing() -> Self {
+        Self { date: "YYYY-MM-DD" }
+    }
+
+    pub fn new() -> Option<Self> {
+        let date = option_env!("CFG_VER_DATE")?;
+
+        Some(Self { date })
+    }
 }
 
 #[derive(Subdiagnostic)]

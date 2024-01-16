@@ -27,7 +27,7 @@ pub fn from_target_feature(
         let code = "enable = \"..\"";
         tcx.dcx()
             .struct_span_err(span, msg)
-            .span_suggestion_mv(span, "must be of the form", code, Applicability::HasPlaceholders)
+            .with_span_suggestion(span, "must be of the form", code, Applicability::HasPlaceholders)
             .emit();
     };
     let rust_features = tcx.features();
@@ -82,7 +82,7 @@ pub fn from_target_feature(
             };
             if !allowed {
                 feature_err(
-                    &tcx.sess.parse_sess,
+                    &tcx.sess,
                     feature_gate.unwrap(),
                     item.span(),
                     format!("the target feature `{feature}` is currently unstable"),

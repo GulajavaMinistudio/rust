@@ -78,7 +78,7 @@ use std::num::NonZeroU32;
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::ErrorGuaranteed;
-use rustc_errors::{pluralize, struct_span_err, Diagnostic, DiagnosticBuilder};
+use rustc_errors::{pluralize, struct_span_code_err, Diagnostic, DiagnosticBuilder};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::Visitor;
 use rustc_index::bit_set::BitSet;
@@ -293,7 +293,7 @@ fn default_body_is_unstable(
 
     rustc_session::parse::add_feature_diagnostics_for_issue(
         &mut err,
-        &tcx.sess.parse_sess,
+        &tcx.sess,
         feature,
         rustc_feature::GateIssue::Library(issue),
         false,

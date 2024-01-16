@@ -13,7 +13,7 @@ use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_data_structures::unord::UnordSet;
 use rustc_errors::StashKey;
 use rustc_errors::{
-    pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, MultiSpan,
+    pluralize, struct_span_code_err, Applicability, Diagnostic, DiagnosticBuilder, MultiSpan,
 };
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
@@ -148,7 +148,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
 
             MethodError::Ambiguity(mut sources) => {
-                let mut err = struct_span_err!(
+                let mut err = struct_span_code_err!(
                     self.dcx(),
                     item_name.span,
                     E0034,
@@ -171,7 +171,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             MethodError::PrivateMatch(kind, def_id, out_of_scope_traits) => {
                 let kind = self.tcx.def_kind_descr(kind, def_id);
-                let mut err = struct_span_err!(
+                let mut err = struct_span_code_err!(
                     self.dcx(),
                     item_name.span,
                     E0624,
@@ -263,8 +263,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) -> DiagnosticBuilder<'_> {
         let mut file = None;
         let ty_str = self.tcx.short_ty_string(rcvr_ty, &mut file);
-        let mut err =
-            struct_span_err!(self.dcx(), rcvr_expr.span, E0599, "cannot write into `{}`", ty_str);
+        let mut err = struct_span_code_err!(
+            self.dcx(),
+            rcvr_expr.span,
+            E0599,
+            "cannot write into `{}`",
+            ty_str
+        );
         err.span_note(
             rcvr_expr.span,
             "must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method",
@@ -820,11 +825,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             "auto trait is invoked with no method error, but no error reported?",
                         );
                     }
-                    Some(Node::Item(hir::Item {
-                        ident,
-                        kind: hir::ItemKind::Trait(..) | hir::ItemKind::TraitAlias(..),
-                        ..
-                    })) => {
+                    Some(
+                        Node::Item(hir::Item {
+                            ident,
+                            kind: hir::ItemKind::Trait(..) | hir::ItemKind::TraitAlias(..),
+                            ..
+                        })
+                        // We may also encounter unsatisfied GAT or method bounds
+                        | Node::TraitItem(hir::TraitItem { ident, .. })
+                        | Node::ImplItem(hir::ImplItem { ident, .. }),
+                    ) => {
                         skip_list.insert(p);
                         let entry = spanned_predicates.entry(ident.span);
                         let entry = entry.or_insert_with(|| {
@@ -835,7 +845,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         entry.1.insert((cause_span, "unsatisfied trait bound introduced here"));
                         entry.2.push(p);
                     }
-                    Some(node) => unreachable!("encountered `{node:?}`"),
+                    Some(node) => unreachable!("encountered `{node:?}` due to `{cause:#?}`"),
                     None => (),
                 }
             }
@@ -1836,7 +1846,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             && !actual.has_concrete_skeleton()
             && let SelfSource::MethodCall(expr) = source
         {
-            let mut err = struct_span_err!(
+            let mut err = struct_span_code_err!(
                 tcx.dcx(),
                 span,
                 E0689,

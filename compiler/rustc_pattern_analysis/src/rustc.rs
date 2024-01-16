@@ -12,7 +12,9 @@ use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::{self, Const};
 use rustc_middle::thir::{FieldPat, Pat, PatKind, PatRange, PatRangeBoundary};
 use rustc_middle::ty::layout::IntegerExt;
+use rustc_middle::ty::TypeVisitableExt;
 use rustc_middle::ty::{self, OpaqueTypeKey, Ty, TyCtxt, VariantDef};
+use rustc_span::ErrorGuaranteed;
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::{FieldIdx, Integer, VariantIdx, FIRST_VARIANT};
 use smallvec::SmallVec;
@@ -31,9 +33,11 @@ pub type ConstructorSet<'p, 'tcx> =
 pub type DeconstructedPat<'p, 'tcx> =
     crate::pat::DeconstructedPat<'p, RustcMatchCheckCtxt<'p, 'tcx>>;
 pub type MatchArm<'p, 'tcx> = crate::MatchArm<'p, RustcMatchCheckCtxt<'p, 'tcx>>;
-pub type MatchCtxt<'a, 'p, 'tcx> = crate::MatchCtxt<'a, 'p, RustcMatchCheckCtxt<'p, 'tcx>>;
+pub type MatchCtxt<'a, 'p, 'tcx> = crate::MatchCtxt<'a, RustcMatchCheckCtxt<'p, 'tcx>>;
+pub type OverlappingRanges<'p, 'tcx> =
+    crate::usefulness::OverlappingRanges<'p, RustcMatchCheckCtxt<'p, 'tcx>>;
 pub(crate) type PlaceCtxt<'a, 'p, 'tcx> =
-    crate::usefulness::PlaceCtxt<'a, 'p, RustcMatchCheckCtxt<'p, 'tcx>>;
+    crate::usefulness::PlaceCtxt<'a, RustcMatchCheckCtxt<'p, 'tcx>>;
 pub(crate) type SplitConstructorSet<'p, 'tcx> =
     crate::constructor::SplitConstructorSet<RustcMatchCheckCtxt<'p, 'tcx>>;
 pub type Usefulness<'p, 'tcx> = crate::usefulness::Usefulness<'p, RustcMatchCheckCtxt<'p, 'tcx>>;
@@ -76,7 +80,9 @@ pub struct RustcMatchCheckCtxt<'p, 'tcx> {
     /// outside its module and should not be matchable with an empty match statement.
     pub module: DefId,
     pub param_env: ty::ParamEnv<'tcx>,
+    /// To allocate lowered patterns
     pub pattern_arena: &'p TypedArena<DeconstructedPat<'p, 'tcx>>,
+    /// To allocate the result of `self.ctor_sub_tys()`
     pub dropless_arena: &'p DroplessArena,
     /// Lint level at the match.
     pub match_lint_level: HirId,
@@ -302,7 +308,10 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
     ///
     /// See [`crate::constructor`] for considerations of emptiness.
     #[instrument(level = "debug", skip(self), ret)]
-    pub fn ctors_for_ty(&self, ty: RevealedTy<'tcx>) -> ConstructorSet<'p, 'tcx> {
+    pub fn ctors_for_ty(
+        &self,
+        ty: RevealedTy<'tcx>,
+    ) -> Result<ConstructorSet<'p, 'tcx>, ErrorGuaranteed> {
         let cx = self;
         let make_uint_range = |start, end| {
             IntRange::from_range(
@@ -311,9 +320,11 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
                 RangeEnd::Included,
             )
         };
+        // Abort on type error.
+        ty.error_reported()?;
         // This determines the set of all possible constructors for the type `ty`. For numbers,
         // arrays and slices we use ranges and variable-length slices when appropriate.
-        match ty.kind() {
+        Ok(match ty.kind() {
             ty::Bool => ConstructorSet::Bool,
             ty::Char => {
                 // The valid Unicode Scalar Value ranges.
@@ -423,7 +434,7 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
             ty::CoroutineWitness(_, _) | ty::Bound(_, _) | ty::Placeholder(_) | ty::Infer(_) => {
                 bug!("Encountered unexpected type in `ConstructorSet::for_ty`: {ty:?}")
             }
-        }
+        })
     }
 
     pub(crate) fn lower_pat_range_bdy(
@@ -944,6 +955,7 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
 
 impl<'p, 'tcx> TypeCx for RustcMatchCheckCtxt<'p, 'tcx> {
     type Ty = RevealedTy<'tcx>;
+    type Error = ErrorGuaranteed;
     type VariantIdx = VariantIdx;
     type StrLit = Const<'tcx>;
     type ArmData = HirId;
@@ -963,7 +975,10 @@ impl<'p, 'tcx> TypeCx for RustcMatchCheckCtxt<'p, 'tcx> {
     ) -> &[Self::Ty] {
         self.ctor_sub_tys(ctor, ty)
     }
-    fn ctors_for_ty(&self, ty: Self::Ty) -> crate::constructor::ConstructorSet<Self> {
+    fn ctors_for_ty(
+        &self,
+        ty: Self::Ty,
+    ) -> Result<crate::constructor::ConstructorSet<Self>, Self::Error> {
         self.ctors_for_ty(ty)
     }
 

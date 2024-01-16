@@ -1223,12 +1223,12 @@ impl LinkCollector<'_, '_> {
         )
         .unwrap_or_else(|| item.attr_span(self.cx.tcx));
         rustc_session::parse::feature_err(
-            &self.cx.tcx.sess.parse_sess,
+            &self.cx.tcx.sess,
             sym::intra_doc_pointers,
             span,
             "linking to associated items of raw pointers is experimental",
         )
-        .note_mv("rustdoc does not allow disambiguating between `*const` and `*mut`, and pointers are unstable until it does")
+        .with_note("rustdoc does not allow disambiguating between `*const` and `*mut`, and pointers are unstable until it does")
         .emit();
     }
 

@@ -6,7 +6,7 @@ use rustc_ast::{MetaItemKind, NestedMetaItem};
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{
-    pluralize, report_ambiguity_error, struct_span_err, Applicability, DiagCtxt, Diagnostic,
+    pluralize, report_ambiguity_error, struct_span_code_err, Applicability, DiagCtxt, Diagnostic,
     DiagnosticBuilder, ErrorGuaranteed, MultiSpan, SuggestionStyle,
 };
 use rustc_feature::BUILTIN_ATTRIBUTES;
@@ -153,7 +153,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                     BuiltinLintDiagnostics::AmbiguousGlobImports { diag },
                 );
             } else {
-                let mut err = struct_span_err!(self.dcx(), diag.span, E0659, "{}", &diag.msg);
+                let mut err = struct_span_code_err!(self.dcx(), diag.span, E0659, "{}", &diag.msg);
                 report_ambiguity_error(&mut err, diag);
                 err.emit();
             }
@@ -254,15 +254,15 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         let msg = format!("the name `{name}` is defined multiple times");
 
         let mut err = match (old_binding.is_extern_crate(), new_binding.is_extern_crate()) {
-            (true, true) => struct_span_err!(self.dcx(), span, E0259, "{}", msg),
+            (true, true) => struct_span_code_err!(self.dcx(), span, E0259, "{}", msg),
             (true, _) | (_, true) => match new_binding.is_import() && old_binding.is_import() {
-                true => struct_span_err!(self.dcx(), span, E0254, "{}", msg),
-                false => struct_span_err!(self.dcx(), span, E0260, "{}", msg),
+                true => struct_span_code_err!(self.dcx(), span, E0254, "{}", msg),
+                false => struct_span_code_err!(self.dcx(), span, E0260, "{}", msg),
             },
             _ => match (old_binding.is_import_user_facing(), new_binding.is_import_user_facing()) {
-                (false, false) => struct_span_err!(self.dcx(), span, E0428, "{}", msg),
-                (true, true) => struct_span_err!(self.dcx(), span, E0252, "{}", msg),
-                _ => struct_span_err!(self.dcx(), span, E0255, "{}", msg),
+                (false, false) => struct_span_code_err!(self.dcx(), span, E0428, "{}", msg),
+                (true, true) => struct_span_code_err!(self.dcx(), span, E0252, "{}", msg),
+                _ => struct_span_code_err!(self.dcx(), span, E0255, "{}", msg),
             },
         };
 
@@ -659,7 +659,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                 let origin_sp = origin.iter().copied().collect::<Vec<_>>();
 
                 let msp = MultiSpan::from_spans(target_sp.clone());
-                let mut err = struct_span_err!(
+                let mut err = struct_span_code_err!(
                     self.dcx(),
                     msp,
                     E0408,
@@ -786,9 +786,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             ResolutionError::SelfImportOnlyInImportListWithNonEmptyPrefix => {
                 self.dcx().create_err(errs::SelfImportOnlyInImportListWithNonEmptyPrefix { span })
             }
-            ResolutionError::FailedToResolve { last_segment, label, suggestion, module } => {
+            ResolutionError::FailedToResolve { segment, label, suggestion, module } => {
                 let mut err =
-                    struct_span_err!(self.dcx(), span, E0433, "failed to resolve: {}", &label);
+                    struct_span_code_err!(self.dcx(), span, E0433, "failed to resolve: {}", &label);
                 err.span_label(span, label);
 
                 if let Some((suggestions, msg, applicability)) = suggestion {
@@ -801,9 +801,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
 
                 if let Some(ModuleOrUniformRoot::Module(module)) = module
                     && let Some(module) = module.opt_def_id()
-                    && let Some(last_segment) = last_segment
+                    && let Some(segment) = segment
                 {
-                    self.find_cfg_stripped(&mut err, &last_segment, module);
+                    self.find_cfg_stripped(&mut err, &segment, module);
                 }
 
                 err
@@ -950,15 +950,18 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                         "item `{name}` is an associated {kind}, which doesn't match its trait `{trait_path}`",
                     ),
                 )
-                .code_mv(code)
-                .span_label_mv(span, "does not match trait")
-                .span_label_mv(trait_item_span, "item in trait")
+                .with_code(code)
+                .with_span_label(span, "does not match trait")
+                .with_span_label(trait_item_span, "item in trait")
             }
             ResolutionError::TraitImplDuplicate { name, trait_item_span, old_span } => self
                 .dcx()
                 .create_err(errs::TraitImplDuplicate { span, name, trait_item_span, old_span }),
             ResolutionError::InvalidAsmSym => self.dcx().create_err(errs::InvalidAsmSym { span }),
             ResolutionError::LowercaseSelf => self.dcx().create_err(errs::LowercaseSelf { span }),
+            ResolutionError::BindingInNeverPattern => {
+                self.dcx().create_err(errs::BindingInNeverPattern { span })
+            }
         }
     }
 
@@ -981,12 +984,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             }
             VisResolutionError::FailedToResolve(span, label, suggestion) => self.into_struct_error(
                 span,
-                ResolutionError::FailedToResolve {
-                    last_segment: None,
-                    label,
-                    suggestion,
-                    module: None,
-                },
+                ResolutionError::FailedToResolve { segment: None, label, suggestion, module: None },
             ),
             VisResolutionError::ExpectedFound(span, path_str, res) => {
                 self.dcx().create_err(errs::ExpectedFound { span, res, path_str })
@@ -1702,8 +1700,14 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
 
         // Print the primary message.
         let descr = get_descr(binding);
-        let mut err =
-            struct_span_err!(self.dcx(), ident.span, E0603, "{} `{}` is private", descr, ident);
+        let mut err = struct_span_code_err!(
+            self.dcx(),
+            ident.span,
+            E0603,
+            "{} `{}` is private",
+            descr,
+            ident
+        );
         err.span_label(ident.span, format!("private {descr}"));
 
         let mut not_publicly_reexported = false;
@@ -2444,7 +2448,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
     pub(crate) fn find_cfg_stripped(
         &mut self,
         err: &mut Diagnostic,
-        last_segment: &Symbol,
+        segment: &Symbol,
         module: DefId,
     ) {
         let local_items;
@@ -2463,7 +2467,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         };
 
         for &StrippedCfgItem { parent_module, name, ref cfg } in symbols {
-            if parent_module != module || name.name != *last_segment {
+            if parent_module != module || name.name != *segment {
                 continue;
             }
 

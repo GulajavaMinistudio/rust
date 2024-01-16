@@ -107,7 +107,7 @@ pub fn expand_include<'cx>(
         return DummyResult::any(sp);
     };
     // The file will be added to the code map by the parser
-    let file = match resolve_path(&cx.sess.parse_sess, file.as_str(), sp) {
+    let file = match resolve_path(&cx.sess, file.as_str(), sp) {
         Ok(f) => f,
         Err(err) => {
             err.emit();
@@ -155,7 +155,7 @@ pub fn expand_include<'cx>(
                         if self.p.token != token::Eof {
                             let token = pprust::token_to_string(&self.p.token);
                             let msg = format!("expected item, found `{token}`");
-                            self.p.dcx().struct_span_err(self.p.token.span, msg).emit();
+                            self.p.dcx().span_err(self.p.token.span, msg);
                         }
 
                         break;
@@ -179,7 +179,7 @@ pub fn expand_include_str(
     let Some(file) = get_single_str_from_tts(cx, sp, tts, "include_str!") else {
         return DummyResult::any(sp);
     };
-    let file = match resolve_path(&cx.sess.parse_sess, file.as_str(), sp) {
+    let file = match resolve_path(&cx.sess, file.as_str(), sp) {
         Ok(f) => f,
         Err(err) => {
             err.emit();
@@ -213,7 +213,7 @@ pub fn expand_include_bytes(
     let Some(file) = get_single_str_from_tts(cx, sp, tts, "include_bytes!") else {
         return DummyResult::any(sp);
     };
-    let file = match resolve_path(&cx.sess.parse_sess, file.as_str(), sp) {
+    let file = match resolve_path(&cx.sess, file.as_str(), sp) {
         Ok(f) => f,
         Err(err) => {
             err.emit();
