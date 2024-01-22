@@ -430,7 +430,7 @@ impl AddToDiagnostic for UnsafeNotInheritedLintNote {
         diag.tool_only_multipart_suggestion(
             fluent::mir_build_wrap_suggestion,
             vec![(body_start, "{ unsafe ".into()), (body_end, "}".into())],
-            Applicability::MaybeIncorrect,
+            Applicability::MachineApplicable,
         );
     }
 }
@@ -787,6 +787,16 @@ pub struct FloatPattern;
 #[derive(LintDiagnostic)]
 #[diag(mir_build_pointer_pattern)]
 pub struct PointerPattern;
+
+#[derive(Diagnostic)]
+#[diag(mir_build_non_empty_never_pattern)]
+#[note]
+pub struct NonEmptyNeverPattern<'tcx> {
+    #[primary_span]
+    #[label]
+    pub span: Span,
+    pub ty: Ty<'tcx>,
+}
 
 #[derive(LintDiagnostic)]
 #[diag(mir_build_indirect_structural_match)]

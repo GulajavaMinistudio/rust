@@ -111,6 +111,7 @@
 //
 // Library features:
 // tidy-alphabetical-start
+#![cfg_attr(not(bootstrap), feature(offset_of_nested))]
 #![feature(char_indices_offset)]
 #![feature(const_align_of_val)]
 #![feature(const_align_of_val_raw)]
@@ -160,6 +161,7 @@
 #![feature(const_slice_ptr_len)]
 #![feature(const_slice_split_at_mut)]
 #![feature(const_str_from_utf8_unchecked_mut)]
+#![feature(const_strict_overflow_ops)]
 #![feature(const_swap)]
 #![feature(const_try)]
 #![feature(const_type_id)]
@@ -176,7 +178,6 @@
 #![feature(isqrt)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(non_null_convenience)]
-#![feature(offset_of)]
 #![feature(offset_of_enum)]
 #![feature(panic_internals)]
 #![feature(ptr_alignment_type)]
@@ -184,6 +185,7 @@
 #![feature(set_ptr_value)]
 #![feature(slice_ptr_get)]
 #![feature(slice_split_at_unchecked)]
+#![feature(split_at_checked)]
 #![feature(str_internals)]
 #![feature(str_split_inclusive_remainder)]
 #![feature(str_split_remainder)]
