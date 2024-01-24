@@ -714,7 +714,7 @@ impl<'a, 'tcx> MirUsedCollector<'a, 'tcx> {
             // but correct span? This would make the lint at least accept crate-level lint attributes.
             return;
         };
-        self.tcx.emit_spanned_lint(
+        self.tcx.emit_node_span_lint(
             LARGE_ASSIGNMENTS,
             lint_root,
             span,
@@ -783,8 +783,7 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirUsedCollector<'a, 'tcx> {
                             def_id,
                             args,
                             ty::ClosureKind::FnOnce,
-                        )
-                        .expect("failed to normalize and resolve closure during codegen");
+                        );
                         if should_codegen_locally(self.tcx, &instance) {
                             self.output.push(create_fn_mono_item(self.tcx, instance, span));
                         }

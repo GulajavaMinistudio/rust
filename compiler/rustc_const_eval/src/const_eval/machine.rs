@@ -611,7 +611,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
                     .0
                     .is_error();
                 let span = ecx.cur_span();
-                ecx.tcx.emit_spanned_lint(
+                ecx.tcx.emit_node_span_lint(
                     rustc_session::lint::builtin::LONG_RUNNING_CONST_EVAL,
                     hir_id,
                     span,
@@ -723,7 +723,7 @@ impl<'mir, 'tcx> interpret::Machine<'mir, 'tcx> for CompileTimeInterpreter<'mir,
             && ty.is_freeze(*ecx.tcx, ecx.param_env)
         {
             let place = ecx.ref_to_mplace(val)?;
-            let new_place = place.map_provenance(|p| p.map(CtfeProvenance::as_immutable));
+            let new_place = place.map_provenance(CtfeProvenance::as_immutable);
             Ok(ImmTy::from_immediate(new_place.to_ref(ecx), val.layout))
         } else {
             Ok(val.clone())
