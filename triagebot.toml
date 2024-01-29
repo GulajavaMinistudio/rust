@@ -476,7 +476,7 @@ of `ObligationCtxt`.
 """
 cc = ["@lcnr", "@compiler-errors"]
 
-[mentions."compiler/rustc_error_codes/src/error_codes.rs"]
+[mentions."compiler/rustc_error_codes/src/lib.rs"]
 message = "Some changes occurred in diagnostic error codes"
 cc = ["@GuillaumeGomez"]
 
@@ -652,6 +652,7 @@ compiler-team-contributors = [
     "@TaKO8Ki",
     "@b-naber",
     "@nnethercote",
+    "@fmease",
 ]
 compiler = [
     "compiler-team",
@@ -662,7 +663,6 @@ libs = [
     "@joshtriplett",
     "@Mark-Simulacrum",
     "@m-ou-se",
-    "@thomcc",
 ]
 bootstrap = [
     "@Mark-Simulacrum",
@@ -802,7 +802,7 @@ project-stable-mir = [
 "/library/panic_unwind" =                                ["libs"]
 "/library/proc_macro" =                                  ["@petrochenkov"]
 "/library/std" =                                         ["libs"]
-"/library/std/src/sys/pal/windows" =                     ["@ChrisDenton", "@thomcc"]
+"/library/std/src/sys/pal/windows" =                     ["@ChrisDenton"]
 "/library/stdarch" =                                     ["libs"]
 "/library/test" =                                        ["libs"]
 "/src/bootstrap" =                                       ["bootstrap"]
