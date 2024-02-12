@@ -1388,13 +1388,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             if should_encode_fn_sig(def_kind) {
                 record!(self.tables.fn_sig[def_id] <- tcx.fn_sig(def_id));
             }
-            // FIXME: Some anonymous constants produced by `#[rustc_legacy_const_generics]`
-            // do not have corresponding HIR nodes, so some queries usually making sense for
-            // anonymous constants will not work on them and panic. It's not clear whether it
-            // can cause any observable issues or not.
-            let anon_const_without_hir = def_kind == DefKind::AnonConst
-                && tcx.opt_hir_node(tcx.local_def_id_to_hir_id(local_id)).is_none();
-            if should_encode_generics(def_kind) && !anon_const_without_hir {
+            if should_encode_generics(def_kind) {
                 let g = tcx.generics_of(def_id);
                 record!(self.tables.generics_of[def_id] <- g);
                 record!(self.tables.explicit_predicates_of[def_id] <- self.tcx.explicit_predicates_of(def_id));
@@ -1408,7 +1402,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     }
                 }
             }
-            if should_encode_type(tcx, local_id, def_kind) && !anon_const_without_hir {
+            if should_encode_type(tcx, local_id, def_kind) {
                 record!(self.tables.type_of[def_id] <- self.tcx.type_of(def_id));
             }
             if should_encode_constness(def_kind) {
@@ -1452,6 +1446,13 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 && let Some(coroutine_kind) = self.tcx.coroutine_kind(def_id)
             {
                 self.tables.coroutine_kind.set(def_id.index, Some(coroutine_kind))
+            }
+            if def_kind == DefKind::Closure
+                && tcx.type_of(def_id).skip_binder().is_coroutine_closure()
+            {
+                self.tables
+                    .coroutine_for_closure
+                    .set_some(def_id.index, self.tcx.coroutine_for_closure(def_id).into());
             }
             if let DefKind::Enum | DefKind::Struct | DefKind::Union = def_kind {
                 self.encode_info_for_adt(local_id);

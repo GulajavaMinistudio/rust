@@ -12,7 +12,7 @@ use rustc_errors::{codes::*, struct_span_code_err, DiagnosticMessage};
 use rustc_hir as hir;
 use rustc_middle::traits::{ObligationCause, ObligationCauseCode};
 use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_span::symbol::{kw, sym, Symbol};
+use rustc_span::symbol::{kw, sym};
 use rustc_target::spec::abi::Abi;
 
 fn equate_intrinsic_type<'tcx>(
@@ -112,7 +112,8 @@ pub fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: DefId) -> hir
         | sym::forget
         | sym::black_box
         | sym::variant_count
-        | sym::ptr_mask => hir::Unsafety::Normal,
+        | sym::ptr_mask
+        | sym::debug_assertions => hir::Unsafety::Normal,
         _ => hir::Unsafety::Unsafe,
     };
 
@@ -132,7 +133,17 @@ pub fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: DefId) -> hir
 /// Remember to add all intrinsics here, in `compiler/rustc_codegen_llvm/src/intrinsic.rs`,
 /// and in `library/core/src/intrinsics.rs`.
 pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
-    let param = |n| Ty::new_param(tcx, n, Symbol::intern(&format!("P{n}")));
+    let generics = tcx.generics_of(it.owner_id);
+    let param = |n| {
+        if let Some(&ty::GenericParamDef {
+            name, kind: ty::GenericParamDefKind::Type { .. }, ..
+        }) = generics.opt_param_at(n as usize, tcx)
+        {
+            Ty::new_param(tcx, n, name)
+        } else {
+            Ty::new_error_with_message(tcx, tcx.def_span(it.owner_id), "expected param")
+        }
+    };
     let intrinsic_id = it.owner_id.to_def_id();
     let intrinsic_name = tcx.item_name(intrinsic_id);
     let name_str = intrinsic_name.as_str();
@@ -461,6 +472,8 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
                 (0, vec![Ty::new_imm_ptr(tcx, Ty::new_unit(tcx))], tcx.types.usize)
             }
 
+            sym::debug_assertions => (0, Vec::new(), tcx.types.bool),
+
             other => {
                 tcx.dcx().emit_err(UnrecognizedIntrinsicFunction { span: it.span, name: other });
                 return;
@@ -475,9 +488,16 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
 
 /// Type-check `extern "platform-intrinsic" { ... }` functions.
 pub fn check_platform_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
+    let generics = tcx.generics_of(it.owner_id);
     let param = |n| {
-        let name = Symbol::intern(&format!("P{n}"));
-        Ty::new_param(tcx, n, name)
+        if let Some(&ty::GenericParamDef {
+            name, kind: ty::GenericParamDefKind::Type { .. }, ..
+        }) = generics.opt_param_at(n as usize, tcx)
+        {
+            Ty::new_param(tcx, n, name)
+        } else {
+            Ty::new_error_with_message(tcx, tcx.def_span(it.owner_id), "expected param")
+        }
     };
 
     let name = it.ident.name;

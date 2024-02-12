@@ -10,7 +10,7 @@ use rustc_errors::{codes::*, struct_span_code_err};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt};
-use rustc_span::ErrorGuaranteed;
+use rustc_span::{sym, ErrorGuaranteed};
 use rustc_trait_selection::traits;
 
 mod builtin;
@@ -70,7 +70,11 @@ fn enforce_trait_manually_implementable(
     if let ty::trait_def::TraitSpecializationKind::AlwaysApplicable =
         tcx.trait_def(trait_def_id).specialization_kind
     {
-        if !tcx.features().specialization && !tcx.features().min_specialization {
+        if !tcx.features().specialization
+            && !tcx.features().min_specialization
+            && !impl_header_span.allows_unstable(sym::specialization)
+            && !impl_header_span.allows_unstable(sym::min_specialization)
+        {
             return Err(tcx.dcx().emit_err(errors::SpecializationTrait { span: impl_header_span }));
         }
     }
@@ -120,11 +124,13 @@ pub fn provide(providers: &mut Providers) {
 }
 
 fn coherent_trait(tcx: TyCtxt<'_>, def_id: DefId) -> Result<(), ErrorGuaranteed> {
+    // If there are no impls for the trait, then "all impls" are trivially coherent and we won't check anything
+    // anyway. Thus we bail out even before the specialization graph, avoiding the dep_graph edge.
+    let Some(impls) = tcx.all_local_trait_impls(()).get(&def_id) else { return Ok(()) };
     // Trigger building the specialization graph for the trait. This will detect and report any
     // overlap errors.
     let mut res = tcx.ensure().specialization_graph_of(def_id);
 
-    let impls = tcx.hir().trait_impls(def_id);
     for &impl_def_id in impls {
         let trait_ref = tcx.impl_trait_ref(impl_def_id).unwrap().instantiate_identity();
 

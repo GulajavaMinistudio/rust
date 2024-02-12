@@ -1,3 +1,6 @@
+#![allow(rustc::diagnostic_outside_of_impl)]
+#![allow(rustc::untranslatable_diagnostic)]
+
 use hir::ExprKind;
 use rustc_errors::{Applicability, Diagnostic, DiagnosticBuilder};
 use rustc_hir as hir;
@@ -396,7 +399,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
 
                 let upvar_hir_id = captured_place.get_root_variable();
 
-                if let Some(Node::Pat(pat)) = self.infcx.tcx.opt_hir_node(upvar_hir_id)
+                if let Node::Pat(pat) = self.infcx.tcx.hir_node(upvar_hir_id)
                     && let hir::PatKind::Binding(hir::BindingAnnotation::NONE, _, upvar_ident, _) =
                         pat.kind
                 {
@@ -688,15 +691,15 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                         break;
                     }
                     f_in_trait_opt.and_then(|f_in_trait| {
-                        match self.infcx.tcx.opt_hir_node(f_in_trait) {
-                            Some(Node::TraitItem(hir::TraitItem {
+                        match self.infcx.tcx.hir_node(f_in_trait) {
+                            Node::TraitItem(hir::TraitItem {
                                 kind:
                                     hir::TraitItemKind::Fn(
                                         hir::FnSig { decl: hir::FnDecl { inputs, .. }, .. },
                                         _,
                                     ),
                                 ..
-                            })) => {
+                            }) => {
                                 let hir::Ty { span, .. } = inputs[local.index() - 1];
                                 Some(span)
                             }
@@ -759,10 +762,10 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
         //
         // `let &b = a;` -> `let &(mut b) = a;`
         if let Some(hir_id) = hir_id
-            && let Some(hir::Node::Local(hir::Local {
+            && let hir::Node::Local(hir::Local {
                 pat: hir::Pat { kind: hir::PatKind::Ref(_, _), .. },
                 ..
-            })) = self.infcx.tcx.opt_hir_node(hir_id)
+            }) = self.infcx.tcx.hir_node(hir_id)
             && let Ok(name) =
                 self.infcx.tcx.sess.source_map().span_to_snippet(local_decl.source_info.span)
         {
@@ -941,7 +944,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
         let hir = self.infcx.tcx.hir();
         let closure_id = self.mir_hir_id();
         let closure_span = self.infcx.tcx.def_span(self.mir_def_id());
-        let fn_call_id = hir.parent_id(closure_id);
+        let fn_call_id = self.infcx.tcx.parent_hir_id(closure_id);
         let node = self.infcx.tcx.hir_node(fn_call_id);
         let def_id = hir.enclosing_body_owner(fn_call_id);
         let mut look_at_return = true;
@@ -1031,7 +1034,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
         if let InstanceDef::Item(def_id) = source.instance
             && let Some(Node::Expr(hir::Expr { hir_id, kind, .. })) = hir.get_if_local(def_id)
             && let ExprKind::Closure(hir::Closure { kind: hir::ClosureKind::Closure, .. }) = kind
-            && let Some(Node::Expr(expr)) = hir.find_parent(*hir_id)
+            && let Node::Expr(expr) = self.infcx.tcx.parent_hir_node(*hir_id)
         {
             let mut cur_expr = expr;
             while let ExprKind::MethodCall(path_segment, recv, _, _) = cur_expr.kind {
@@ -1206,7 +1209,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 };
 
                 if let Some(hir_id) = hir_id
-                    && let Some(hir::Node::Local(local)) = self.infcx.tcx.opt_hir_node(hir_id)
+                    && let hir::Node::Local(local) = self.infcx.tcx.hir_node(hir_id)
                 {
                     let tables = self.infcx.tcx.typeck(def_id.as_local().unwrap());
                     if let Some(clone_trait) = self.infcx.tcx.lang_items().clone_trait()

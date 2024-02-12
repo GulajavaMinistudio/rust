@@ -298,7 +298,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let hir::Node::Pat(pat) = self.tcx.hir_node(local_hir_id) else {
             return false;
         };
-        let (init_ty_hir_id, init) = match hir.get_parent(pat.hir_id) {
+        let (init_ty_hir_id, init) = match self.tcx.parent_hir_node(pat.hir_id) {
             hir::Node::Local(hir::Local { ty: Some(ty), init, .. }) => (ty.hir_id, *init),
             hir::Node::Local(hir::Local { init: Some(init), .. }) => (init.hir_id, Some(*init)),
             _ => return false,
@@ -445,7 +445,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 continue;
             }
 
-            if let hir::Node::Expr(parent_expr) = hir.get_parent(binding.hir_id)
+            if let hir::Node::Expr(parent_expr) = self.tcx.parent_hir_node(binding.hir_id)
                 && let hir::ExprKind::MethodCall(segment, rcvr, args, _) = parent_expr.kind
                 && rcvr.hir_id == binding.hir_id
             {
@@ -557,20 +557,18 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let Some(TypeError::Sorts(ExpectedFound { expected, .. })) = error else {
             return;
         };
-        let mut parent_id = self.tcx.hir().parent_id(expr.hir_id);
+        let mut parent_id = self.tcx.parent_hir_id(expr.hir_id);
         let mut parent;
         'outer: loop {
             // Climb the HIR tree to see if the current `Expr` is part of a `break;` statement.
-            let Some(
-                hir::Node::Stmt(hir::Stmt { kind: hir::StmtKind::Semi(&ref p), .. })
-                | hir::Node::Block(hir::Block { expr: Some(&ref p), .. })
-                | hir::Node::Expr(&ref p),
-            ) = self.tcx.opt_hir_node(parent_id)
+            let (hir::Node::Stmt(hir::Stmt { kind: hir::StmtKind::Semi(&ref p), .. })
+            | hir::Node::Block(hir::Block { expr: Some(&ref p), .. })
+            | hir::Node::Expr(&ref p)) = self.tcx.hir_node(parent_id)
             else {
                 break;
             };
             parent = p;
-            parent_id = self.tcx.hir().parent_id(parent_id);
+            parent_id = self.tcx.parent_hir_id(parent_id);
             let hir::ExprKind::Break(destination, _) = parent.kind else {
                 continue;
             };
@@ -578,21 +576,21 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let mut direct = false;
             loop {
                 // Climb the HIR tree to find the (desugared) `loop` this `break` corresponds to.
-                let parent = match self.tcx.opt_hir_node(parent_id) {
-                    Some(hir::Node::Expr(&ref parent)) => {
-                        parent_id = self.tcx.hir().parent_id(parent.hir_id);
+                let parent = match self.tcx.hir_node(parent_id) {
+                    hir::Node::Expr(&ref parent) => {
+                        parent_id = self.tcx.parent_hir_id(parent.hir_id);
                         parent
                     }
-                    Some(hir::Node::Stmt(hir::Stmt {
+                    hir::Node::Stmt(hir::Stmt {
                         hir_id,
                         kind: hir::StmtKind::Semi(&ref parent) | hir::StmtKind::Expr(&ref parent),
                         ..
-                    })) => {
-                        parent_id = self.tcx.hir().parent_id(*hir_id);
+                    }) => {
+                        parent_id = self.tcx.parent_hir_id(*hir_id);
                         parent
                     }
-                    Some(hir::Node::Block(_)) => {
-                        parent_id = self.tcx.hir().parent_id(parent_id);
+                    hir::Node::Block(_) => {
+                        parent_id = self.tcx.parent_hir_id(parent_id);
                         parent
                     }
                     _ => break,
@@ -679,18 +677,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr: &hir::Expr<'_>,
         error: Option<TypeError<'tcx>>,
     ) {
-        let parent = self.tcx.hir().parent_id(expr.hir_id);
-        match (self.tcx.opt_hir_node(parent), error) {
-            (Some(hir::Node::Local(hir::Local { ty: Some(ty), init: Some(init), .. })), _)
+        match (self.tcx.parent_hir_node(expr.hir_id), error) {
+            (hir::Node::Local(hir::Local { ty: Some(ty), init: Some(init), .. }), _)
                 if init.hir_id == expr.hir_id =>
             {
                 // Point at `let` assignment type.
                 err.span_label(ty.span, "expected due to this");
             }
             (
-                Some(hir::Node::Expr(hir::Expr {
-                    kind: hir::ExprKind::Assign(lhs, rhs, _), ..
-                })),
+                hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Assign(lhs, rhs, _), .. }),
                 Some(TypeError::Sorts(ExpectedFound { expected, .. })),
             ) if rhs.hir_id == expr.hir_id && !expected.is_closure() => {
                 // We ignore closures explicitly because we already point at them elsewhere.
@@ -725,19 +720,19 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         None,
                         hir::Path { res: hir::def::Res::Local(hir_id), .. },
                     )) => {
-                        if let Some(hir::Node::Pat(pat)) = self.tcx.opt_hir_node(*hir_id) {
+                        if let hir::Node::Pat(pat) = self.tcx.hir_node(*hir_id) {
                             primary_span = pat.span;
                             secondary_span = pat.span;
-                            match self.tcx.hir().find_parent(pat.hir_id) {
-                                Some(hir::Node::Local(hir::Local { ty: Some(ty), .. })) => {
+                            match self.tcx.parent_hir_node(pat.hir_id) {
+                                hir::Node::Local(hir::Local { ty: Some(ty), .. }) => {
                                     primary_span = ty.span;
                                     post_message = " type";
                                 }
-                                Some(hir::Node::Local(hir::Local { init: Some(init), .. })) => {
+                                hir::Node::Local(hir::Local { init: Some(init), .. }) => {
                                     primary_span = init.span;
                                     post_message = " value";
                                 }
-                                Some(hir::Node::Param(hir::Param { ty_span, .. })) => {
+                                hir::Node::Param(hir::Param { ty_span, .. }) => {
                                     primary_span = *ty_span;
                                     post_message = " parameter type";
                                 }
@@ -774,9 +769,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
             }
             (
-                Some(hir::Node::Expr(hir::Expr {
-                    kind: hir::ExprKind::Binary(_, lhs, rhs), ..
-                })),
+                hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Binary(_, lhs, rhs), .. }),
                 Some(TypeError::Sorts(ExpectedFound { expected, .. })),
             ) if rhs.hir_id == expr.hir_id
                 && self.typeck_results.borrow().expr_ty_adjusted_opt(lhs) == Some(expected) =>
@@ -793,12 +786,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr: &hir::Expr<'_>,
         error: Option<TypeError<'tcx>>,
     ) {
-        let parent = self.tcx.hir().parent_id(expr.hir_id);
         let Some(TypeError::Sorts(ExpectedFound { expected, .. })) = error else {
             return;
         };
-        let Some(hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Assign(lhs, rhs, _), .. })) =
-            self.tcx.opt_hir_node(parent)
+        let hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Assign(lhs, rhs, _), .. }) =
+            self.tcx.parent_hir_node(expr.hir_id)
         else {
             return;
         };
@@ -1022,13 +1014,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             hir::Path { res: hir::def::Res::Local(bind_hir_id), .. },
         )) = expr.kind
         {
-            let bind = self.tcx.opt_hir_node(*bind_hir_id);
-            let parent = self.tcx.opt_hir_node(self.tcx.hir().parent_id(*bind_hir_id));
-            if let Some(hir::Node::Pat(hir::Pat {
-                kind: hir::PatKind::Binding(_, _hir_id, _, _),
-                ..
-            })) = bind
-                && let Some(hir::Node::Pat(hir::Pat { default_binding_modes: false, .. })) = parent
+            let bind = self.tcx.hir_node(*bind_hir_id);
+            let parent = self.tcx.parent_hir_node(*bind_hir_id);
+            if let hir::Node::Pat(hir::Pat {
+                kind: hir::PatKind::Binding(_, _hir_id, _, _), ..
+            }) = bind
+                && let hir::Node::Pat(hir::Pat { default_binding_modes: false, .. }) = parent
             {
                 return true;
             }
@@ -1095,7 +1086,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expr: &hir::Expr<'_>,
         checked_ty: Ty<'tcx>,
     ) {
-        let Some(hir::Node::Expr(parent_expr)) = self.tcx.hir().find_parent(expr.hir_id) else {
+        let hir::Node::Expr(parent_expr) = self.tcx.parent_hir_node(expr.hir_id) else {
             return;
         };
         enum CallableKind {

@@ -123,15 +123,15 @@ impl<'tcx> LateLintPass<'tcx> for BoxedLocal {
 
 // TODO: Replace with Map::is_argument(..) when it's fixed
 fn is_argument(tcx: TyCtxt<'_>, id: HirId) -> bool {
-    match tcx.opt_hir_node(id) {
-        Some(Node::Pat(Pat {
+    match tcx.hir_node(id) {
+        Node::Pat(Pat {
             kind: PatKind::Binding(..),
             ..
-        })) => (),
+        }) => (),
         _ => return false,
     }
 
-    matches!(tcx.hir().find_parent(id), Some(Node::Param(_)))
+    matches!(tcx.parent_hir_node(id), Node::Param(_))
 }
 
 impl<'a, 'tcx> Delegate<'tcx> for EscapeDelegate<'a, 'tcx> {
@@ -156,8 +156,8 @@ impl<'a, 'tcx> Delegate<'tcx> for EscapeDelegate<'a, 'tcx> {
             let map = &self.cx.tcx.hir();
             if is_argument(self.cx.tcx, cmt.hir_id) {
                 // Skip closure arguments
-                let parent_id = map.parent_id(cmt.hir_id);
-                if let Some(Node::Expr(..)) = map.find_parent(parent_id) {
+                let parent_id = self.cx.tcx.parent_hir_id(cmt.hir_id);
+                if let Node::Expr(..) = self.cx.tcx.parent_hir_node(parent_id) {
                     return;
                 }
 

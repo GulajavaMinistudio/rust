@@ -862,8 +862,8 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     ) {
                         err.subdiagnostic(subdiag);
                     }
-                    if let Some(hir::Node::Expr(m)) = self.tcx.hir().find_parent(scrut_hir_id)
-                        && let Some(hir::Node::Stmt(stmt)) = self.tcx.hir().find_parent(m.hir_id)
+                    if let hir::Node::Expr(m) = self.tcx.parent_hir_node(scrut_hir_id)
+                        && let hir::Node::Stmt(stmt) = self.tcx.parent_hir_node(m.hir_id)
                         && let hir::StmtKind::Expr(_) = stmt.kind
                     {
                         err.span_suggestion_verbose(
@@ -2182,8 +2182,8 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         if let Some(tykind) = tykind
             && let hir::TyKind::Array(_, length) = tykind
             && let hir::ArrayLen::Body(hir::AnonConst { hir_id, .. }) = length
-            && let Some(span) = self.tcx.hir().opt_span(*hir_id)
         {
+            let span = self.tcx.hir().span(*hir_id);
             Some(TypeErrorAdditionalDiags::ConsiderSpecifyingLength { span, length: sz.found })
         } else {
             None

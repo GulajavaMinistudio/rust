@@ -1,9 +1,11 @@
+#![allow(rustc::diagnostic_outside_of_impl)]
+#![allow(rustc::untranslatable_diagnostic)]
 #![feature(if_let_guard)]
 #![feature(let_chains)]
 #![feature(try_blocks)]
 #![feature(never_type)]
 #![feature(box_patterns)]
-#![feature(min_specialization)]
+#![cfg_attr(bootstrap, feature(min_specialization))]
 #![feature(control_flow_enum)]
 
 #[macro_use]
@@ -218,7 +220,7 @@ fn typeck_with_fallback<'tcx>(
                 span,
             }))
         } else if let Node::AnonConst(_) = node {
-            match tcx.hir_node(tcx.hir().parent_id(id)) {
+            match tcx.parent_hir_node(id) {
                 Node::Ty(&hir::Ty { kind: hir::TyKind::Typeof(ref anon_const), .. })
                     if anon_const.hir_id == id =>
                 {
@@ -286,7 +288,7 @@ fn typeck_with_fallback<'tcx>(
     debug!(pending_obligations = ?fcx.fulfillment_cx.borrow().pending_obligations());
 
     // This must be the last thing before `report_ambiguity_errors`.
-    fcx.resolve_coroutine_interiors(def_id.to_def_id());
+    fcx.resolve_coroutine_interiors();
 
     debug!(pending_obligations = ?fcx.fulfillment_cx.borrow().pending_obligations());
 
