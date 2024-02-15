@@ -617,7 +617,7 @@ impl<'hir> Map<'hir> {
                 Node::Item(_)
                 | Node::ForeignItem(_)
                 | Node::TraitItem(_)
-                | Node::Expr(Expr { kind: ExprKind::Closure { .. }, .. })
+                | Node::Expr(Expr { kind: ExprKind::Closure(_), .. })
                 | Node::ImplItem(_)
                     // The input node `id` must be enclosed in the method's body as opposed
                     // to some other place such as its return type (fixes #114918).
@@ -753,6 +753,13 @@ impl<'hir> Map<'hir> {
         match self.tcx.hir_node(id) {
             Node::Variant(variant) => variant,
             _ => bug!("expected variant, found {}", self.node_to_string(id)),
+        }
+    }
+
+    pub fn expect_field(self, id: HirId) -> &'hir FieldDef<'hir> {
+        match self.tcx.hir_node(id) {
+            Node::Field(field) => field,
+            _ => bug!("expected field, found {}", self.node_to_string(id)),
         }
     }
 
