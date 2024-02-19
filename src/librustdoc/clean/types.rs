@@ -643,7 +643,7 @@ impl Item {
                 let abi = tcx.fn_sig(def_id).skip_binder().abi();
                 hir::FnHeader {
                     unsafety: if abi == Abi::RustIntrinsic {
-                        intrinsic_operation_unsafety(tcx, self.def_id().unwrap())
+                        intrinsic_operation_unsafety(tcx, def_id.expect_local())
                     } else {
                         hir::Unsafety::Unsafe
                     },
@@ -1326,7 +1326,7 @@ impl WherePredicate {
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub(crate) enum GenericParamDefKind {
     Lifetime { outlives: ThinVec<Lifetime> },
-    Type { did: DefId, bounds: ThinVec<GenericBound>, default: Option<Box<Type>>, synthetic: bool },
+    Type { bounds: ThinVec<GenericBound>, default: Option<Box<Type>>, synthetic: bool },
     // Option<Box<String>> makes this type smaller than `Option<String>` would.
     Const { ty: Box<Type>, default: Option<Box<String>>, is_host_effect: bool },
 }
@@ -1340,12 +1340,13 @@ impl GenericParamDefKind {
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub(crate) struct GenericParamDef {
     pub(crate) name: Symbol,
+    pub(crate) def_id: DefId,
     pub(crate) kind: GenericParamDefKind,
 }
 
 impl GenericParamDef {
-    pub(crate) fn lifetime(name: Symbol) -> Self {
-        Self { name, kind: GenericParamDefKind::Lifetime { outlives: ThinVec::new() } }
+    pub(crate) fn lifetime(def_id: DefId, name: Symbol) -> Self {
+        Self { name, def_id, kind: GenericParamDefKind::Lifetime { outlives: ThinVec::new() } }
     }
 
     pub(crate) fn is_synthetic_param(&self) -> bool {

@@ -1,11 +1,11 @@
-use crate::astconv::{AstConv, ConvertedBindingKind};
+use crate::astconv::AstConv;
 use crate::errors::{
     self, AssocTypeBindingNotAllowed, ManualImplementation, MissingTypeParams,
     ParenthesizedFnTraitExpansion,
 };
 use crate::fluent_generated as fluent;
 use crate::traits::error_reporting::report_object_safety_error;
-use rustc_data_structures::fx::{FxHashMap, FxIndexMap, FxIndexSet};
+use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_data_structures::sorted_map::SortedMap;
 use rustc_data_structures::unord::UnordMap;
 use rustc_errors::{
@@ -111,7 +111,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         assoc_kind: ty::AssocKind,
         assoc_name: Ident,
         span: Span,
-        binding: Option<&super::ConvertedBinding<'_, 'tcx>>,
+        binding: Option<&hir::TypeBinding<'tcx>>,
     ) -> ErrorGuaranteed
     where
         I: Iterator<Item = ty::PolyTraitRef<'tcx>>,
@@ -243,7 +243,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         None,
                     ) && suggested_name != assoc_name.name
                     {
-                        // We suggested constraining a type parameter, but the associated type on it
+                        // We suggested constraining a type parameter, but the associated item on it
                         // was also not an exact match, so we also suggest changing it.
                         err.span_suggestion_verbose(
                             assoc_name.span,
@@ -258,16 +258,17 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
         }
 
-        // If we still couldn't find any associated type, and only one associated type exists,
+        // If we still couldn't find any associated item, and only one associated item exists,
         // suggests using it.
         if let [candidate_name] = all_candidate_names.as_slice() {
-            // this should still compile, except on `#![feature(associated_type_defaults)]`
-            // where it could suggests `type A = Self::A`, thus recursing infinitely
-            let applicability = if tcx.features().associated_type_defaults {
-                Applicability::Unspecified
-            } else {
-                Applicability::MaybeIncorrect
-            };
+            // This should still compile, except on `#![feature(associated_type_defaults)]`
+            // where it could suggests `type A = Self::A`, thus recursing infinitely.
+            let applicability =
+                if assoc_kind == ty::AssocKind::Type && tcx.features().associated_type_defaults {
+                    Applicability::Unspecified
+                } else {
+                    Applicability::MaybeIncorrect
+                };
 
             err.sugg = Some(errors::AssocItemNotFoundSugg::Other {
                 span: assoc_name.span,
@@ -289,13 +290,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         assoc_kind: ty::AssocKind,
         ident: Ident,
         span: Span,
-        binding: Option<&super::ConvertedBinding<'_, 'tcx>>,
+        binding: Option<&hir::TypeBinding<'tcx>>,
     ) -> ErrorGuaranteed {
         let tcx = self.tcx();
 
         let bound_on_assoc_const_label = if let ty::AssocKind::Const = assoc_item.kind
             && let Some(binding) = binding
-            && let ConvertedBindingKind::Constraint(_) = binding.kind
+            && let hir::TypeBindingKind::Constraint { .. } = binding.kind
         {
             let lo = if binding.gen_args.span_ext.is_dummy() {
                 ident.span
@@ -309,25 +310,29 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
 
         // FIXME(associated_const_equality): This has quite a few false positives and negatives.
         let wrap_in_braces_sugg = if let Some(binding) = binding
-            && let ConvertedBindingKind::Equality(term) = binding.kind
-            && let ty::TermKind::Ty(ty) = term.node.unpack()
+            && let hir::TypeBindingKind::Equality { term: hir::Term::Ty(hir_ty) } = binding.kind
+            && let ty = self.ast_ty_to_ty(hir_ty)
             && (ty.is_enum() || ty.references_error())
             && tcx.features().associated_const_equality
         {
             Some(errors::AssocKindMismatchWrapInBracesSugg {
-                lo: term.span.shrink_to_lo(),
-                hi: term.span.shrink_to_hi(),
+                lo: hir_ty.span.shrink_to_lo(),
+                hi: hir_ty.span.shrink_to_hi(),
             })
         } else {
             None
         };
 
         // For equality bounds, we want to blame the term (RHS) instead of the item (LHS) since
-        // one can argue that that's more “untuitive” to the user.
+        // one can argue that that's more “intuitive” to the user.
         let (span, expected_because_label, expected, got) = if let Some(binding) = binding
-            && let ConvertedBindingKind::Equality(term) = binding.kind
+            && let hir::TypeBindingKind::Equality { term } = binding.kind
         {
-            (term.span, Some(ident.span), assoc_item.kind, assoc_kind)
+            let span = match term {
+                hir::Term::Ty(ty) => ty.span,
+                hir::Term::Const(ct) => tcx.def_span(ct.def_id),
+            };
+            (span, Some(ident.span), assoc_item.kind, assoc_kind)
         } else {
             (ident.span, None, assoc_kind, assoc_item.kind)
         };
@@ -806,7 +811,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         if suggestions.len() != 1 || already_has_generics_args_suggestion {
             // We don't need this label if there's an inline suggestion, show otherwise.
             for (span, assoc_items) in &associated_types {
-                let mut names: FxHashMap<_, usize> = FxHashMap::default();
+                let mut names: FxIndexMap<_, usize> = FxIndexMap::default();
                 for item in assoc_items {
                     types_count += 1;
                     *names.entry(item.name).or_insert(0) += 1;

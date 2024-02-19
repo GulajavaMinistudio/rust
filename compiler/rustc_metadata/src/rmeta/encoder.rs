@@ -421,7 +421,7 @@ macro_rules! record_defaulted_array {
 }
 
 impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
-    fn emit_lazy_distance(&mut self, position: NonZeroUsize) {
+    fn emit_lazy_distance(&mut self, position: NonZero<usize>) {
         let pos = position.get();
         let distance = match self.lazy_state {
             LazyState::NoNode => bug!("emit_lazy_distance: outside of a metadata node"),
@@ -439,7 +439,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 position.get() - last_pos.get()
             }
         };
-        self.lazy_state = LazyState::Previous(NonZeroUsize::new(pos).unwrap());
+        self.lazy_state = LazyState::Previous(NonZero::new(pos).unwrap());
         self.emit_usize(distance);
     }
 
@@ -447,7 +447,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
     where
         T::Value<'tcx>: Encodable<EncodeContext<'a, 'tcx>>,
     {
-        let pos = NonZeroUsize::new(self.position()).unwrap();
+        let pos = NonZero::new(self.position()).unwrap();
 
         assert_eq!(self.lazy_state, LazyState::NoNode);
         self.lazy_state = LazyState::NodeStart(pos);
@@ -466,7 +466,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
     where
         T::Value<'tcx>: Encodable<EncodeContext<'a, 'tcx>>,
     {
-        let pos = NonZeroUsize::new(self.position()).unwrap();
+        let pos = NonZero::new(self.position()).unwrap();
 
         assert_eq!(self.lazy_state, LazyState::NoNode);
         self.lazy_state = LazyState::NodeStart(pos);
@@ -1045,11 +1045,9 @@ fn should_encode_mir(
             (true, mir_opt_base)
         }
         // Constants
-        DefKind::AnonConst
-        | DefKind::InlineConst
-        | DefKind::AssocConst
-        | DefKind::Static(..)
-        | DefKind::Const => (true, false),
+        DefKind::AnonConst | DefKind::InlineConst | DefKind::AssocConst | DefKind::Const => {
+            (true, false)
+        }
         // Coroutines require optimized MIR to compute layout.
         DefKind::Closure if tcx.is_coroutine(def_id.to_def_id()) => (false, true),
         // Full-fledged functions + closures
@@ -1411,7 +1409,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             if let DefKind::Fn | DefKind::AssocFn = def_kind {
                 self.tables.asyncness.set_some(def_id.index, tcx.asyncness(def_id));
                 record_array!(self.tables.fn_arg_names[def_id] <- tcx.fn_arg_names(def_id));
-                self.tables.is_intrinsic.set(def_id.index, tcx.is_intrinsic(def_id));
+                if let Some(name) = tcx.intrinsic(def_id) {
+                    record!(self.tables.intrinsic[def_id] <- name);
+                }
             }
             if let DefKind::TyParam = def_kind {
                 let default = self.tcx.object_lifetime_default(def_id);
@@ -1453,6 +1453,12 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 self.tables
                     .coroutine_for_closure
                     .set_some(def_id.index, self.tcx.coroutine_for_closure(def_id).into());
+            }
+            if let DefKind::Static(_) = def_kind {
+                if !self.tcx.is_foreign_item(def_id) {
+                    let data = self.tcx.eval_static_initializer(def_id).unwrap();
+                    record!(self.tables.eval_static_initializer[def_id] <- data);
+                }
             }
             if let DefKind::Enum | DefKind::Struct | DefKind::Union = def_kind {
                 self.encode_info_for_adt(local_id);

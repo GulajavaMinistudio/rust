@@ -15,7 +15,7 @@
 //! crate as a kind of pass. This should eventually be factored away.
 
 use rustc_data_structures::captures::Captures;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_data_structures::unord::UnordMap;
 use rustc_errors::{Applicability, DiagnosticBuilder, ErrorGuaranteed, StashKey};
 use rustc_hir as hir;
@@ -834,12 +834,12 @@ impl From<NestedSpan> for FieldDeclSpan {
 
 struct FieldUniquenessCheckContext<'tcx> {
     tcx: TyCtxt<'tcx>,
-    seen_fields: FxHashMap<Ident, FieldDeclSpan>,
+    seen_fields: FxIndexMap<Ident, FieldDeclSpan>,
 }
 
 impl<'tcx> FieldUniquenessCheckContext<'tcx> {
     fn new(tcx: TyCtxt<'tcx>) -> Self {
-        Self { tcx, seen_fields: FxHashMap::default() }
+        Self { tcx, seen_fields: FxIndexMap::default() }
     }
 
     /// Check if a given field `ident` declared at `field_decl` has been declared elsewhere before.
@@ -943,7 +943,15 @@ impl<'tcx> FieldUniquenessCheckContext<'tcx> {
                 }
             }
             hir::TyKind::Path(hir::QPath::Resolved(_, hir::Path { res, .. })) => {
-                self.check_field_in_nested_adt(self.tcx.adt_def(res.def_id()), field.span);
+                // If this is a direct path to an ADT, we can check it
+                // If this is a type alias or non-ADT, `check_unnamed_fields` should verify it
+                if let Some(def_id) = res.opt_def_id()
+                    && let Some(local) = def_id.as_local()
+                    && let Node::Item(item) = self.tcx.hir_node_by_def_id(local)
+                    && item.is_adt()
+                {
+                    self.check_field_in_nested_adt(self.tcx.adt_def(def_id), field.span);
+                }
             }
             // Abort due to errors (there must be an error if an unnamed field
             //  has any type kind other than an anonymous adt or a named adt)
@@ -1651,7 +1659,7 @@ fn compute_sig_of_foreign_fn_decl<'tcx>(
     abi: abi::Abi,
 ) -> ty::PolyFnSig<'tcx> {
     let unsafety = if abi == abi::Abi::RustIntrinsic {
-        intrinsic_operation_unsafety(tcx, def_id.to_def_id())
+        intrinsic_operation_unsafety(tcx, def_id)
     } else {
         hir::Unsafety::Unsafe
     };

@@ -481,7 +481,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         // FIXME: Depending on the PassMode, this should reset some padding to uninitialized. (This
         // is true for all `copy_op`, but there are a lot of special cases for argument passing
         // specifically.)
-        self.copy_op(&caller_arg_copy, &callee_arg, /*allow_transmute*/ true)?;
+        self.copy_op_allow_transmute(&caller_arg_copy, &callee_arg)?;
         // If this was an in-place pass, protect the place it comes from for the duration of the call.
         if let FnArg::InPlace(place) = caller_arg {
             M::protect_in_place_function_argument(self, place)?;
@@ -526,7 +526,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
 
         match instance.def {
             ty::InstanceDef::Intrinsic(def_id) => {
-                assert!(self.tcx.is_intrinsic(def_id));
+                assert!(self.tcx.intrinsic(def_id).is_some());
                 // FIXME: Should `InPlace` arguments be reset to uninit?
                 M::call_intrinsic(
                     self,

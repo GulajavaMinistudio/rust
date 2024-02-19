@@ -313,6 +313,8 @@ const_eval_realloc_or_alloc_with_offset =
         *[other] {""}
     } {$ptr} which does not point to the beginning of an object
 
+const_eval_recursive_static = encountered static that tried to initialize itself with itself
+
 const_eval_remainder_by_zero =
     calculating the remainder with a divisor of zero
 const_eval_remainder_overflow =
@@ -451,7 +453,7 @@ const_eval_validation_invalid_fn_ptr = {$front_matter}: encountered {$value}, bu
 const_eval_validation_invalid_ref_meta = {$front_matter}: encountered invalid reference metadata: total size is bigger than largest supported object
 const_eval_validation_invalid_ref_slice_meta = {$front_matter}: encountered invalid reference metadata: slice is bigger than largest supported object
 const_eval_validation_invalid_vtable_ptr = {$front_matter}: encountered {$value}, but expected a vtable pointer
-const_eval_validation_mutable_ref_in_const = {$front_matter}: encountered mutable reference in a `const` or `static`
+const_eval_validation_mutable_ref_in_const_or_static = {$front_matter}: encountered mutable reference in a `const` or `static`
 const_eval_validation_mutable_ref_to_immutable = {$front_matter}: encountered mutable reference or box pointing to read-only memory
 const_eval_validation_never_val = {$front_matter}: encountered a value of the never type `!`
 const_eval_validation_null_box = {$front_matter}: encountered a null box

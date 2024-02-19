@@ -250,6 +250,15 @@ provide! { tcx, def_id, other, cdata,
     fn_arg_names => { table }
     coroutine_kind => { table_direct }
     coroutine_for_closure => { table }
+    eval_static_initializer => {
+        Ok(cdata
+            .root
+            .tables
+            .eval_static_initializer
+            .get(cdata, def_id.index)
+            .map(|lazy| lazy.decode((cdata, tcx)))
+            .unwrap_or_else(|| panic!("{def_id:?} does not have eval_static_initializer")))
+    }
     trait_def => { table }
     deduced_param_attrs => { table }
     is_type_alias_impl_trait => {
@@ -347,7 +356,7 @@ provide! { tcx, def_id, other, cdata,
         cdata.get_stability_implications(tcx).iter().copied().collect()
     }
     stripped_cfg_items => { cdata.get_stripped_cfg_items(cdata.cnum, tcx) }
-    is_intrinsic => { cdata.get_is_intrinsic(def_id.index) }
+    intrinsic => { cdata.get_intrinsic(def_id.index) }
     defined_lang_items => { cdata.get_lang_items(tcx) }
     diagnostic_items => { cdata.get_diagnostic_items() }
     missing_lang_items => { cdata.get_missing_lang_items(tcx) }

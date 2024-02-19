@@ -24,9 +24,10 @@ use crate::{
 use rustc_ast as ast;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
+use rustc_data_structures::unord::UnordMap;
 use rustc_errors::{
     codes::*, pluralize, struct_span_code_err, AddToDiagnostic, Applicability, Diagnostic,
-    DiagnosticBuilder, ErrCode, ErrorGuaranteed, StashKey,
+    DiagnosticBuilder, ErrorGuaranteed, StashKey,
 };
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
@@ -395,7 +396,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         if let Some(sp) =
                             tcx.sess.parse_sess.ambiguous_block_expr_parse.borrow().get(&sp)
                         {
-                            err.subdiagnostic(ExprParenthesesNeeded::surrounding(*sp));
+                            err.subdiagnostic(self.dcx(), ExprParenthesesNeeded::surrounding(*sp));
                         }
                         oprnd_t = Ty::new_error(tcx, err.emit());
                     }
@@ -1709,7 +1710,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .fields
             .iter_enumerated()
             .map(|(i, field)| (field.ident(tcx).normalize_to_macros_2_0(), (i, field)))
-            .collect::<FxHashMap<_, _>>();
+            .collect::<UnordMap<_, _>>();
 
         let mut seen_fields = FxHashMap::default();
 
@@ -1954,18 +1955,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         adt_ty: Ty<'tcx>,
         span: Span,
-        remaining_fields: FxHashMap<Ident, (FieldIdx, &ty::FieldDef)>,
+        remaining_fields: UnordMap<Ident, (FieldIdx, &ty::FieldDef)>,
         variant: &'tcx ty::VariantDef,
         ast_fields: &'tcx [hir::ExprField<'tcx>],
         args: GenericArgsRef<'tcx>,
     ) {
         let len = remaining_fields.len();
 
-        #[allow(rustc::potential_query_instability)]
-        let mut displayable_field_names: Vec<&str> =
-            remaining_fields.keys().map(|ident| ident.as_str()).collect();
-        // sorting &str primitives here, sort_unstable is ok
-        displayable_field_names.sort_unstable();
+        let displayable_field_names: Vec<&str> =
+            remaining_fields.items().map(|(ident, _)| ident.as_str()).into_sorted_stable_ord();
 
         let mut truncated_fields_error = String::new();
         let remaining_fields_names = match &displayable_field_names[..] {
@@ -2050,7 +2048,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .shrink_to_hi()
                 .to(range_end.span);
 
-            err.subdiagnostic(TypeMismatchFruTypo { expr_span: range_start.span, fru_span, expr });
+            err.subdiagnostic(
+                self.dcx(),
+                TypeMismatchFruTypo { expr_span: range_start.span, fru_span, expr },
+            );
         }
     }
 

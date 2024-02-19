@@ -74,9 +74,9 @@ pub mod wfcheck;
 
 pub use check::check_abi;
 
-use std::num::NonZeroU32;
+use std::num::NonZero;
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_errors::ErrorGuaranteed;
 use rustc_errors::{pluralize, struct_span_code_err, Diagnostic, DiagnosticBuilder};
 use rustc_hir::def_id::{DefId, LocalDefId};
@@ -270,7 +270,7 @@ fn default_body_is_unstable(
     item_did: DefId,
     feature: Symbol,
     reason: Option<Symbol>,
-    issue: Option<NonZeroU32>,
+    issue: Option<NonZero<u32>>,
 ) {
     let missing_item_name = tcx.associated_item(item_did).name;
     let (mut some_note, mut none_note, mut reason_str) = (false, false, String::new());
@@ -307,7 +307,7 @@ fn bounds_from_generic_predicates<'tcx>(
     tcx: TyCtxt<'tcx>,
     predicates: impl IntoIterator<Item = (ty::Clause<'tcx>, Span)>,
 ) -> (String, String) {
-    let mut types: FxHashMap<Ty<'tcx>, Vec<DefId>> = FxHashMap::default();
+    let mut types: FxIndexMap<Ty<'tcx>, Vec<DefId>> = FxIndexMap::default();
     let mut projections = vec![];
     for (predicate, _) in predicates {
         debug!("predicate {:?}", predicate);
