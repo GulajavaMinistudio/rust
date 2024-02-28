@@ -18,8 +18,9 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::ty::{ToPredicate, TypeVisitableExt};
 use rustc_span::{sym, ErrorGuaranteed, DUMMY_SP};
 
+mod anon_const;
 mod inherent;
-mod opaques;
+mod opaque_types;
 mod weak_types;
 
 impl<'tcx> EvalCtxt<'_, 'tcx> {
@@ -31,34 +32,34 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         let def_id = goal.predicate.def_id();
         match self.tcx().def_kind(def_id) {
             DefKind::AssocTy | DefKind::AssocConst => {
-                // To only compute normalization once for each projection we only
-                // assemble normalization candidates if the expected term is an
-                // unconstrained inference variable.
-                //
-                // Why: For better cache hits, since if we have an unconstrained RHS then
-                // there are only as many cache keys as there are (canonicalized) alias
-                // types in each normalizes-to goal. This also weakens inference in a
-                // forwards-compatible way so we don't use the value of the RHS term to
-                // affect candidate assembly for projections.
-                //
-                // E.g. for `<T as Trait>::Assoc == u32` we recursively compute the goal
-                // `exists<U> <T as Trait>::Assoc == U` and then take the resulting type for
-                // `U` and equate it with `u32`. This means that we don't need a separate
-                // projection cache in the solver, since we're piggybacking off of regular
-                // goal caching.
-                if self.term_is_fully_unconstrained(goal) {
-                    match self.tcx().associated_item(def_id).container {
-                        ty::AssocItemContainer::TraitContainer => {
+                match self.tcx().associated_item(def_id).container {
+                    ty::AssocItemContainer::TraitContainer => {
+                        // To only compute normalization once for each projection we only
+                        // assemble normalization candidates if the expected term is an
+                        // unconstrained inference variable.
+                        //
+                        // Why: For better cache hits, since if we have an unconstrained RHS then
+                        // there are only as many cache keys as there are (canonicalized) alias
+                        // types in each normalizes-to goal. This also weakens inference in a
+                        // forwards-compatible way so we don't use the value of the RHS term to
+                        // affect candidate assembly for projections.
+                        //
+                        // E.g. for `<T as Trait>::Assoc == u32` we recursively compute the goal
+                        // `exists<U> <T as Trait>::Assoc == U` and then take the resulting type for
+                        // `U` and equate it with `u32`. This means that we don't need a separate
+                        // projection cache in the solver, since we're piggybacking off of regular
+                        // goal caching.
+                        if self.term_is_fully_unconstrained(goal) {
                             let candidates = self.assemble_and_evaluate_candidates(goal);
                             self.merge_candidates(candidates)
-                        }
-                        ty::AssocItemContainer::ImplContainer => {
-                            self.normalize_inherent_associated_type(goal)
+                        } else {
+                            self.set_normalizes_to_hack_goal(goal);
+                            self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
                         }
                     }
-                } else {
-                    self.set_normalizes_to_hack_goal(goal);
-                    self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
+                    ty::AssocItemContainer::ImplContainer => {
+                        self.normalize_inherent_associated_type(goal)
+                    }
                 }
             }
             DefKind::AnonConst => self.normalize_anon_const(goal),
@@ -68,24 +69,32 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         }
     }
 
-    #[instrument(level = "debug", skip(self), ret)]
-    fn normalize_anon_const(
+    /// When normalizing an associated item, constrain the result to `term`.
+    ///
+    /// While `NormalizesTo` goals have the normalized-to term as an argument,
+    /// this argument is always fully unconstrained for associated items.
+    /// It is therefore appropriate to instead think of these `NormalizesTo` goals
+    /// as function returning a term after normalizing.
+    ///
+    /// When equating an inference variable and an alias, we tend to emit `alias-relate`
+    /// goals and only actually instantiate the inference variable with an alias if the
+    /// alias is rigid. However, this means that constraining the expected term of
+    /// such goals ends up fully structurally normalizing the resulting type instead of
+    /// only by one step. To avoid this we instead use structural equality here, resulting
+    /// in each `NormalizesTo` only projects by a single step.
+    ///
+    /// Not doing so, currently causes issues because trying to normalize an opaque type
+    /// during alias-relate doesn't actually constrain the opaque if the concrete type
+    /// is an inference variable. This means that `NormalizesTo` for associated types
+    /// normalizing to an opaque type always resulted in ambiguity, breaking tests e.g.
+    /// tests/ui/type-alias-impl-trait/issue-78450.rs.
+    pub fn instantiate_normalizes_to_term(
         &mut self,
-        goal: Goal<'tcx, ty::NormalizesTo<'tcx>>,
-    ) -> QueryResult<'tcx> {
-        if let Some(normalized_const) = self.try_const_eval_resolve(
-            goal.param_env,
-            ty::UnevaluatedConst::new(goal.predicate.alias.def_id, goal.predicate.alias.args),
-            self.tcx()
-                .type_of(goal.predicate.alias.def_id)
-                .no_bound_vars()
-                .expect("const ty should not rely on other generics"),
-        ) {
-            self.eq(goal.param_env, normalized_const, goal.predicate.term.ct().unwrap())?;
-            self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
-        } else {
-            self.evaluate_added_goals_and_make_canonical_response(Certainty::AMBIGUOUS)
-        }
+        goal: Goal<'tcx, NormalizesTo<'tcx>>,
+        term: ty::Term<'tcx>,
+    ) {
+        self.eq_structurally_relating_aliases(goal.param_env, goal.predicate.term, term)
+            .expect("expected goal term to be fully unconstrained");
     }
 }
 
@@ -123,8 +132,8 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
                         goal.predicate.alias,
                         assumption_projection_pred.projection_ty,
                     )?;
-                    ecx.eq(goal.param_env, goal.predicate.term, assumption_projection_pred.term)
-                        .expect("expected goal term to be fully unconstrained");
+
+                    ecx.instantiate_normalizes_to_term(goal, assumption_projection_pred.term);
 
                     // Add GAT where clauses from the trait's definition
                     ecx.add_goals(
@@ -211,8 +220,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
                         "cannot project to an associated function"
                     ),
                 };
-                ecx.eq(goal.param_env, goal.predicate.term, error_term)
-                    .expect("expected goal term to be fully unconstrained");
+                ecx.instantiate_normalizes_to_term(goal, error_term);
                 ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
             };
 
@@ -267,8 +275,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
                 ty::AssocKind::Fn => unreachable!("we should never project to a fn"),
             };
 
-            ecx.eq(goal.param_env, goal.predicate.term, term.instantiate(tcx, args))
-                .expect("expected goal term to be fully unconstrained");
+            ecx.instantiate_normalizes_to_term(goal, term.instantiate(tcx, args));
             ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         })
     }
@@ -475,7 +482,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
             borrow_region.expect_region(),
         );
 
-        ecx.eq(goal.param_env, goal.predicate.term.ty().unwrap(), upvars_ty)?;
+        ecx.instantiate_normalizes_to_term(goal, upvars_ty.into());
         ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
     }
 
@@ -562,8 +569,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
                 ),
             };
 
-            ecx.eq(goal.param_env, goal.predicate.term, metadata_ty.into())
-                .expect("expected goal term to be fully unconstrained");
+            ecx.instantiate_normalizes_to_term(goal, metadata_ty.into());
             ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         })
     }
@@ -646,20 +652,22 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
         }
 
         ecx.probe_misc_candidate("builtin AsyncIterator kind").enter(|ecx| {
+            let expected_ty = ecx.next_ty_infer();
             // Take `AsyncIterator<Item = I>` and turn it into the corresponding
             // coroutine yield ty `Poll<Option<I>>`.
-            let expected_ty = Ty::new_adt(
+            let wrapped_expected_ty = Ty::new_adt(
                 tcx,
                 tcx.adt_def(tcx.require_lang_item(LangItem::Poll, None)),
                 tcx.mk_args(&[Ty::new_adt(
                     tcx,
                     tcx.adt_def(tcx.require_lang_item(LangItem::Option, None)),
-                    tcx.mk_args(&[goal.predicate.term.into()]),
+                    tcx.mk_args(&[expected_ty.into()]),
                 )
                 .into()]),
             );
             let yield_ty = args.as_coroutine().yield_ty();
-            ecx.eq(goal.param_env, expected_ty, yield_ty)?;
+            ecx.eq(goal.param_env, wrapped_expected_ty, yield_ty)?;
+            ecx.instantiate_normalizes_to_term(goal, expected_ty.into());
             ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         })
     }
@@ -761,8 +769,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
         };
 
         ecx.probe_misc_candidate("builtin discriminant kind").enter(|ecx| {
-            ecx.eq(goal.param_env, goal.predicate.term, discriminant_ty.into())
-                .expect("expected goal term to be fully unconstrained");
+            ecx.instantiate_normalizes_to_term(goal, discriminant_ty.into());
             ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         })
     }

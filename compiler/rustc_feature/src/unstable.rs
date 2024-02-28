@@ -259,8 +259,6 @@ declare_features! (
     (internal, needs_panic_runtime, "1.10.0", Some(32837)),
     /// Allows using the `#![panic_runtime]` attribute.
     (internal, panic_runtime, "1.10.0", Some(32837)),
-    /// Allows `extern "platform-intrinsic" { ... }`.
-    (internal, platform_intrinsics, "1.4.0", Some(27731)),
     /// Allows using `#[rustc_allow_const_fn_unstable]`.
     /// This is an attribute on `const fn` for the same
     /// purpose as `#[allow_internal_unstable]`.
@@ -373,8 +371,6 @@ declare_features! (
     (unstable, cfg_sanitize, "1.41.0", Some(39699)),
     /// Allows `cfg(sanitizer_cfi_generalize_pointers)` and `cfg(sanitizer_cfi_normalize_integers)`.
     (unstable, cfg_sanitizer_cfi, "1.77.0", Some(89653)),
-    /// Allows `cfg(target_abi = "...")`.
-    (unstable, cfg_target_abi, "1.55.0", Some(80970)),
     /// Allows `cfg(target(abi = "..."))`.
     (unstable, cfg_target_compact, "1.63.0", Some(96901)),
     /// Allows `cfg(target_has_atomic_load_store = "...")`.
@@ -518,7 +514,7 @@ declare_features! (
     (unstable, marker_trait_attr, "1.30.0", Some(29864)),
     /// Allows exhaustive pattern matching on types that contain uninhabited types in cases that are
     /// unambiguously sound.
-    (incomplete, min_exhaustive_patterns, "1.77.0", Some(119612)),
+    (unstable, min_exhaustive_patterns, "1.77.0", Some(119612)),
     /// A minimal, sound subset of specialization intended to be used by the
     /// standard library until the soundness issues with specialization
     /// are fixed.

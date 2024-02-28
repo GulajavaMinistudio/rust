@@ -1,8 +1,12 @@
 use super::diagnostics::{dummy_arg, ConsumeClosingDelim};
 use super::ty::{AllowPlus, RecoverQPath, RecoverReturnSign};
-use super::{AttrWrapper, FollowedByType, ForceCollect, Parser, PathStyle, TrailingToken};
+use super::{
+    AttrWrapper, FollowedByType, ForceCollect, Parser, PathStyle, Recovered, Trailing,
+    TrailingToken,
+};
 use crate::errors::{self, MacroExpandsToAdtField};
 use crate::fluent_generated as fluent;
+use ast::token::IdentIsRaw;
 use rustc_ast::ast::*;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{self, Delimiter, TokenKind};
@@ -562,6 +566,15 @@ impl<'a> Parser<'a> {
             self.sess.gated_spans.gate(sym::const_trait_impl, span);
         }
 
+        // Parse stray `impl async Trait`
+        if (self.token.uninterpolated_span().at_least_rust_2018()
+            && self.token.is_keyword(kw::Async))
+            || self.is_kw_followed_by_ident(kw::Async)
+        {
+            self.bump();
+            self.dcx().emit_err(errors::AsyncImpl { span: self.prev_token.span });
+        }
+
         let polarity = self.parse_polarity();
 
         // Parse both types and traits as a type, then reinterpret if necessary.
@@ -592,22 +605,10 @@ impl<'a> Parser<'a> {
             // We need to report this error after `cfg` expansion for compatibility reasons
             self.bump(); // `..`, do not add it to expected tokens
 
-            // FIXME(nnethercote): AST validation later detects this
-            // `TyKind::Err` and emits an errors. So why the unchecked
-            // ErrorGuaranteed?
-            // - A `span_delayed_bug` doesn't work here, because rustfmt can
-            //   hit this path but then not hit the follow-up path in the AST
-            //   validator that issues the error, which results in ICEs.
-            // - `TyKind::Dummy` doesn't work, because it ends up reaching HIR
-            //   lowering, which results in ICEs. Changing `TyKind::Dummy` to
-            //   `TyKind::Err` during AST validation might fix that, but that's
-            //   not possible because AST validation doesn't allow mutability.
-            //
-            // #121072 will hopefully remove all this special handling of the
-            // obsolete `impl Trait for ..` and then this can go away.
-            #[allow(deprecated)]
-            let guar = rustc_errors::ErrorGuaranteed::unchecked_error_guaranteed();
-            Some(self.mk_ty(self.prev_token.span, TyKind::Err(guar)))
+            // AST validation later detects this `TyKind::Dummy` and emits an
+            // error. (#121072 will hopefully remove all this special handling
+            // of the obsolete `impl Trait for ..` and then this can go away.)
+            Some(self.mk_ty(self.prev_token.span, TyKind::Dummy))
         } else if has_for || self.token.can_begin_type() {
             Some(self.parse_ty()?)
         } else {
@@ -1079,7 +1080,7 @@ impl<'a> Parser<'a> {
 
     fn parse_ident_or_underscore(&mut self) -> PResult<'a, Ident> {
         match self.token.ident() {
-            Some((ident @ Ident { name: kw::Underscore, .. }, false)) => {
+            Some((ident @ Ident { name: kw::Underscore, .. }, IdentIsRaw::No)) => {
                 self.bump();
                 Ok(ident)
             }
@@ -1456,7 +1457,7 @@ impl<'a> Parser<'a> {
         let (variants, _) = if self.token == TokenKind::Semi {
             self.dcx().emit_err(errors::UseEmptyBlockNotSemi { span: self.token.span });
             self.bump();
-            (thin_vec![], false)
+            (thin_vec![], Trailing::No)
         } else {
             self.parse_delim_comma_seq(Delimiter::Brace, |p| p.parse_enum_variant(id.span))
                 .map_err(|mut err| {
@@ -1533,10 +1534,10 @@ impl<'a> Parser<'a> {
                                 err.span_label(span, "while parsing this enum");
                                 err.help(help);
                                 err.emit();
-                                (thin_vec![], true)
+                                (thin_vec![], Recovered::Yes)
                             }
                         };
-                    VariantData::Struct { fields, recovered }
+                    VariantData::Struct { fields, recovered: recovered.into() }
                 } else if this.check(&token::OpenDelim(Delimiter::Parenthesis)) {
                     let body = match this.parse_tuple_struct_body() {
                         Ok(body) => body,
@@ -1621,7 +1622,7 @@ impl<'a> Parser<'a> {
                     class_name.span,
                     generics.where_clause.has_where_token,
                 )?;
-                VariantData::Struct { fields, recovered }
+                VariantData::Struct { fields, recovered: recovered.into() }
             }
         // No `where` so: `struct Foo<T>;`
         } else if self.eat(&token::Semi) {
@@ -1633,7 +1634,7 @@ impl<'a> Parser<'a> {
                 class_name.span,
                 generics.where_clause.has_where_token,
             )?;
-            VariantData::Struct { fields, recovered }
+            VariantData::Struct { fields, recovered: recovered.into() }
         // Tuple-style struct definition with optional where-clause.
         } else if self.token == token::OpenDelim(Delimiter::Parenthesis) {
             let body = VariantData::Tuple(self.parse_tuple_struct_body()?, DUMMY_NODE_ID);
@@ -1662,14 +1663,14 @@ impl<'a> Parser<'a> {
                 class_name.span,
                 generics.where_clause.has_where_token,
             )?;
-            VariantData::Struct { fields, recovered }
+            VariantData::Struct { fields, recovered: recovered.into() }
         } else if self.token == token::OpenDelim(Delimiter::Brace) {
             let (fields, recovered) = self.parse_record_struct_body(
                 "union",
                 class_name.span,
                 generics.where_clause.has_where_token,
             )?;
-            VariantData::Struct { fields, recovered }
+            VariantData::Struct { fields, recovered: recovered.into() }
         } else {
             let token_str = super::token_descr(&self.token);
             let msg = format!("expected `where` or `{{` after union name, found {token_str}");
@@ -1686,14 +1687,14 @@ impl<'a> Parser<'a> {
         adt_ty: &str,
         ident_span: Span,
         parsed_where: bool,
-    ) -> PResult<'a, (ThinVec<FieldDef>, /* recovered */ bool)> {
+    ) -> PResult<'a, (ThinVec<FieldDef>, Recovered)> {
         let mut fields = ThinVec::new();
-        let mut recovered = false;
+        let mut recovered = Recovered::No;
         if self.eat(&token::OpenDelim(Delimiter::Brace)) {
             while self.token != token::CloseDelim(Delimiter::Brace) {
                 let field = self.parse_field_def(adt_ty).map_err(|e| {
                     self.consume_block(Delimiter::Brace, ConsumeClosingDelim::No);
-                    recovered = true;
+                    recovered = Recovered::Yes;
                     e
                 });
                 match field {
@@ -1965,7 +1966,7 @@ impl<'a> Parser<'a> {
         let (ident, is_raw) = self.ident_or_err(true)?;
         if ident.name == kw::Underscore {
             self.sess.gated_spans.gate(sym::unnamed_fields, lo);
-        } else if !is_raw && ident.is_reserved() {
+        } else if matches!(is_raw, IdentIsRaw::No) && ident.is_reserved() {
             let snapshot = self.create_snapshot_for_diagnostic();
             let err = if self.check_fn_front_matter(false, Case::Sensitive) {
                 let inherited_vis = Visibility {
@@ -2327,11 +2328,11 @@ impl<'a> Parser<'a> {
             let _ = self.parse_expr()?;
             self.expect_semi()?; // `;`
             let span = eq_sp.to(self.prev_token.span);
-            self.dcx().emit_err(errors::FunctionBodyEqualsExpr {
+            let guar = self.dcx().emit_err(errors::FunctionBodyEqualsExpr {
                 span,
                 sugg: errors::FunctionBodyEqualsExprSugg { eq: eq_sp, semi: self.prev_token.span },
             });
-            (AttrVec::new(), Some(self.mk_block_err(span)))
+            (AttrVec::new(), Some(self.mk_block_err(span, guar)))
         } else {
             let expected = if req_body {
                 &[token::OpenDelim(Delimiter::Brace)][..]
@@ -2464,8 +2465,8 @@ impl<'a> Parser<'a> {
             // `self.expected_tokens`, therefore, do not use `self.unexpected()` which doesn't
             // account for this.
             match self.expect_one_of(&[], &[]) {
-                Ok(true) => {}
-                Ok(false) => unreachable!(),
+                Ok(Recovered::Yes) => {}
+                Ok(Recovered::No) => unreachable!(),
                 Err(mut err) => {
                     // Qualifier keywords ordering check
                     enum WrongKw {
@@ -2743,7 +2744,7 @@ impl<'a> Parser<'a> {
     fn parse_self_param(&mut self) -> PResult<'a, Option<Param>> {
         // Extract an identifier *after* having confirmed that the token is one.
         let expect_self_ident = |this: &mut Self| match this.token.ident() {
-            Some((ident, false)) => {
+            Some((ident, IdentIsRaw::No)) => {
                 this.bump();
                 ident
             }

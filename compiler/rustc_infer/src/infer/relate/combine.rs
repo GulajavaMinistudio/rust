@@ -26,6 +26,7 @@ use super::equate::Equate;
 use super::glb::Glb;
 use super::lub::Lub;
 use super::sub::Sub;
+use super::StructurallyRelateAliases;
 use crate::infer::{DefineOpaqueTypes, InferCtxt, TypeTrace};
 use crate::traits::{Obligation, PredicateObligations};
 use rustc_middle::infer::canonical::OriginalQueryValues;
@@ -116,8 +117,15 @@ impl<'tcx> InferCtxt<'tcx> {
             }
 
             (_, ty::Alias(..)) | (ty::Alias(..), _) if self.next_trait_solver() => {
-                relation.register_type_relate_obligation(a, b);
-                Ok(a)
+                match relation.structurally_relate_aliases() {
+                    StructurallyRelateAliases::Yes => {
+                        ty::relate::structurally_relate_tys(relation, a, b)
+                    }
+                    StructurallyRelateAliases::No => {
+                        relation.register_type_relate_obligation(a, b);
+                        Ok(a)
+                    }
+                }
             }
 
             // All other cases of inference are errors
@@ -194,7 +202,7 @@ impl<'tcx> InferCtxt<'tcx> {
                 ty::ConstKind::Infer(InferConst::Var(b_vid)),
             ) => {
                 self.inner.borrow_mut().const_unification_table().union(a_vid, b_vid);
-                return Ok(a);
+                Ok(a)
             }
 
             (
@@ -202,7 +210,7 @@ impl<'tcx> InferCtxt<'tcx> {
                 ty::ConstKind::Infer(InferConst::EffectVar(b_vid)),
             ) => {
                 self.inner.borrow_mut().effect_unification_table().union(a_vid, b_vid);
-                return Ok(a);
+                Ok(a)
             }
 
             // All other cases of inference with other variables are errors.
@@ -220,42 +228,49 @@ impl<'tcx> InferCtxt<'tcx> {
             }
 
             (ty::ConstKind::Infer(InferConst::Var(vid)), _) => {
-                return self.instantiate_const_var(vid, b);
+                self.instantiate_const_var(relation, relation.a_is_expected(), vid, b)?;
+                Ok(b)
             }
 
             (_, ty::ConstKind::Infer(InferConst::Var(vid))) => {
-                return self.instantiate_const_var(vid, a);
+                self.instantiate_const_var(relation, !relation.a_is_expected(), vid, a)?;
+                Ok(a)
             }
 
             (ty::ConstKind::Infer(InferConst::EffectVar(vid)), _) => {
-                return Ok(self.unify_effect_variable(vid, b));
+                Ok(self.unify_effect_variable(vid, b))
             }
 
             (_, ty::ConstKind::Infer(InferConst::EffectVar(vid))) => {
-                return Ok(self.unify_effect_variable(vid, a));
+                Ok(self.unify_effect_variable(vid, a))
             }
 
             (ty::ConstKind::Unevaluated(..), _) | (_, ty::ConstKind::Unevaluated(..))
                 if self.tcx.features().generic_const_exprs || self.next_trait_solver() =>
             {
-                let (a, b) = if relation.a_is_expected() { (a, b) } else { (b, a) };
+                match relation.structurally_relate_aliases() {
+                    StructurallyRelateAliases::No => {
+                        let (a, b) = if relation.a_is_expected() { (a, b) } else { (b, a) };
 
-                relation.register_predicates([ty::Binder::dummy(if self.next_trait_solver() {
-                    ty::PredicateKind::AliasRelate(
-                        a.into(),
-                        b.into(),
-                        ty::AliasRelationDirection::Equate,
-                    )
-                } else {
-                    ty::PredicateKind::ConstEquate(a, b)
-                })]);
+                        relation.register_predicates([if self.next_trait_solver() {
+                            ty::PredicateKind::AliasRelate(
+                                a.into(),
+                                b.into(),
+                                ty::AliasRelationDirection::Equate,
+                            )
+                        } else {
+                            ty::PredicateKind::ConstEquate(a, b)
+                        }]);
 
-                return Ok(b);
+                        Ok(b)
+                    }
+                    StructurallyRelateAliases::Yes => {
+                        ty::relate::structurally_relate_consts(relation, a, b)
+                    }
+                }
             }
-            _ => {}
+            _ => ty::relate::structurally_relate_consts(relation, a, b),
         }
-
-        ty::relate::structurally_relate_consts(relation, a, b)
     }
 
     fn unify_integral_variable(
@@ -303,8 +318,12 @@ impl<'infcx, 'tcx> CombineFields<'infcx, 'tcx> {
         self.infcx.tcx
     }
 
-    pub fn equate<'a>(&'a mut self, a_is_expected: bool) -> Equate<'a, 'infcx, 'tcx> {
-        Equate::new(self, a_is_expected)
+    pub fn equate<'a>(
+        &'a mut self,
+        structurally_relate_aliases: StructurallyRelateAliases,
+        a_is_expected: bool,
+    ) -> Equate<'a, 'infcx, 'tcx> {
+        Equate::new(self, structurally_relate_aliases, a_is_expected)
     }
 
     pub fn sub<'a>(&'a mut self, a_is_expected: bool) -> Sub<'a, 'infcx, 'tcx> {
@@ -334,6 +353,11 @@ pub trait ObligationEmittingRelation<'tcx>: TypeRelation<'tcx> {
     fn span(&self) -> Span;
 
     fn param_env(&self) -> ty::ParamEnv<'tcx>;
+
+    /// Whether aliases should be related structurally. This is pretty much
+    /// always `No` unless you're equating in some specific locations of the
+    /// new solver. See the comments in these use-cases for more details.
+    fn structurally_relate_aliases(&self) -> StructurallyRelateAliases;
 
     /// Register obligations that must hold in order for this relation to hold
     fn register_obligations(&mut self, obligations: PredicateObligations<'tcx>);

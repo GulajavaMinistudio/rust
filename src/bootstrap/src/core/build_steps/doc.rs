@@ -32,7 +32,7 @@ macro_rules! submodule_helper {
 macro_rules! book {
     ($($name:ident, $path:expr, $book_name:expr $(, submodule $(= $submodule:literal)? )? ;)+) => {
         $(
-            #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+            #[derive(Debug, Clone, Hash, PartialEq, Eq)]
         pub struct $name {
             target: TargetSelection,
         }
@@ -86,7 +86,7 @@ book!(
     StyleGuide, "src/doc/style-guide", "style-guide";
 );
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct UnstableBook {
     target: TargetSelection,
 }
@@ -151,7 +151,7 @@ impl<P: Step> Step for RustbookSrc<P> {
             builder.info(&format!("Rustbook ({target}) - {name}"));
             let _ = fs::remove_dir_all(&out);
 
-            builder.run(rustbook_cmd.arg("build").arg(&src).arg("-d").arg(out));
+            builder.run(rustbook_cmd.arg("build").arg(src).arg("-d").arg(out));
         }
 
         if self.parent.is_some() {
@@ -160,7 +160,7 @@ impl<P: Step> Step for RustbookSrc<P> {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct TheBook {
     compiler: Compiler,
     target: TargetSelection,
@@ -286,7 +286,7 @@ fn invoke_rustdoc(
     builder.run(&mut cmd);
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Standalone {
     compiler: Compiler,
     target: TargetSelection,
@@ -384,12 +384,12 @@ impl Step for Standalone {
         // with no particular explicit doc requested (e.g. library/core).
         if builder.paths.is_empty() || builder.was_invoked_explicitly::<Self>(Kind::Doc) {
             let index = out.join("index.html");
-            builder.open_in_browser(&index);
+            builder.open_in_browser(index);
         }
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Releases {
     compiler: Compiler,
     target: TargetSelection,
@@ -492,7 +492,7 @@ pub struct SharedAssetsPaths {
     pub version_info: PathBuf,
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct SharedAssets {
     target: TargetSelection,
 }
@@ -517,7 +517,7 @@ impl Step for SharedAssets {
                 .replace("VERSION", &builder.rust_release())
                 .replace("SHORT_HASH", builder.rust_info().sha_short().unwrap_or(""))
                 .replace("STAMP", builder.rust_info().sha().unwrap_or(""));
-            t!(fs::write(&version_info, &info));
+            t!(fs::write(&version_info, info));
         }
 
         builder.copy(&builder.src.join("src").join("doc").join("rust.css"), &out.join("rust.css"));
@@ -714,11 +714,11 @@ fn doc_std(
     }
 
     let description =
-        format!("library{} in {} format", crate_description(&requested_crates), format.as_str());
-    let _guard = builder.msg_doc(compiler, &description, target);
+        format!("library{} in {} format", crate_description(requested_crates), format.as_str());
+    let _guard = builder.msg_doc(compiler, description, target);
 
     builder.run(&mut cargo.into());
-    builder.cp_r(&out_dir, &out);
+    builder.cp_r(&out_dir, out);
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -781,7 +781,7 @@ impl Step for Rustc {
         let _guard = builder.msg_sysroot_tool(
             Kind::Doc,
             stage,
-            &format!("compiler{}", crate_description(&self.crates)),
+            format!("compiler{}", crate_description(&self.crates)),
             compiler.host,
             target,
         );
@@ -819,7 +819,7 @@ impl Step for Rustc {
             // Create all crate output directories first to make sure rustdoc uses
             // relative links.
             // FIXME: Cargo should probably do this itself.
-            let dir_name = krate.replace("-", "_");
+            let dir_name = krate.replace('-', "_");
             t!(fs::create_dir_all(out_dir.join(&*dir_name)));
             cargo.arg("-p").arg(krate);
             if to_open.is_none() {
@@ -844,7 +844,7 @@ impl Step for Rustc {
         if !builder.config.dry_run() {
             // Sanity check on linked compiler crates
             for krate in &*self.crates {
-                let dir_name = krate.replace("-", "_");
+                let dir_name = krate.replace('-', "_");
                 // Making sure the directory exists and is not empty.
                 assert!(out.join(&*dir_name).read_dir().unwrap().next().is_some());
             }
@@ -872,7 +872,7 @@ macro_rules! tool_doc {
         $(is_library = $is_library:expr,)?
         $(crates = $crates:expr)?
        ) => {
-        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
         pub struct $tool {
             target: TargetSelection,
         }
@@ -1021,7 +1021,7 @@ tool_doc!(
     crates = ["bootstrap"]
 );
 
-#[derive(Ord, PartialOrd, Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Ord, PartialOrd, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ErrorIndex {
     pub target: TargetSelection,
 }
@@ -1056,7 +1056,7 @@ impl Step for ErrorIndex {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct UnstableBookGen {
     target: TargetSelection,
 }
@@ -1112,7 +1112,7 @@ fn symlink_dir_force(config: &Config, original: &Path, link: &Path) {
     );
 }
 
-#[derive(Ord, PartialOrd, Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Ord, PartialOrd, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RustcBook {
     pub compiler: Compiler,
     pub target: TargetSelection,
@@ -1160,7 +1160,7 @@ impl Step for RustcBook {
         cmd.arg(&out_listing);
         cmd.arg("--rustc");
         cmd.arg(&rustc);
-        cmd.arg("--rustc-target").arg(&self.target.rustc_target_arg());
+        cmd.arg("--rustc-target").arg(self.target.rustc_target_arg());
         if builder.is_verbose() {
             cmd.arg("--verbose");
         }

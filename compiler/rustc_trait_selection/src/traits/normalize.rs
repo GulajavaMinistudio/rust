@@ -1,4 +1,8 @@
 //! Deeply normalize types using the old trait solver.
+use super::error_reporting::OverflowCause;
+use super::error_reporting::TypeErrCtxtExt;
+use super::SelectionContext;
+use super::{project, with_replaced_escaping_bound_vars, BoundVarReplacer, PlaceholderReplacer};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_infer::infer::at::At;
 use rustc_infer::infer::InferOk;
@@ -7,10 +11,6 @@ use rustc_infer::traits::{FulfillmentError, Normalized, Obligation, TraitEngine}
 use rustc_middle::traits::{ObligationCause, ObligationCauseCode, Reveal};
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeFolder};
 use rustc_middle::ty::{TypeFoldable, TypeSuperFoldable, TypeVisitable, TypeVisitableExt};
-
-use super::error_reporting::TypeErrCtxtExt;
-use super::SelectionContext;
-use super::{project, with_replaced_escaping_bound_vars, BoundVarReplacer, PlaceholderReplacer};
 
 #[extension(pub trait NormalizeExt<'tcx>)]
 impl<'tcx> At<'_, 'tcx> {
@@ -101,19 +101,17 @@ pub(super) fn needs_normalization<'tcx, T: TypeVisitable<TyCtxt<'tcx>>>(
     value: &T,
     reveal: Reveal,
 ) -> bool {
+    let mut flags = ty::TypeFlags::HAS_TY_PROJECTION
+        | ty::TypeFlags::HAS_TY_WEAK
+        | ty::TypeFlags::HAS_TY_INHERENT
+        | ty::TypeFlags::HAS_CT_PROJECTION;
+
     match reveal {
-        Reveal::UserFacing => value.has_type_flags(
-            ty::TypeFlags::HAS_TY_PROJECTION
-                | ty::TypeFlags::HAS_TY_INHERENT
-                | ty::TypeFlags::HAS_CT_PROJECTION,
-        ),
-        Reveal::All => value.has_type_flags(
-            ty::TypeFlags::HAS_TY_PROJECTION
-                | ty::TypeFlags::HAS_TY_INHERENT
-                | ty::TypeFlags::HAS_TY_OPAQUE
-                | ty::TypeFlags::HAS_CT_PROJECTION,
-        ),
+        Reveal::UserFacing => {}
+        Reveal::All => flags |= ty::TypeFlags::HAS_TY_OPAQUE,
     }
+
+    value.has_type_flags(flags)
 }
 
 struct AssocTypeNormalizer<'a, 'b, 'tcx> {
@@ -175,7 +173,7 @@ impl<'a, 'b, 'tcx> TypeFolder<TyCtxt<'tcx>> for AssocTypeNormalizer<'a, 'b, 'tcx
         }
 
         let (kind, data) = match *ty.kind() {
-            ty::Alias(kind, alias_ty) => (kind, alias_ty),
+            ty::Alias(kind, data) => (kind, data),
             _ => return ty.super_fold_with(self),
         };
 
@@ -212,7 +210,7 @@ impl<'a, 'b, 'tcx> TypeFolder<TyCtxt<'tcx>> for AssocTypeNormalizer<'a, 'b, 'tcx
                         let recursion_limit = self.interner().recursion_limit();
                         if !recursion_limit.value_within_limit(self.depth) {
                             self.selcx.infcx.err_ctxt().report_overflow_error(
-                                &ty,
+                                OverflowCause::DeeplyNormalize(data),
                                 self.cause.span,
                                 true,
                                 |_| {},
@@ -308,7 +306,7 @@ impl<'a, 'b, 'tcx> TypeFolder<TyCtxt<'tcx>> for AssocTypeNormalizer<'a, 'b, 'tcx
                 let recursion_limit = self.interner().recursion_limit();
                 if !recursion_limit.value_within_limit(self.depth) {
                     self.selcx.infcx.err_ctxt().report_overflow_error(
-                        &ty,
+                        OverflowCause::DeeplyNormalize(data),
                         self.cause.span,
                         false,
                         |diag| {
@@ -355,8 +353,6 @@ impl<'a, 'b, 'tcx> TypeFolder<TyCtxt<'tcx>> for AssocTypeNormalizer<'a, 'b, 'tcx
 
                 let data = data.fold_with(self);
 
-                // FIXME(inherent_associated_types): Do we need to honor `self.eager_inference_replacement`
-                // here like `ty::Projection`?
                 project::normalize_inherent_projection(
                     self.selcx,
                     self.param_env,

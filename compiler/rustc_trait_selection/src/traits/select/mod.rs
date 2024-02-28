@@ -29,7 +29,7 @@ use crate::traits::ProjectionCacheKey;
 use crate::traits::Unimplemented;
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap, FxIndexSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
-use rustc_errors::Diagnostic;
+use rustc_errors::{DiagnosticBuilder, EmissionGuarantee};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::BoundRegionConversionTime;
@@ -40,7 +40,6 @@ use rustc_middle::dep_graph::DepNodeIndex;
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::ty::_match::MatchAgainstFreshVars;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
-use rustc_middle::ty::fold::BottomUpFolder;
 use rustc_middle::ty::relate::TypeRelation;
 use rustc_middle::ty::GenericArgsRef;
 use rustc_middle::ty::{self, EarlyBinder, PolyProjectionPredicate, ToPolyTraitRef, ToPredicate};
@@ -70,7 +69,10 @@ pub enum IntercrateAmbiguityCause<'tcx> {
 impl<'tcx> IntercrateAmbiguityCause<'tcx> {
     /// Emits notes when the overlap is caused by complex intercrate ambiguities.
     /// See #23980 for details.
-    pub fn add_intercrate_ambiguity_hint(&self, err: &mut Diagnostic) {
+    pub fn add_intercrate_ambiguity_hint<G: EmissionGuarantee>(
+        &self,
+        err: &mut DiagnosticBuilder<'_, G>,
+    ) {
         err.note(self.intercrate_ambiguity_hint());
     }
 
@@ -2432,28 +2434,8 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
         match self.match_impl(impl_def_id, impl_trait_header, obligation) {
             Ok(args) => args,
             Err(()) => {
-                // FIXME: A rematch may fail when a candidate cache hit occurs
-                // on the freshened form of the trait predicate, but the match
-                // fails for some reason that is not captured in the freshened
-                // cache key. For example, equating an impl trait ref against
-                // the placeholder trait ref may fail due the Generalizer relation
-                // raising a CyclicalTy error due to a sub_root_var relation
-                // for a variable being generalized...
-                let guar = self.infcx.dcx().span_delayed_bug(
-                    obligation.cause.span,
-                    format!(
-                        "Impl {impl_def_id:?} was matchable against {obligation:?} but now is not"
-                    ),
-                );
-                let value = self.infcx.fresh_args_for_item(obligation.cause.span, impl_def_id);
-                let err = Ty::new_error(self.tcx(), guar);
-                let value = value.fold_with(&mut BottomUpFolder {
-                    tcx: self.tcx(),
-                    ty_op: |_| err,
-                    lt_op: |l| l,
-                    ct_op: |c| c,
-                });
-                Normalized { value, obligations: vec![] }
+                let predicate = self.infcx.resolve_vars_if_possible(obligation.predicate);
+                bug!("impl {impl_def_id:?} was matchable against {predicate:?} but now is not")
             }
         }
     }

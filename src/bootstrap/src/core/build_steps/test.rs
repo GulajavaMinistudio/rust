@@ -86,7 +86,7 @@ impl Step for CrateBootstrap {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Linkcheck {
     host: TargetSelection,
 }
@@ -156,7 +156,7 @@ You can skip linkcheck with --skip src/tools/linkchecker"
         // Run the linkchecker.
         let _guard =
             builder.msg(Kind::Test, compiler.stage, "Linkcheck", bootstrap_host, bootstrap_host);
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
         builder.run_delaying_failure(linkchecker.arg(builder.out.join(host.triple).join("doc")));
     }
 
@@ -179,7 +179,7 @@ fn check_if_tidy_is_installed() -> bool {
         .map_or(false, |status| status.success())
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HtmlCheck {
     target: TargetSelection,
 }
@@ -220,7 +220,7 @@ impl Step for HtmlCheck {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cargotest {
     stage: u32,
     host: TargetSelection,
@@ -253,20 +253,20 @@ impl Step for Cargotest {
         let out_dir = builder.out.join("ct");
         t!(fs::create_dir_all(&out_dir));
 
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
         let mut cmd = builder.tool_cmd(Tool::CargoTest);
-        let mut cmd = cmd
+        let cmd = cmd
             .arg(&cargo)
             .arg(&out_dir)
             .args(builder.config.test_args())
             .env("RUSTC", builder.rustc(compiler))
             .env("RUSTDOC", builder.rustdoc(compiler));
-        add_rustdoc_cargo_linker_args(&mut cmd, builder, compiler.host, LldThreads::No);
+        add_rustdoc_cargo_linker_args(cmd, builder, compiler.host, LldThreads::No);
         builder.run_delaying_failure(cmd);
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cargo {
     stage: u32,
     host: TargetSelection,
@@ -322,12 +322,12 @@ impl Step for Cargo {
             builder,
         );
 
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
         add_flags_and_try_run_tests(builder, &mut cargo);
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RustAnalyzer {
     stage: u32,
     host: TargetSelection,
@@ -386,7 +386,7 @@ impl Step for RustAnalyzer {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rustfmt {
     stage: u32,
     host: TargetSelection,
@@ -433,7 +433,7 @@ impl Step for Rustfmt {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RustDemangler {
     stage: u32,
     host: TargetSelection,
@@ -474,7 +474,7 @@ impl Step for RustDemangler {
         );
 
         let dir = testdir(builder, compiler.host);
-        t!(fs::create_dir_all(&dir));
+        t!(fs::create_dir_all(dir));
 
         cargo.env("RUST_DEMANGLER_DRIVER_PATH", rust_demangler);
         cargo.add_rustc_lib_path(builder);
@@ -492,7 +492,7 @@ impl Step for RustDemangler {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Miri {
     stage: u32,
     host: TargetSelection,
@@ -525,7 +525,7 @@ impl Miri {
         // Tell `cargo miri setup` where to find the sources.
         cargo.env("MIRI_LIB_SRC", builder.src.join("library"));
         // Tell it where to find Miri.
-        cargo.env("MIRI", &miri);
+        cargo.env("MIRI", miri);
         // Tell it where to put the sysroot.
         cargo.env("MIRI_SYSROOT", &miri_sysroot);
         // Debug things.
@@ -637,7 +637,7 @@ impl Step for Miri {
         // does not understand the flags added by `add_flags_and_try_run_test`.
         let mut cargo = prepare_cargo_test(cargo, &[], &[], "miri", compiler, target, builder);
         {
-            let _time = helpers::timeit(&builder);
+            let _time = helpers::timeit(builder);
             builder.run(&mut cargo);
         }
 
@@ -649,11 +649,11 @@ impl Step for Miri {
             // `MIRI_SKIP_UI_CHECKS` and `RUSTC_BLESS` are incompatible
             cargo.env_remove("RUSTC_BLESS");
             // Optimizations can change error locations and remove UB so don't run `fail` tests.
-            cargo.args(&["tests/pass", "tests/panic"]);
+            cargo.args(["tests/pass", "tests/panic"]);
 
             let mut cargo = prepare_cargo_test(cargo, &[], &[], "miri", compiler, target, builder);
             {
-                let _time = helpers::timeit(&builder);
+                let _time = helpers::timeit(builder);
                 builder.run(&mut cargo);
             }
         }
@@ -693,13 +693,13 @@ impl Step for Miri {
 
         let mut cargo = Command::from(cargo);
         {
-            let _time = helpers::timeit(&builder);
+            let _time = helpers::timeit(builder);
             builder.run(&mut cargo);
         }
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CompiletestTest {
     host: TargetSelection,
 }
@@ -747,7 +747,7 @@ impl Step for CompiletestTest {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Clippy {
     stage: u32,
     host: TargetSelection,
@@ -815,7 +815,7 @@ fn path_for_cargo(builder: &Builder<'_>, compiler: Compiler) -> OsString {
     env::join_paths(iter::once(path).chain(env::split_paths(&old_path))).expect("")
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RustdocTheme {
     pub compiler: Compiler,
 }
@@ -852,7 +852,7 @@ impl Step for RustdocTheme {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RustdocJSStd {
     pub target: TargetSelection,
 }
@@ -912,7 +912,7 @@ impl Step for RustdocJSStd {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RustdocJSNotStd {
     pub target: TargetSelection,
     pub compiler: Compiler,
@@ -946,7 +946,7 @@ impl Step for RustdocJSNotStd {
 }
 
 fn get_browser_ui_test_version_inner(npm: &Path, global: bool) -> Option<String> {
-    let mut command = Command::new(&npm);
+    let mut command = Command::new(npm);
     command.arg("list").arg("--parseable").arg("--long").arg("--depth=0");
     if global {
         command.arg("--global");
@@ -954,7 +954,7 @@ fn get_browser_ui_test_version_inner(npm: &Path, global: bool) -> Option<String>
     let lines = command
         .output()
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or(String::new());
+        .unwrap_or_default();
     lines
         .lines()
         .find_map(|l| l.split(':').nth(1)?.strip_prefix("browser-ui-test@"))
@@ -966,7 +966,7 @@ fn get_browser_ui_test_version(npm: &Path) -> Option<String> {
         .or_else(|| get_browser_ui_test_version_inner(npm, true))
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RustdocGUI {
     pub target: TargetSelection,
     pub compiler: Compiler,
@@ -1048,7 +1048,7 @@ impl Step for RustdocGUI {
             cmd.arg("--npm").arg(npm);
         }
 
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
         let _guard = builder.msg_sysroot_tool(
             Kind::Test,
             self.compiler.stage,
@@ -1060,7 +1060,7 @@ impl Step for RustdocGUI {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Tidy;
 
 impl Step for Tidy {
@@ -1096,7 +1096,7 @@ impl Step for Tidy {
             cmd.arg(format!("--extra-checks={s}"));
         }
         let mut args = std::env::args_os();
-        if let Some(_) = args.find(|arg| arg == OsStr::new("--")) {
+        if args.any(|arg| arg == OsStr::new("--")) {
             cmd.arg("--");
             cmd.args(args);
         }
@@ -1116,7 +1116,7 @@ HELP: to skip test's attempt to check tidiness, pass `--skip src/tools/tidy` to 
                 );
                 crate::exit!(1);
             }
-            crate::core::build_steps::format::format(&builder, !builder.config.cmd.bless(), &[]);
+            crate::core::build_steps::format::format(builder, !builder.config.cmd.bless(), &[]);
         }
 
         builder.info("tidy check");
@@ -1151,7 +1151,7 @@ HELP: to skip test's attempt to check tidiness, pass `--skip src/tools/tidy` to 
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExpandYamlAnchors;
 
 impl Step for ExpandYamlAnchors {
@@ -1171,7 +1171,7 @@ impl Step for ExpandYamlAnchors {
         }
         builder.info("Ensuring the YAML anchors in the GitHub Actions config were expanded");
         builder.run_delaying_failure(
-            &mut builder.tool_cmd(Tool::ExpandYamlAnchors).arg("check").arg(&builder.src),
+            builder.tool_cmd(Tool::ExpandYamlAnchors).arg("check").arg(&builder.src),
         );
     }
 
@@ -1251,7 +1251,7 @@ macro_rules! test_definitions {
         host: $host:expr,
         compare_mode: $compare_mode:expr
     }) => {
-        #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         pub struct $name {
             pub compiler: Compiler,
             pub target: TargetSelection,
@@ -1294,7 +1294,7 @@ macro_rules! coverage_test_alias {
         default: $default:expr,
         only_hosts: $only_hosts:expr $(,)?
     }) => {
-        #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         pub struct $name {
             pub compiler: Compiler,
             pub target: TargetSelection,
@@ -1376,7 +1376,7 @@ default_test!(Assembly { path: "tests/assembly", mode: "assembly", suite: "assem
 ///
 /// Each individual mode also has its own alias that will run the tests in
 /// just that mode.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Coverage {
     pub compiler: Compiler,
     pub target: TargetSelection,
@@ -1438,7 +1438,7 @@ host_test!(CoverageRunRustdoc {
 });
 
 // For the mir-opt suite we do not use macros, as we need custom behavior when blessing.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MirOpt {
     pub compiler: Compiler,
     pub target: TargetSelection,
@@ -1494,7 +1494,7 @@ impl Step for MirOpt {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Compiletest {
     compiler: Compiler,
     target: TargetSelection,
@@ -1759,7 +1759,7 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
 
         for exclude in &builder.config.skip {
             cmd.arg("--skip");
-            cmd.arg(&exclude);
+            cmd.arg(exclude);
         }
 
         // Get paths from cmd args
@@ -1780,7 +1780,7 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
         // so the correct filters are passed to libtest
         if cfg!(windows) {
             let test_args_win: Vec<String> =
-                test_args.iter().map(|s| s.replace("/", "\\")).collect();
+                test_args.iter().map(|s| s.replace('/', "\\")).collect();
             cmd.args(&test_args_win);
         } else {
             cmd.args(&test_args);
@@ -1900,7 +1900,7 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
             // Note that if we encounter `PATH` we make sure to append to our own `PATH`
             // rather than stomp over it.
             if !builder.config.dry_run() && target.is_msvc() {
-                for &(ref k, ref v) in builder.cc.borrow()[&target].env() {
+                for (k, v) in builder.cc.borrow()[&target].env() {
                     if k != "PATH" {
                         cmd.env(k, v);
                     }
@@ -1996,7 +1996,7 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
         let _group = builder.msg(
             Kind::Test,
             compiler.stage,
-            &format!("compiletest suite={suite} mode={mode}"),
+            format!("compiletest suite={suite} mode={mode}"),
             compiler.host,
             target,
         );
@@ -2022,7 +2022,7 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
                 "Check compiletest suite={} mode={} compare_mode={} ({} -> {})",
                 suite, mode, compare_mode, &compiler.host, target
             ));
-            let _time = helpers::timeit(&builder);
+            let _time = helpers::timeit(builder);
             try_run_tests(builder, &mut cmd, false);
         }
     }
@@ -2094,7 +2094,7 @@ impl BookTest {
             compiler.host,
             compiler.host,
         );
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
         let toolstate = if builder.run_delaying_failure(&mut rustbook_cmd) {
             ToolState::TestPass
         } else {
@@ -2111,12 +2111,12 @@ impl BookTest {
         builder.ensure(compile::Std::new(compiler, host));
 
         let _guard =
-            builder.msg(Kind::Test, compiler.stage, &format!("book {}", self.name), host, host);
+            builder.msg(Kind::Test, compiler.stage, format!("book {}", self.name), host, host);
 
         // Do a breadth-first traversal of the `src/doc` directory and just run
         // tests for all files that end in `*.md`
         let mut stack = vec![builder.src.join(self.path)];
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
         let mut files = Vec::new();
         while let Some(p) = stack.pop() {
             if p.is_dir() {
@@ -2142,7 +2142,7 @@ impl BookTest {
 macro_rules! test_book {
     ($($name:ident, $path:expr, $book_name:expr, default=$default:expr;)+) => {
         $(
-            #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+            #[derive(Debug, Clone, PartialEq, Eq, Hash)]
             pub struct $name {
                 compiler: Compiler,
             }
@@ -2187,7 +2187,7 @@ test_book!(
     EditionGuide, "src/doc/edition-guide", "edition-guide", default=false;
 );
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ErrorIndex {
     compiler: Compiler,
 }
@@ -2227,7 +2227,7 @@ impl Step for ErrorIndex {
 
         let guard =
             builder.msg(Kind::Test, compiler.stage, "error-index", compiler.host, compiler.host);
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
         builder.run_quiet(&mut tool);
         drop(guard);
         // The tests themselves need to link to std, so make sure it is
@@ -2264,7 +2264,7 @@ fn markdown_test(builder: &Builder<'_>, compiler: Compiler, markdown: &Path) -> 
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RustcGuide;
 
 impl Step for RustcGuide {
@@ -2315,11 +2315,8 @@ impl Step for CrateLibrustc {
         let builder = run.builder;
         let host = run.build_triple();
         let compiler = builder.compiler_for(builder.top_stage, host, host);
-        let crates = run
-            .paths
-            .iter()
-            .map(|p| builder.crate_paths[&p.assert_single_path().path].clone())
-            .collect();
+        let crates =
+            run.paths.iter().map(|p| builder.crate_paths[&p.assert_single_path().path]).collect();
 
         builder.ensure(CrateLibrustc { compiler, target: run.target, crates });
     }
@@ -2351,7 +2348,7 @@ fn run_cargo_test<'a>(
 ) -> bool {
     let mut cargo =
         prepare_cargo_test(cargo, libtest_args, crates, primary_crate, compiler, target, builder);
-    let _time = helpers::timeit(&builder);
+    let _time = helpers::timeit(builder);
     let _group = description.into().and_then(|what| {
         builder.msg_sysroot_tool(Kind::Test, compiler.stage, what, compiler.host, target)
     });
@@ -2406,7 +2403,7 @@ fn prepare_cargo_test(
             if krate.has_lib {
                 cargo.arg("--lib");
             }
-            cargo.args(&["--bins", "--examples", "--tests", "--benches"]);
+            cargo.args(["--bins", "--examples", "--tests", "--benches"]);
         }
         DocTests::Yes => {}
     }
@@ -2468,11 +2465,8 @@ impl Step for Crate {
         let builder = run.builder;
         let host = run.build_triple();
         let compiler = builder.compiler_for(builder.top_stage, host, host);
-        let crates = run
-            .paths
-            .iter()
-            .map(|p| builder.crate_paths[&p.assert_single_path().path].clone())
-            .collect();
+        let crates =
+            run.paths.iter().map(|p| builder.crate_paths[&p.assert_single_path().path]).collect();
 
         builder.ensure(Crate { compiler, target: run.target, mode: Mode::Std, crates });
     }
@@ -2543,7 +2537,7 @@ impl Step for Crate {
 }
 
 /// Rustdoc is special in various ways, which is why this step is different from `Crate`.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrateRustdoc {
     host: TargetSelection,
 }
@@ -2644,7 +2638,7 @@ impl Step for CrateRustdoc {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrateRustdocJsonTypes {
     host: TargetSelection,
 }
@@ -2714,7 +2708,7 @@ impl Step for CrateRustdocJsonTypes {
 /// QEMU we have to build our own tools so we've got conditional dependencies
 /// on those programs as well. Note that the remote test client is built for
 /// the build target (us) and the server is built for the target.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RemoteCopyLibs {
     compiler: Compiler,
     target: TargetSelection,
@@ -2760,7 +2754,7 @@ impl Step for RemoteCopyLibs {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Distcheck;
 
 impl Step for Distcheck {
@@ -2830,7 +2824,7 @@ impl Step for Distcheck {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Bootstrap;
 
 impl Step for Bootstrap {
@@ -2844,11 +2838,11 @@ impl Step for Bootstrap {
         let compiler = builder.compiler(0, host);
         let _guard = builder.msg(Kind::Test, 0, "bootstrap", host, host);
 
-        let mut check_bootstrap = Command::new(&builder.python());
+        let mut check_bootstrap = Command::new(builder.python());
         check_bootstrap
             .args(["-m", "unittest", "bootstrap_test.py"])
             .env("BUILD_DIR", &builder.out)
-            .env("BUILD_PLATFORM", &builder.build.build.triple)
+            .env("BUILD_PLATFORM", builder.build.build.triple)
             .current_dir(builder.src.join("src/bootstrap/"));
         // NOTE: we intentionally don't pass test_args here because the args for unittest and cargo test are mutually incompatible.
         // Use `python -m unittest` manually if you want to pass arguments.
@@ -2882,7 +2876,7 @@ impl Step for Bootstrap {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TierCheck {
     pub compiler: Compiler,
 }
@@ -2932,7 +2926,7 @@ impl Step for TierCheck {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LintDocs {
     pub compiler: Compiler,
     pub target: TargetSelection,
@@ -2965,7 +2959,7 @@ impl Step for LintDocs {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RustInstaller;
 
 impl Step for RustInstaller {
@@ -3026,7 +3020,7 @@ impl Step for RustInstaller {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TestHelpers {
     pub target: TargetSelection,
 }
@@ -3171,7 +3165,7 @@ impl Step for CodegenCranelift {
             &compiler.host,
             target
         ));
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
 
         // FIXME handle vendoring for source tarballs before removing the --skip-test below
         let download_dir = builder.out.join("cg_clif_download");
@@ -3300,7 +3294,7 @@ impl Step for CodegenGCC {
             &compiler.host,
             target
         ));
-        let _time = helpers::timeit(&builder);
+        let _time = helpers::timeit(builder);
 
         // FIXME: Uncomment the `prepare` command below once vendoring is implemented.
         /*

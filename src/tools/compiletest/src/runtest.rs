@@ -1936,7 +1936,7 @@ impl<'test> TestCx<'test> {
     fn document(&self, out_dir: &Path) -> ProcRes {
         if self.props.build_aux_docs {
             for rel_ab in &self.props.aux_builds {
-                let aux_testpaths = self.compute_aux_test_paths(rel_ab);
+                let aux_testpaths = self.compute_aux_test_paths(&self.testpaths, rel_ab);
                 let aux_props =
                     self.props.from_aux_file(&aux_testpaths.file, self.revision, self.config);
                 let aux_cx = TestCx {
@@ -2092,24 +2092,18 @@ impl<'test> TestCx<'test> {
         proc_res
     }
 
-    /// For each `aux-build: foo/bar` annotation, we check to find the
-    /// file in an `auxiliary` directory relative to the test itself.
-    fn compute_aux_test_paths(&self, rel_ab: &str) -> TestPaths {
-        let test_ab = self
-            .testpaths
-            .file
-            .parent()
-            .expect("test file path has no parent")
-            .join("auxiliary")
-            .join(rel_ab);
+    /// For each `aux-build: foo/bar` annotation, we check to find the file in an `auxiliary`
+    /// directory relative to the test itself (not any intermediate auxiliaries).
+    fn compute_aux_test_paths(&self, of: &TestPaths, rel_ab: &str) -> TestPaths {
+        let test_ab =
+            of.file.parent().expect("test file path has no parent").join("auxiliary").join(rel_ab);
         if !test_ab.exists() {
             self.fatal(&format!("aux-build `{}` source not found", test_ab.display()))
         }
 
         TestPaths {
             file: test_ab,
-            relative_dir: self
-                .testpaths
+            relative_dir: of
                 .relative_dir
                 .join(self.output_testname_unique())
                 .join("auxiliary")
@@ -2135,7 +2129,7 @@ impl<'test> TestCx<'test> {
         self.config.target.contains("vxworks") && !self.is_vxworks_pure_static()
     }
 
-    fn build_all_auxiliary(&self, rustc: &mut Command) -> PathBuf {
+    fn aux_output_dir(&self) -> PathBuf {
         let aux_dir = self.aux_output_dir_name();
 
         if !self.props.aux_builds.is_empty() {
@@ -2143,22 +2137,26 @@ impl<'test> TestCx<'test> {
             create_dir_all(&aux_dir).unwrap();
         }
 
+        aux_dir
+    }
+
+    fn build_all_auxiliary(&self, of: &TestPaths, aux_dir: &Path, rustc: &mut Command) {
         for rel_ab in &self.props.aux_builds {
-            self.build_auxiliary(rel_ab, &aux_dir);
+            self.build_auxiliary(of, rel_ab, &aux_dir);
         }
 
         for (aux_name, aux_path) in &self.props.aux_crates {
-            let is_dylib = self.build_auxiliary(&aux_path, &aux_dir);
+            let is_dylib = self.build_auxiliary(of, &aux_path, &aux_dir);
             let lib_name =
                 get_lib_name(&aux_path.trim_end_matches(".rs").replace('-', "_"), is_dylib);
             rustc.arg("--extern").arg(format!("{}={}/{}", aux_name, aux_dir.display(), lib_name));
         }
-
-        aux_dir
     }
 
     fn compose_and_run_compiler(&self, mut rustc: Command, input: Option<String>) -> ProcRes {
-        let aux_dir = self.build_all_auxiliary(&mut rustc);
+        let aux_dir = self.aux_output_dir();
+        self.build_all_auxiliary(&self.testpaths, &aux_dir, &mut rustc);
+
         self.props.unset_rustc_env.iter().fold(&mut rustc, Command::env_remove);
         rustc.envs(self.props.rustc_env.clone());
         self.compose_and_run(
@@ -2172,10 +2170,10 @@ impl<'test> TestCx<'test> {
     /// Builds an aux dependency.
     ///
     /// Returns whether or not it is a dylib.
-    fn build_auxiliary(&self, source_path: &str, aux_dir: &Path) -> bool {
-        let aux_testpaths = self.compute_aux_test_paths(source_path);
+    fn build_auxiliary(&self, of: &TestPaths, source_path: &str, aux_dir: &Path) -> bool {
+        let aux_testpaths = self.compute_aux_test_paths(of, source_path);
         let aux_props = self.props.from_aux_file(&aux_testpaths.file, self.revision, self.config);
-        let aux_output = TargetLocation::ThisDirectory(self.aux_output_dir_name());
+        let aux_output = TargetLocation::ThisDirectory(aux_dir.to_path_buf());
         let aux_cx = TestCx {
             config: self.config,
             props: &aux_props,
@@ -2193,6 +2191,7 @@ impl<'test> TestCx<'test> {
             LinkToAux::No,
             Vec::new(),
         );
+        aux_cx.build_all_auxiliary(of, aux_dir, &mut aux_rustc);
 
         for key in &aux_props.unset_rustc_env {
             aux_rustc.env_remove(key);
@@ -2504,8 +2503,11 @@ impl<'test> TestCx<'test> {
                 // overridden by `compile-flags`.
                 rustc.arg("-Copt-level=2");
             }
-            RunPassValgrind | Pretty | DebugInfo | Codegen | Rustdoc | RustdocJson | RunMake
-            | CodegenUnits | JsDocTest | Assembly => {
+            Assembly | Codegen => {
+                rustc.arg("-Cdebug-assertions=no");
+            }
+            RunPassValgrind | Pretty | DebugInfo | Rustdoc | RustdocJson | RunMake
+            | CodegenUnits | JsDocTest => {
                 // do not use JSON output
             }
         }
@@ -2907,25 +2909,32 @@ impl<'test> TestCx<'test> {
     fn verify_with_filecheck(&self, output: &Path) -> ProcRes {
         let mut filecheck = Command::new(self.config.llvm_filecheck.as_ref().unwrap());
         filecheck.arg("--input-file").arg(output).arg(&self.testpaths.file);
-        // It would be more appropriate to make most of the arguments configurable through
-        // a comment-attribute similar to `compile-flags`. For example, --check-prefixes is a very
-        // useful flag.
-        //
-        // For now, though…
-        let prefix_for_target =
-            if self.config.target.contains("msvc") { "MSVC" } else { "NONMSVC" };
-        let prefixes = if let Some(rev) = self.revision {
-            format!("CHECK,{},{}", prefix_for_target, rev)
-        } else {
-            format!("CHECK,{}", prefix_for_target)
-        };
-        if self.config.llvm_version.unwrap_or(0) >= 130000 {
-            filecheck.args(&["--allow-unused-prefixes", "--check-prefixes", &prefixes]);
-        } else {
-            filecheck.args(&["--check-prefixes", &prefixes]);
+
+        // FIXME: Consider making some of these prefix flags opt-in per test,
+        // via `filecheck-flags` or by adding new header directives.
+
+        // Because we use custom prefixes, we also have to register the default prefix.
+        filecheck.arg("--check-prefix=CHECK");
+
+        // Some tests use the current revision name as a check prefix.
+        if let Some(rev) = self.revision {
+            filecheck.arg("--check-prefix").arg(rev);
         }
+
+        // Some tests also expect either the MSVC or NONMSVC prefix to be defined.
+        let msvc_or_not = if self.config.target.contains("msvc") { "MSVC" } else { "NONMSVC" };
+        filecheck.arg("--check-prefix").arg(msvc_or_not);
+
+        // The filecheck tool normally fails if a prefix is defined but not used.
+        // However, we define several prefixes globally for all tests.
+        filecheck.arg("--allow-unused-prefixes");
+
         // Provide more context on failures.
         filecheck.args(&["--dump-input-context", "100"]);
+
+        // Add custom flags supplied by the `filecheck-flags:` test header.
+        filecheck.args(&self.props.filecheck_flags);
+
         self.compose_and_run(filecheck, "", None, None)
     }
 
@@ -3034,7 +3043,8 @@ impl<'test> TestCx<'test> {
             LinkToAux::Yes,
             Vec::new(),
         );
-        new_rustdoc.build_all_auxiliary(&mut rustc);
+        let aux_dir = new_rustdoc.aux_output_dir();
+        new_rustdoc.build_all_auxiliary(&new_rustdoc.testpaths, &aux_dir, &mut rustc);
 
         let proc_res = new_rustdoc.document(&compare_dir);
         if !proc_res.status.success() {
@@ -3939,7 +3949,7 @@ impl<'test> TestCx<'test> {
             );
         } else if !expected_fixed.is_empty() {
             panic!(
-                "the `// run-rustfix` directive wasn't found but a `*.fixed` \
+                "the `//@ run-rustfix` directive wasn't found but a `*.fixed` \
                  file was found"
             );
         }

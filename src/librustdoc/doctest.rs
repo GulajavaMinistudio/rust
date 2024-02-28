@@ -153,8 +153,7 @@ pub(crate) fn run(options: RustdocOptions) -> Result<(), ErrorGuaranteed> {
 
                     collector
                 });
-                // We must include lint errors here.
-                if compiler.sess.dcx().has_errors_or_lint_errors().is_some() {
+                if compiler.sess.dcx().has_errors().is_some() {
                     FatalError.raise();
                 }
 
@@ -1205,6 +1204,13 @@ impl Tester for Collector {
                 self.names.push(name);
             }
         }
+    }
+}
+
+#[cfg(test)] // used in tests
+impl Tester for Vec<usize> {
+    fn add_test(&mut self, _test: String, _config: LangString, line: usize) {
+        self.push(line);
     }
 }
 

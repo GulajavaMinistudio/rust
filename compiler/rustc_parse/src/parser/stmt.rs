@@ -11,6 +11,7 @@ use crate::errors;
 use crate::maybe_whole;
 
 use crate::errors::MalformedLoopLabel;
+use crate::parser::Recovered;
 use ast::Label;
 use rustc_ast as ast;
 use rustc_ast::ptr::P;
@@ -21,7 +22,7 @@ use rustc_ast::{Block, BlockCheckMode, Expr, ExprKind, HasAttrs, Local, Stmt};
 use rustc_ast::{StmtKind, DUMMY_NODE_ID};
 use rustc_errors::{Applicability, DiagnosticBuilder, PResult};
 use rustc_span::symbol::{kw, sym, Ident};
-use rustc_span::{BytePos, Span};
+use rustc_span::{BytePos, ErrorGuaranteed, Span};
 
 use std::borrow::Cow;
 use std::mem;
@@ -229,8 +230,7 @@ impl<'a> Parser<'a> {
     /// Also error if the previous token was a doc comment.
     fn error_outer_attrs(&self, attrs: AttrWrapper) {
         if !attrs.is_empty()
-            && let attrs = attrs.take_for_recovery(self.sess)
-            && let attrs @ [.., last] = &*attrs
+            && let attrs @ [.., last] = &*attrs.take_for_recovery(self.sess)
         {
             if last.is_doc_comment() {
                 self.dcx().emit_err(errors::DocCommentDoesNotDocumentAnything {
@@ -609,9 +609,9 @@ impl<'a> Parser<'a> {
                         }
                     }
 
-                    err.emit();
+                    let guar = err.emit();
                     self.recover_stmt_(SemiColonMode::Ignore, BlockMode::Ignore);
-                    Some(self.mk_stmt_err(self.token.span))
+                    Some(self.mk_stmt_err(self.token.span, guar))
                 }
                 Ok(stmt) => stmt,
                 Err(err) => return Err(err),
@@ -650,10 +650,10 @@ impl<'a> Parser<'a> {
                         .contains(&self.token.kind) =>
             {
                 // The user has written `#[attr] expr` which is unsupported. (#106020)
-                self.attr_on_non_tail_expr(&expr);
+                let guar = self.attr_on_non_tail_expr(&expr);
                 // We already emitted an error, so don't emit another type error
                 let sp = expr.span.to(self.prev_token.span);
-                *expr = self.mk_expr_err(sp);
+                *expr = self.mk_expr_err(sp, guar);
             }
 
             // Expression without semicolon.
@@ -661,15 +661,22 @@ impl<'a> Parser<'a> {
                 if self.token != token::Eof && classify::expr_requires_semi_to_be_stmt(expr) =>
             {
                 // Just check for errors and recover; do not eat semicolon yet.
-                // `expect_one_of` returns PResult<'a, bool /* recovered */>
 
                 let expect_result =
                     self.expect_one_of(&[], &[token::Semi, token::CloseDelim(Delimiter::Brace)]);
 
+                // Try to both emit a better diagnostic, and avoid further errors by replacing
+                // the `expr` with `ExprKind::Err`.
                 let replace_with_err = 'break_recover: {
                     match expect_result {
-                        // Recover from parser, skip type error to avoid extra errors.
-                        Ok(true) => true,
+                        Ok(Recovered::No) => None,
+                        Ok(Recovered::Yes) => {
+                            // Skip type error to avoid extra errors.
+                            let guar = self
+                                .dcx()
+                                .span_delayed_bug(self.prev_token.span, "expected `;` or `}`");
+                            Some(guar)
+                        }
                         Err(e) => {
                             if self.recover_colon_as_semi() {
                                 // recover_colon_as_semi has already emitted a nicer error.
@@ -677,7 +684,7 @@ impl<'a> Parser<'a> {
                                 add_semi_to_stmt = true;
                                 eat_semi = false;
 
-                                break 'break_recover false;
+                                break 'break_recover None;
                             }
 
                             match &expr.kind {
@@ -691,7 +698,7 @@ impl<'a> Parser<'a> {
                                                     token.kind,
                                                     token::Ident(
                                                         kw::For | kw::Loop | kw::While,
-                                                        false
+                                                        token::IdentIsRaw::No
                                                     ) | token::OpenDelim(Delimiter::Brace)
                                                 )
                                         })
@@ -705,13 +712,13 @@ impl<'a> Parser<'a> {
                                         };
                                         match self.parse_expr_labeled(label, false) {
                                             Ok(labeled_expr) => {
-                                                e.delay_as_bug();
+                                                e.cancel();
                                                 self.dcx().emit_err(MalformedLoopLabel {
                                                     span: label.ident.span,
                                                     correct_label: label.ident,
                                                 });
                                                 *expr = labeled_expr;
-                                                break 'break_recover false;
+                                                break 'break_recover None;
                                             }
                                             Err(err) => {
                                                 err.cancel();
@@ -723,26 +730,26 @@ impl<'a> Parser<'a> {
                                 _ => {}
                             }
 
-                            if let Err(e) =
-                                self.check_mistyped_turbofish_with_multiple_type_params(e, expr)
-                            {
-                                if recover.no() {
-                                    return Err(e);
-                                }
-                                e.emit();
-                                self.recover_stmt();
-                            }
+                            let res =
+                                self.check_mistyped_turbofish_with_multiple_type_params(e, expr);
 
-                            true
+                            Some(if recover.no() {
+                                res?
+                            } else {
+                                res.unwrap_or_else(|e| {
+                                    let guar = e.emit();
+                                    self.recover_stmt();
+                                    guar
+                                })
+                            })
                         }
-                        Ok(false) => false,
                     }
                 };
 
-                if replace_with_err {
+                if let Some(guar) = replace_with_err {
                     // We already emitted an error, so don't emit another type error
                     let sp = expr.span.to(self.prev_token.span);
-                    *expr = self.mk_expr_err(sp);
+                    *expr = self.mk_expr_err(sp, guar);
                 }
             }
             StmtKind::Expr(_) | StmtKind::MacCall(_) => {}
@@ -791,11 +798,11 @@ impl<'a> Parser<'a> {
         Stmt { id: DUMMY_NODE_ID, kind, span }
     }
 
-    pub(super) fn mk_stmt_err(&self, span: Span) -> Stmt {
-        self.mk_stmt(span, StmtKind::Expr(self.mk_expr_err(span)))
+    pub(super) fn mk_stmt_err(&self, span: Span, guar: ErrorGuaranteed) -> Stmt {
+        self.mk_stmt(span, StmtKind::Expr(self.mk_expr_err(span, guar)))
     }
 
-    pub(super) fn mk_block_err(&self, span: Span) -> P<Block> {
-        self.mk_block(thin_vec![self.mk_stmt_err(span)], BlockCheckMode::Default, span)
+    pub(super) fn mk_block_err(&self, span: Span, guar: ErrorGuaranteed) -> P<Block> {
+        self.mk_block(thin_vec![self.mk_stmt_err(span, guar)], BlockCheckMode::Default, span)
     }
 }

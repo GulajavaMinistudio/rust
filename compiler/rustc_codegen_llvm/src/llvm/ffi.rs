@@ -1618,6 +1618,8 @@ extern "C" {
     ) -> &'a Value;
 
     pub fn LLVMRustSetFastMath(Instr: &Value);
+    pub fn LLVMRustSetAlgebraicMath(Instr: &Value);
+    pub fn LLVMRustSetAllowReassoc(Instr: &Value);
 
     // Miscellaneous instructions
     pub fn LLVMRustGetInstrProfIncrementIntrinsic(M: &Module) -> &Value;
@@ -2254,7 +2256,7 @@ extern "C" {
     pub fn LLVMRustUnpackInlineAsmDiagnostic<'a>(
         DI: &'a DiagnosticInfo,
         level_out: &mut DiagnosticLevel,
-        cookie_out: &mut c_uint,
+        cookie_out: &mut u64,
         message_out: &mut Option<&'a Twine>,
     );
 

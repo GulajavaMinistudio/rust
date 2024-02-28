@@ -175,7 +175,7 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
     ) -> Result<PatKind<'tcx>, ErrorGuaranteed> {
         if lo_expr.is_none() && hi_expr.is_none() {
             let msg = "found twice-open range pattern (`..`) outside of error recovery";
-            return Err(self.tcx.dcx().span_delayed_bug(span, msg));
+            self.tcx.dcx().span_bug(span, msg);
         }
 
         let (lo, lo_ascr, lo_inline) = self.lower_pattern_range_endpoint(lo_expr)?;
@@ -223,19 +223,14 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
         // If we are handling a range with associated constants (e.g.
         // `Foo::<'a>::A..=Foo::B`), we need to put the ascriptions for the associated
         // constants somewhere. Have them on the range pattern.
-        for ascr in [lo_ascr, hi_ascr] {
-            if let Some(ascription) = ascr {
-                kind = PatKind::AscribeUserType {
-                    ascription,
-                    subpattern: Box::new(Pat { span, ty, kind }),
-                };
-            }
+        for ascription in [lo_ascr, hi_ascr].into_iter().flatten() {
+            kind = PatKind::AscribeUserType {
+                ascription,
+                subpattern: Box::new(Pat { span, ty, kind }),
+            };
         }
-        for inline_const in [lo_inline, hi_inline] {
-            if let Some(def) = inline_const {
-                kind =
-                    PatKind::InlineConstant { def, subpattern: Box::new(Pat { span, ty, kind }) };
-            }
+        for def in [lo_inline, hi_inline].into_iter().flatten() {
+            kind = PatKind::InlineConstant { def, subpattern: Box::new(Pat { span, ty, kind }) };
         }
         Ok(kind)
     }

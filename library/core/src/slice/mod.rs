@@ -146,6 +146,9 @@ impl<T> [T] {
     /// ```
     /// let a = [1, 2, 3];
     /// assert!(!a.is_empty());
+    ///
+    /// let b: &[i32] = &[];
+    /// assert!(b.is_empty());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_const_stable(feature = "const_slice_is_empty", since = "1.39.0")]
@@ -185,6 +188,9 @@ impl<T> [T] {
     ///     *first = 5;
     /// }
     /// assert_eq!(x, &[5, 1, 2]);
+    ///
+    /// let y: &mut [i32] = &mut [];
+    /// assert_eq!(None, y.first_mut());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_const_unstable(feature = "const_slice_first_last", issue = "83570")]
@@ -297,7 +303,7 @@ impl<T> [T] {
         if let [.., last] = self { Some(last) } else { None }
     }
 
-    /// Returns a mutable reference to the last item in the slice.
+    /// Returns a mutable reference to the last item in the slice, or `None` if it is empty.
     ///
     /// # Examples
     ///
@@ -308,6 +314,9 @@ impl<T> [T] {
     ///     *last = 10;
     /// }
     /// assert_eq!(x, &[0, 1, 10]);
+    ///
+    /// let y: &mut [i32] = &mut [];
+    /// assert_eq!(None, y.last_mut());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_const_unstable(feature = "const_slice_first_last", issue = "83570")]
@@ -938,7 +947,7 @@ impl<T> [T] {
     pub const unsafe fn swap_unchecked(&mut self, a: usize, b: usize) {
         debug_assert_nounwind!(
             a < self.len() && b < self.len(),
-            "slice::swap_unchecked requires that the indices are within the slice",
+            "slice::swap_unchecked requires that the indices are within the slice"
         );
 
         let ptr = self.as_mut_ptr();
@@ -1278,7 +1287,7 @@ impl<T> [T] {
     pub const unsafe fn as_chunks_unchecked<const N: usize>(&self) -> &[[T; N]] {
         debug_assert_nounwind!(
             N != 0 && self.len() % N == 0,
-            "slice::as_chunks_unchecked requires `N != 0` and the slice to split exactly into `N`-element chunks",
+            "slice::as_chunks_unchecked requires `N != 0` and the slice to split exactly into `N`-element chunks"
         );
         // SAFETY: Caller must guarantee that `N` is nonzero and exactly divides the slice length
         let new_len = unsafe { exact_div(self.len(), N) };
@@ -1432,7 +1441,7 @@ impl<T> [T] {
     pub const unsafe fn as_chunks_unchecked_mut<const N: usize>(&mut self) -> &mut [[T; N]] {
         debug_assert_nounwind!(
             N != 0 && self.len() % N == 0,
-            "slice::as_chunks_unchecked requires `N != 0` and the slice to split exactly into `N`-element chunks",
+            "slice::as_chunks_unchecked requires `N != 0` and the slice to split exactly into `N`-element chunks"
         );
         // SAFETY: Caller must guarantee that `N` is nonzero and exactly divides the slice length
         let new_len = unsafe { exact_div(self.len(), N) };
@@ -1964,7 +1973,7 @@ impl<T> [T] {
 
         debug_assert_nounwind!(
             mid <= len,
-            "slice::split_at_unchecked requires the index to be within the slice",
+            "slice::split_at_unchecked requires the index to be within the slice"
         );
 
         // SAFETY: Caller has to check that `0 <= mid <= self.len()`
@@ -2014,7 +2023,7 @@ impl<T> [T] {
 
         debug_assert_nounwind!(
             mid <= len,
-            "slice::split_at_mut_unchecked requires the index to be within the slice",
+            "slice::split_at_mut_unchecked requires the index to be within the slice"
         );
 
         // SAFETY: Caller has to check that `0 <= mid <= self.len()`.

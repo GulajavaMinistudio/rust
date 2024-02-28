@@ -1969,7 +1969,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
 
             // Copy value as bytes
             ptr::copy_nonoverlapping(
-                &*src as *const T as *const u8,
+                core::ptr::addr_of!(*src) as *const u8,
                 ptr::addr_of_mut!((*ptr).value) as *mut u8,
                 value_size,
             );
@@ -2440,7 +2440,7 @@ impl<T: ?Sized + fmt::Debug, A: Allocator> fmt::Debug for Rc<T, A> {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized, A: Allocator> fmt::Pointer for Rc<T, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Pointer::fmt(&(&**self as *const T), f)
+        fmt::Pointer::fmt(&core::ptr::addr_of!(**self), f)
     }
 }
 
@@ -2804,7 +2804,9 @@ impl<T> Weak<T> {
     #[must_use]
     pub const fn new() -> Weak<T> {
         Weak {
-            ptr: unsafe { NonNull::new_unchecked(ptr::invalid_mut::<RcBox<T>>(usize::MAX)) },
+            ptr: unsafe {
+                NonNull::new_unchecked(ptr::without_provenance_mut::<RcBox<T>>(usize::MAX))
+            },
             alloc: Global,
         }
     }
@@ -2829,7 +2831,9 @@ impl<T, A: Allocator> Weak<T, A> {
     #[unstable(feature = "allocator_api", issue = "32838")]
     pub fn new_in(alloc: A) -> Weak<T, A> {
         Weak {
-            ptr: unsafe { NonNull::new_unchecked(ptr::invalid_mut::<RcBox<T>>(usize::MAX)) },
+            ptr: unsafe {
+                NonNull::new_unchecked(ptr::without_provenance_mut::<RcBox<T>>(usize::MAX))
+            },
             alloc,
         }
     }

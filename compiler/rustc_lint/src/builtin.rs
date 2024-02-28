@@ -393,6 +393,10 @@ impl EarlyLintPass for UnsafeCode {
                 }
             }
 
+            ast::ItemKind::GlobalAsm(..) => {
+                self.report_unsafe(cx, it.span, BuiltinUnsafe::GlobalAsm);
+            }
+
             _ => {}
         }
     }
@@ -1542,32 +1546,6 @@ impl<'tcx> LateLintPass<'tcx> for TypeAliasBounds {
     }
 }
 
-declare_lint_pass!(
-    /// Lint constants that are erroneous.
-    /// Without this lint, we might not get any diagnostic if the constant is
-    /// unused within this crate, even though downstream crates can't use it
-    /// without producing an error.
-    UnusedBrokenConst => []
-);
-
-impl<'tcx> LateLintPass<'tcx> for UnusedBrokenConst {
-    fn check_item(&mut self, cx: &LateContext<'_>, it: &hir::Item<'_>) {
-        match it.kind {
-            hir::ItemKind::Const(_, _, body_id) => {
-                let def_id = cx.tcx.hir().body_owner_def_id(body_id).to_def_id();
-                // trigger the query once for all constants since that will already report the errors
-                // FIXME(generic_const_items): Does this work properly with generic const items?
-                cx.tcx.ensure().const_eval_poly(def_id);
-            }
-            hir::ItemKind::Static(_, _, body_id) => {
-                let def_id = cx.tcx.hir().body_owner_def_id(body_id).to_def_id();
-                cx.tcx.ensure().eval_static_initializer(def_id);
-            }
-            _ => {}
-        }
-    }
-}
-
 declare_lint! {
     /// The `trivial_bounds` lint detects trait bounds that don't depend on
     /// any type parameters.
@@ -1847,7 +1825,7 @@ impl KeywordIdents {
             match tt {
                 // Only report non-raw idents.
                 TokenTree::Token(token, _) => {
-                    if let Some((ident, false)) = token.ident() {
+                    if let Some((ident, token::IdentIsRaw::No)) = token.ident() {
                         self.check_ident_token(cx, UnderMacro(true), ident);
                     }
                 }

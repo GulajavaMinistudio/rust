@@ -257,8 +257,7 @@ fn check_static_inhabited(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 fn check_opaque(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     let item = tcx.hir().expect_item(def_id);
     let hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) = item.kind else {
-        tcx.dcx().span_delayed_bug(item.span, "expected opaque item");
-        return;
+        tcx.dcx().span_bug(item.span, "expected opaque item");
     };
 
     // HACK(jynelson): trying to infer the type of `impl trait` breaks documenting
@@ -382,10 +381,10 @@ fn check_opaque_meets_bounds<'tcx>(
         Ok(()) => {}
         Err(ty_err) => {
             let ty_err = ty_err.to_string(tcx);
-            return Err(tcx.dcx().span_delayed_bug(
+            tcx.dcx().span_bug(
                 span,
                 format!("could not unify `{hidden_ty}` with revealed type:\n{ty_err}"),
-            ));
+            );
         }
     }
 
@@ -478,7 +477,7 @@ fn sanity_check_found_hidden_type<'tcx>(
     } else {
         let span = tcx.def_span(key.def_id);
         let other = ty::OpaqueHiddenType { ty: hidden_ty, span };
-        Err(ty.report_mismatch(&other, key.def_id, tcx).emit())
+        Err(ty.build_mismatch_error(&other, key.def_id, tcx)?.emit())
     }
 }
 
@@ -609,17 +608,6 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
                             item.span,
                             item.ident.name,
                             abi,
-                        );
-                    }
-                }
-
-                Abi::PlatformIntrinsic => {
-                    for item in items {
-                        intrinsic::check_platform_intrinsic_type(
-                            tcx,
-                            item.id.owner_id.def_id,
-                            item.span,
-                            item.ident.name,
                         );
                     }
                 }
@@ -1248,7 +1236,7 @@ fn check_enum(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 fn detect_discriminant_duplicate<'tcx>(tcx: TyCtxt<'tcx>, adt: ty::AdtDef<'tcx>) {
     // Helper closure to reduce duplicate code. This gets called everytime we detect a duplicate.
     // Here `idx` refers to the order of which the discriminant appears, and its index in `vs`
-    let report = |dis: Discr<'tcx>, idx, err: &mut Diagnostic| {
+    let report = |dis: Discr<'tcx>, idx, err: &mut DiagnosticBuilder<'_>| {
         let var = adt.variant(idx); // HIR for the duplicate discriminant
         let (span, display_discr) = match var.discr {
             ty::VariantDiscr::Explicit(discr_def_id) => {

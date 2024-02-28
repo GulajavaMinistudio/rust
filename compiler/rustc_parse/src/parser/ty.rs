@@ -1,4 +1,4 @@
-use super::{Parser, PathStyle, TokenType};
+use super::{Parser, PathStyle, TokenType, Trailing};
 
 use crate::errors::{
     self, DynAfterMut, ExpectedFnPathFoundFnKeyword, ExpectedMutOrConstInRawPointerType,
@@ -415,7 +415,7 @@ impl<'a> Parser<'a> {
             Ok(ty)
         })?;
 
-        if ts.len() == 1 && !trailing {
+        if ts.len() == 1 && matches!(trailing, Trailing::No) {
             let ty = ts.into_iter().next().unwrap().into_inner();
             let maybe_bounds = allow_plus == AllowPlus::Yes && self.token.is_like_plus();
             match ty.kind {
@@ -778,9 +778,10 @@ impl<'a> Parser<'a> {
             || self.check(&token::Not)
             || self.check(&token::Question)
             || self.check(&token::Tilde)
-            || self.check_keyword(kw::Const)
             || self.check_keyword(kw::For)
             || self.check(&token::OpenDelim(Delimiter::Parenthesis))
+            || self.check_keyword(kw::Const)
+            || self.check_keyword(kw::Async)
     }
 
     /// Parses a bound according to the grammar:
@@ -882,11 +883,13 @@ impl<'a> Parser<'a> {
             BoundConstness::Never
         };
 
-        let asyncness = if self.token.span.at_least_rust_2018() && self.eat_keyword(kw::Async) {
+        let asyncness = if self.token.uninterpolated_span().at_least_rust_2018()
+            && self.eat_keyword(kw::Async)
+        {
             self.sess.gated_spans.gate(sym::async_closure, self.prev_token.span);
             BoundAsyncness::Async(self.prev_token.span)
         } else if self.may_recover()
-            && self.token.span.is_rust_2015()
+            && self.token.uninterpolated_span().is_rust_2015()
             && self.is_kw_followed_by_ident(kw::Async)
         {
             self.bump(); // eat `async`

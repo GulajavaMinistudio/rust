@@ -18,8 +18,8 @@ use crate::require_c_abi_if_c_variadic;
 use rustc_ast::TraitObjectSyntax;
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_errors::{
-    codes::*, struct_span_code_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
-    FatalError, MultiSpan,
+    codes::*, struct_span_code_err, Applicability, DiagnosticBuilder, ErrorGuaranteed, FatalError,
+    MultiSpan,
 };
 use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Namespace, Res};
@@ -1237,8 +1237,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 // trait reference.
                 let Some(trait_ref) = tcx.impl_trait_ref(impl_def_id) else {
                     // A cycle error occurred, most likely.
-                    let guar = tcx.dcx().span_delayed_bug(span, "expected cycle error");
-                    return Err(guar);
+                    tcx.dcx().span_bug(span, "expected cycle error");
                 };
 
                 self.one_bound_for_assoc_item(
@@ -1724,7 +1723,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
     pub fn prohibit_generics<'a>(
         &self,
         segments: impl Iterator<Item = &'a hir::PathSegment<'a>> + Clone,
-        extend: impl Fn(&mut Diagnostic),
+        extend: impl Fn(&mut DiagnosticBuilder<'_>),
     ) -> bool {
         let args = segments.clone().flat_map(|segment| segment.args().args);
 
@@ -2678,9 +2677,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         //     for<'a> fn(&'a String) -> &'a str <-- 'a is ok
         let inputs = bare_fn_ty.inputs();
         let late_bound_in_args =
-            tcx.collect_constrained_late_bound_regions(&inputs.map_bound(|i| i.to_owned()));
+            tcx.collect_constrained_late_bound_regions(inputs.map_bound(|i| i.to_owned()));
         let output = bare_fn_ty.output();
-        let late_bound_in_ret = tcx.collect_referenced_late_bound_regions(&output);
+        let late_bound_in_ret = tcx.collect_referenced_late_bound_regions(output);
 
         self.validate_late_bound_regions(late_bound_in_args, late_bound_in_ret, |br_name| {
             struct_span_code_err!(

@@ -520,7 +520,7 @@ fn get_new_lifetime_name<'tcx>(
     generics: &hir::Generics<'tcx>,
 ) -> String {
     let existing_lifetimes = tcx
-        .collect_referenced_late_bound_regions(&poly_trait_ref)
+        .collect_referenced_late_bound_regions(poly_trait_ref)
         .into_iter()
         .filter_map(|lt| {
             if let ty::BoundRegionKind::BrNamed(_, name) = lt {
@@ -760,7 +760,7 @@ fn convert_enum_variant_types(tcx: TyCtxt<'_>, def_id: DefId) {
         let wrapped_discr = prev_discr.map_or(initial, |d| d.wrap_incr(tcx));
         prev_discr = Some(
             if let ty::VariantDiscr::Explicit(const_def_id) = variant.discr {
-                def.eval_explicit_discr(tcx, const_def_id)
+                def.eval_explicit_discr(tcx, const_def_id).ok()
             } else if let Some(discr) = repr_type.disr_incr(tcx, prev_discr) {
                 Some(discr)
             } else {
@@ -1025,9 +1025,17 @@ fn adt_def(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::AdtDef<'_> {
 
     let is_anonymous = item.ident.name == kw::Empty;
     let repr = if is_anonymous {
-        tcx.adt_def(tcx.local_parent(def_id)).repr()
+        let parent = tcx.local_parent(def_id);
+        if let Node::Item(item) = tcx.hir_node_by_def_id(parent)
+            && item.is_struct_or_union()
+        {
+            tcx.adt_def(parent).repr()
+        } else {
+            tcx.dcx().span_delayed_bug(item.span, "anonymous field inside non struct/union");
+            ty::ReprOptions::default()
+        }
     } else {
-        tcx.repr_options_of_def(def_id.to_def_id())
+        tcx.repr_options_of_def(def_id)
     };
     let (kind, variants) = match &item.kind {
         ItemKind::Enum(def, _) => {
@@ -1669,10 +1677,7 @@ fn compute_sig_of_foreign_fn_decl<'tcx>(
 
     // Feature gate SIMD types in FFI, since I am not sure that the
     // ABIs are handled at all correctly. -huonw
-    if abi != abi::Abi::RustIntrinsic
-        && abi != abi::Abi::PlatformIntrinsic
-        && !tcx.features().simd_ffi
-    {
+    if abi != abi::Abi::RustIntrinsic && !tcx.features().simd_ffi {
         let check = |ast_ty: &hir::Ty<'_>, ty: Ty<'_>| {
             if ty.is_simd() {
                 let snip = tcx

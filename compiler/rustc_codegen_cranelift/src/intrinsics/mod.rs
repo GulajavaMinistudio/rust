@@ -23,7 +23,7 @@ use rustc_middle::ty::layout::{HasParamEnv, ValidityRequirement};
 use rustc_middle::ty::print::{with_no_trimmed_paths, with_no_visible_paths};
 use rustc_middle::ty::GenericArgsRef;
 use rustc_span::source_map::Spanned;
-use rustc_span::symbol::{kw, sym, Symbol};
+use rustc_span::symbol::{sym, Symbol};
 
 pub(crate) use self::llvm::codegen_llvm_intrinsic_call;
 use crate::prelude::*;
@@ -1132,7 +1132,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
             ret.write_cvalue(fx, val);
         }
 
-        kw::Try => {
+        sym::catch_unwind => {
             intrinsic_args!(fx, args => (f, data, catch_fn); intrinsic);
             let f = f.load_scalar(fx);
             let data = data.load_scalar(fx);
@@ -1152,17 +1152,26 @@ fn codegen_regular_intrinsic_call<'tcx>(
             ret.write_cvalue(fx, ret_val);
         }
 
-        sym::fadd_fast | sym::fsub_fast | sym::fmul_fast | sym::fdiv_fast | sym::frem_fast => {
+        sym::fadd_fast
+        | sym::fsub_fast
+        | sym::fmul_fast
+        | sym::fdiv_fast
+        | sym::frem_fast
+        | sym::fadd_algebraic
+        | sym::fsub_algebraic
+        | sym::fmul_algebraic
+        | sym::fdiv_algebraic
+        | sym::frem_algebraic => {
             intrinsic_args!(fx, args => (x, y); intrinsic);
 
             let res = crate::num::codegen_float_binop(
                 fx,
                 match intrinsic {
-                    sym::fadd_fast => BinOp::Add,
-                    sym::fsub_fast => BinOp::Sub,
-                    sym::fmul_fast => BinOp::Mul,
-                    sym::fdiv_fast => BinOp::Div,
-                    sym::frem_fast => BinOp::Rem,
+                    sym::fadd_fast | sym::fadd_algebraic => BinOp::Add,
+                    sym::fsub_fast | sym::fsub_algebraic => BinOp::Sub,
+                    sym::fmul_fast | sym::fmul_algebraic => BinOp::Mul,
+                    sym::fdiv_fast | sym::fdiv_algebraic => BinOp::Div,
+                    sym::frem_fast | sym::frem_algebraic => BinOp::Rem,
                     _ => unreachable!(),
                 },
                 x,
