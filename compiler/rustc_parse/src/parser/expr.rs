@@ -26,7 +26,7 @@ use rustc_ast::{Arm, BlockCheckMode, Expr, ExprKind, Label, Movability, RangeLim
 use rustc_ast::{ClosureBinder, MetaItemLit, StmtKind};
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::stack::ensure_sufficient_stack;
-use rustc_errors::{AddToDiagnostic, Applicability, DiagnosticBuilder, PResult, StashKey};
+use rustc_errors::{AddToDiagnostic, Applicability, Diag, PResult, StashKey};
 use rustc_lexer::unescape::unescape_char;
 use rustc_macros::Subdiagnostic;
 use rustc_session::errors::{report_lit_error, ExprParenthesesNeeded};
@@ -866,7 +866,7 @@ impl<'a> Parser<'a> {
             );
             let mut err = self.dcx().struct_span_err(span, msg);
 
-            let suggest_parens = |err: &mut DiagnosticBuilder<'_>| {
+            let suggest_parens = |err: &mut Diag<'_>| {
                 let suggestions = vec![
                     (span.shrink_to_lo(), "(".to_string()),
                     (span.shrink_to_hi(), ")".to_string()),
@@ -1759,27 +1759,28 @@ impl<'a> Parser<'a> {
         &self,
         ident: Ident,
         mk_lit_char: impl FnOnce(Symbol, Span) -> L,
-        err: impl FnOnce(&Self) -> DiagnosticBuilder<'a>,
+        err: impl FnOnce(&Self) -> Diag<'a>,
     ) -> L {
         assert!(could_be_unclosed_char_literal(ident));
-        if let Some(diag) = self.dcx().steal_diagnostic(ident.span, StashKey::LifetimeIsChar) {
-            diag.with_span_suggestion_verbose(
-                ident.span.shrink_to_hi(),
-                "add `'` to close the char literal",
-                "'",
-                Applicability::MaybeIncorrect,
-            )
-            .emit();
-        } else {
-            err(self)
-                .with_span_suggestion_verbose(
+        self.dcx()
+            .try_steal_modify_and_emit_err(ident.span, StashKey::LifetimeIsChar, |err| {
+                err.span_suggestion_verbose(
                     ident.span.shrink_to_hi(),
                     "add `'` to close the char literal",
                     "'",
                     Applicability::MaybeIncorrect,
-                )
-                .emit();
-        }
+                );
+            })
+            .unwrap_or_else(|| {
+                err(self)
+                    .with_span_suggestion_verbose(
+                        ident.span.shrink_to_hi(),
+                        "add `'` to close the char literal",
+                        "'",
+                        Applicability::MaybeIncorrect,
+                    )
+                    .emit()
+            });
         let name = ident.without_first_quote().name;
         mk_lit_char(name, ident.span)
     }
@@ -3447,7 +3448,7 @@ impl<'a> Parser<'a> {
         let mut recovered_async = None;
         let in_if_guard = self.restrictions.contains(Restrictions::IN_IF_GUARD);
 
-        let async_block_err = |e: &mut DiagnosticBuilder<'_>, span: Span| {
+        let async_block_err = |e: &mut Diag<'_>, span: Span| {
             errors::AsyncBlockIn2015 { span }.add_to_diagnostic(e);
             errors::HelpUseLatestEdition::new().add_to_diagnostic(e);
         };

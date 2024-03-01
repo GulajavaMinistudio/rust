@@ -80,7 +80,7 @@ pub(crate) enum ProcMacroKind {
 }
 
 impl IntoDiagnosticArg for ProcMacroKind {
-    fn into_diagnostic_arg(self) -> rustc_errors::DiagnosticArgValue {
+    fn into_diagnostic_arg(self) -> rustc_errors::DiagArgValue {
         match self {
             ProcMacroKind::Attribute => "attribute proc macro",
             ProcMacroKind::Derive => "derive proc macro",
@@ -2520,14 +2520,6 @@ fn check_invalid_crate_level_attr(tcx: TyCtxt<'_>, attrs: &[Attribute]) {
         if attr.style == AttrStyle::Inner {
             for attr_to_check in ATTRS_TO_CHECK {
                 if attr.has_name(*attr_to_check) {
-                    if let AttrKind::Normal(ref p) = attr.kind
-                        && let Some(diag) = tcx.dcx().steal_diagnostic(
-                            p.item.path.span,
-                            StashKey::UndeterminedMacroResolution,
-                        )
-                    {
-                        diag.cancel();
-                    }
                     let item = tcx
                         .hir()
                         .items()
@@ -2537,7 +2529,7 @@ fn check_invalid_crate_level_attr(tcx: TyCtxt<'_>, attrs: &[Attribute]) {
                             span: item.ident.span,
                             kind: item.kind.descr(),
                         });
-                    tcx.dcx().emit_err(errors::InvalidAttrAtCrateLevel {
+                    let err = tcx.dcx().create_err(errors::InvalidAttrAtCrateLevel {
                         span: attr.span,
                         sugg_span: tcx
                             .sess
@@ -2553,6 +2545,16 @@ fn check_invalid_crate_level_attr(tcx: TyCtxt<'_>, attrs: &[Attribute]) {
                         name: *attr_to_check,
                         item,
                     });
+
+                    if let AttrKind::Normal(ref p) = attr.kind {
+                        tcx.dcx().try_steal_replace_and_emit_err(
+                            p.item.path.span,
+                            StashKey::UndeterminedMacroResolution,
+                            err,
+                        );
+                    } else {
+                        err.emit();
+                    }
                 }
             }
         }
