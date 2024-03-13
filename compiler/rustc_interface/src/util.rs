@@ -14,13 +14,14 @@ use rustc_session::{filesearch, output, Session};
 use rustc_span::edit_distance::find_best_match_for_name;
 use rustc_span::edition::Edition;
 use rustc_span::symbol::{sym, Symbol};
+use rustc_target::spec::Target;
 use session::EarlyDiagCtxt;
-use std::env;
 use std::env::consts::{DLL_PREFIX, DLL_SUFFIX};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::thread;
+use std::{env, iter};
 
 /// Function pointer type that constructs a new CodegenBackend.
 pub type MakeBackendFn = fn() -> Box<dyn CodegenBackend>;
@@ -101,10 +102,11 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce() -> R + Send, R: Send>(
     threads: usize,
     f: F,
 ) -> R {
-    use rustc_data_structures::{jobserver, sync::FromDyn};
+    use rustc_data_structures::{defer, jobserver, sync::FromDyn};
     use rustc_middle::ty::tls;
     use rustc_query_impl::QueryCtxt;
-    use rustc_query_system::query::{deadlock, QueryContext};
+    use rustc_query_system::query::{break_query_cycles, QueryContext};
+    use std::process;
 
     let registry = sync::Registry::new(std::num::NonZero::new(threads).unwrap());
 
@@ -128,7 +130,19 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce() -> R + Send, R: Send>(
             let query_map =
                 FromDyn::from(tls::with(|tcx| QueryCtxt::new(tcx).collect_active_jobs()));
             let registry = rayon_core::Registry::current();
-            thread::spawn(move || deadlock(query_map.into_inner(), &registry));
+            thread::Builder::new()
+                .name("rustc query cycle handler".to_string())
+                .spawn(move || {
+                    let on_panic = defer(|| {
+                        eprintln!("query cycle handler thread panicked, aborting process");
+                        // We need to abort here as we failed to resolve the deadlock,
+                        // otherwise the compiler could just hang,
+                        process::abort();
+                    });
+                    break_query_cycles(query_map.into_inner(), &registry);
+                    on_panic.disable();
+                })
+                .unwrap();
         });
     if let Some(size) = get_stack_size() {
         builder = builder.stack_size(size);
@@ -182,21 +196,25 @@ fn load_backend_from_dylib(early_dcx: &EarlyDiagCtxt, path: &Path) -> MakeBacken
 /// A name of `None` indicates that the default backend should be used.
 pub fn get_codegen_backend(
     early_dcx: &EarlyDiagCtxt,
-    maybe_sysroot: &Option<PathBuf>,
+    sysroot: &Path,
     backend_name: Option<&str>,
+    target: &Target,
 ) -> Box<dyn CodegenBackend> {
     static LOAD: OnceLock<unsafe fn() -> Box<dyn CodegenBackend>> = OnceLock::new();
 
     let load = LOAD.get_or_init(|| {
-        let default_codegen_backend = option_env!("CFG_DEFAULT_CODEGEN_BACKEND").unwrap_or("llvm");
+        let backend = backend_name
+            .or(target.default_codegen_backend.as_deref())
+            .or(option_env!("CFG_DEFAULT_CODEGEN_BACKEND"))
+            .unwrap_or("llvm");
 
-        match backend_name.unwrap_or(default_codegen_backend) {
+        match backend {
             filename if filename.contains('.') => {
                 load_backend_from_dylib(early_dcx, filename.as_ref())
             }
             #[cfg(feature = "llvm")]
             "llvm" => rustc_codegen_llvm::LlvmCodegenBackend::new,
-            backend_name => get_codegen_sysroot(early_dcx, maybe_sysroot, backend_name),
+            backend_name => get_codegen_sysroot(early_dcx, sysroot, backend_name),
         }
     });
 
@@ -231,7 +249,7 @@ fn get_rustc_path_inner(bin_path: &str) -> Option<PathBuf> {
 #[allow(rustc::untranslatable_diagnostic)] // FIXME: make this translatable
 fn get_codegen_sysroot(
     early_dcx: &EarlyDiagCtxt,
-    maybe_sysroot: &Option<PathBuf>,
+    sysroot: &Path,
     backend_name: &str,
 ) -> MakeBackendFn {
     // For now we only allow this function to be called once as it'll dlopen a
@@ -248,28 +266,28 @@ fn get_codegen_sysroot(
     let target = session::config::host_triple();
     let sysroot_candidates = sysroot_candidates();
 
-    let sysroot = maybe_sysroot
-        .iter()
-        .chain(sysroot_candidates.iter())
+    let sysroot = iter::once(sysroot)
+        .chain(sysroot_candidates.iter().map(<_>::as_ref))
         .map(|sysroot| {
             filesearch::make_target_lib_path(sysroot, target).with_file_name("codegen-backends")
         })
         .find(|f| {
             info!("codegen backend candidate: {}", f.display());
             f.exists()
-        });
-    let sysroot = sysroot.unwrap_or_else(|| {
-        let candidates = sysroot_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join("\n* ");
-        let err = format!(
-            "failed to find a `codegen-backends` folder \
+        })
+        .unwrap_or_else(|| {
+            let candidates = sysroot_candidates
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n* ");
+            let err = format!(
+                "failed to find a `codegen-backends` folder \
                            in the sysroot candidates:\n* {candidates}"
-        );
-        early_dcx.early_fatal(err);
-    });
+            );
+            early_dcx.early_fatal(err);
+        });
+
     info!("probing {} for a codegen backend", sysroot.display());
 
     let d = sysroot.read_dir().unwrap_or_else(|e| {

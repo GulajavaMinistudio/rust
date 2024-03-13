@@ -1132,9 +1132,15 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         &mut self,
         op: rustc_codegen_ssa::common::AtomicRmwBinOp,
         dst: &'ll Value,
-        src: &'ll Value,
+        mut src: &'ll Value,
         order: rustc_codegen_ssa::common::AtomicOrdering,
     ) -> &'ll Value {
+        // The only RMW operation that LLVM supports on pointers is compare-exchange.
+        if self.val_ty(src) == self.type_ptr()
+            && op != rustc_codegen_ssa::common::AtomicRmwBinOp::AtomicXchg
+        {
+            src = self.ptrtoint(src, self.type_isize());
+        }
         unsafe {
             llvm::LLVMBuildAtomicRMW(
                 self.llbuilder,
@@ -1536,6 +1542,58 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         unsafe {
             llvm::LLVMBuildLandingPad(self.llbuilder, ty, None, num_clauses as c_uint, UNNAMED)
         }
+    }
+
+    pub(crate) fn callbr(
+        &mut self,
+        llty: &'ll Type,
+        fn_attrs: Option<&CodegenFnAttrs>,
+        fn_abi: Option<&FnAbi<'tcx, Ty<'tcx>>>,
+        llfn: &'ll Value,
+        args: &[&'ll Value],
+        default_dest: &'ll BasicBlock,
+        indirect_dest: &[&'ll BasicBlock],
+        funclet: Option<&Funclet<'ll>>,
+    ) -> &'ll Value {
+        debug!("invoke {:?} with args ({:?})", llfn, args);
+
+        let args = self.check_call("callbr", llty, llfn, args);
+        let funclet_bundle = funclet.map(|funclet| funclet.bundle());
+        let funclet_bundle = funclet_bundle.as_ref().map(|b| &*b.raw);
+        let mut bundles: SmallVec<[_; 2]> = SmallVec::new();
+        if let Some(funclet_bundle) = funclet_bundle {
+            bundles.push(funclet_bundle);
+        }
+
+        // Emit CFI pointer type membership test
+        self.cfi_type_test(fn_attrs, fn_abi, llfn);
+
+        // Emit KCFI operand bundle
+        let kcfi_bundle = self.kcfi_operand_bundle(fn_attrs, fn_abi, llfn);
+        let kcfi_bundle = kcfi_bundle.as_ref().map(|b| &*b.raw);
+        if let Some(kcfi_bundle) = kcfi_bundle {
+            bundles.push(kcfi_bundle);
+        }
+
+        let callbr = unsafe {
+            llvm::LLVMRustBuildCallBr(
+                self.llbuilder,
+                llty,
+                llfn,
+                default_dest,
+                indirect_dest.as_ptr(),
+                indirect_dest.len() as c_uint,
+                args.as_ptr(),
+                args.len() as c_uint,
+                bundles.as_ptr(),
+                bundles.len() as c_uint,
+                UNNAMED,
+            )
+        };
+        if let Some(fn_abi) = fn_abi {
+            fn_abi.apply_attrs_callsite(self, callbr);
+        }
+        callbr
     }
 
     // Emits CFI pointer type membership tests.

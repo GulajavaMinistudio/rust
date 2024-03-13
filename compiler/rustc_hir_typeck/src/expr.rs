@@ -26,8 +26,8 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_data_structures::unord::UnordMap;
 use rustc_errors::{
-    codes::*, pluralize, struct_span_code_err, AddToDiagnostic, Applicability, Diag,
-    ErrorGuaranteed, StashKey,
+    codes::*, pluralize, struct_span_code_err, Applicability, Diag, ErrorGuaranteed, StashKey,
+    Subdiagnostic,
 };
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Res};
@@ -2600,7 +2600,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // We know by construction that `<expr>.await` is either on Rust 2015
             // or results in `ExprKind::Await`. Suggest switching the edition to 2018.
             err.note("to `.await` a `Future`, switch to Rust 2018 or later");
-            HelpUseLatestEdition::new().add_to_diagnostic(&mut err);
+            HelpUseLatestEdition::new().add_to_diag(&mut err);
         }
 
         err.emit()
@@ -3232,6 +3232,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn check_expr_asm(&self, asm: &'tcx hir::InlineAsm<'tcx>) -> Ty<'tcx> {
+        let mut diverge = asm.options.contains(ast::InlineAsmOptions::NORETURN);
+
         for (op, _op_sp) in asm.operands {
             match op {
                 hir::InlineAsmOperand::In { expr, .. } => {
@@ -3253,13 +3255,24 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // be well-formed.
                 hir::InlineAsmOperand::Const { .. } | hir::InlineAsmOperand::SymFn { .. } => {}
                 hir::InlineAsmOperand::SymStatic { .. } => {}
+                hir::InlineAsmOperand::Label { block } => {
+                    let previous_diverges = self.diverges.get();
+
+                    // The label blocks should have unit return value or diverge.
+                    let ty =
+                        self.check_block_with_expected(block, ExpectHasType(self.tcx.types.unit));
+                    if !ty.is_never() {
+                        self.demand_suptype(block.span, self.tcx.types.unit, ty);
+                        diverge = false;
+                    }
+
+                    // We need this to avoid false unreachable warning when a label diverges.
+                    self.diverges.set(previous_diverges);
+                }
             }
         }
-        if asm.options.contains(ast::InlineAsmOptions::NORETURN) {
-            self.tcx.types.never
-        } else {
-            Ty::new_unit(self.tcx)
-        }
+
+        if diverge { self.tcx.types.never } else { self.tcx.types.unit }
     }
 
     fn check_offset_of(

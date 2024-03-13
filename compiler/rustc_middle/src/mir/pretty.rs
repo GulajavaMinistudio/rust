@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::mir::interpret::ConstAllocation;
 
 use super::graphviz::write_mir_fn_graphviz;
-use rustc_ast::InlineAsmTemplatePiece;
+use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_middle::mir::interpret::{
     alloc_range, read_target_uint, AllocBytes, AllocId, Allocation, GlobalAlloc, Pointer,
     Provenance,
@@ -496,10 +496,14 @@ fn write_mir_sig(tcx: TyCtxt<'_>, body: &Body<'_>, w: &mut dyn io::Write) -> io:
         _ => tcx.is_closure_like(def_id),
     };
     match (kind, body.source.promoted) {
-        (_, Some(i)) => write!(w, "{i:?} in ")?,
+        (_, Some(_)) => write!(w, "const ")?, // promoteds are the closest to consts
         (DefKind::Const | DefKind::AssocConst, _) => write!(w, "const ")?,
-        (DefKind::Static(hir::Mutability::Not), _) => write!(w, "static ")?,
-        (DefKind::Static(hir::Mutability::Mut), _) => write!(w, "static mut ")?,
+        (DefKind::Static { mutability: hir::Mutability::Not, nested: false }, _) => {
+            write!(w, "static ")?
+        }
+        (DefKind::Static { mutability: hir::Mutability::Mut, nested: false }, _) => {
+            write!(w, "static mut ")?
+        }
         (_, _) if is_function => write!(w, "fn ")?,
         (DefKind::AnonConst | DefKind::InlineConst, _) => {} // things like anon const, not an item
         _ => bug!("Unexpected def kind {:?}", kind),
@@ -508,6 +512,9 @@ fn write_mir_sig(tcx: TyCtxt<'_>, body: &Body<'_>, w: &mut dyn io::Write) -> io:
     ty::print::with_forced_impl_filename_line! {
         // see notes on #41697 elsewhere
         write!(w, "{}", tcx.def_path_str(def_id))?
+    }
+    if let Some(p) = body.source.promoted {
+        write!(w, "::{p:?}")?;
     }
 
     if body.source.promoted.is_none() && is_function {
@@ -830,6 +837,9 @@ impl<'tcx> TerminatorKind<'tcx> {
                         InlineAsmOperand::SymStatic { def_id } => {
                             write!(fmt, "sym_static {def_id:?}")?;
                         }
+                        InlineAsmOperand::Label { target_index } => {
+                            write!(fmt, "label {target_index}")?;
+                        }
                     }
                 }
                 write!(fmt, ", options({options:?}))")
@@ -868,16 +878,19 @@ impl<'tcx> TerminatorKind<'tcx> {
                 vec!["real".into(), "unwind".into()]
             }
             FalseUnwind { unwind: _, .. } => vec!["real".into()],
-            InlineAsm { destination: Some(_), unwind: UnwindAction::Cleanup(_), .. } => {
-                vec!["return".into(), "unwind".into()]
+            InlineAsm { options, ref targets, unwind, .. } => {
+                let mut vec = Vec::with_capacity(targets.len() + 1);
+                if !options.contains(InlineAsmOptions::NORETURN) {
+                    vec.push("return".into());
+                }
+                vec.resize(targets.len(), "label".into());
+
+                if let UnwindAction::Cleanup(_) = unwind {
+                    vec.push("unwind".into());
+                }
+
+                vec
             }
-            InlineAsm { destination: Some(_), unwind: _, .. } => {
-                vec!["return".into()]
-            }
-            InlineAsm { destination: None, unwind: UnwindAction::Cleanup(_), .. } => {
-                vec!["unwind".into()]
-            }
-            InlineAsm { destination: None, unwind: _, .. } => vec![],
         }
     }
 }
@@ -909,7 +922,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     NullOp::SizeOf => write!(fmt, "SizeOf({t})"),
                     NullOp::AlignOf => write!(fmt, "AlignOf({t})"),
                     NullOp::OffsetOf(fields) => write!(fmt, "OffsetOf({t}, {fields:?})"),
-                    NullOp::DebugAssertions => write!(fmt, "cfg!(debug_assertions)"),
+                    NullOp::UbCheck(kind) => write!(fmt, "UbCheck({kind:?})"),
                 }
             }
             ThreadLocalRef(did) => ty::tls::with(|tcx| {

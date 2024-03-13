@@ -17,7 +17,7 @@ use rustc_ast::visit::{walk_list, AssocCtxt, BoundKind, FnCtxt, FnKind, Visitor}
 use rustc_ast::*;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_errors::{
-    codes::*, struct_span_code_err, Applicability, DiagArgValue, IntoDiagnosticArg, StashKey,
+    codes::*, struct_span_code_err, Applicability, DiagArgValue, IntoDiagArg, StashKey,
 };
 use rustc_hir::def::Namespace::{self, *};
 use rustc_hir::def::{self, CtorKind, DefKind, LifetimeRes, NonMacroAttrKind, PartialRes, PerNS};
@@ -89,8 +89,8 @@ impl PatternSource {
     }
 }
 
-impl IntoDiagnosticArg for PatternSource {
-    fn into_diagnostic_arg(self) -> DiagArgValue {
+impl IntoDiagArg for PatternSource {
+    fn into_diag_arg(self) -> DiagArgValue {
         DiagArgValue::Str(Cow::Borrowed(self.descr()))
     }
 }
@@ -500,7 +500,7 @@ impl<'a> PathSource<'a> {
                 Res::Def(
                     DefKind::Ctor(_, CtorKind::Const | CtorKind::Fn)
                         | DefKind::Const
-                        | DefKind::Static(_)
+                        | DefKind::Static { .. }
                         | DefKind::Fn
                         | DefKind::AssocFn
                         | DefKind::AssocConst
@@ -1242,6 +1242,7 @@ impl<'a: 'ast, 'ast, 'tcx> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast,
                     self.resolve_anon_const(anon_const, AnonConstKind::InlineConst);
                 }
                 InlineAsmOperand::Sym { sym } => self.visit_inline_asm_sym(sym),
+                InlineAsmOperand::Label { block } => self.visit_block(block),
             }
         }
     }
@@ -2593,10 +2594,19 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
                     let span = *entry.get();
                     let err = ResolutionError::NameAlreadyUsedInParameterList(ident.name, span);
                     self.report_error(param.ident.span, err);
-                    if let GenericParamKind::Lifetime = param.kind {
-                        // Record lifetime res, so lowering knows there is something fishy.
-                        self.record_lifetime_param(param.id, LifetimeRes::Error);
-                    }
+                    let rib = match param.kind {
+                        GenericParamKind::Lifetime => {
+                            // Record lifetime res, so lowering knows there is something fishy.
+                            self.record_lifetime_param(param.id, LifetimeRes::Error);
+                            continue;
+                        }
+                        GenericParamKind::Type { .. } => &mut function_type_rib,
+                        GenericParamKind::Const { .. } => &mut function_value_rib,
+                    };
+
+                    // Taint the resolution in case of errors to prevent follow up errors in typeck
+                    self.r.record_partial_res(param.id, PartialRes::new(Res::Err));
+                    rib.bindings.insert(ident, Res::Err);
                     continue;
                 }
                 Entry::Vacant(entry) => {
@@ -3112,7 +3122,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
                 );
                 rustc_middle::ty::Visibility::Public
             };
-            this.r.feed_visibility(this.r.local_def_id(id), vis);
+            this.r.feed_visibility(this.r.feed(id), vis);
         };
 
         let Some(binding) = binding else {
@@ -3635,7 +3645,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
                 }
                 Some(res)
             }
-            Res::Def(DefKind::Ctor(..) | DefKind::Const | DefKind::Static(_), _) => {
+            Res::Def(DefKind::Ctor(..) | DefKind::Const | DefKind::Static { .. }, _) => {
                 // This is unambiguously a fresh binding, either syntactically
                 // (e.g., `IDENT @ PAT` or `ref IDENT`) or because `IDENT` resolves
                 // to something unusable as a pattern (e.g., constructor function),

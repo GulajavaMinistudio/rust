@@ -5,6 +5,7 @@ use crate::errors::{
 };
 use crate::llvm;
 use libc::c_int;
+use rustc_codegen_ssa::base::wants_wasm_eh;
 use rustc_codegen_ssa::traits::PrintBackendInfo;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::small_c_str::SmallCStr;
@@ -96,6 +97,10 @@ unsafe fn configure_llvm(sess: &Session) {
             MergeFunctions::Aliases => {
                 add("-mergefunc-use-aliases", false);
             }
+        }
+
+        if wants_wasm_eh(sess) {
+            add("-wasm-enable-eh", false);
         }
 
         if sess.target.os == "emscripten" && sess.panic_strategy() == PanicStrategy::Unwind {
@@ -201,7 +206,13 @@ impl<'a> IntoIterator for LLVMFeature<'a> {
 // which might lead to failures if the oldest tested / supported LLVM version
 // doesn't yet support the relevant intrinsics
 pub fn to_llvm_features<'a>(sess: &Session, s: &'a str) -> LLVMFeature<'a> {
-    let arch = if sess.target.arch == "x86_64" { "x86" } else { &*sess.target.arch };
+    let arch = if sess.target.arch == "x86_64" {
+        "x86"
+    } else if sess.target.arch == "arm64ec" {
+        "aarch64"
+    } else {
+        &*sess.target.arch
+    };
     match (arch, s) {
         ("x86", "sse4.2") => {
             LLVMFeature::with_dependency("sse4.2", TargetFeatureFoldStrength::EnableOnly("crc32"))
@@ -516,6 +527,10 @@ pub(crate) fn global_llvm_features(sess: &Session, diagnostics: bool) -> Vec<Str
             .filter(|v| !v.is_empty() && backend_feature_name(sess, v).is_some())
             .map(String::from),
     );
+
+    if wants_wasm_eh(sess) && sess.panic_strategy() == PanicStrategy::Unwind {
+        features.push("+exception-handling".into());
+    }
 
     // -Ctarget-features
     let supported_features = sess.target.supported_target_features();

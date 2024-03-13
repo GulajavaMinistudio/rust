@@ -3,7 +3,7 @@
 //! Currently, this pass only propagates scalar values.
 
 use rustc_const_eval::interpret::{
-    ImmTy, Immediate, InterpCx, OpTy, PlaceTy, PointerArithmetic, Projectable,
+    HasStaticRootDefId, ImmTy, Immediate, InterpCx, OpTy, PlaceTy, PointerArithmetic, Projectable,
 };
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def::DefKind;
@@ -889,6 +889,12 @@ impl<'tcx> Visitor<'tcx> for OperandCollector<'tcx, '_, '_, '_> {
 
 pub(crate) struct DummyMachine;
 
+impl HasStaticRootDefId for DummyMachine {
+    fn static_def_id(&self) -> Option<rustc_hir::def_id::LocalDefId> {
+        None
+    }
+}
+
 impl<'mir, 'tcx: 'mir> rustc_const_eval::interpret::Machine<'mir, 'tcx> for DummyMachine {
     rustc_const_eval::interpret::compile_time_machine!(<'mir, 'tcx>);
     type MemoryKind = !;
@@ -929,7 +935,7 @@ impl<'mir, 'tcx: 'mir> rustc_const_eval::interpret::Machine<'mir, 'tcx> for Dumm
         _instance: ty::Instance<'tcx>,
         _abi: rustc_target::spec::abi::Abi,
         _args: &[rustc_const_eval::interpret::FnArg<'tcx, Self::Provenance>],
-        _destination: &rustc_const_eval::interpret::PlaceTy<'tcx, Self::Provenance>,
+        _destination: &rustc_const_eval::interpret::MPlaceTy<'tcx, Self::Provenance>,
         _target: Option<BasicBlock>,
         _unwind: UnwindAction,
     ) -> interpret::InterpResult<'tcx, Option<(&'mir Body<'tcx>, ty::Instance<'tcx>)>> {
@@ -947,7 +953,7 @@ impl<'mir, 'tcx: 'mir> rustc_const_eval::interpret::Machine<'mir, 'tcx> for Dumm
         _ecx: &mut InterpCx<'mir, 'tcx, Self>,
         _instance: ty::Instance<'tcx>,
         _args: &[rustc_const_eval::interpret::OpTy<'tcx, Self::Provenance>],
-        _destination: &rustc_const_eval::interpret::PlaceTy<'tcx, Self::Provenance>,
+        _destination: &rustc_const_eval::interpret::MPlaceTy<'tcx, Self::Provenance>,
         _target: Option<BasicBlock>,
         _unwind: UnwindAction,
     ) -> interpret::InterpResult<'tcx> {

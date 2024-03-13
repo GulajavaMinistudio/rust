@@ -6,6 +6,7 @@
 #![feature(assert_matches)]
 #![feature(associated_type_bounds)]
 #![feature(box_patterns)]
+#![feature(control_flow_enum)]
 #![feature(let_chains)]
 #![feature(min_specialization)]
 #![feature(never_type)]
@@ -125,10 +126,7 @@ fn mir_borrowck(tcx: TyCtxt<'_>, def: LocalDefId) -> &BorrowCheckResult<'_> {
         return tcx.arena.alloc(result);
     }
 
-    let hir_owner = tcx.local_def_id_to_hir_id(def).owner;
-
-    let infcx =
-        tcx.infer_ctxt().with_opaque_type_inference(DefiningAnchor::Bind(hir_owner.def_id)).build();
+    let infcx = tcx.infer_ctxt().with_opaque_type_inference(DefiningAnchor::bind(tcx, def)).build();
     let promoted: &IndexSlice<_, _> = &promoted.borrow();
     let opt_closure_req = do_mir_borrowck(&infcx, input_body, promoted, None).0;
     debug!("mir_borrowck done");
@@ -723,7 +721,7 @@ impl<'cx, 'tcx, R> rustc_mir_dataflow::ResultsVisitor<'cx, 'tcx, R> for MirBorro
                 operands,
                 options: _,
                 line_spans: _,
-                destination: _,
+                targets: _,
                 unwind: _,
             } => {
                 for op in operands {
@@ -749,7 +747,8 @@ impl<'cx, 'tcx, R> rustc_mir_dataflow::ResultsVisitor<'cx, 'tcx, R> for MirBorro
                         }
                         InlineAsmOperand::Const { value: _ }
                         | InlineAsmOperand::SymFn { value: _ }
-                        | InlineAsmOperand::SymStatic { def_id: _ } => {}
+                        | InlineAsmOperand::SymStatic { def_id: _ }
+                        | InlineAsmOperand::Label { target_index: _ } => {}
                     }
                 }
             }

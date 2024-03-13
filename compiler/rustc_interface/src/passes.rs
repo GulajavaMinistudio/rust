@@ -280,7 +280,7 @@ fn configure_and_expand(
 
 fn early_lint_checks(tcx: TyCtxt<'_>, (): ()) {
     let sess = tcx.sess;
-    let (resolver, krate) = &*tcx.resolver_for_lowering(()).borrow();
+    let (resolver, krate) = &*tcx.resolver_for_lowering().borrow();
     let mut lint_buffer = resolver.lint_buffer.steal();
 
     if sess.opts.unstable_opts.input_stats {
@@ -531,10 +531,10 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
     }
 }
 
-fn resolver_for_lowering<'tcx>(
+fn resolver_for_lowering_raw<'tcx>(
     tcx: TyCtxt<'tcx>,
     (): (),
-) -> &'tcx Steal<(ty::ResolverAstLowering, Lrc<ast::Crate>)> {
+) -> (&'tcx Steal<(ty::ResolverAstLowering, Lrc<ast::Crate>)>, &'tcx ty::ResolverGlobalCtxt) {
     let arenas = Resolver::arenas();
     let _ = tcx.registered_tools(()); // Uses `crate_for_resolver`.
     let (krate, pre_configured_attrs) = tcx.crate_for_resolver(()).steal();
@@ -549,16 +549,15 @@ fn resolver_for_lowering<'tcx>(
         ast_lowering: untracked_resolver_for_lowering,
     } = resolver.into_outputs();
 
-    let feed = tcx.feed_unit_query();
-    feed.resolutions(tcx.arena.alloc(untracked_resolutions));
-    tcx.arena.alloc(Steal::new((untracked_resolver_for_lowering, Lrc::new(krate))))
+    let resolutions = tcx.arena.alloc(untracked_resolutions);
+    (tcx.arena.alloc(Steal::new((untracked_resolver_for_lowering, Lrc::new(krate)))), resolutions)
 }
 
 pub(crate) fn write_dep_info(tcx: TyCtxt<'_>) {
     // Make sure name resolution and macro expansion is run for
     // the side-effect of providing a complete set of all
     // accessed files and env vars.
-    let _ = tcx.resolver_for_lowering(());
+    let _ = tcx.resolver_for_lowering();
 
     let sess = tcx.sess;
     let _timer = sess.timer("write_dep_info");
@@ -607,7 +606,10 @@ pub static DEFAULT_QUERY_PROVIDERS: LazyLock<Providers> = LazyLock::new(|| {
     let providers = &mut Providers::default();
     providers.analysis = analysis;
     providers.hir_crate = rustc_ast_lowering::lower_to_hir;
-    providers.resolver_for_lowering = resolver_for_lowering;
+    providers.resolver_for_lowering_raw = resolver_for_lowering_raw;
+    providers.stripped_cfg_items =
+        |tcx, _| tcx.arena.alloc_from_iter(tcx.resolutions(()).stripped_cfg_items.steal());
+    providers.resolutions = |tcx, ()| tcx.resolver_for_lowering_raw(()).1;
     providers.early_lint_checks = early_lint_checks;
     proc_macro_decls::provide(providers);
     rustc_const_eval::provide(providers);
@@ -686,6 +688,11 @@ pub fn create_global_ctxt<'tcx>(
 /// Runs the type-checking, region checking and other miscellaneous analysis
 /// passes on the crate.
 fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
+    if tcx.sess.opts.unstable_opts.hir_stats {
+        rustc_passes::hir_stats::print_hir_stats(tcx);
+    }
+
+    #[cfg(debug_assertions)]
     rustc_passes::hir_id_validator::check_crate(tcx);
 
     let sess = tcx.sess;
@@ -727,19 +734,22 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
     });
 
     // passes are timed inside typeck
-    rustc_hir_analysis::check_crate(tcx)?;
+    rustc_hir_analysis::check_crate(tcx);
 
-    sess.time("MIR_borrow_checking", || {
+    sess.time("typeck_and_mir_analyses", || {
         tcx.hir().par_body_owners(|def_id| {
+            let def_kind = tcx.def_kind(def_id);
+            // FIXME: Remove this when we implement creating `DefId`s
+            // for anon constants during their parents' typeck.
+            // Typeck all body owners in parallel will produce queries
+            // cycle errors because it may typeck on anon constants directly.
+            if !matches!(def_kind, rustc_hir::def::DefKind::AnonConst) {
+                tcx.ensure().typeck(def_id);
+            }
             // Run unsafety check because it's responsible for stealing and
             // deallocating THIR.
             tcx.ensure().check_unsafety(def_id);
-            tcx.ensure().mir_borrowck(def_id)
-        });
-    });
-
-    sess.time("MIR_effect_checking", || {
-        for def_id in tcx.hir().body_owners() {
+            tcx.ensure().mir_borrowck(def_id);
             if !tcx.sess.opts.unstable_opts.thir_unsafeck {
                 rustc_mir_transform::check_unsafety::check_unsafety(tcx, def_id);
             }
@@ -754,15 +764,15 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
                 tcx.ensure().mir_drops_elaborated_and_const_checked(def_id);
                 tcx.ensure().unused_generic_params(ty::InstanceDef::Item(def_id.to_def_id()));
             }
-        }
+
+            if tcx.is_coroutine(def_id.to_def_id()) {
+                tcx.ensure().mir_coroutine_witnesses(def_id);
+                tcx.ensure().check_coroutine_obligations(def_id);
+            }
+        })
     });
 
-    tcx.hir().par_body_owners(|def_id| {
-        if tcx.is_coroutine(def_id.to_def_id()) {
-            tcx.ensure().mir_coroutine_witnesses(def_id);
-            tcx.ensure().check_coroutine_obligations(def_id);
-        }
-    });
+    tcx.ensure().check_unused_traits(());
 
     sess.time("layout_testing", || layout_test::test_layout(tcx));
     sess.time("abi_testing", || abi_test::test_abi(tcx));

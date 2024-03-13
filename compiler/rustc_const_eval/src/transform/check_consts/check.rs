@@ -30,7 +30,7 @@ type QualifResults<'mir, 'tcx, Q> =
     rustc_mir_dataflow::ResultsCursor<'mir, 'tcx, FlowSensitiveAnalysis<'mir, 'mir, 'tcx, Q>>;
 
 #[derive(Default)]
-pub struct Qualifs<'mir, 'tcx> {
+pub(crate) struct Qualifs<'mir, 'tcx> {
     has_mut_interior: Option<QualifResults<'mir, 'tcx, HasMutInterior>>,
     needs_drop: Option<QualifResults<'mir, 'tcx, NeedsDrop>>,
     needs_non_const_drop: Option<QualifResults<'mir, 'tcx, NeedsNonConstDrop>>,
@@ -558,7 +558,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
             Rvalue::Cast(_, _, _) => {}
 
             Rvalue::NullaryOp(
-                NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(_) | NullOp::DebugAssertions,
+                NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(_) | NullOp::UbCheck(_),
                 _,
             ) => {}
             Rvalue::ShallowInitBox(_, _) => {}
@@ -581,7 +581,6 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                 if is_int_bool_or_char(lhs_ty) && is_int_bool_or_char(rhs_ty) {
                     // Int, bool, and char operations are fine.
                 } else if lhs_ty.is_fn_ptr() || lhs_ty.is_unsafe_ptr() {
-                    assert_eq!(lhs_ty, rhs_ty);
                     assert!(matches!(
                         op,
                         BinOp::Eq

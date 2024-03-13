@@ -84,7 +84,7 @@
 //!
 //! # Contributing changes to the documentation
 //!
-//! Check out the rust contribution guidelines [here](
+//! Check out the Rust contribution guidelines [here](
 //! https://rustc-dev-guide.rust-lang.org/contributing.html#writing-documentation).
 //! The source for this documentation can be found on
 //! [GitHub](https://github.com/rust-lang/rust).
@@ -314,6 +314,7 @@
 //
 // Library features (core):
 // tidy-alphabetical-start
+#![feature(c_str_module)]
 #![feature(char_internals)]
 #![feature(core_intrinsics)]
 #![feature(core_io_borrowed_buf)]

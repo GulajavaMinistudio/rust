@@ -1,9 +1,11 @@
 use crate::convert::{TryFrom, TryInto};
+#[cfg(debug_assertions)]
+use crate::intrinsics::assert_unsafe_precondition;
 use crate::num::NonZero;
 use crate::{cmp, fmt, hash, mem, num};
 
 /// A type storing a `usize` which is a power of two, and thus
-/// represents a possible alignment in the rust abstract machine.
+/// represents a possible alignment in the Rust abstract machine.
 ///
 /// Note that particularly large alignments, while representable in this type,
 /// are likely not to be supported by actual allocators and linkers.
@@ -77,9 +79,10 @@ impl Alignment {
     #[inline]
     pub const unsafe fn new_unchecked(align: usize) -> Self {
         #[cfg(debug_assertions)]
-        crate::panic::debug_assert_nounwind!(
-            align.is_power_of_two(),
-            "Alignment::new_unchecked requires a power of two"
+        assert_unsafe_precondition!(
+            check_language_ub,
+            "Alignment::new_unchecked requires a power of two",
+            (align: usize = align) => align.is_power_of_two()
         );
 
         // SAFETY: By precondition, this must be a power of two, and

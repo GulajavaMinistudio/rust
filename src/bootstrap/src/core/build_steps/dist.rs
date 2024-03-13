@@ -25,7 +25,6 @@ use crate::core::build_steps::llvm;
 use crate::core::build_steps::tool::{self, Tool};
 use crate::core::builder::{Builder, Kind, RunConfig, ShouldRun, Step};
 use crate::core::config::TargetSelection;
-use crate::utils::cache::{Interned, INTERNER};
 use crate::utils::channel;
 use crate::utils::helpers::{exe, is_dylib, output, t, target_supports_cranelift_backend, timeit};
 use crate::utils::tarball::{GeneratedTarball, OverlayKind, Tarball};
@@ -129,6 +128,7 @@ pub struct RustcDocs {
 impl Step for RustcDocs {
     type Output = Option<GeneratedTarball>;
     const DEFAULT: bool = true;
+    const ONLY_HOSTS: bool = true;
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
         let builder = run.builder;
@@ -488,8 +488,7 @@ impl Step for Rustc {
             }
 
             // Debugger scripts
-            builder
-                .ensure(DebuggerScripts { sysroot: INTERNER.intern_path(image.to_owned()), host });
+            builder.ensure(DebuggerScripts { sysroot: image.to_owned(), host });
 
             // Misc license info
             let cp = |file: &str| {
@@ -503,9 +502,9 @@ impl Step for Rustc {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DebuggerScripts {
-    pub sysroot: Interned<PathBuf>,
+    pub sysroot: PathBuf,
     pub host: TargetSelection,
 }
 
@@ -1263,10 +1262,10 @@ impl Step for Miri {
     }
 }
 
-#[derive(Debug, PartialOrd, Ord, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, PartialOrd, Ord, Clone, Hash, PartialEq, Eq)]
 pub struct CodegenBackend {
     pub compiler: Compiler,
-    pub backend: Interned<String>,
+    pub backend: String,
 }
 
 impl Step for CodegenBackend {
@@ -1279,14 +1278,14 @@ impl Step for CodegenBackend {
     }
 
     fn make_run(run: RunConfig<'_>) {
-        for &backend in run.builder.config.codegen_backends(run.target) {
+        for backend in run.builder.config.codegen_backends(run.target) {
             if backend == "llvm" {
                 continue; // Already built as part of rustc
             }
 
             run.builder.ensure(CodegenBackend {
                 compiler: run.builder.compiler(run.builder.top_stage, run.target),
-                backend,
+                backend: backend.clone(),
             });
         }
     }
@@ -1303,7 +1302,8 @@ impl Step for CodegenBackend {
             return None;
         }
 
-        if !builder.config.codegen_backends(self.compiler.host).contains(&self.backend) {
+        if !builder.config.codegen_backends(self.compiler.host).contains(&self.backend.to_string())
+        {
             return None;
         }
 
@@ -1528,7 +1528,7 @@ impl Step for Extended {
         add_component!("analysis" => Analysis { compiler, target });
         add_component!("rustc-codegen-cranelift" => CodegenBackend {
             compiler: builder.compiler(stage, target),
-            backend: INTERNER.intern_str("cranelift"),
+            backend: "cranelift".to_string(),
         });
 
         let etc = builder.src.join("src/etc/installer");
@@ -2046,7 +2046,15 @@ fn install_llvm_file(
             // projects like miri link against librustc_driver.so. We don't use a symlink, as
             // these are not allowed inside rustup components.
             let link = t!(fs::read_link(source));
-            t!(std::fs::write(full_dest, format!("INPUT({})\n", link.display())));
+            let mut linker_script = t!(fs::File::create(full_dest));
+            t!(write!(linker_script, "INPUT({})\n", link.display()));
+
+            // We also want the linker script to have the same mtime as the source, otherwise it
+            // can trigger rebuilds.
+            let meta = t!(fs::metadata(source));
+            if let Ok(mtime) = meta.modified() {
+                t!(linker_script.set_modified(mtime));
+            }
         }
     } else {
         builder.install(&source, destination, 0o644);
@@ -2099,7 +2107,7 @@ fn maybe_install_llvm(
     {
         let mut cmd = Command::new(llvm_config);
         cmd.arg("--libfiles");
-        builder.verbose(&format!("running {cmd:?}"));
+        builder.verbose(|| println!("running {cmd:?}"));
         let files = if builder.config.dry_run() { "".into() } else { output(&mut cmd) };
         let build_llvm_out = &builder.llvm_out(builder.config.build);
         let target_llvm_out = &builder.llvm_out(target);

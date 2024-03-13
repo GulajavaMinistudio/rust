@@ -125,12 +125,11 @@ rustc_queries! {
     }
 
     query resolutions(_: ()) -> &'tcx ty::ResolverGlobalCtxt {
-        feedable
         no_hash
         desc { "getting the resolver outputs" }
     }
 
-    query resolver_for_lowering(_: ()) -> &'tcx Steal<(ty::ResolverAstLowering, Lrc<ast::Crate>)> {
+    query resolver_for_lowering_raw(_: ()) -> (&'tcx Steal<(ty::ResolverAstLowering, Lrc<ast::Crate>)>, &'tcx ty::ResolverGlobalCtxt) {
         eval_always
         no_hash
         desc { "getting the resolver for lowering" }
@@ -763,6 +762,7 @@ rustc_queries! {
         desc { |tcx| "computing the variances of `{}`", tcx.def_path_str(def_id) }
         cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
+        cycle_delay_bug
     }
 
     /// Maps from thee `DefId` of a type to its (inferred) outlives.
@@ -840,7 +840,7 @@ rustc_queries! {
 
     /// Given an `impl_id`, return the trait it implements along with some header information.
     /// Return `None` if this is an inherent impl.
-    query impl_trait_header(impl_id: DefId) -> Option<ty::EarlyBinder<ty::ImplTraitHeader<'tcx>>> {
+    query impl_trait_header(impl_id: DefId) -> Option<ty::ImplTraitHeader<'tcx>> {
         desc { |tcx| "computing trait implemented by `{}`", tcx.def_path_str(impl_id) }
         cache_on_disk_if { impl_id.is_local() }
         separate_provide_extern
@@ -955,18 +955,9 @@ rustc_queries! {
         desc { |tcx| "checking deathness of variables in {}", describe_as_module(key, tcx) }
     }
 
-    query check_mod_impl_wf(key: LocalModDefId) -> Result<(), ErrorGuaranteed> {
-        desc { |tcx| "checking that impls are well-formed in {}", describe_as_module(key, tcx) }
-        ensure_forwards_result_if_red
-    }
-
     query check_mod_type_wf(key: LocalModDefId) -> Result<(), ErrorGuaranteed> {
         desc { |tcx| "checking that types are well-formed in {}", describe_as_module(key, tcx) }
         ensure_forwards_result_if_red
-    }
-
-    query collect_mod_item_types(key: LocalModDefId) {
-        desc { |tcx| "collecting item types in {}", describe_as_module(key, tcx) }
     }
 
     /// Caches `CoerceUnsized` kinds for impls on custom types.
@@ -1071,6 +1062,7 @@ rustc_queries! {
         }
         cache_on_disk_if { key.is_local() }
         separate_provide_extern
+        feedable
     }
 
     /// Evaluates const items or anonymous constants
@@ -1229,6 +1221,7 @@ rustc_queries! {
         arena_cache
         cache_on_disk_if { def_id.is_local() }
         separate_provide_extern
+        feedable
     }
 
     query asm_target_features(def_id: DefId) -> &'tcx FxIndexSet<Symbol> {
@@ -1751,7 +1744,7 @@ rustc_queries! {
         separate_provide_extern
     }
     /// Whether the function is an intrinsic
-    query intrinsic(def_id: DefId) -> Option<rustc_middle::ty::IntrinsicDef> {
+    query intrinsic_raw(def_id: DefId) -> Option<rustc_middle::ty::IntrinsicDef> {
         desc { |tcx| "fetch intrinsic name if `{}` is an intrinsic", tcx.def_path_str(def_id) }
         separate_provide_extern
     }
@@ -2221,7 +2214,6 @@ rustc_queries! {
     /// Should not be called for the local crate before the resolver outputs are created, as it
     /// is only fed there.
     query stripped_cfg_items(cnum: CrateNum) -> &'tcx [StrippedCfgItem] {
-        feedable
         desc { "getting cfg-ed out item names" }
         separate_provide_extern
     }

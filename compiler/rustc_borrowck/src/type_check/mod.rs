@@ -1770,8 +1770,8 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                 self.assert_iscleanup(body, block_data, real_target, is_cleanup);
                 self.assert_iscleanup_unwind(body, block_data, unwind, is_cleanup);
             }
-            TerminatorKind::InlineAsm { destination, unwind, .. } => {
-                if let Some(target) = destination {
+            TerminatorKind::InlineAsm { ref targets, unwind, .. } => {
+                for &target in targets {
                     self.assert_iscleanup(body, block_data, target, is_cleanup);
                 }
                 self.assert_iscleanup_unwind(body, block_data, unwind, is_cleanup);
@@ -2000,7 +2000,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     ConstraintCategory::SizedBound,
                 );
             }
-            &Rvalue::NullaryOp(NullOp::DebugAssertions, _) => {}
+            &Rvalue::NullaryOp(NullOp::UbCheck(_), _) => {}
 
             Rvalue::ShallowInitBox(operand, ty) => {
                 self.check_operand(operand, location);

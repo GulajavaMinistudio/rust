@@ -146,9 +146,6 @@ const_eval_intern_kind = {$kind ->
     *[other] {""}
 }
 
-const_eval_invalid_align =
-    align has to be a power of 2
-
 const_eval_invalid_align_details =
     invalid align passed to `{$name}`: {$align} is {$err_kind ->
         [not_power_of_two] not a power of 2
@@ -231,9 +228,6 @@ const_eval_non_const_fn_call =
 
 const_eval_non_const_impl =
     impl defined here, but it is not `const`
-
-const_eval_noreturn_asm_returned =
-    returned from noreturn inline assembly
 
 const_eval_not_enough_caller_args =
     calling a function with fewer arguments than it requires

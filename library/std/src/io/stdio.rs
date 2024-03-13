@@ -128,8 +128,8 @@ impl Write for StdoutRaw {
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        let total = bufs.iter().map(|b| b.len()).sum();
-        handle_ebadf(self.0.write_vectored(bufs), total)
+        let total = || bufs.iter().map(|b| b.len()).sum();
+        handle_ebadf_lazy(self.0.write_vectored(bufs), total)
     }
 
     #[inline]
@@ -160,8 +160,8 @@ impl Write for StderrRaw {
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        let total = bufs.iter().map(|b| b.len()).sum();
-        handle_ebadf(self.0.write_vectored(bufs), total)
+        let total = || bufs.iter().map(|b| b.len()).sum();
+        handle_ebadf_lazy(self.0.write_vectored(bufs), total)
     }
 
     #[inline]
@@ -189,6 +189,13 @@ impl Write for StderrRaw {
 fn handle_ebadf<T>(r: io::Result<T>, default: T) -> io::Result<T> {
     match r {
         Err(ref e) if stdio::is_ebadf(e) => Ok(default),
+        r => r,
+    }
+}
+
+fn handle_ebadf_lazy<T>(r: io::Result<T>, default: impl FnOnce() -> T) -> io::Result<T> {
+    match r {
+        Err(ref e) if stdio::is_ebadf(e) => Ok(default()),
         r => r,
     }
 }
@@ -422,6 +429,32 @@ impl fmt::Debug for Stdin {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Read for Stdin {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.lock().read(buf)
+    }
+    fn read_buf(&mut self, buf: BorrowedCursor<'_>) -> io::Result<()> {
+        self.lock().read_buf(buf)
+    }
+    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        self.lock().read_vectored(bufs)
+    }
+    #[inline]
+    fn is_read_vectored(&self) -> bool {
+        self.lock().is_read_vectored()
+    }
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
+        self.lock().read_to_end(buf)
+    }
+    fn read_to_string(&mut self, buf: &mut String) -> io::Result<usize> {
+        self.lock().read_to_string(buf)
+    }
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.lock().read_exact(buf)
+    }
+}
+
+#[stable(feature = "read_shared_stdin", since = "CURRENT_RUSTC_VERSION")]
+impl Read for &Stdin {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.lock().read(buf)
     }

@@ -311,13 +311,13 @@ fn check_opaque_type_well_formed<'tcx>(
         parent_def_id = tcx.local_parent(parent_def_id);
     }
 
-    // FIXME(-Znext-solver): We probably should use `DefiningAnchor::Error`
+    // FIXME(-Znext-solver): We probably should use `DefiningAnchor::Bind(&[])`
     // and prepopulate this `InferCtxt` with known opaque values, rather than
     // using the `Bind` anchor here. For now it's fine.
     let infcx = tcx
         .infer_ctxt()
         .with_next_trait_solver(next_trait_solver)
-        .with_opaque_type_inference(DefiningAnchor::Bind(parent_def_id))
+        .with_opaque_type_inference(DefiningAnchor::bind(tcx, parent_def_id))
         .build();
     let ocx = ObligationCtxt::new(&infcx);
     let identity_args = GenericArgs::identity_for_item(tcx, def_id);
@@ -367,14 +367,17 @@ fn check_opaque_type_parameter_valid(
     span: Span,
 ) -> Result<(), ErrorGuaranteed> {
     let opaque_ty_hir = tcx.hir().expect_item(opaque_type_key.def_id);
-    let is_ty_alias = match opaque_ty_hir.expect_opaque_ty().origin {
-        OpaqueTyOrigin::TyAlias { .. } => true,
-        OpaqueTyOrigin::AsyncFn(..) | OpaqueTyOrigin::FnReturn(..) => false,
+    let (parent, is_ty_alias) = match opaque_ty_hir.expect_opaque_ty().origin {
+        OpaqueTyOrigin::TyAlias { parent, .. } => (parent, true),
+        OpaqueTyOrigin::AsyncFn(parent) | OpaqueTyOrigin::FnReturn(parent) => (parent, false),
     };
 
-    let opaque_generics = tcx.generics_of(opaque_type_key.def_id);
+    let parent_generics = tcx.generics_of(parent);
     let mut seen_params: FxIndexMap<_, Vec<_>> = FxIndexMap::default();
-    for (i, arg) in opaque_type_key.args.iter().enumerate() {
+
+    // Only check the parent generics, which will ignore any of the
+    // duplicated lifetime args that come from reifying late-bounds.
+    for (i, arg) in opaque_type_key.args.iter().take(parent_generics.count()).enumerate() {
         if let Err(guar) = arg.error_reported() {
             return Err(guar);
         }
@@ -395,7 +398,7 @@ fn check_opaque_type_parameter_valid(
             seen_params.entry(arg).or_default().push(i);
         } else {
             // Prevent `fn foo() -> Foo<u32>` from being defining.
-            let opaque_param = opaque_generics.param_at(i, tcx);
+            let opaque_param = parent_generics.param_at(i, tcx);
             let kind = opaque_param.kind.descr();
 
             return Err(tcx.dcx().emit_err(NonGenericOpaqueTypeParam {
@@ -409,10 +412,10 @@ fn check_opaque_type_parameter_valid(
 
     for (_, indices) in seen_params {
         if indices.len() > 1 {
-            let descr = opaque_generics.param_at(indices[0], tcx).kind.descr();
+            let descr = parent_generics.param_at(indices[0], tcx).kind.descr();
             let spans: Vec<_> = indices
                 .into_iter()
-                .map(|i| tcx.def_span(opaque_generics.param_at(i, tcx).def_id))
+                .map(|i| tcx.def_span(parent_generics.param_at(i, tcx).def_id))
                 .collect();
             #[allow(rustc::diagnostic_outside_of_impl)]
             #[allow(rustc::untranslatable_diagnostic)]

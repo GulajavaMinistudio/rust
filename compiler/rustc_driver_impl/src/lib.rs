@@ -37,7 +37,7 @@ use rustc_session::config::{nightly_options, CG_OPTIONS, Z_OPTIONS};
 use rustc_session::config::{ErrorOutputType, Input, OutFileName, OutputType};
 use rustc_session::getopts::{self, Matches};
 use rustc_session::lint::{Lint, LintId};
-use rustc_session::{config, EarlyDiagCtxt, Session};
+use rustc_session::{config, filesearch, EarlyDiagCtxt, Session};
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::source_map::FileLoader;
 use rustc_span::symbol::sym;
@@ -292,7 +292,7 @@ fn run_compiler(
     // the compiler with @empty_file as argv[0] and no more arguments.
     let at_args = at_args.get(1..).unwrap_or_default();
 
-    let args = args::arg_expand_all(&default_early_dcx, at_args);
+    let args = args::arg_expand_all(&default_early_dcx, at_args)?;
 
     let Some(matches) = handle_options(&default_early_dcx, &args) else { return Ok(()) };
 
@@ -418,7 +418,7 @@ fn run_compiler(
             }
 
             // Make sure name resolution and macro expansion is run.
-            queries.global_ctxt()?.enter(|tcx| tcx.resolver_for_lowering(()));
+            queries.global_ctxt()?.enter(|tcx| tcx.resolver_for_lowering());
 
             if callbacks.after_expansion(compiler, queries) == Compilation::Stop {
                 return early_exit();
@@ -676,6 +676,7 @@ fn list_metadata(early_dcx: &EarlyDiagCtxt, sess: &Session, metadata_loader: &dy
                 metadata_loader,
                 &mut v,
                 &sess.opts.unstable_opts.ls,
+                sess.cfg_version,
             )
             .unwrap();
             safe_println!("{}", String::from_utf8(v).unwrap());
@@ -886,7 +887,11 @@ pub fn version_at_macro_invocation(
 
         let debug_flags = matches.opt_strs("Z");
         let backend_name = debug_flags.iter().find_map(|x| x.strip_prefix("codegen-backend="));
-        get_codegen_backend(early_dcx, &None, backend_name).print_version();
+        let opts = config::Options::default();
+        let sysroot = filesearch::materialize_sysroot(opts.maybe_sysroot.clone());
+        let target = config::build_target_config(early_dcx, &opts, None, &sysroot);
+
+        get_codegen_backend(early_dcx, &sysroot, backend_name, &target).print_version();
     }
 }
 
@@ -1091,7 +1096,12 @@ pub fn describe_flag_categories(early_dcx: &EarlyDiagCtxt, matches: &Matches) ->
 
     if cg_flags.iter().any(|x| *x == "passes=list") {
         let backend_name = debug_flags.iter().find_map(|x| x.strip_prefix("codegen-backend="));
-        get_codegen_backend(early_dcx, &None, backend_name).print_passes();
+
+        let opts = config::Options::default();
+        let sysroot = filesearch::materialize_sysroot(opts.maybe_sysroot.clone());
+        let target = config::build_target_config(early_dcx, &opts, None, &sysroot);
+
+        get_codegen_backend(early_dcx, &sysroot, backend_name, &target).print_passes();
         return true;
     }
 
@@ -1317,6 +1327,9 @@ pub fn install_ice_hook(
     panic::update_hook(Box::new(
         move |default_hook: &(dyn Fn(&PanicInfo<'_>) + Send + Sync + 'static),
               info: &PanicInfo<'_>| {
+            // Lock stderr to prevent interleaving of concurrent panics.
+            let _guard = io::stderr().lock();
+
             // If the error was caused by a broken pipe then this is not a bug.
             // Write the error and return immediately. See #98700.
             #[cfg(windows)]
@@ -1515,15 +1528,7 @@ pub fn main() -> ! {
     let mut callbacks = TimePassesCallbacks::default();
     let using_internal_features = install_ice_hook(DEFAULT_BUG_REPORT_URL, |_| ());
     let exit_code = catch_with_exit_code(|| {
-        let args = env::args_os()
-            .enumerate()
-            .map(|(i, arg)| {
-                arg.into_string().unwrap_or_else(|arg| {
-                    early_dcx.early_fatal(format!("argument {i} is not valid Unicode: {arg:?}"))
-                })
-            })
-            .collect::<Vec<_>>();
-        RunCompiler::new(&args, &mut callbacks)
+        RunCompiler::new(&args::raw_args(&early_dcx)?, &mut callbacks)
             .set_using_internal_features(using_internal_features)
             .run()
     });

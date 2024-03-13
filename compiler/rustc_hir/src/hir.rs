@@ -1510,7 +1510,7 @@ impl fmt::Display for ConstContext {
     }
 }
 
-// NOTE: `IntoDiagnosticArg` impl for `ConstContext` lives in `rustc_errors`
+// NOTE: `IntoDiagArg` impl for `ConstContext` lives in `rustc_errors`
 // due to a cyclical dependency between hir that crate.
 
 /// A literal.
@@ -1616,7 +1616,7 @@ impl Expr<'_> {
     pub fn is_place_expr(&self, mut allow_projections_from: impl FnMut(&Self) -> bool) -> bool {
         match self.kind {
             ExprKind::Path(QPath::Resolved(_, ref path)) => {
-                matches!(path.res, Res::Local(..) | Res::Def(DefKind::Static(_), _) | Res::Err)
+                matches!(path.res, Res::Local(..) | Res::Def(DefKind::Static { .. }, _) | Res::Err)
             }
 
             // Type ascription inherits its place expression kind from its
@@ -2562,6 +2562,8 @@ pub enum OpaqueTyOrigin {
     AsyncFn(LocalDefId),
     /// type aliases: `type Foo = impl Trait;`
     TyAlias {
+        /// The type alias or associated type parent of the TAIT/ATPIT
+        parent: LocalDefId,
         /// associated types in impl blocks for traits.
         in_assoc_ty: bool,
     },
@@ -2650,6 +2652,9 @@ pub enum InlineAsmOperand<'hir> {
         path: QPath<'hir>,
         def_id: DefId,
     },
+    Label {
+        block: &'hir Block<'hir>,
+    },
 }
 
 impl<'hir> InlineAsmOperand<'hir> {
@@ -2659,7 +2664,10 @@ impl<'hir> InlineAsmOperand<'hir> {
             | Self::Out { reg, .. }
             | Self::InOut { reg, .. }
             | Self::SplitInOut { reg, .. } => Some(reg),
-            Self::Const { .. } | Self::SymFn { .. } | Self::SymStatic { .. } => None,
+            Self::Const { .. }
+            | Self::SymFn { .. }
+            | Self::SymStatic { .. }
+            | Self::Label { .. } => None,
         }
     }
 
@@ -2678,6 +2686,12 @@ pub struct InlineAsm<'hir> {
     pub operands: &'hir [(InlineAsmOperand<'hir>, Span)],
     pub options: InlineAsmOptions,
     pub line_spans: &'hir [Span],
+}
+
+impl InlineAsm<'_> {
+    pub fn contains_label(&self) -> bool {
+        self.operands.iter().any(|x| matches!(x.0, InlineAsmOperand::Label { .. }))
+    }
 }
 
 /// Represents a parameter in a function header.

@@ -27,7 +27,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         link_name: Symbol,
         abi: Abi,
         args: &[OpTy<'tcx, Provenance>],
-        dest: &PlaceTy<'tcx, Provenance>,
+        dest: &MPlaceTy<'tcx, Provenance>,
     ) -> InterpResult<'tcx, EmulateForeignItemResult> {
         let this = self.eval_context_mut();
 
@@ -257,11 +257,11 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
             }
 
             // Time related shims
-            "GetSystemTimeAsFileTime" => {
+            "GetSystemTimeAsFileTime" | "GetSystemTimePreciseAsFileTime" => {
                 #[allow(non_snake_case)]
                 let [LPFILETIME] =
                     this.check_shim(abi, Abi::System { unwind: false }, link_name, args)?;
-                this.GetSystemTimeAsFileTime(LPFILETIME)?;
+                this.GetSystemTimeAsFileTime(link_name.as_str(), LPFILETIME)?;
             }
             "QueryPerformanceCounter" => {
                 #[allow(non_snake_case)]

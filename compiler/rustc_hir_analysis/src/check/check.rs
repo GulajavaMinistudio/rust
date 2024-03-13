@@ -226,7 +226,7 @@ fn check_static_inhabited(tcx: TyCtxt<'_>, def_id: LocalDefId) {
         Ok(l) => l,
         // Foreign statics that overflow their allowed size should emit an error
         Err(LayoutError::SizeOverflow(_))
-            if matches!(tcx.def_kind(def_id), DefKind::Static(_)
+            if matches!(tcx.def_kind(def_id), DefKind::Static{ .. }
                 if tcx.def_kind(tcx.local_parent(def_id)) == DefKind::ForeignMod) =>
         {
             tcx.dcx().emit_err(errors::TooLargeStatic { span });
@@ -339,26 +339,27 @@ fn check_opaque_meets_bounds<'tcx>(
     origin: &hir::OpaqueTyOrigin,
 ) -> Result<(), ErrorGuaranteed> {
     let defining_use_anchor = match *origin {
-        hir::OpaqueTyOrigin::FnReturn(did) | hir::OpaqueTyOrigin::AsyncFn(did) => did,
-        hir::OpaqueTyOrigin::TyAlias { .. } => tcx.impl_trait_parent(def_id),
+        hir::OpaqueTyOrigin::FnReturn(did)
+        | hir::OpaqueTyOrigin::AsyncFn(did)
+        | hir::OpaqueTyOrigin::TyAlias { parent: did, .. } => did,
     };
     let param_env = tcx.param_env(defining_use_anchor);
 
     let infcx = tcx
         .infer_ctxt()
-        .with_opaque_type_inference(DefiningAnchor::Bind(defining_use_anchor))
+        .with_opaque_type_inference(DefiningAnchor::bind(tcx, defining_use_anchor))
         .build();
     let ocx = ObligationCtxt::new(&infcx);
 
     let args = match *origin {
-        hir::OpaqueTyOrigin::FnReturn(parent) | hir::OpaqueTyOrigin::AsyncFn(parent) => {
-            GenericArgs::identity_for_item(tcx, parent).extend_to(
-                tcx,
-                def_id.to_def_id(),
-                |param, _| tcx.map_rpit_lifetime_to_fn_lifetime(param.def_id.expect_local()).into(),
-            )
-        }
-        hir::OpaqueTyOrigin::TyAlias { .. } => GenericArgs::identity_for_item(tcx, def_id),
+        hir::OpaqueTyOrigin::FnReturn(parent)
+        | hir::OpaqueTyOrigin::AsyncFn(parent)
+        | hir::OpaqueTyOrigin::TyAlias { parent, .. } => GenericArgs::identity_for_item(
+            tcx, parent,
+        )
+        .extend_to(tcx, def_id.to_def_id(), |param, _| {
+            tcx.map_opaque_lifetime_to_parent_lifetime(param.def_id.expect_local()).into()
+        }),
     };
 
     let opaque_ty = Ty::new_opaque(tcx, def_id.to_def_id(), args);
@@ -504,7 +505,7 @@ fn check_static_linkage(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     let _indenter = indenter();
     match tcx.def_kind(def_id) {
-        DefKind::Static(..) => {
+        DefKind::Static { .. } => {
             tcx.ensure().typeck(def_id);
             maybe_check_static_with_link_section(tcx, def_id);
             check_static_inhabited(tcx, def_id);
@@ -530,11 +531,7 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
         }
         DefKind::Impl { of_trait } => {
             if of_trait && let Some(impl_trait_header) = tcx.impl_trait_header(def_id) {
-                check_impl_items_against_trait(
-                    tcx,
-                    def_id,
-                    impl_trait_header.instantiate_identity(),
-                );
+                check_impl_items_against_trait(tcx, def_id, impl_trait_header);
                 check_on_unimplemented(tcx, def_id);
             }
         }
@@ -725,10 +722,11 @@ fn check_impl_items_against_trait<'tcx>(
     impl_id: LocalDefId,
     impl_trait_header: ty::ImplTraitHeader<'tcx>,
 ) {
+    let trait_ref = impl_trait_header.trait_ref.instantiate_identity();
     // If the trait reference itself is erroneous (so the compilation is going
     // to fail), skip checking the items here -- the `impl_item` table in `tcx`
     // isn't populated for such impls.
-    if impl_trait_header.references_error() {
+    if trait_ref.references_error() {
         return;
     }
 
@@ -752,7 +750,7 @@ fn check_impl_items_against_trait<'tcx>(
         }
     }
 
-    let trait_def = tcx.trait_def(impl_trait_header.trait_ref.def_id);
+    let trait_def = tcx.trait_def(trait_ref.def_id);
 
     for &impl_item in impl_item_refs {
         let ty_impl_item = tcx.associated_item(impl_item);
@@ -771,10 +769,10 @@ fn check_impl_items_against_trait<'tcx>(
                 ));
             }
             ty::AssocKind::Fn => {
-                compare_impl_method(tcx, ty_impl_item, ty_trait_item, impl_trait_header.trait_ref);
+                compare_impl_method(tcx, ty_impl_item, ty_trait_item, trait_ref);
             }
             ty::AssocKind::Type => {
-                compare_impl_ty(tcx, ty_impl_item, ty_trait_item, impl_trait_header.trait_ref);
+                compare_impl_ty(tcx, ty_impl_item, ty_trait_item, trait_ref);
             }
         }
 
@@ -794,7 +792,7 @@ fn check_impl_items_against_trait<'tcx>(
         let mut must_implement_one_of: Option<&[Ident]> =
             trait_def.must_implement_one_of.as_deref();
 
-        for &trait_item_id in tcx.associated_item_def_ids(impl_trait_header.trait_ref.def_id) {
+        for &trait_item_id in tcx.associated_item_def_ids(trait_ref.def_id) {
             let leaf_def = ancestors.leaf_def(tcx, trait_item_id);
 
             let is_implemented = leaf_def
@@ -872,7 +870,7 @@ fn check_impl_items_against_trait<'tcx>(
 
         if let Some(missing_items) = must_implement_one_of {
             let attr_span = tcx
-                .get_attr(impl_trait_header.trait_ref.def_id, sym::rustc_must_implement_one_of)
+                .get_attr(trait_ref.def_id, sym::rustc_must_implement_one_of)
                 .map(|attr| attr.span);
 
             missing_items_must_implement_one_of_err(
@@ -1560,7 +1558,7 @@ pub(super) fn check_coroutine_obligations(
         .ignoring_regions()
         // Bind opaque types to type checking root, as they should have been checked by borrowck,
         // but may show up in some cases, like when (root) obligations are stalled in the new solver.
-        .with_opaque_type_inference(DefiningAnchor::Bind(typeck.hir_owner.def_id))
+        .with_opaque_type_inference(DefiningAnchor::bind(tcx, typeck.hir_owner.def_id))
         .build();
 
     let mut fulfillment_cx = <dyn TraitEngine<'_>>::new(&infcx);
