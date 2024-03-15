@@ -3091,6 +3091,13 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     rustc_transmute::Reason::DstIsTooBig => {
                         format!("The size of `{src}` is smaller than the size of `{dst}`")
                     }
+                    rustc_transmute::Reason::DstRefIsTooBig { src, dst } => {
+                        let src_size = src.size;
+                        let dst_size = dst.size;
+                        format!(
+                            "The referent size of `{src}` ({src_size} bytes) is smaller than that of `{dst}` ({dst_size} bytes)"
+                        )
+                    }
                     rustc_transmute::Reason::SrcSizeOverflow => {
                         format!(
                             "values of the type `{src}` are too big for the current architecture"
@@ -3402,6 +3409,8 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         self.dcx().try_steal_replace_and_emit_err(self.tcx.def_span(def_id), StashKey::Cycle, err)
     }
 
+    // FIXME(@lcnr): This function could be changed to trait `TraitRef` directly
+    // instead of using a `Binder`.
     fn report_signature_mismatch_error(
         &self,
         obligation: &PredicateObligation<'tcx>,

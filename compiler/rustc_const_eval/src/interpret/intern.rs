@@ -21,6 +21,7 @@ use rustc_hir as hir;
 use rustc_middle::mir::interpret::{ConstAllocation, CtfeProvenance, InterpResult};
 use rustc_middle::query::TyCtxtAt;
 use rustc_middle::ty::layout::TyAndLayout;
+use rustc_session::lint;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::sym;
 
@@ -175,7 +176,7 @@ pub fn intern_const_alloc_recursive<
     // This gives us the initial set of nested allocations, which will then all be processed
     // recursively in the loop below.
     let mut todo: Vec<_> = if is_static {
-        // Do not steal the root allocation, we need it later for `take_static_root_alloc`
+        // Do not steal the root allocation, we need it later to create the return value of `eval_static_initializer`.
         // But still change its mutability to match the requested one.
         let alloc = ecx.memory.alloc_map.get_mut(&base_alloc_id).unwrap();
         alloc.1.mutability = base_mutability;
@@ -262,10 +263,13 @@ pub fn intern_const_alloc_recursive<
         })?);
     }
     if found_bad_mutable_pointer {
-        return Err(ecx
-            .tcx
-            .dcx()
-            .emit_err(MutablePtrInFinal { span: ecx.tcx.span, kind: intern_kind }));
+        let err_diag = MutablePtrInFinal { span: ecx.tcx.span, kind: intern_kind };
+        ecx.tcx.emit_node_span_lint(
+            lint::builtin::CONST_EVAL_MUTABLE_PTR_IN_FINAL_VALUE,
+            ecx.best_lint_scope(),
+            err_diag.span,
+            err_diag,
+        )
     }
 
     Ok(())

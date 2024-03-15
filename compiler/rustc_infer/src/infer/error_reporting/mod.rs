@@ -2139,7 +2139,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                         // the same span as the error and the type is specified.
                         if let hir::Stmt {
                             kind:
-                                hir::StmtKind::Local(hir::Local {
+                                hir::StmtKind::Let(hir::Local {
                                     init: Some(hir::Expr { span: init_span, .. }),
                                     ty: Some(array_ty),
                                     ..
@@ -2554,6 +2554,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             hir::OwnerNode::ImplItem(i) => visitor.visit_impl_item(i),
             hir::OwnerNode::TraitItem(i) => visitor.visit_trait_item(i),
             hir::OwnerNode::Crate(_) => bug!("OwnerNode::Crate doesn't not have generics"),
+            hir::OwnerNode::AssocOpaqueTy(..) => unreachable!(),
         }
 
         let ast_generics = self.tcx.hir().get_generics(lifetime_scope).unwrap();
