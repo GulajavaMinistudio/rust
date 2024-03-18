@@ -149,8 +149,7 @@ pub(crate) fn clean_doc_module<'tcx>(doc: &DocModule<'tcx>, cx: &mut DocContext<
 }
 
 fn is_glob_import(tcx: TyCtxt<'_>, import_id: LocalDefId) -> bool {
-    if let Some(node) = tcx.opt_hir_node_by_def_id(import_id)
-        && let hir::Node::Item(item) = node
+    if let hir::Node::Item(item) = tcx.hir_node_by_def_id(import_id)
         && let hir::ItemKind::Use(_, use_kind) = item.kind
     {
         use_kind == hir::UseKind::Glob
@@ -1573,7 +1572,7 @@ fn first_non_private<'tcx>(
     path: &hir::Path<'tcx>,
 ) -> Option<Path> {
     let target_def_id = path.res.opt_def_id()?;
-    let (parent_def_id, ident) = match &path.segments[..] {
+    let (parent_def_id, ident) = match &path.segments {
         [] => return None,
         // Relative paths are available in the same scope as the owner.
         [leaf] => (cx.tcx.local_parent(hir_id.owner.def_id), leaf.ident),
@@ -1612,8 +1611,7 @@ fn first_non_private<'tcx>(
             'reexps: for reexp in child.reexport_chain.iter() {
                 if let Some(use_def_id) = reexp.id()
                     && let Some(local_use_def_id) = use_def_id.as_local()
-                    && let Some(hir::Node::Item(item)) =
-                        cx.tcx.opt_hir_node_by_def_id(local_use_def_id)
+                    && let hir::Node::Item(item) = cx.tcx.hir_node_by_def_id(local_use_def_id)
                     && !item.ident.name.is_empty()
                     && let hir::ItemKind::Use(path, _) = item.kind
                 {
@@ -2796,7 +2794,8 @@ fn clean_maybe_renamed_item<'tcx>(
             ItemKind::Macro(ref macro_def, MacroKind::Bang) => {
                 let ty_vis = cx.tcx.visibility(def_id);
                 MacroItem(Macro {
-                    source: display_macro_source(cx, name, macro_def, def_id, ty_vis),
+                    // FIXME this shouldn't be false
+                    source: display_macro_source(cx, name, macro_def, def_id, ty_vis, false),
                 })
             }
             ItemKind::Macro(_, macro_kind) => clean_proc_macro(item, &mut name, macro_kind, cx),
