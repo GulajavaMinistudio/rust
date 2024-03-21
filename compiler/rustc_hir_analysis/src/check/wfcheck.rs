@@ -196,7 +196,7 @@ fn check_well_formed(tcx: TyCtxt<'_>, def_id: hir::OwnerId) -> Result<(), ErrorG
         hir::OwnerNode::TraitItem(item) => check_trait_item(tcx, item),
         hir::OwnerNode::ImplItem(item) => check_impl_item(tcx, item),
         hir::OwnerNode::ForeignItem(item) => check_foreign_item(tcx, item),
-        hir::OwnerNode::AssocOpaqueTy(..) => unreachable!(),
+        hir::OwnerNode::Synthetic => unreachable!(),
     };
 
     if let Some(generics) = node.generics() {
@@ -999,9 +999,14 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) -> Result<(), 
                     // Implments `ConstParamTy`, suggest adding the feature to enable.
                     Ok(..) => true,
                 };
-                if may_suggest_feature && tcx.sess.is_nightly_build() {
-                    diag.help(
-                        "add `#![feature(adt_const_params)]` to the crate attributes to enable more complex and user defined types",
+                if may_suggest_feature {
+                    tcx.disabled_nightly_features(
+                        &mut diag,
+                        Some(param.hir_id),
+                        [(
+                            " more complex and user defined types".to_string(),
+                            sym::adt_const_params,
+                        )],
                     );
                 }
 

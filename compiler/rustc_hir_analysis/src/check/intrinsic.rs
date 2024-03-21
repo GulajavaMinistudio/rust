@@ -441,7 +441,7 @@ pub fn check_intrinsic_type(
 
             sym::ptr_guaranteed_cmp => (
                 1,
-                0,
+                1,
                 vec![Ty::new_imm_ptr(tcx, param(0)), Ty::new_imm_ptr(tcx, param(0))],
                 tcx.types.u8,
             ),
@@ -579,7 +579,7 @@ pub fn check_intrinsic_type(
 
             sym::is_val_statically_known => (1, 1, vec![param(0)], tcx.types.bool),
 
-            sym::const_eval_select => (4, 0, vec![param(0), param(1), param(2)], param(3)),
+            sym::const_eval_select => (4, 1, vec![param(0), param(1), param(2)], param(3)),
 
             sym::vtable_size | sym::vtable_align => {
                 (0, 0, vec![Ty::new_imm_ptr(tcx, Ty::new_unit(tcx))], tcx.types.usize)
@@ -657,10 +657,6 @@ pub fn check_intrinsic_type(
             | sym::simd_reduce_max => (2, 0, vec![param(0)], param(1)),
             sym::simd_shuffle => (3, 0, vec![param(0), param(0), param(1)], param(2)),
             sym::simd_shuffle_generic => (2, 1, vec![param(0), param(0)], param(1)),
-
-            sym::retag_box_to_raw => {
-                (2, 0, vec![Ty::new_mut_ptr(tcx, param(0))], Ty::new_mut_ptr(tcx, param(0)))
-            }
 
             other => {
                 tcx.dcx().emit_err(UnrecognizedIntrinsicFunction { span, name: other });

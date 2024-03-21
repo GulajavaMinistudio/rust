@@ -43,7 +43,9 @@ use rustc_data_structures::sync::{self, FreezeReadGuard, Lock, Lrc, WorkerLocal}
 #[cfg(parallel_compiler)]
 use rustc_data_structures::sync::{DynSend, DynSync};
 use rustc_data_structures::unord::UnordSet;
-use rustc_errors::{Diag, DiagCtxt, DiagMessage, ErrorGuaranteed, LintDiagnostic, MultiSpan};
+use rustc_errors::{
+    Applicability, Diag, DiagCtxt, DiagMessage, ErrorGuaranteed, LintDiagnostic, MultiSpan,
+};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId, LOCAL_CRATE};
@@ -593,6 +595,27 @@ impl<'tcx> TyCtxtFeed<'tcx, LocalDefId> {
     // Caller must ensure that `self.key` ID is indeed an owner.
     pub fn feed_owner_id(&self) -> TyCtxtFeed<'tcx, hir::OwnerId> {
         TyCtxtFeed { tcx: self.tcx, key: hir::OwnerId { def_id: self.key } }
+    }
+
+    // Fills in all the important parts needed by HIR queries
+    pub fn feed_hir(&self) {
+        self.local_def_id_to_hir_id(HirId::make_owner(self.def_id()));
+
+        let node = hir::OwnerNode::Synthetic;
+        let bodies = Default::default();
+        let attrs = hir::AttributeMap::EMPTY;
+
+        let (opt_hash_including_bodies, _) = self.tcx.hash_owner_nodes(node, &bodies, &attrs.map);
+        let node = node.into();
+        self.opt_hir_owner_nodes(Some(self.tcx.arena.alloc(hir::OwnerNodes {
+            opt_hash_including_bodies,
+            nodes: IndexVec::from_elem_n(
+                hir::ParentedNode { parent: hir::ItemLocalId::INVALID, node },
+                1,
+            ),
+            bodies,
+        })));
+        self.feed_owner_id().hir_attrs(attrs);
     }
 }
 
@@ -2172,6 +2195,45 @@ impl<'tcx> TyCtxt<'tcx> {
     ) {
         let (level, src) = self.lint_level_at_node(lint, hir_id);
         lint_level(self.sess, lint, level, src, Some(span.into()), msg, decorate);
+    }
+
+    /// Find the crate root and the appropriate span where `use` and outer attributes can be
+    /// inserted at.
+    pub fn crate_level_attribute_injection_span(self, hir_id: HirId) -> Option<Span> {
+        for (_hir_id, node) in self.hir().parent_iter(hir_id) {
+            if let hir::Node::Crate(m) = node {
+                return Some(m.spans.inject_use_span.shrink_to_lo());
+            }
+        }
+        None
+    }
+
+    pub fn disabled_nightly_features<E: rustc_errors::EmissionGuarantee>(
+        self,
+        diag: &mut Diag<'_, E>,
+        hir_id: Option<HirId>,
+        features: impl IntoIterator<Item = (String, Symbol)>,
+    ) {
+        if !self.sess.is_nightly_build() {
+            return;
+        }
+
+        let span = hir_id.and_then(|id| self.crate_level_attribute_injection_span(id));
+        for (desc, feature) in features {
+            // FIXME: make this string translatable
+            let msg =
+                format!("add `#![feature({feature})]` to the crate attributes to enable{desc}");
+            if let Some(span) = span {
+                diag.span_suggestion_verbose(
+                    span,
+                    msg,
+                    format!("#![feature({feature})]\n"),
+                    Applicability::MachineApplicable,
+                );
+            } else {
+                diag.help(msg);
+            }
+        }
     }
 
     /// Emit a lint from a lint struct (some type that implements `LintDiagnostic`, typically

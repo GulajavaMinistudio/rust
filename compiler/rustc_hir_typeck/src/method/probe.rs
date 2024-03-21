@@ -386,10 +386,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
                 let infcx = &self.infcx;
                 let (ParamEnvAnd { param_env: _, value: self_ty }, canonical_inference_vars) =
-                    infcx.instantiate_canonical_with_fresh_inference_vars(
-                        span,
-                        &param_env_and_self_ty,
-                    );
+                    infcx.instantiate_canonical(span, &param_env_and_self_ty);
                 debug!(
                     "probe_op: Mode::Path, param_env_and_self_ty={:?} self_ty={:?}",
                     param_env_and_self_ty, self_ty
@@ -661,13 +658,13 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 // of the iterations in the autoderef loop, so there is no problem with it
                 // being discoverable in another one of these iterations.
                 //
-                // Using `instantiate_canonical_with_fresh_inference_vars` on our
+                // Using `instantiate_canonical` on our
                 // `Canonical<QueryResponse<Ty<'tcx>>>` and then *throwing away* the
                 // `CanonicalVarValues` will exactly give us such a generalization - it
                 // will still match the original object type, but it won't pollute our
                 // type variables in any form, so just do that!
                 let (QueryResponse { value: generalized_self_ty, .. }, _ignored_var_values) =
-                    self.fcx.instantiate_canonical_with_fresh_inference_vars(self.span, self_ty);
+                    self.fcx.instantiate_canonical(self.span, self_ty);
 
                 self.assemble_inherent_candidates_from_object(generalized_self_ty);
                 self.assemble_inherent_impl_candidates_for_type(p.def_id());
@@ -1420,15 +1417,13 @@ impl<'tcx> Pick<'tcx> {
                     }
                     _ => {}
                 }
-                if tcx.sess.is_nightly_build() {
-                    for (candidate, feature) in &self.unstable_candidates {
-                        lint.help(format!(
-                            "add `#![feature({})]` to the crate attributes to enable `{}`",
-                            feature,
-                            tcx.def_path_str(candidate.item.def_id),
-                        ));
-                    }
-                }
+                tcx.disabled_nightly_features(
+                    lint,
+                    Some(scope_expr_id),
+                    self.unstable_candidates.iter().map(|(candidate, feature)| {
+                        (format!(" `{}`", tcx.def_path_str(candidate.item.def_id)), *feature)
+                    }),
+                );
             },
         );
     }
@@ -1935,7 +1930,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
         }
     }
 
-    /// Determine if the associated item withe the given DefId matches
+    /// Determine if the associated item with the given DefId matches
     /// the desired name via a doc alias.
     fn matches_by_doc_alias(&self, def_id: DefId) -> bool {
         let Some(name) = self.method_name else {

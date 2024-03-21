@@ -828,7 +828,7 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirUsedCollector<'a, 'tcx> {
         // a codegen-time error). rustc stops after collection if there was an error, so this
         // ensures codegen never has to worry about failing consts.
         // (codegen relies on this and ICEs will happen if this is violated.)
-        let val = match const_.eval(self.tcx, param_env, Some(constant.span)) {
+        let val = match const_.eval(self.tcx, param_env, constant.span) {
             Ok(v) => v,
             Err(ErrorHandled::TooGeneric(..)) => span_bug!(
                 self.body.source_info(location).span,
@@ -1027,11 +1027,6 @@ fn should_codegen_locally<'tcx>(tcx: TyCtxt<'tcx>, instance: &Instance<'tcx>) ->
 
     if tcx.is_foreign_item(def_id) {
         // Foreign items are always linked against, there's no way of instantiating them.
-        return false;
-    }
-
-    if tcx.intrinsic(def_id).is_some_and(|i| i.must_be_overridden) {
-        // These are implemented by backends directly and have no meaningful body.
         return false;
     }
 
