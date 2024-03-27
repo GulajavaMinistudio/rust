@@ -30,8 +30,8 @@ several major phases:
 The type checker is defined into various submodules which are documented
 independently:
 
-- astconv: converts the AST representation of types
-  into the `ty` representation.
+- hir_ty_lowering: lowers type-system entities from the [HIR][hir] to the
+  [`rustc_middle::ty`] representation.
 
 - collect: computes the types of each top-level item and enters them into
   the `tcx.types` table for later use.
@@ -82,11 +82,11 @@ extern crate rustc_middle;
 // These are used by Clippy.
 pub mod check;
 
-pub mod astconv;
 pub mod autoderef;
 mod bounds;
 mod check_unused;
 mod coherence;
+pub mod hir_ty_lowering;
 // FIXME: This module shouldn't be public.
 pub mod collect;
 mod constrained_generic_params;
@@ -101,8 +101,9 @@ use rustc_errors::ErrorGuaranteed;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_middle::middle;
+use rustc_middle::mir::interpret::GlobalId;
 use rustc_middle::query::Providers;
-use rustc_middle::ty::{Ty, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::util;
 use rustc_session::parse::feature_err;
 use rustc_span::{symbol::sym, Span};
@@ -186,7 +187,12 @@ pub fn check_crate(tcx: TyCtxt<'_>) -> Result<(), ErrorGuaranteed> {
         let def_kind = tcx.def_kind(item_def_id);
         match def_kind {
             DefKind::Static { .. } => tcx.ensure().eval_static_initializer(item_def_id),
-            DefKind::Const => tcx.ensure().const_eval_poly(item_def_id.into()),
+            DefKind::Const if tcx.generics_of(item_def_id).params.is_empty() => {
+                let instance = ty::Instance::new(item_def_id.into(), ty::GenericArgs::empty());
+                let cid = GlobalId { instance, promoted: None };
+                let param_env = ty::ParamEnv::reveal_all();
+                tcx.ensure().eval_to_const_value_raw(param_env.and(cid));
+            }
             _ => (),
         }
     });
@@ -211,12 +217,20 @@ pub fn check_crate(tcx: TyCtxt<'_>) -> Result<(), ErrorGuaranteed> {
     Ok(())
 }
 
-/// A quasi-deprecated helper used in rustdoc and clippy to get
-/// the type from a HIR node.
-pub fn hir_ty_to_ty<'tcx>(tcx: TyCtxt<'tcx>, hir_ty: &hir::Ty<'tcx>) -> Ty<'tcx> {
+/// Lower a [`hir::Ty`] to a [`Ty`].
+///
+/// <div class="warning">
+///
+/// This function is **quasi-deprecated**. It can cause ICEs if called inside of a body
+/// (of a function or constant) and especially if it contains inferred types (`_`).
+///
+/// It's used in rustdoc and Clippy.
+///
+/// </div>
+pub fn lower_ty<'tcx>(tcx: TyCtxt<'tcx>, hir_ty: &hir::Ty<'tcx>) -> Ty<'tcx> {
     // In case there are any projections, etc., find the "environment"
     // def-ID that will be used to determine the traits/predicates in
     // scope. This is derived from the enclosing item-like thing.
     let env_def_id = tcx.hir().get_parent_item(hir_ty.hir_id);
-    collect::ItemCtxt::new(tcx, env_def_id.def_id).to_ty(hir_ty)
+    collect::ItemCtxt::new(tcx, env_def_id.def_id).lower_ty(hir_ty)
 }

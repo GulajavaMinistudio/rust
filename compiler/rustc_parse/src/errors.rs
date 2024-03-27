@@ -1987,6 +1987,17 @@ pub enum UnknownPrefixSugg {
         style = "verbose"
     )]
     Whitespace(#[primary_span] Span),
+    #[multipart_suggestion(
+        parse_suggestion_str,
+        applicability = "maybe-incorrect",
+        style = "verbose"
+    )]
+    MeantStr {
+        #[suggestion_part(code = "\"")]
+        start: Span,
+        #[suggestion_part(code = "\"")]
+        end: Span,
+    },
 }
 
 #[derive(Diagnostic)]
@@ -2198,11 +2209,20 @@ pub enum MoreThanOneCharSugg {
         ch: String,
     },
     #[suggestion(parse_use_double_quotes, code = "{sugg}", applicability = "machine-applicable")]
-    Quotes {
+    QuotesFull {
         #[primary_span]
         span: Span,
         is_byte: bool,
         sugg: String,
+    },
+    #[multipart_suggestion(parse_use_double_quotes, applicability = "machine-applicable")]
+    Quotes {
+        #[suggestion_part(code = "{prefix}\"")]
+        start: Span,
+        #[suggestion_part(code = "\"")]
+        end: Span,
+        is_byte: bool,
+        prefix: &'static str,
     },
 }
 
@@ -2611,13 +2631,22 @@ pub(crate) struct GenericsInPath {
 }
 
 #[derive(Diagnostic)]
-#[diag(parse_assoc_lifetime)]
+#[diag(parse_lifetime_in_eq_constraint)]
 #[help]
-pub(crate) struct AssocLifetime {
+pub(crate) struct LifetimeInEqConstraint {
     #[primary_span]
-    pub span: Span,
     #[label]
-    pub lifetime: Span,
+    pub span: Span,
+    pub lifetime: Ident,
+    #[label(parse_context_label)]
+    pub binding_label: Span,
+    #[suggestion(
+        parse_colon_sugg,
+        style = "verbose",
+        applicability = "maybe-incorrect",
+        code = ": "
+    )]
+    pub colon_sugg: Span,
 }
 
 #[derive(Diagnostic)]

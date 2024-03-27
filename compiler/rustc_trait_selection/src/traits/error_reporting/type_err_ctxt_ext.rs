@@ -1272,7 +1272,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             {
                 let parent = self.tcx.parent_hir_node(binding.hir_id);
                 // We've reached the root of the method call chain...
-                if let hir::Node::Local(local) = parent
+                if let hir::Node::LetStmt(local) = parent
                     && let Some(binding_expr) = local.init
                 {
                     // ...and it is a binding. Get the binding creation and continue the chain.
@@ -1357,7 +1357,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     "using function pointers as const generic parameters is forbidden",
                 )
             }
-            ty::RawPtr(_) => {
+            ty::RawPtr(_, _) => {
                 struct_span_code_err!(
                     self.dcx(),
                     span,
@@ -1809,9 +1809,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         let strip_references = |mut t: Ty<'tcx>| -> Ty<'tcx> {
             loop {
                 match t.kind() {
-                    ty::Ref(_, inner, _) | ty::RawPtr(ty::TypeAndMut { ty: inner, .. }) => {
-                        t = *inner
-                    }
+                    ty::Ref(_, inner, _) | ty::RawPtr(inner, _) => t = *inner,
                     _ => break t,
                 }
             }
@@ -1907,7 +1905,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             .all_impls(trait_pred.def_id())
             .filter_map(|def_id| {
                 let imp = self.tcx.impl_trait_header(def_id).unwrap();
-                if imp.polarity == ty::ImplPolarity::Negative
+                if imp.polarity != ty::ImplPolarity::Positive
                     || !self.tcx.is_user_visible_dep(def_id.krate)
                 {
                     return None;
@@ -3538,12 +3536,39 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     let mut err =
                         self.dcx().struct_span_err(span, "unconstrained generic constant");
                     let const_span = self.tcx.def_span(uv.def);
+
+                    let const_ty = self.tcx.type_of(uv.def).instantiate(self.tcx, uv.args);
+                    let cast = if const_ty != self.tcx.types.usize { " as usize" } else { "" };
+                    let msg = "try adding a `where` bound";
                     match self.tcx.sess.source_map().span_to_snippet(const_span) {
-                            Ok(snippet) => err.help(format!(
-                                "try adding a `where` bound using this expression: `where [(); {snippet}]:`"
-                            )),
-                            _ => err.help("consider adding a `where` bound using this expression"),
-                        };
+                        Ok(snippet) => {
+                            let code = format!("[(); {snippet}{cast}]:");
+                            let def_id = if let ObligationCauseCode::CompareImplItemObligation {
+                                trait_item_def_id,
+                                ..
+                            } = obligation.cause.code()
+                            {
+                                trait_item_def_id.as_local()
+                            } else {
+                                Some(obligation.cause.body_id)
+                            };
+                            if let Some(def_id) = def_id
+                                && let Some(generics) = self.tcx.hir().get_generics(def_id)
+                            {
+                                err.span_suggestion_verbose(
+                                    generics.tail_span_for_predicate_suggestion(),
+                                    msg,
+                                    format!("{} {code}", generics.add_where_or_trailing_comma()),
+                                    Applicability::MaybeIncorrect,
+                                );
+                            } else {
+                                err.help(format!("{msg}: where {code}"));
+                            };
+                        }
+                        _ => {
+                            err.help(msg);
+                        }
+                    };
                     Ok(err)
                 }
                 ty::ConstKind::Expr(_) => {

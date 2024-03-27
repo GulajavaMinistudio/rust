@@ -4,6 +4,7 @@
 #![allow(rustc::untranslatable_diagnostic)]
 
 use either::Either;
+use hir::ClosureKind;
 use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_errors::{codes::*, struct_span_code_err, Applicability, Diag, MultiSpan};
@@ -463,6 +464,15 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 } else if let UseSpans::FnSelfUse { kind: CallKind::Normal { .. }, .. } = move_spans
                 {
                     // We already suggest cloning for these cases in `explain_captures`.
+                } else if let UseSpans::ClosureUse {
+                    closure_kind:
+                        ClosureKind::Coroutine(CoroutineKind::Desugared(_, CoroutineSource::Block)),
+                    args_span: _,
+                    capture_kind_span: _,
+                    path_span,
+                } = move_spans
+                {
+                    self.suggest_cloning(err, ty, expr, path_span);
                 } else if self.suggest_hoisting_call_outside_loop(err, expr) {
                     // The place where the the type moves would be misleading to suggest clone.
                     // #121466
@@ -621,8 +631,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     }
 
                     // FIXME: We make sure that this is a normal top-level binding,
-                    // but we could suggest `todo!()` for all uninitalized bindings in the pattern pattern
-                    if let hir::StmtKind::Let(hir::Local { span, ty, init: None, pat, .. }) =
+                    // but we could suggest `todo!()` for all uninitialized bindings in the pattern pattern
+                    if let hir::StmtKind::Let(hir::LetStmt { span, ty, init: None, pat, .. }) =
                         &ex.kind
                         && let hir::PatKind::Binding(..) = pat.kind
                         && span.contains(self.decl_span)
@@ -749,7 +759,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         true
     }
 
-    /// In a move error that occurs on a call wihtin a loop, we try to identify cases where cloning
+    /// In a move error that occurs on a call within a loop, we try to identify cases where cloning
     /// the value would lead to a logic error. We infer these cases by seeing if the moved value is
     /// part of the logic to break the loop, either through an explicit `break` or if the expression
     /// is part of a `while let`.
@@ -800,7 +810,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         for (_, node) in tcx.hir().parent_iter(expr.hir_id) {
             let e = match node {
                 hir::Node::Expr(e) => e,
-                hir::Node::Local(hir::Local { els: Some(els), .. }) => {
+                hir::Node::LetStmt(hir::LetStmt { els: Some(els), .. }) => {
                     let mut finder = BreakFinder { found_breaks: vec![], found_continues: vec![] };
                     finder.visit_block(els);
                     if !finder.found_breaks.is_empty() {
@@ -950,7 +960,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             {
                 // FIXME: We could check that the call's *parent* takes `&mut val` to make the
                 // suggestion more targeted to the `mk_iter(val).next()` case. Maybe do that only to
-                // check for wheter to suggest `let value` or `let mut value`.
+                // check for whether to suggest `let value` or `let mut value`.
 
                 let span = in_loop.span;
                 if !finder.found_breaks.is_empty()
@@ -2124,7 +2134,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 hir::intravisit::walk_expr(self, e);
             }
 
-            fn visit_local(&mut self, local: &'hir hir::Local<'hir>) {
+            fn visit_local(&mut self, local: &'hir hir::LetStmt<'hir>) {
                 if let hir::Pat { kind: hir::PatKind::Binding(_, hir_id, _ident, _), .. } =
                     local.pat
                     && let Some(init) = local.init

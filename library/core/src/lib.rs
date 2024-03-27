@@ -170,6 +170,8 @@
 #![feature(const_try)]
 #![feature(const_type_id)]
 #![feature(const_type_name)]
+#![feature(const_typed_swap)]
+#![feature(const_ub_checks)]
 #![feature(const_unicode_case_lookup)]
 #![feature(const_unsafecell_get_mut)]
 #![feature(const_waker)]
@@ -189,7 +191,6 @@
 #![feature(ptr_metadata)]
 #![feature(set_ptr_value)]
 #![feature(slice_ptr_get)]
-#![feature(slice_split_at_unchecked)]
 #![feature(split_at_checked)]
 #![feature(str_internals)]
 #![feature(str_split_inclusive_remainder)]
@@ -269,6 +270,7 @@
 #![feature(arm_target_feature)]
 #![feature(avx512_target_feature)]
 #![feature(hexagon_target_feature)]
+#![feature(loongarch_target_feature)]
 #![feature(mips_target_feature)]
 #![feature(powerpc_target_feature)]
 #![feature(riscv_target_feature)]
@@ -284,7 +286,7 @@ extern crate self as core;
 
 #[prelude_import]
 #[allow(unused)]
-use prelude::v1::*;
+use prelude::rust_2021::*;
 
 #[cfg(not(test))] // See #65860
 #[macro_use]
@@ -366,6 +368,7 @@ pub mod hint;
 pub mod intrinsics;
 pub mod mem;
 pub mod ptr;
+mod ub_checks;
 
 /* Core language traits */
 

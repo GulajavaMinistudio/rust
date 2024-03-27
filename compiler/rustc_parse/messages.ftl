@@ -14,10 +14,6 @@ parse_array_index_offset_of = array indexing not supported in offset_of
 
 parse_assignment_else_not_allowed = <assignment> ... else {"{"} ... {"}"} is not allowed
 
-parse_assoc_lifetime = associated lifetimes are not supported
-    .label = the lifetime is given here
-    .help = if you meant to specify a trait object, write `dyn Trait + 'lifetime`
-
 parse_associated_static_item_not_allowed = associated `static` items are not allowed
 
 parse_async_block_in_2015 = `async` blocks are only allowed in Rust 2018 or later
@@ -445,6 +441,12 @@ parse_lifetime_in_borrow_expression = borrow expressions cannot be annotated wit
     .suggestion = remove the lifetime annotation
     .label = annotated with lifetime here
 
+parse_lifetime_in_eq_constraint = lifetimes are not permitted in this context
+    .label = lifetime is not allowed here
+    .context_label = this introduces an associated item binding
+    .help = if you meant to specify a trait object, write `dyn /* Trait */ + {$lifetime}`
+    .colon_sugg = you might have meant to write a bound here
+
 parse_lone_slash = invalid trailing slash in literal
     .label = {parse_lone_slash}
 
@@ -568,7 +570,7 @@ parse_more_than_one_char = character literal may only contain one codepoint
     .remove_non = consider removing the non-printing characters
     .use_double_quotes = if you meant to write a {$is_byte ->
         [true] byte string
-        *[false] `str`
+        *[false] string
         } literal, use double quotes
 
 parse_multiple_skipped_lines = multiple lines skipped by escaped newline
@@ -833,6 +835,7 @@ parse_unknown_prefix = prefix `{$prefix}` is unknown
     .label = unknown prefix
     .note =  prefixed identifiers and literals are reserved since Rust 2021
     .suggestion_br = use `br` for a raw byte string
+    .suggestion_str = if you meant to write a string literal, use double quotes
     .suggestion_whitespace = consider inserting whitespace here
 
 parse_unknown_start_of_token = unknown start of token: {$escaped}

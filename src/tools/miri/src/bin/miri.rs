@@ -179,6 +179,26 @@ impl rustc_driver::Callbacks for MiriBeRustCompilerCalls {
             });
         }
     }
+
+    fn after_analysis<'tcx>(
+        &mut self,
+        _: &rustc_interface::interface::Compiler,
+        queries: &'tcx rustc_interface::Queries<'tcx>,
+    ) -> Compilation {
+        queries.global_ctxt().unwrap().enter(|tcx| {
+            if self.target_crate {
+                // cargo-miri has patched the compiler flags to make these into check-only builds,
+                // but we are still emulating regular rustc builds, which would perform post-mono
+                // const-eval during collection. So let's also do that here, even if we might be
+                // running with `--emit=metadata`. In particular this is needed to make
+                // `compile_fail` doc tests trigger post-mono errors.
+                // In general `collect_and_partition_mono_items` is not safe to call in check-only
+                // builds, but we are setting `-Zalways-encode-mir` which avoids those issues.
+                let _ = tcx.collect_and_partition_mono_items(());
+            }
+        });
+        Compilation::Continue
+    }
 }
 
 fn show_error(msg: &impl std::fmt::Display) -> ! {
@@ -256,7 +276,7 @@ fn run_compiler(
         // If no `--sysroot` is given, the `MIRI_SYSROOT` env var is consulted to find where
         // that sysroot lives, and that is passed to rustc.
         let sysroot_flag = "--sysroot";
-        if !args.iter().any(|e| e == sysroot_flag) {
+        if !args.iter().any(|e| e.starts_with(sysroot_flag)) {
             // Using the built-in default here would be plain wrong, so we *require*
             // the env var to make sure things make sense.
             let miri_sysroot = env::var("MIRI_SYSROOT").unwrap_or_else(|_| {
@@ -343,6 +363,10 @@ fn main() {
 
     let args = rustc_driver::args::raw_args(&early_dcx)
         .unwrap_or_else(|_| std::process::exit(rustc_driver::EXIT_FAILURE));
+
+    // Install the ctrlc handler that sets `rustc_const_eval::CTRL_C_RECEIVED`, even if
+    // MIRI_BE_RUSTC is set.
+    rustc_driver::install_ctrlc_handler();
 
     // If the environment asks us to actually be rustc, then do that.
     if let Some(crate_kind) = env::var_os("MIRI_BE_RUSTC") {

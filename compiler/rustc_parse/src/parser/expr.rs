@@ -11,12 +11,11 @@ use crate::errors;
 use crate::maybe_recover_from_interpolated_ty_qpath;
 use ast::mut_visit::{noop_visit_expr, MutVisitor};
 use ast::token::IdentIsRaw;
-use ast::{CoroutineKind, ForLoopKind, GenBlockKind, Pat, Path, PathSegment};
+use ast::{CoroutineKind, ForLoopKind, GenBlockKind, MatchKind, Pat, Path, PathSegment};
 use core::mem;
 use core::ops::ControlFlow;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{self, Delimiter, Token, TokenKind};
-use rustc_ast::tokenstream::Spacing;
 use rustc_ast::util::case::Case;
 use rustc_ast::util::classify;
 use rustc_ast::util::parser::{prec_let_scrutinee_needs_par, AssocOp, Fixity};
@@ -999,13 +998,57 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_dot_suffix_expr(&mut self, lo: Span, base: P<Expr>) -> PResult<'a, P<Expr>> {
+        // At this point we've consumed something like `expr.` and `self.token` holds the token
+        // after the dot.
         match self.token.uninterpolate().kind {
             token::Ident(..) => self.parse_dot_suffix(base, lo),
             token::Literal(token::Lit { kind: token::Integer, symbol, suffix }) => {
-                Ok(self.parse_expr_tuple_field_access(lo, base, symbol, suffix, None))
+                let ident_span = self.token.span;
+                self.bump();
+                Ok(self.mk_expr_tuple_field_access(lo, ident_span, base, symbol, suffix))
             }
             token::Literal(token::Lit { kind: token::Float, symbol, suffix }) => {
-                Ok(self.parse_expr_tuple_field_access_float(lo, base, symbol, suffix))
+                Ok(match self.break_up_float(symbol, self.token.span) {
+                    // 1e2
+                    DestructuredFloat::Single(sym, _sp) => {
+                        // `foo.1e2`: a single complete dot access, fully consumed. We end up with
+                        // the `1e2` token in `self.prev_token` and the following token in
+                        // `self.token`.
+                        let ident_span = self.token.span;
+                        self.bump();
+                        self.mk_expr_tuple_field_access(lo, ident_span, base, sym, suffix)
+                    }
+                    // 1.
+                    DestructuredFloat::TrailingDot(sym, ident_span, dot_span) => {
+                        // `foo.1.`: a single complete dot access and the start of another.
+                        // We end up with the `sym` (`1`) token in `self.prev_token` and a dot in
+                        // `self.token`.
+                        assert!(suffix.is_none());
+                        self.token = Token::new(token::Ident(sym, IdentIsRaw::No), ident_span);
+                        self.bump_with((Token::new(token::Dot, dot_span), self.token_spacing));
+                        self.mk_expr_tuple_field_access(lo, ident_span, base, sym, None)
+                    }
+                    // 1.2 | 1.2e3
+                    DestructuredFloat::MiddleDot(
+                        sym1,
+                        ident1_span,
+                        _dot_span,
+                        sym2,
+                        ident2_span,
+                    ) => {
+                        // `foo.1.2` (or `foo.1.2e3`): two complete dot accesses. We end up with
+                        // the `sym2` (`2` or `2e3`) token in `self.prev_token` and the following
+                        // token in `self.token`.
+                        let next_token2 =
+                            Token::new(token::Ident(sym2, IdentIsRaw::No), ident2_span);
+                        self.bump_with((next_token2, self.token_spacing));
+                        self.bump();
+                        let base1 =
+                            self.mk_expr_tuple_field_access(lo, ident1_span, base, sym1, None);
+                        self.mk_expr_tuple_field_access(lo, ident2_span, base1, sym2, suffix)
+                    }
+                    DestructuredFloat::Error => base,
+                })
             }
             _ => {
                 self.error_unexpected_after_dot();
@@ -1119,41 +1162,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_expr_tuple_field_access_float(
-        &mut self,
-        lo: Span,
-        base: P<Expr>,
-        float: Symbol,
-        suffix: Option<Symbol>,
-    ) -> P<Expr> {
-        match self.break_up_float(float, self.token.span) {
-            // 1e2
-            DestructuredFloat::Single(sym, _sp) => {
-                self.parse_expr_tuple_field_access(lo, base, sym, suffix, None)
-            }
-            // 1.
-            DestructuredFloat::TrailingDot(sym, ident_span, dot_span) => {
-                assert!(suffix.is_none());
-                self.token = Token::new(token::Ident(sym, IdentIsRaw::No), ident_span);
-                let next_token = (Token::new(token::Dot, dot_span), self.token_spacing);
-                self.parse_expr_tuple_field_access(lo, base, sym, None, Some(next_token))
-            }
-            // 1.2 | 1.2e3
-            DestructuredFloat::MiddleDot(symbol1, ident1_span, dot_span, symbol2, ident2_span) => {
-                self.token = Token::new(token::Ident(symbol1, IdentIsRaw::No), ident1_span);
-                // This needs to be `Spacing::Alone` to prevent regressions.
-                // See issue #76399 and PR #76285 for more details
-                let next_token1 = (Token::new(token::Dot, dot_span), Spacing::Alone);
-                let base1 =
-                    self.parse_expr_tuple_field_access(lo, base, symbol1, None, Some(next_token1));
-                let next_token2 = Token::new(token::Ident(symbol2, IdentIsRaw::No), ident2_span);
-                self.bump_with((next_token2, self.token_spacing)); // `.`
-                self.parse_expr_tuple_field_access(lo, base1, symbol2, suffix, None)
-            }
-            DestructuredFloat::Error => base,
-        }
-    }
-
     /// Parse the field access used in offset_of, matched by `$(e:expr)+`.
     /// Currently returns a list of idents. However, it should be possible in
     /// future to also do array indices, which might be arbitrary expressions.
@@ -1255,24 +1263,18 @@ impl<'a> Parser<'a> {
         Ok(fields.into_iter().collect())
     }
 
-    fn parse_expr_tuple_field_access(
+    fn mk_expr_tuple_field_access(
         &mut self,
         lo: Span,
+        ident_span: Span,
         base: P<Expr>,
         field: Symbol,
         suffix: Option<Symbol>,
-        next_token: Option<(Token, Spacing)>,
     ) -> P<Expr> {
-        match next_token {
-            Some(next_token) => self.bump_with(next_token),
-            None => self.bump(),
-        }
-        let span = self.prev_token.span;
-        let field = ExprKind::Field(base, Ident::new(field, span));
         if let Some(suffix) = suffix {
-            self.expect_no_tuple_index_suffix(span, suffix);
+            self.expect_no_tuple_index_suffix(ident_span, suffix);
         }
-        self.mk_expr(lo.to(span), field)
+        self.mk_expr(lo.to(ident_span), ExprKind::Field(base, Ident::new(field, ident_span)))
     }
 
     /// Parse a function call expression, `expr(...)`.
@@ -1377,6 +1379,13 @@ impl<'a> Parser<'a> {
     fn parse_dot_suffix(&mut self, self_arg: P<Expr>, lo: Span) -> PResult<'a, P<Expr>> {
         if self.token.uninterpolated_span().at_least_rust_2018() && self.eat_keyword(kw::Await) {
             return Ok(self.mk_await_expr(self_arg, lo));
+        }
+
+        // Post-fix match
+        if self.eat_keyword(kw::Match) {
+            let match_span = self.prev_token.span;
+            self.psess.gated_spans.gate(sym::postfix_match, match_span);
+            return self.parse_match_block(lo, match_span, self_arg, MatchKind::Postfix);
         }
 
         let fn_span_lo = self.token.span;
@@ -2894,8 +2903,20 @@ impl<'a> Parser<'a> {
     /// Parses a `match ... { ... }` expression (`match` token already eaten).
     fn parse_expr_match(&mut self) -> PResult<'a, P<Expr>> {
         let match_span = self.prev_token.span;
-        let lo = self.prev_token.span;
         let scrutinee = self.parse_expr_res(Restrictions::NO_STRUCT_LITERAL, None)?;
+
+        self.parse_match_block(match_span, match_span, scrutinee, MatchKind::Prefix)
+    }
+
+    /// Parses the block of a `match expr { ... }` or a `expr.match { ... }`
+    /// expression. This is after the match token and scrutinee are eaten
+    fn parse_match_block(
+        &mut self,
+        lo: Span,
+        match_span: Span,
+        scrutinee: P<Expr>,
+        match_kind: MatchKind,
+    ) -> PResult<'a, P<Expr>> {
         if let Err(mut e) = self.expect(&token::OpenDelim(Delimiter::Brace)) {
             if self.token == token::Semi {
                 e.span_suggestion_short(
@@ -2938,7 +2959,7 @@ impl<'a> Parser<'a> {
                     });
                     return Ok(self.mk_expr_with_attrs(
                         span,
-                        ExprKind::Match(scrutinee, arms),
+                        ExprKind::Match(scrutinee, arms, match_kind),
                         attrs,
                     ));
                 }
@@ -2946,7 +2967,7 @@ impl<'a> Parser<'a> {
         }
         let hi = self.token.span;
         self.bump();
-        Ok(self.mk_expr_with_attrs(lo.to(hi), ExprKind::Match(scrutinee, arms), attrs))
+        Ok(self.mk_expr_with_attrs(lo.to(hi), ExprKind::Match(scrutinee, arms, match_kind), attrs))
     }
 
     /// Attempt to recover from match arm body with statements and no surrounding braces.
@@ -3955,7 +3976,7 @@ impl MutVisitor for CondChecker<'_> {
             | ExprKind::While(_, _, _)
             | ExprKind::ForLoop { .. }
             | ExprKind::Loop(_, _, _)
-            | ExprKind::Match(_, _)
+            | ExprKind::Match(_, _, _)
             | ExprKind::Closure(_)
             | ExprKind::Block(_, _)
             | ExprKind::Gen(_, _, _)

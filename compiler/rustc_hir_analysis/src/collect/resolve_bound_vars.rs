@@ -793,12 +793,20 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
         fd: &'tcx hir::FnDecl<'tcx>,
         body_id: hir::BodyId,
         _: Span,
-        _: LocalDefId,
+        def_id: LocalDefId,
     ) {
         let output = match fd.output {
             hir::FnRetTy::DefaultReturn(_) => None,
             hir::FnRetTy::Return(ty) => Some(ty),
         };
+        if let Some(ty) = output
+            && let hir::TyKind::InferDelegation(sig_id, _) = ty.kind
+        {
+            let bound_vars: Vec<_> =
+                self.tcx.fn_sig(sig_id).skip_binder().bound_vars().iter().collect();
+            let hir_id = self.tcx.local_def_id_to_hir_id(def_id);
+            self.map.late_bound_vars.insert(hir_id, bound_vars);
+        }
         self.visit_fn_like_elision(fd.inputs, output, matches!(fk, intravisit::FnKind::Closure));
         intravisit::walk_fn_kind(self, fk);
         self.visit_nested_body(body_id)
@@ -1917,18 +1925,18 @@ fn is_late_bound_map(
     ///
     /// If we conservatively considered `'a` unconstrained then we could break users who had written code before
     /// we started correctly handling aliases. If we considered `'a` constrained then it would become late bound
-    /// causing an error during astconv as the `'a` is not constrained by the input type `<() as Trait<'a>>::Assoc`
+    /// causing an error during HIR ty lowering as the `'a` is not constrained by the input type `<() as Trait<'a>>::Assoc`
     /// but appears in the output type `<() as Trait<'a>>::Assoc`.
     ///
     /// We must therefore "look into" the `Alias` to see whether we should consider `'a` constrained or not.
     ///
     /// See #100508 #85533 #47511 for additional context
-    struct ConstrainedCollectorPostAstConv {
+    struct ConstrainedCollectorPostHirTyLowering {
         arg_is_constrained: Box<[bool]>,
     }
 
     use ty::Ty;
-    impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ConstrainedCollectorPostAstConv {
+    impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ConstrainedCollectorPostHirTyLowering {
         fn visit_ty(&mut self, t: Ty<'tcx>) {
             match t.kind() {
                 ty::Param(param_ty) => {
@@ -1970,10 +1978,10 @@ fn is_late_bound_map(
                     None,
                     hir::Path { res: Res::Def(DefKind::TyAlias, alias_def), segments, span },
                 )) => {
-                    // See comments on `ConstrainedCollectorPostAstConv` for why this arm does not just consider
-                    // args to be unconstrained.
+                    // See comments on `ConstrainedCollectorPostHirTyLowering` for why this arm does not
+                    // just consider args to be unconstrained.
                     let generics = self.tcx.generics_of(alias_def);
-                    let mut walker = ConstrainedCollectorPostAstConv {
+                    let mut walker = ConstrainedCollectorPostHirTyLowering {
                         arg_is_constrained: vec![false; generics.params.len()].into_boxed_slice(),
                     };
                     walker.visit_ty(self.tcx.type_of(alias_def).instantiate_identity());

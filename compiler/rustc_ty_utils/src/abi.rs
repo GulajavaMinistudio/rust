@@ -125,8 +125,12 @@ fn fn_sig_for_fn_abi<'tcx>(
                     coroutine_kind = ty::ClosureKind::FnOnce;
 
                     // Implementations of `FnMut` and `Fn` for coroutine-closures
-                    // still take their receiver by ref.
-                    if receiver_by_ref { Ty::new_mut_ptr(tcx, coroutine_ty) } else { coroutine_ty }
+                    // still take their receiver by (mut) ref.
+                    if receiver_by_ref {
+                        Ty::new_mut_ref(tcx, tcx.lifetimes.re_erased, coroutine_ty)
+                    } else {
+                        coroutine_ty
+                    }
                 } else {
                     tcx.closure_env_ty(coroutine_ty, coroutine_kind, env_region)
                 };
@@ -623,7 +627,7 @@ fn fn_abi_new_uncached<'tcx>(
         let is_return = arg_idx.is_none();
         let is_drop_target = is_drop_in_place && arg_idx == Some(0);
         let drop_target_pointee = is_drop_target.then(|| match ty.kind() {
-            ty::RawPtr(ty::TypeAndMut { ty, .. }) => *ty,
+            ty::RawPtr(ty, _) => *ty,
             _ => bug!("argument to drop_in_place is not a raw ptr: {:?}", ty),
         });
 

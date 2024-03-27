@@ -424,7 +424,15 @@ message_on_reopen = "Issue #{number} has been reopened. Pinging @*T-types*."
 
 [notify-zulip."A-edition-2021"]
 required_labels = ["C-bug"]
-zulip_stream = 268952 # #edition 2021
+zulip_stream = 268952 # #edition
+topic = "Edition Bugs"
+message_on_add = """\
+Issue #{number} "{title}" has been added (previous edition 2021).
+"""
+
+[notify-zulip."A-edition-2024"]
+required_labels = ["C-bug"]
+zulip_stream = 268952 # #edition
 topic = "Edition Bugs"
 message_on_add = """\
 Issue #{number} "{title}" has been added.
@@ -498,6 +506,10 @@ Some changes occurred in engine.rs, potentially modifying the public API \
 of `ObligationCtxt`.
 """
 cc = ["@lcnr", "@compiler-errors"]
+
+[mentions."compiler/rustc_hir_analysis/src/hir_ty_lowering"]
+message = "HIR ty lowering was modified"
+cc = ["@fmease"]
 
 [mentions."compiler/rustc_error_codes/src/lib.rs"]
 message = "Some changes occurred in diagnostic error codes"
@@ -619,7 +631,7 @@ cc = ["@davidtwco", "@compiler-errors", "@TaKO8Ki"]
 
 [mentions."compiler/stable_mir"]
 message = "This PR changes Stable MIR"
-cc = ["@oli-obk", "@celinval", "@spastorino", "@ouz-a"]
+cc = ["@oli-obk", "@celinval", "@ouz-a"]
 
 [mentions."compiler/rustc_target/src/spec"]
 message = """
@@ -771,7 +783,6 @@ compiler-team = [
 compiler-team-contributors = [
     "@TaKO8Ki",
     "@Nadrieril",
-    "@nnethercote",
     "@fmease",
     "@fee1-dead",
 ]
@@ -827,16 +838,15 @@ parser = [
     "@compiler-errors",
     "@davidtwco",
     "@estebank",
-    "@nnethercote",
     "@petrochenkov",
+    "@spastorino",
 ]
 lexer = [
-    "@nnethercote",
     "@petrochenkov",
     "@estebank",
 ]
 arena = [
-    "@nnethercote",
+    "@spastorino",
 ]
 mir = [
     "@davidtwco",

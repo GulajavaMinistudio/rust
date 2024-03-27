@@ -10,6 +10,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_index::bit_set::FiniteBitSet;
 use rustc_macros::HashStable;
 use rustc_middle::ty::normalize_erasing_regions::NormalizationError;
+use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::Symbol;
 
 use std::assert_matches::assert_matches;
@@ -172,6 +173,11 @@ impl<'tcx> Instance<'tcx> {
         // If this a non-generic instance, it cannot be a shared monomorphization.
         self.args.non_erasable_generics(tcx, self.def_id()).next()?;
 
+        // compiler_builtins cannot use upstream monomorphizations.
+        if tcx.is_compiler_builtins(LOCAL_CRATE) {
+            return None;
+        }
+
         match self.def {
             InstanceDef::Item(def) => tcx
                 .upstream_monomorphizations_for(def)
@@ -329,7 +335,7 @@ impl<'tcx> InstanceDef<'tcx> {
 
 fn fmt_instance(
     f: &mut fmt::Formatter<'_>,
-    instance: &Instance<'_>,
+    instance: Instance<'_>,
     type_length: Option<rustc_session::Limit>,
 ) -> fmt::Result {
     ty::tls::with(|tcx| {
@@ -363,9 +369,9 @@ fn fmt_instance(
     }
 }
 
-pub struct ShortInstance<'a, 'tcx>(pub &'a Instance<'tcx>, pub usize);
+pub struct ShortInstance<'tcx>(pub Instance<'tcx>, pub usize);
 
-impl<'a, 'tcx> fmt::Display for ShortInstance<'a, 'tcx> {
+impl<'tcx> fmt::Display for ShortInstance<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt_instance(f, self.0, Some(rustc_session::Limit(self.1)))
     }
@@ -373,7 +379,7 @@ impl<'a, 'tcx> fmt::Display for ShortInstance<'a, 'tcx> {
 
 impl<'tcx> fmt::Display for Instance<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt_instance(f, self, None)
+        fmt_instance(f, *self, None)
     }
 }
 

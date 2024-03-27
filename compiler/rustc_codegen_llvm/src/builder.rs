@@ -19,9 +19,13 @@ use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
 use rustc_middle::ty::layout::{
     FnAbiError, FnAbiOfHelpers, FnAbiRequest, LayoutError, LayoutOfHelpers, TyAndLayout,
 };
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
+use rustc_session::config::OptLevel;
 use rustc_span::Span;
-use rustc_symbol_mangling::typeid::{kcfi_typeid_for_fnabi, typeid_for_fnabi, TypeIdOptions};
+use rustc_symbol_mangling::typeid::{
+    kcfi_typeid_for_fnabi, kcfi_typeid_for_instance, typeid_for_fnabi, typeid_for_instance,
+    TypeIdOptions,
+};
 use rustc_target::abi::{self, call::FnAbi, Align, Size, WrappingRange};
 use rustc_target::spec::{HasTargetSpec, SanitizerSet, Target};
 use smallvec::SmallVec;
@@ -221,6 +225,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         then: &'ll BasicBlock,
         catch: &'ll BasicBlock,
         funclet: Option<&Funclet<'ll>>,
+        instance: Option<Instance<'tcx>>,
     ) -> &'ll Value {
         debug!("invoke {:?} with args ({:?})", llfn, args);
 
@@ -233,10 +238,10 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         }
 
         // Emit CFI pointer type membership test
-        self.cfi_type_test(fn_attrs, fn_abi, llfn);
+        self.cfi_type_test(fn_attrs, fn_abi, instance, llfn);
 
         // Emit KCFI operand bundle
-        let kcfi_bundle = self.kcfi_operand_bundle(fn_attrs, fn_abi, llfn);
+        let kcfi_bundle = self.kcfi_operand_bundle(fn_attrs, fn_abi, instance, llfn);
         let kcfi_bundle = kcfi_bundle.as_ref().map(|b| &*b.raw);
         if let Some(kcfi_bundle) = kcfi_bundle {
             bundles.push(kcfi_bundle);
@@ -547,6 +552,11 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
             layout: TyAndLayout<'tcx>,
             offset: Size,
         ) {
+            if bx.cx.sess().opts.optimize == OptLevel::No {
+                // Don't emit metadata we're not going to use
+                return;
+            }
+
             if !scalar.is_uninit_valid() {
                 bx.noundef_metadata(load);
             }
@@ -660,6 +670,11 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
             // split into a v2i32, halving the bitwidth LLVM expects,
             // tripping an assertion. So, for now, just disable this
             // optimization.
+            return;
+        }
+
+        if self.cx.sess().opts.optimize == OptLevel::No {
+            // Don't emit metadata we're not going to use
             return;
         }
 
@@ -1231,6 +1246,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         llfn: &'ll Value,
         args: &[&'ll Value],
         funclet: Option<&Funclet<'ll>>,
+        instance: Option<Instance<'tcx>>,
     ) -> &'ll Value {
         debug!("call {:?} with args ({:?})", llfn, args);
 
@@ -1243,10 +1259,10 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         }
 
         // Emit CFI pointer type membership test
-        self.cfi_type_test(fn_attrs, fn_abi, llfn);
+        self.cfi_type_test(fn_attrs, fn_abi, instance, llfn);
 
         // Emit KCFI operand bundle
-        let kcfi_bundle = self.kcfi_operand_bundle(fn_attrs, fn_abi, llfn);
+        let kcfi_bundle = self.kcfi_operand_bundle(fn_attrs, fn_abi, instance, llfn);
         let kcfi_bundle = kcfi_bundle.as_ref().map(|b| &*b.raw);
         if let Some(kcfi_bundle) = kcfi_bundle {
             bundles.push(kcfi_bundle);
@@ -1468,7 +1484,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
 
     pub(crate) fn call_intrinsic(&mut self, intrinsic: &str, args: &[&'ll Value]) -> &'ll Value {
         let (ty, f) = self.cx.get_intrinsic(intrinsic);
-        self.call(ty, None, None, f, args, None)
+        self.call(ty, None, None, f, args, None, None)
     }
 
     fn call_lifetime_intrinsic(&mut self, intrinsic: &str, ptr: &'ll Value, size: Size) {
@@ -1526,7 +1542,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
             format!("llvm.{instr}.sat.i{int_width}.f{float_width}")
         };
         let f = self.declare_cfn(&name, llvm::UnnamedAddr::No, self.type_func(&[src_ty], dest_ty));
-        self.call(self.type_func(&[src_ty], dest_ty), None, None, f, &[val], None)
+        self.call(self.type_func(&[src_ty], dest_ty), None, None, f, &[val], None, None)
     }
 
     pub(crate) fn landing_pad(
@@ -1554,6 +1570,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         default_dest: &'ll BasicBlock,
         indirect_dest: &[&'ll BasicBlock],
         funclet: Option<&Funclet<'ll>>,
+        instance: Option<Instance<'tcx>>,
     ) -> &'ll Value {
         debug!("invoke {:?} with args ({:?})", llfn, args);
 
@@ -1566,10 +1583,10 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         }
 
         // Emit CFI pointer type membership test
-        self.cfi_type_test(fn_attrs, fn_abi, llfn);
+        self.cfi_type_test(fn_attrs, fn_abi, instance, llfn);
 
         // Emit KCFI operand bundle
-        let kcfi_bundle = self.kcfi_operand_bundle(fn_attrs, fn_abi, llfn);
+        let kcfi_bundle = self.kcfi_operand_bundle(fn_attrs, fn_abi, instance, llfn);
         let kcfi_bundle = kcfi_bundle.as_ref().map(|b| &*b.raw);
         if let Some(kcfi_bundle) = kcfi_bundle {
             bundles.push(kcfi_bundle);
@@ -1601,6 +1618,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         &mut self,
         fn_attrs: Option<&CodegenFnAttrs>,
         fn_abi: Option<&FnAbi<'tcx, Ty<'tcx>>>,
+        instance: Option<Instance<'tcx>>,
         llfn: &'ll Value,
     ) {
         let is_indirect_call = unsafe { llvm::LLVMRustIsNonGVFunctionPointerTy(llfn) };
@@ -1622,7 +1640,11 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
                 options.insert(TypeIdOptions::NORMALIZE_INTEGERS);
             }
 
-            let typeid = typeid_for_fnabi(self.tcx, fn_abi, options);
+            let typeid = if let Some(instance) = instance {
+                typeid_for_instance(self.tcx, instance, options)
+            } else {
+                typeid_for_fnabi(self.tcx, fn_abi, options)
+            };
             let typeid_metadata = self.cx.typeid_metadata(typeid).unwrap();
 
             // Test whether the function pointer is associated with the type identifier.
@@ -1644,6 +1666,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         &mut self,
         fn_attrs: Option<&CodegenFnAttrs>,
         fn_abi: Option<&FnAbi<'tcx, Ty<'tcx>>>,
+        instance: Option<Instance<'tcx>>,
         llfn: &'ll Value,
     ) -> Option<llvm::OperandBundleDef<'ll>> {
         let is_indirect_call = unsafe { llvm::LLVMRustIsNonGVFunctionPointerTy(llfn) };
@@ -1665,7 +1688,12 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
                 options.insert(TypeIdOptions::NORMALIZE_INTEGERS);
             }
 
-            let kcfi_typeid = kcfi_typeid_for_fnabi(self.tcx, fn_abi, options);
+            let kcfi_typeid = if let Some(instance) = instance {
+                kcfi_typeid_for_instance(self.tcx, instance, options)
+            } else {
+                kcfi_typeid_for_fnabi(self.tcx, fn_abi, options)
+            };
+
             Some(llvm::OperandBundleDef::new("kcfi", &[self.const_u32(kcfi_typeid)]))
         } else {
             None

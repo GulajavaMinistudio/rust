@@ -33,7 +33,7 @@ pub fn typeid_for_fnabi<'tcx>(
 /// Returns a type metadata identifier for the specified Instance.
 pub fn typeid_for_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
-    instance: &Instance<'tcx>,
+    instance: Instance<'tcx>,
     options: TypeIdOptions,
 ) -> String {
     typeid_itanium_cxx_abi::typeid_for_instance(tcx, instance, options)
@@ -55,7 +55,7 @@ pub fn kcfi_typeid_for_fnabi<'tcx>(
 /// Returns a KCFI type metadata identifier for the specified Instance.
 pub fn kcfi_typeid_for_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
-    instance: &Instance<'tcx>,
+    instance: Instance<'tcx>,
     options: TypeIdOptions,
 ) -> u32 {
     // A KCFI type metadata identifier is a 32-bit constant produced by taking the lower half of the

@@ -667,15 +667,15 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             ty::Int(t) => p!(write("{}", t.name_str())),
             ty::Uint(t) => p!(write("{}", t.name_str())),
             ty::Float(t) => p!(write("{}", t.name_str())),
-            ty::RawPtr(ref tm) => {
+            ty::RawPtr(ty, mutbl) => {
                 p!(write(
                     "*{} ",
-                    match tm.mutbl {
+                    match mutbl {
                         hir::Mutability::Mut => "mut",
                         hir::Mutability::Not => "const",
                     }
                 ));
-                p!(print(tm.ty))
+                p!(print(ty))
             }
             ty::Ref(r, ty, mutbl) => {
                 p!("&");
@@ -804,7 +804,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             }
             ty::Str => p!("str"),
             ty::Coroutine(did, args) => {
-                p!(write("{{"));
+                p!("{{");
                 let coroutine_kind = self.tcx().coroutine_kind(did).unwrap();
                 let should_print_movability = self.should_print_verbose()
                     || matches!(coroutine_kind, hir::CoroutineKind::Coroutine(_));
@@ -818,9 +818,17 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
 
                 if !self.should_print_verbose() {
                     p!(write("{}", coroutine_kind));
-                    // FIXME(eddyb) should use `def_span`.
-                    if let Some(did) = did.as_local() {
-                        let span = self.tcx().def_span(did);
+                    if coroutine_kind.is_fn_like() {
+                        // If we are printing an `async fn` coroutine type, then give the path
+                        // of the fn, instead of its span, because that will in most cases be
+                        // more helpful for the reader than just a source location.
+                        //
+                        // This will look like:
+                        //    {async fn body of some_fn()}
+                        let did_of_the_fn_item = self.tcx().parent(did);
+                        p!(" of ", print_def_path(did_of_the_fn_item, args), "()");
+                    } else if let Some(local_did) = did.as_local() {
+                        let span = self.tcx().def_span(local_did);
                         p!(write(
                             "@{}",
                             // This may end up in stderr diagnostics but it may also be emitted
@@ -828,7 +836,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                             self.tcx().sess.source_map().span_to_embeddable_string(span)
                         ));
                     } else {
-                        p!(write("@"), print_def_path(did, args));
+                        p!("@", print_def_path(did, args));
                     }
                 } else {
                     p!(print_def_path(did, args));
@@ -995,11 +1003,11 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                     // Don't print `+ Sized`, but rather `+ ?Sized` if absent.
                     if Some(trait_ref.def_id()) == tcx.lang_items().sized_trait() {
                         match pred.polarity {
-                            ty::ImplPolarity::Positive | ty::ImplPolarity::Reservation => {
+                            ty::PredicatePolarity::Positive => {
                                 has_sized_bound = true;
                                 continue;
                             }
-                            ty::ImplPolarity::Negative => has_negative_sized_bound = true,
+                            ty::PredicatePolarity::Negative => has_negative_sized_bound = true,
                         }
                     }
 
@@ -1020,7 +1028,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
 
                     self.insert_trait_and_projection(
                         trait_ref,
-                        ty::ImplPolarity::Positive,
+                        ty::PredicatePolarity::Positive,
                         Some(proj_ty),
                         &mut traits,
                         &mut fn_traits,
@@ -1085,7 +1093,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                     _ => {
                         if entry.has_fn_once {
                             traits
-                                .entry((fn_once_trait_ref, ty::ImplPolarity::Positive))
+                                .entry((fn_once_trait_ref, ty::PredicatePolarity::Positive))
                                 .or_default()
                                 .extend(
                                     // Group the return ty with its def id, if we had one.
@@ -1095,10 +1103,10 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                                 );
                         }
                         if let Some(trait_ref) = entry.fn_mut_trait_ref {
-                            traits.entry((trait_ref, ty::ImplPolarity::Positive)).or_default();
+                            traits.entry((trait_ref, ty::PredicatePolarity::Positive)).or_default();
                         }
                         if let Some(trait_ref) = entry.fn_trait_ref {
-                            traits.entry((trait_ref, ty::ImplPolarity::Positive)).or_default();
+                            traits.entry((trait_ref, ty::PredicatePolarity::Positive)).or_default();
                         }
                     }
                 }
@@ -1114,7 +1122,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             self.wrap_binder(&trait_ref, |trait_ref, cx| {
                 define_scoped_cx!(cx);
 
-                if polarity == ty::ImplPolarity::Negative {
+                if polarity == ty::PredicatePolarity::Negative {
                     p!("!");
                 }
                 p!(print(trait_ref.print_only_trait_name()));
@@ -1223,10 +1231,10 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
     fn insert_trait_and_projection(
         &mut self,
         trait_ref: ty::PolyTraitRef<'tcx>,
-        polarity: ty::ImplPolarity,
+        polarity: ty::PredicatePolarity,
         proj_ty: Option<(DefId, ty::Binder<'tcx, Term<'tcx>>)>,
         traits: &mut FxIndexMap<
-            (ty::PolyTraitRef<'tcx>, ty::ImplPolarity),
+            (ty::PolyTraitRef<'tcx>, ty::PredicatePolarity),
             FxIndexMap<DefId, ty::Binder<'tcx, Term<'tcx>>>,
         >,
         fn_traits: &mut FxIndexMap<ty::PolyTraitRef<'tcx>, OpaqueFnEntry<'tcx>>,
@@ -1236,7 +1244,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
         // If our trait_ref is FnOnce or any of its children, project it onto the parent FnOnce
         // super-trait ref and record it there.
         // We skip negative Fn* bounds since they can't use parenthetical notation anyway.
-        if polarity == ty::ImplPolarity::Positive
+        if polarity == ty::PredicatePolarity::Positive
             && let Some(fn_once_trait) = self.tcx().lang_items().fn_once_trait()
         {
             // If we have a FnOnce, then insert it into
@@ -1752,7 +1760,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 p!(write("{:?}", char::try_from(int).unwrap()))
             }
             // Pointer types
-            ty::Ref(..) | ty::RawPtr(_) | ty::FnPtr(_) => {
+            ty::Ref(..) | ty::RawPtr(_, _) | ty::FnPtr(_) => {
                 let data = int.assert_bits(self.tcx().data_layout.pointer_size);
                 self.typed_value(
                     |this| {
@@ -3139,7 +3147,7 @@ define_print_and_forward_display! {
 
     TraitPredPrintModifiersAndPath<'tcx> {
         p!(pretty_print_bound_constness(self.0.trait_ref));
-        if let ty::ImplPolarity::Negative = self.0.polarity {
+        if let ty::PredicatePolarity::Negative = self.0.polarity {
             p!("!")
         }
         p!(print(self.0.trait_ref.print_only_trait_path()));
@@ -3172,7 +3180,7 @@ define_print_and_forward_display! {
     ty::TraitPredicate<'tcx> {
         p!(print(self.trait_ref.self_ty()), ": ");
         p!(pretty_print_bound_constness(self.trait_ref));
-        if let ty::ImplPolarity::Negative = self.polarity {
+        if let ty::PredicatePolarity::Negative = self.polarity {
             p!("!");
         }
         p!(print(self.trait_ref.print_trait_sugared()))
