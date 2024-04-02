@@ -21,6 +21,7 @@ use crate::traits::{
 };
 use core::ops::ControlFlow;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
+use rustc_data_structures::unord::UnordSet;
 use rustc_errors::codes::*;
 use rustc_errors::{pluralize, struct_span_code_err, Applicability, MultiSpan, StringPart};
 use rustc_errors::{Diag, EmissionGuarantee, ErrorGuaranteed, FatalError, StashKey};
@@ -1127,10 +1128,11 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         err: &mut Diag<'_>,
     ) -> bool {
         let span = obligation.cause.span;
-        struct V {
+        /// Look for the (direct) sub-expr of `?`, and return it if it's a `.` method call.
+        struct FindMethodSubexprOfTry {
             search_span: Span,
         }
-        impl<'v> Visitor<'v> for V {
+        impl<'v> Visitor<'v> for FindMethodSubexprOfTry {
             type Result = ControlFlow<&'v hir::Expr<'v>>;
             fn visit_expr(&mut self, ex: &'v hir::Expr<'v>) -> Self::Result {
                 if let hir::ExprKind::Match(expr, _arms, hir::MatchSource::TryDesugar(_)) = ex.kind
@@ -1148,8 +1150,8 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(_, _, body_id), .. }) => body_id,
             _ => return false,
         };
-        let ControlFlow::Break(expr) =
-            (V { search_span: span }).visit_body(self.tcx.hir().body(*body_id))
+        let ControlFlow::Break(expr) = (FindMethodSubexprOfTry { search_span: span })
+            .visit_body(self.tcx.hir().body(*body_id))
         else {
             return false;
         };
@@ -2117,7 +2119,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 })
                 .collect();
 
-            impl_candidates.sort();
+            impl_candidates.sort_by_key(|tr| tr.to_string());
             impl_candidates.dedup();
             return report(impl_candidates, err);
         }
@@ -2143,7 +2145,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 cand
             })
             .collect();
-        impl_candidates.sort_by_key(|cand| (cand.similarity, cand.trait_ref));
+        impl_candidates.sort_by_key(|cand| (cand.similarity, cand.trait_ref.to_string()));
         let mut impl_candidates: Vec<_> =
             impl_candidates.into_iter().map(|cand| cand.trait_ref).collect();
         impl_candidates.dedup();
@@ -2243,14 +2245,18 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         };
 
         let required_trait_path = self.tcx.def_path_str(trait_ref.def_id());
-        let traits_with_same_path: std::collections::BTreeSet<_> = self
+        let traits_with_same_path: UnordSet<_> = self
             .tcx
             .all_traits()
             .filter(|trait_def_id| *trait_def_id != trait_ref.def_id())
-            .filter(|trait_def_id| self.tcx.def_path_str(*trait_def_id) == required_trait_path)
+            .map(|trait_def_id| (self.tcx.def_path_str(trait_def_id), trait_def_id))
+            .filter(|(p, _)| *p == required_trait_path)
             .collect();
+
+        let traits_with_same_path =
+            traits_with_same_path.into_items().into_sorted_stable_ord_by_key(|(p, _)| p);
         let mut suggested = false;
-        for trait_with_same_path in traits_with_same_path {
+        for (_, trait_with_same_path) in traits_with_same_path {
             let trait_impls = get_trait_impls(trait_with_same_path);
             if trait_impls.is_empty() {
                 continue;

@@ -848,6 +848,7 @@ pub trait Ord: Eq + PartialOrd<Self> {
     #[stable(feature = "ord_max_min", since = "1.21.0")]
     #[inline]
     #[must_use]
+    #[cfg_attr(not(bootstrap), rustc_diagnostic_item = "cmp_ord_max")]
     fn max(self, other: Self) -> Self
     where
         Self: Sized,
@@ -868,6 +869,7 @@ pub trait Ord: Eq + PartialOrd<Self> {
     #[stable(feature = "ord_max_min", since = "1.21.0")]
     #[inline]
     #[must_use]
+    #[cfg_attr(not(bootstrap), rustc_diagnostic_item = "cmp_ord_min")]
     fn min(self, other: Self) -> Self
     where
         Self: Sized,
@@ -1154,6 +1156,7 @@ pub trait PartialOrd<Rhs: ?Sized = Self>: PartialEq<Rhs> {
     /// ```
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg_attr(not(bootstrap), rustc_diagnostic_item = "cmp_partialord_cmp")]
     fn partial_cmp(&self, other: &Rhs) -> Option<Ordering>;
 
     /// This method tests less than (for `self` and `other`) and is used by the `<` operator.
@@ -1168,6 +1171,7 @@ pub trait PartialOrd<Rhs: ?Sized = Self>: PartialEq<Rhs> {
     #[inline]
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg_attr(not(bootstrap), rustc_diagnostic_item = "cmp_partialord_lt")]
     fn lt(&self, other: &Rhs) -> bool {
         matches!(self.partial_cmp(other), Some(Less))
     }
@@ -1185,6 +1189,7 @@ pub trait PartialOrd<Rhs: ?Sized = Self>: PartialEq<Rhs> {
     #[inline]
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg_attr(not(bootstrap), rustc_diagnostic_item = "cmp_partialord_le")]
     fn le(&self, other: &Rhs) -> bool {
         matches!(self.partial_cmp(other), Some(Less | Equal))
     }
@@ -1201,6 +1206,7 @@ pub trait PartialOrd<Rhs: ?Sized = Self>: PartialEq<Rhs> {
     #[inline]
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg_attr(not(bootstrap), rustc_diagnostic_item = "cmp_partialord_gt")]
     fn gt(&self, other: &Rhs) -> bool {
         matches!(self.partial_cmp(other), Some(Greater))
     }
@@ -1218,6 +1224,7 @@ pub trait PartialOrd<Rhs: ?Sized = Self>: PartialEq<Rhs> {
     #[inline]
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg_attr(not(bootstrap), rustc_diagnostic_item = "cmp_partialord_ge")]
     fn ge(&self, other: &Rhs) -> bool {
         matches!(self.partial_cmp(other), Some(Greater | Equal))
     }
@@ -1486,7 +1493,7 @@ mod impls {
     }
 
     partial_eq_impl! {
-        bool char usize u8 u16 u32 u64 u128 isize i8 i16 i32 i64 i128 f32 f64
+        bool char usize u8 u16 u32 u64 u128 isize i8 i16 i32 i64 i128 f16 f32 f64 f128
     }
 
     macro_rules! eq_impl {
@@ -1539,7 +1546,7 @@ mod impls {
         }
     }
 
-    partial_ord_impl! { f32 f64 }
+    partial_ord_impl! { f16 f32 f64 f128 }
 
     macro_rules! ord_impl {
         ($($t:ty)*) => ($(
