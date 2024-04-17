@@ -36,8 +36,9 @@ struct ToolBuild {
 
 impl Builder<'_> {
     #[track_caller]
-    fn msg_tool(
+    pub(crate) fn msg_tool(
         &self,
+        kind: Kind,
         mode: Mode,
         tool: &str,
         build_stage: u32,
@@ -47,7 +48,7 @@ impl Builder<'_> {
         match mode {
             // depends on compiler stage, different to host compiler
             Mode::ToolRustc => self.msg_sysroot_tool(
-                Kind::Build,
+                kind,
                 build_stage,
                 format_args!("tool {tool}"),
                 *host,
@@ -100,6 +101,7 @@ impl Step for ToolBuild {
             cargo.allow_features(self.allow_features);
         }
         let _guard = builder.msg_tool(
+            Kind::Build,
             self.mode,
             self.tool,
             self.compiler.stage,
@@ -481,6 +483,7 @@ impl Step for Rustdoc {
         );
 
         let _guard = builder.msg_tool(
+            Kind::Build,
             Mode::ToolRustc,
             "rustdoc",
             build_compiler.stage,
@@ -746,9 +749,11 @@ impl Step for LlvmBitcodeLinker {
             .join(exe(bin_name, self.compiler.host));
 
         if self.compiler.stage > 0 {
-            let bindir = builder.sysroot(self.compiler).join("bin");
-            t!(fs::create_dir_all(&bindir));
-            let bin_destination = bindir.join(exe(bin_name, self.compiler.host));
+            let bindir_self_contained = builder
+                .sysroot(self.compiler)
+                .join(format!("lib/rustlib/{}/bin/self-contained", self.target.triple));
+            t!(fs::create_dir_all(&bindir_self_contained));
+            let bin_destination = bindir_self_contained.join(exe(bin_name, self.compiler.host));
             builder.copy_link(&tool_out, &bin_destination);
             bin_destination
         } else {

@@ -286,6 +286,11 @@ trigger_files = [
     "library/std/src/os/windows"
 ]
 
+[autolabel."O-visionos"]
+trigger_files = [
+    "library/std/src/os/visionos"
+]
+
 [autolabel."T-bootstrap"]
 trigger_files = [
     "x.py",
@@ -379,7 +384,7 @@ trigger_files = [
 
 [autolabel."PG-exploit-mitigations"]
 trigger_files = [
-    "compiler/rustc_symbol_mangling/src/typeid",
+    "compiler/rustc_sanitizers",
     "src/doc/rustc/src/exploit-mitigations.md",
     "src/doc/unstable-book/src/compiler-flags/branch-protection.md",
     "src/doc/unstable-book/src/compiler-flags/cf-protection.md",
@@ -469,11 +474,11 @@ message = "Some changes occurred in need_type_info.rs"
 cc = ["@lcnr"]
 
 [mentions."compiler/rustc_middle/src/ty/relate.rs"]
-message = "Type relation code was changed"
+message = "changes to the core type system"
 cc = ["@compiler-errors", "@lcnr"]
 
 [mentions."compiler/rustc_infer/src/infer/relate"]
-message = "Type relation code was changed"
+message = "changes to the core type system"
 cc = ["@compiler-errors", "@lcnr"]
 
 [mentions."compiler/rustc_middle/src/mir/interpret"]
@@ -483,6 +488,10 @@ cc = ["@rust-lang/miri"]
 [mentions."compiler/rustc_mir_transform/src/"]
 message = "Some changes occurred to MIR optimizations"
 cc = ["@rust-lang/wg-mir-opt"]
+
+[mentions."compiler/rustc_trait_selection/src/traits/wf.rs"]
+message = "changes to the core type system"
+cc = ["@compiler-errors", "@lcnr"]
 
 [mentions."compiler/rustc_trait_selection/src/traits/const_evaluatable.rs"]
 message = "Some changes occurred in `const_evaluatable.rs`"
@@ -527,7 +536,12 @@ cc = ["@Nadrieril"]
 message = "Some changes occurred in exhaustiveness checking"
 cc = ["@Nadrieril"]
 
+[mentions."compiler/rustc_session/src/config/cfg.rs"]
+message = "Some changes occurred in cfg and check-cfg configuration"
+cc = ["@Urgau"]
+
 [mentions."compiler/rustc_lint/src/context/diagnostics/check_cfg.rs"]
+message = "Some changes occurred in check-cfg diagnostics"
 cc = ["@Urgau"]
 
 [mentions."library/core/src/intrinsics/simd.rs"]
@@ -687,7 +701,7 @@ cc = ["@nnethercote"]
 message = "Changes to the size of AST and/or HIR nodes."
 cc = ["@nnethercote"]
 
-[mentions."compiler/rustc_symbol_mangling/src/typeid"]
+[mentions."compiler/rustc_sanitizers"]
 cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
 
 [mentions."src/doc/rustc/src/exploit-mitigations.md"]
@@ -714,7 +728,7 @@ cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
 [mentions."src/doc/unstable-book/src/language-features/no-sanitize.md"]
 cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
 
-[mentions."src/doc/unstable-book/src/compiler-flags/check-cfg.md"]
+[mentions."src/doc/rustc/src/check-cfg.md"]
 cc = ["@Urgau"]
 
 [mentions."src/doc/rustc/src/platform-support"]
@@ -786,9 +800,11 @@ compiler-team = [
 compiler-team-contributors = [
     "@TaKO8Ki",
     "@Nadrieril",
+    "@nnethercote",
     "@fmease",
     "@fee1-dead",
     "@BoxyUwU",
+    "@jieyouxu",
 ]
 compiler = [
     "compiler-team",
@@ -842,14 +858,17 @@ parser = [
     "@compiler-errors",
     "@davidtwco",
     "@estebank",
+    "@nnethercote",
     "@petrochenkov",
     "@spastorino",
 ]
 lexer = [
+    "@nnethercote",
     "@petrochenkov",
     "@estebank",
 ]
 arena = [
+    "@nnethercote",
     "@spastorino",
 ]
 mir = [
@@ -969,10 +988,12 @@ project-exploit-mitigations = [
 "/src/llvm-project" =                                    ["@cuviper"]
 "/src/rustdoc-json-types" =                              ["rustdoc"]
 "/src/stage0.json" =                                     ["bootstrap"]
+"/tests/run-make" =                                      ["@jieyouxu"]
 "/tests/ui" =                                            ["compiler"]
 "/src/tools/cargo" =                                     ["@ehuss"]
-"/src/tools/compiletest" =                               ["bootstrap", "@wesleywiser", "@oli-obk", "@compiler-errors"]
+"/src/tools/compiletest" =                               ["bootstrap", "@wesleywiser", "@oli-obk", "@compiler-errors", "@jieyouxu"]
 "/src/tools/linkchecker" =                               ["@ehuss"]
+"/src/tools/run-make-support" =                          ["@jieyouxu"]
 "/src/tools/rust-installer" =                            ["bootstrap"]
 "/src/tools/rustbook" =                                  ["@ehuss"]
 "/src/tools/rustdoc" =                                   ["rustdoc"]

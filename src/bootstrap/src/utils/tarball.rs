@@ -1,3 +1,10 @@
+//! Facilitates the management and generation of tarballs.
+//!
+//! Tarballs efficiently hold Rust compiler build artifacts and
+//! capture a snapshot of each boostrap stage.
+//! In uplifting, a tarball from Stage N captures essential components
+//! to assemble Stage N + 1 compiler.
+
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -20,6 +27,7 @@ pub(crate) enum OverlayKind {
     RLS,
     RustAnalyzer,
     RustcCodegenCranelift,
+    LlvmBitcodeLinker,
 }
 
 impl OverlayKind {
@@ -64,6 +72,12 @@ impl OverlayKind {
                 "compiler/rustc_codegen_cranelift/LICENSE-APACHE",
                 "compiler/rustc_codegen_cranelift/LICENSE-MIT",
             ],
+            OverlayKind::LlvmBitcodeLinker => &[
+                "COPYRIGHT",
+                "LICENSE-APACHE",
+                "LICENSE-MIT",
+                "src/tools/llvm-bitcode-linker/README.md",
+            ],
         }
     }
 
@@ -87,6 +101,7 @@ impl OverlayKind {
                 .rust_analyzer_info
                 .version(builder, &builder.release_num("rust-analyzer/crates/rust-analyzer")),
             OverlayKind::RustcCodegenCranelift => builder.rust_version(),
+            OverlayKind::LlvmBitcodeLinker => builder.rust_version(),
         }
     }
 }

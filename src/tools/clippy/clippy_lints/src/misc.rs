@@ -66,7 +66,7 @@ declare_clippy_lint! {
     ///
     /// ### Known problems
     /// The lint does not work properly with desugaring and
-    /// macro, it has been allowed in the mean time.
+    /// macro, it has been allowed in the meantime.
     ///
     /// ### Example
     /// ```no_run
@@ -246,7 +246,7 @@ impl<'tcx> LateLintPass<'tcx> for LintPass {
                 cx,
                 USED_UNDERSCORE_BINDING,
                 expr.span,
-                &format!(
+                format!(
                     "used binding `{name}` which is prefixed with an underscore. A leading \
                      underscore signals that a binding will not be used"
                 ),

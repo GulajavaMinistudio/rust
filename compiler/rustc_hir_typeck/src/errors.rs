@@ -77,13 +77,6 @@ pub struct StructExprNonExhaustive {
 }
 
 #[derive(Diagnostic)]
-#[diag(hir_typeck_method_call_on_unknown_raw_pointee, code = E0699)]
-pub struct MethodCallOnUnknownRawPointee {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
 #[diag(hir_typeck_functional_record_update_on_non_struct, code = E0436)]
 pub struct FunctionalRecordUpdateOnNonStruct {
     #[primary_span]
@@ -638,4 +631,12 @@ pub enum SuggestBoxingForReturnImplTrait {
         #[suggestion_part(code = ")")]
         ends: Vec<Span>,
     },
+}
+
+#[derive(LintDiagnostic)]
+#[diag(hir_typeck_dereferencing_mut_binding)]
+pub struct DereferencingMutBinding {
+    #[label]
+    #[help]
+    pub span: Span,
 }

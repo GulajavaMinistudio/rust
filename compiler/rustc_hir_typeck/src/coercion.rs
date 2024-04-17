@@ -43,7 +43,7 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::Expr;
 use rustc_hir_analysis::hir_ty_lowering::HirTyLowerer;
-use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
+use rustc_infer::infer::type_variable::TypeVariableOrigin;
 use rustc_infer::infer::{Coercion, DefineOpaqueTypes, InferOk, InferResult};
 use rustc_infer::traits::TraitEngineExt as _;
 use rustc_infer::traits::{IfExpressionCause, MatchExpressionArmCause, TraitEngine};
@@ -59,10 +59,10 @@ use rustc_middle::ty::visit::TypeVisitableExt;
 use rustc_middle::ty::{self, GenericArgsRef, Ty, TyCtxt};
 use rustc_session::parse::feature_err;
 use rustc_span::symbol::sym;
-use rustc_span::DesugaringKind;
-use rustc_span::{BytePos, Span};
+use rustc_span::{BytePos, DesugaringKind, Span, DUMMY_SP};
 use rustc_target::spec::abi::Abi;
 use rustc_trait_selection::infer::InferCtxtExt as _;
+use rustc_trait_selection::traits::error_reporting::suggestions::TypeErrCtxtExt;
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt;
 use rustc_trait_selection::traits::TraitEngineExt as _;
@@ -279,10 +279,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         if b.is_ty_var() {
             // Two unresolved type variables: create a `Coerce` predicate.
             let target_ty = if self.use_lub {
-                self.next_ty_var(TypeVariableOrigin {
-                    kind: TypeVariableOriginKind::LatticeVariable,
-                    span: self.cause.span,
-                })
+                self.next_ty_var(TypeVariableOrigin { param_def_id: None, span: self.cause.span })
             } else {
                 b
             };
@@ -581,10 +578,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         // the `CoerceUnsized` target type and the expected type.
         // We only have the latter, so we use an inference variable
         // for the former and let type inference do the rest.
-        let origin = TypeVariableOrigin {
-            kind: TypeVariableOriginKind::MiscVariable,
-            span: self.cause.span,
-        };
+        let origin = TypeVariableOrigin { param_def_id: None, span: self.cause.span };
         let coerce_target = self.next_ty_var(origin);
         let mut coercion = self.unify_and(coerce_target, target, |target| {
             let unsize = Adjustment { kind: Adjust::Pointer(PointerCoercion::Unsize), target };
@@ -1050,7 +1044,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let source = self.resolve_vars_with_obligations(expr_ty);
         debug!("coercion::can_with_predicates({:?} -> {:?})", source, target);
 
-        let cause = self.cause(rustc_span::DUMMY_SP, ObligationCauseCode::ExprAssignable);
+        let cause = self.cause(DUMMY_SP, ObligationCauseCode::ExprAssignable);
         // We don't ever need two-phase here since we throw out the result of the coercion
         let coerce = Coerce::new(self, cause, AllowTwoPhase::No);
         self.probe(|_| {
@@ -1067,11 +1061,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// how many dereference steps needed to achieve `expr_ty <: target`. If
     /// it's not possible, return `None`.
     pub fn deref_steps(&self, expr_ty: Ty<'tcx>, target: Ty<'tcx>) -> Option<usize> {
-        let cause = self.cause(rustc_span::DUMMY_SP, ObligationCauseCode::ExprAssignable);
+        let cause = self.cause(DUMMY_SP, ObligationCauseCode::ExprAssignable);
         // We don't ever need two-phase here since we throw out the result of the coercion
         let coerce = Coerce::new(self, cause, AllowTwoPhase::No);
         coerce
-            .autoderef(rustc_span::DUMMY_SP, expr_ty)
+            .autoderef(DUMMY_SP, expr_ty)
             .find_map(|(ty, steps)| self.probe(|_| coerce.unify(ty, target)).ok().map(|_| steps))
     }
 
@@ -1082,7 +1076,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// trait or region sub-obligations. (presumably we could, but it's not
     /// particularly important for diagnostics...)
     pub fn deref_once_mutably_for_diagnostic(&self, expr_ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
-        self.autoderef(rustc_span::DUMMY_SP, expr_ty).nth(1).and_then(|(deref_ty, _)| {
+        self.autoderef(DUMMY_SP, expr_ty).nth(1).and_then(|(deref_ty, _)| {
             self.infcx
                 .type_implements_trait(
                     self.tcx.lang_items().deref_mut_trait()?,
@@ -1316,6 +1310,20 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
         }
     }
+}
+
+/// Check whether `ty` can be coerced to `output_ty`.
+/// Used from clippy.
+pub fn can_coerce<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+    body_id: LocalDefId,
+    ty: Ty<'tcx>,
+    output_ty: Ty<'tcx>,
+) -> bool {
+    let root_ctxt = crate::typeck_root_ctxt::TypeckRootCtxt::new(tcx, body_id);
+    let fn_ctxt = FnCtxt::new(&root_ctxt, param_env, body_id);
+    fn_ctxt.can_coerce(ty, output_ty)
 }
 
 /// CoerceMany encapsulates the pattern you should use when you have
@@ -1602,6 +1610,15 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                             E0069,
                             "`return;` in a function whose return type is not `()`"
                         );
+                        if let Some(value) = fcx.err_ctxt().ty_kind_suggestion(fcx.param_env, found)
+                        {
+                            err.span_suggestion_verbose(
+                                cause.span.shrink_to_hi(),
+                                "give the `return` a value of the expected type",
+                                format!(" {value}"),
+                                Applicability::HasPlaceholders,
+                            );
+                        }
                         err.span_label(cause.span, "return type is not `()`");
                     }
                     ObligationCauseCode::BlockTailExpression(blk_id, ..) => {
@@ -1990,16 +2007,17 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
             }
         }
 
-        let parent_id = fcx.tcx.hir().get_parent_item(id);
-        let mut parent_item = fcx.tcx.hir_node_by_def_id(parent_id.def_id);
+        let mut parent_id = fcx.tcx.hir().get_parent_item(id).def_id;
+        let mut parent_item = fcx.tcx.hir_node_by_def_id(parent_id);
         // When suggesting return, we need to account for closures and async blocks, not just items.
         for (_, node) in fcx.tcx.hir().parent_iter(id) {
             match node {
                 hir::Node::Expr(&hir::Expr {
-                    kind: hir::ExprKind::Closure(hir::Closure { .. }),
+                    kind: hir::ExprKind::Closure(hir::Closure { def_id, .. }),
                     ..
                 }) => {
                     parent_item = node;
+                    parent_id = *def_id;
                     break;
                 }
                 hir::Node::Item(_) | hir::Node::TraitItem(_) | hir::Node::ImplItem(_) => break,
@@ -2009,13 +2027,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
 
         if let (Some(expr), Some(_), Some(fn_decl)) = (expression, blk_id, parent_item.fn_decl()) {
             fcx.suggest_missing_break_or_return_expr(
-                &mut err,
-                expr,
-                fn_decl,
-                expected,
-                found,
-                id,
-                parent_id.into(),
+                &mut err, expr, fn_decl, expected, found, id, parent_id,
             );
         }
 

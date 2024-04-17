@@ -46,6 +46,10 @@ hir_typeck_ctor_is_private = tuple struct constructor `{$def}` is private
 
 hir_typeck_deref_is_empty = this expression `Deref`s to `{$deref_ty}` which implements `is_empty`
 
+hir_typeck_dereferencing_mut_binding = dereferencing `mut` binding
+    .label = `mut` dereferences the type of this binding
+    .help = this will change in edition 2024
+
 hir_typeck_expected_default_return_type = expected `()` because of default return type
 
 hir_typeck_expected_return_type = expected `{$expected}` because of return type
@@ -92,9 +96,6 @@ hir_typeck_lossy_provenance_ptr2int =
     under strict provenance it is considered bad style to cast pointer `{$expr_ty}` to integer `{$cast_ty}`
     .suggestion = use `.addr()` to obtain the address of a pointer
     .help = if you can't comply with strict provenance and need to expose the pointer provenance you can use `.expose_provenance()` instead
-
-hir_typeck_method_call_on_unknown_raw_pointee =
-    cannot call a method on a raw pointer with an unknown pointee type
 
 hir_typeck_missing_parentheses_in_range = can't call method `{$method_name}` on type `{$ty_str}`
 

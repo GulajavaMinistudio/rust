@@ -1,10 +1,10 @@
 use crate::check::intrinsicck::InlineAsmCtxt;
-use crate::errors::LinkageType;
 
 use super::compare_impl_item::check_type_bounds;
 use super::compare_impl_item::{compare_impl_method, compare_impl_ty};
 use super::*;
 use rustc_attr as attr;
+use rustc_data_structures::unord::{UnordMap, UnordSet};
 use rustc_errors::{codes::*, MultiSpan};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind};
@@ -12,8 +12,9 @@ use rustc_hir::Node;
 use rustc_infer::infer::{RegionVariableOrigin, TyCtxtInferExt};
 use rustc_infer::traits::{Obligation, TraitEngineExt as _};
 use rustc_lint_defs::builtin::REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS;
+use rustc_middle::middle::resolve_bound_vars::ResolvedArg;
 use rustc_middle::middle::stability::EvalResult;
-use rustc_middle::traits::{DefiningAnchor, ObligationCauseCode};
+use rustc_middle::traits::ObligationCauseCode;
 use rustc_middle::ty::fold::BottomUpFolder;
 use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::util::{Discr, InspectCoroutineFields, IntTypeExt};
@@ -22,7 +23,6 @@ use rustc_middle::ty::{
     AdtDef, ParamEnv, RegionKind, TypeSuperVisitable, TypeVisitable, TypeVisitableExt,
 };
 use rustc_session::lint::builtin::{UNINHABITED_STATIC, UNSUPPORTED_CALLING_CONVENTIONS};
-use rustc_span::symbol::sym;
 use rustc_target::abi::FieldIdx;
 use rustc_trait_selection::traits::error_reporting::on_unimplemented::OnUnimplementedDirective;
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
@@ -345,10 +345,7 @@ fn check_opaque_meets_bounds<'tcx>(
     };
     let param_env = tcx.param_env(defining_use_anchor);
 
-    let infcx = tcx
-        .infer_ctxt()
-        .with_opaque_type_inference(DefiningAnchor::bind(tcx, defining_use_anchor))
-        .build();
+    let infcx = tcx.infer_ctxt().with_opaque_type_inference(defining_use_anchor).build();
     let ocx = ObligationCtxt::new(&infcx);
 
     let args = match *origin {
@@ -478,6 +475,133 @@ fn sanity_check_found_hidden_type<'tcx>(
     }
 }
 
+/// Check that the opaque's precise captures list is valid (if present).
+/// We check this for regular `impl Trait`s and also RPITITs, even though the latter
+/// are technically GATs.
+///
+/// This function is responsible for:
+/// 1. Checking that all type/const params are mention in the captures list.
+/// 2. Checking that all lifetimes that are implicitly captured are mentioned.
+/// 3. Asserting that all parameters mentioned in the captures list are invariant.
+fn check_opaque_precise_captures<'tcx>(tcx: TyCtxt<'tcx>, opaque_def_id: LocalDefId) {
+    let hir::OpaqueTy { precise_capturing_args, .. } =
+        *tcx.hir_node_by_def_id(opaque_def_id).expect_item().expect_opaque_ty();
+    let Some(precise_capturing_args) = precise_capturing_args else {
+        // No precise capturing args; nothing to validate
+        return;
+    };
+
+    let mut expected_captures = UnordSet::default();
+    let mut seen_params = UnordMap::default();
+    let mut prev_non_lifetime_param = None;
+    for arg in precise_capturing_args {
+        let (hir_id, ident) = match *arg {
+            hir::PreciseCapturingArg::Param(hir::PreciseCapturingNonLifetimeArg {
+                hir_id,
+                ident,
+                ..
+            }) => {
+                if prev_non_lifetime_param.is_none() {
+                    prev_non_lifetime_param = Some(ident);
+                }
+                (hir_id, ident)
+            }
+            hir::PreciseCapturingArg::Lifetime(&hir::Lifetime { hir_id, ident, .. }) => {
+                if let Some(prev_non_lifetime_param) = prev_non_lifetime_param {
+                    tcx.dcx().emit_err(errors::LifetimesMustBeFirst {
+                        lifetime_span: ident.span,
+                        name: ident.name,
+                        other_span: prev_non_lifetime_param.span,
+                    });
+                }
+                (hir_id, ident)
+            }
+        };
+
+        let ident = ident.normalize_to_macros_2_0();
+        if let Some(span) = seen_params.insert(ident, ident.span) {
+            tcx.dcx().emit_err(errors::DuplicatePreciseCapture {
+                name: ident.name,
+                first_span: span,
+                second_span: ident.span,
+            });
+        }
+
+        match tcx.named_bound_var(hir_id) {
+            Some(ResolvedArg::EarlyBound(def_id)) => {
+                expected_captures.insert(def_id);
+            }
+            _ => {
+                tcx.dcx().span_delayed_bug(
+                    tcx.hir().span(hir_id),
+                    "parameter should have been resolved",
+                );
+            }
+        }
+    }
+
+    let variances = tcx.variances_of(opaque_def_id);
+    let mut def_id = Some(opaque_def_id.to_def_id());
+    while let Some(generics) = def_id {
+        let generics = tcx.generics_of(generics);
+        def_id = generics.parent;
+
+        for param in &generics.params {
+            if expected_captures.contains(&param.def_id) {
+                assert_eq!(
+                    variances[param.index as usize],
+                    ty::Invariant,
+                    "precise captured param should be invariant"
+                );
+                continue;
+            }
+
+            match param.kind {
+                ty::GenericParamDefKind::Lifetime => {
+                    // Check if the lifetime param was captured but isn't named in the precise captures list.
+                    if variances[param.index as usize] == ty::Invariant {
+                        let param_span =
+                            if let ty::ReEarlyParam(ty::EarlyParamRegion { def_id, .. })
+                            | ty::ReLateParam(ty::LateParamRegion {
+                                bound_region: ty::BoundRegionKind::BrNamed(def_id, _),
+                                ..
+                            }) = *tcx
+                                .map_opaque_lifetime_to_parent_lifetime(param.def_id.expect_local())
+                            {
+                                Some(tcx.def_span(def_id))
+                            } else {
+                                None
+                            };
+                        // FIXME(precise_capturing): Structured suggestion for this would be useful
+                        tcx.dcx().emit_err(errors::LifetimeNotCaptured {
+                            use_span: tcx.def_span(param.def_id),
+                            param_span,
+                            opaque_span: tcx.def_span(opaque_def_id),
+                        });
+                        continue;
+                    }
+                }
+                ty::GenericParamDefKind::Type { .. } => {
+                    // FIXME(precise_capturing): Structured suggestion for this would be useful
+                    tcx.dcx().emit_err(errors::ParamNotCaptured {
+                        param_span: tcx.def_span(param.def_id),
+                        opaque_span: tcx.def_span(opaque_def_id),
+                        kind: "type",
+                    });
+                }
+                ty::GenericParamDefKind::Const { .. } => {
+                    // FIXME(precise_capturing): Structured suggestion for this would be useful
+                    tcx.dcx().emit_err(errors::ParamNotCaptured {
+                        param_span: tcx.def_span(param.def_id),
+                        opaque_span: tcx.def_span(opaque_def_id),
+                        kind: "const",
+                    });
+                }
+            }
+        }
+    }
+}
+
 fn is_enum_of_nonnullable_ptr<'tcx>(
     tcx: TyCtxt<'tcx>,
     adt_def: AdtDef<'tcx>,
@@ -503,13 +627,12 @@ fn check_static_linkage(tcx: TyCtxt<'_>, def_id: LocalDefId) {
             ty::Adt(adt_def, args) => !is_enum_of_nonnullable_ptr(tcx, *adt_def, *args),
             _ => true,
         } {
-            tcx.dcx().emit_err(LinkageType { span: tcx.def_span(def_id) });
+            tcx.dcx().emit_err(errors::LinkageType { span: tcx.def_span(def_id) });
         }
     }
 }
 
 pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
-    let _indenter = indenter();
     match tcx.def_kind(def_id) {
         DefKind::Static { .. } => {
             tcx.ensure().typeck(def_id);
@@ -571,6 +694,8 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
             check_union(tcx, def_id);
         }
         DefKind::OpaqueTy => {
+            check_opaque_precise_captures(tcx, def_id);
+
             let origin = tcx.opaque_type_origin(def_id);
             if let hir::OpaqueTyOrigin::FnReturn(fn_def_id)
             | hir::OpaqueTyOrigin::AsyncFn(fn_def_id) = origin
@@ -1567,7 +1692,7 @@ pub(super) fn check_coroutine_obligations(
         .ignoring_regions()
         // Bind opaque types to type checking root, as they should have been checked by borrowck,
         // but may show up in some cases, like when (root) obligations are stalled in the new solver.
-        .with_opaque_type_inference(DefiningAnchor::bind(tcx, typeck.hir_owner.def_id))
+        .with_opaque_type_inference(typeck.hir_owner.def_id)
         .build();
 
     let mut fulfillment_cx = <dyn TraitEngine<'_>>::new(&infcx);

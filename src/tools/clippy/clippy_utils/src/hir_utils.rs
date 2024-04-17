@@ -954,8 +954,7 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
                     self.hash_pat(pat);
                 }
             },
-            PatKind::Box(pat) => self.hash_pat(pat),
-            PatKind::Deref(pat) => self.hash_pat(pat),
+            PatKind::Box(pat) | PatKind::Deref(pat) => self.hash_pat(pat),
             PatKind::Lit(expr) => self.hash_expr(expr),
             PatKind::Or(pats) => {
                 for pat in pats {
@@ -1068,6 +1067,10 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
             &TyKind::Array(ty, len) => {
                 self.hash_ty(ty);
                 self.hash_array_length(len);
+            },
+            TyKind::Pat(ty, pat) => {
+                self.hash_ty(ty);
+                self.hash_pat(pat);
             },
             TyKind::Ptr(ref mut_ty) => {
                 self.hash_ty(mut_ty.ty);

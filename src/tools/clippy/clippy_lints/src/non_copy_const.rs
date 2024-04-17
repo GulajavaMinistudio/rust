@@ -18,7 +18,7 @@ use rustc_middle::mir::interpret::{ErrorHandled, EvalToValTreeResult, GlobalId};
 use rustc_middle::ty::adjustment::Adjust;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::impl_lint_pass;
-use rustc_span::{sym, InnerSpan, Span};
+use rustc_span::{sym, DUMMY_SP, InnerSpan, Span};
 use rustc_target::abi::VariantIdx;
 
 // FIXME: this is a correctness problem but there's no suitable
@@ -285,14 +285,12 @@ impl NonCopyConst {
         let def_id = body_id.hir_id.owner.to_def_id();
         let args = ty::GenericArgs::identity_for_item(cx.tcx, def_id);
         let instance = ty::Instance::new(def_id, args);
-        let cid = rustc_middle::mir::interpret::GlobalId {
+        let cid = GlobalId {
             instance,
             promoted: None,
         };
         let param_env = cx.tcx.param_env(def_id).with_reveal_all_normalized(cx.tcx);
-        let result = cx
-            .tcx
-            .const_eval_global_id_for_typeck(param_env, cid, rustc_span::DUMMY_SP);
+        let result = cx.tcx.const_eval_global_id_for_typeck(param_env, cid, DUMMY_SP);
         self.is_value_unfrozen_raw(cx, result, ty)
     }
 
@@ -303,7 +301,7 @@ impl NonCopyConst {
             cx.tcx,
             cx.param_env,
             ty::UnevaluatedConst::new(def_id, args),
-            rustc_span::DUMMY_SP,
+            DUMMY_SP,
         );
         self.is_value_unfrozen_raw(cx, result, ty)
     }
@@ -534,7 +532,7 @@ impl<'tcx> LateLintPass<'tcx> for NonCopyConst {
     }
 }
 
-fn ignored_macro(cx: &LateContext<'_>, it: &rustc_hir::Item<'_>) -> bool {
+fn ignored_macro(cx: &LateContext<'_>, it: &Item<'_>) -> bool {
     macro_backtrace(it.span).any(|macro_call| {
         matches!(
             cx.tcx.get_diagnostic_name(macro_call.def_id),

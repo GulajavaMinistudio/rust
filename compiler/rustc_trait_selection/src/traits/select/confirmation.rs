@@ -157,10 +157,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     ) -> Result<Vec<PredicateObligation<'tcx>>, SelectionError<'tcx>> {
         let tcx = self.tcx();
 
-        let trait_predicate = self.infcx.shallow_resolve(obligation.predicate);
         let placeholder_trait_predicate =
-            self.infcx.enter_forall_and_leak_universe(trait_predicate).trait_ref;
-        let placeholder_self_ty = placeholder_trait_predicate.self_ty();
+            self.infcx.enter_forall_and_leak_universe(obligation.predicate).trait_ref;
+        let placeholder_self_ty = self.infcx.shallow_resolve(placeholder_trait_predicate.self_ty());
         let candidate_predicate = self
             .for_each_item_bound(
                 placeholder_self_ty,
@@ -314,12 +313,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     .flat_map(|cond| flatten_answer_tree(tcx, obligation, predicate, cond))
                     .collect(),
                 Condition::IfTransmutable { src, dst } => {
-                    let trait_def_id = obligation.predicate.def_id();
+                    let transmute_trait = obligation.predicate.def_id();
                     let assume_const = predicate.trait_ref.args.const_at(2);
-                    let make_obl = |from_ty, to_ty| {
-                        let trait_ref1 = ty::TraitRef::new(
+                    let make_transmute_obl = |from_ty, to_ty| {
+                        let trait_ref = ty::TraitRef::new(
                             tcx,
-                            trait_def_id,
+                            transmute_trait,
                             [
                                 ty::GenericArg::from(to_ty),
                                 ty::GenericArg::from(from_ty),
@@ -331,17 +330,45 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             obligation.cause.clone(),
                             obligation.recursion_depth + 1,
                             obligation.param_env,
-                            trait_ref1,
+                            trait_ref,
                         )
                     };
+
+                    let make_freeze_obl = |ty| {
+                        let trait_ref = ty::TraitRef::new(
+                            tcx,
+                            tcx.lang_items().freeze_trait().unwrap(),
+                            [ty::GenericArg::from(ty)],
+                        );
+                        Obligation::with_depth(
+                            tcx,
+                            obligation.cause.clone(),
+                            obligation.recursion_depth + 1,
+                            obligation.param_env,
+                            trait_ref,
+                        )
+                    };
+
+                    let mut obls = vec![];
+
+                    // If the source is a shared reference, it must be `Freeze`;
+                    // otherwise, transmuting could lead to data races.
+                    if src.mutability == Mutability::Not {
+                        obls.extend([make_freeze_obl(src.ty), make_freeze_obl(dst.ty)])
+                    }
 
                     // If Dst is mutable, check bidirectionally.
                     // For example, transmuting bool -> u8 is OK as long as you can't update that u8
                     // to be > 1, because you could later transmute the u8 back to a bool and get UB.
                     match dst.mutability {
-                        Mutability::Not => vec![make_obl(src.ty, dst.ty)],
-                        Mutability::Mut => vec![make_obl(src.ty, dst.ty), make_obl(dst.ty, src.ty)],
+                        Mutability::Not => obls.push(make_transmute_obl(src.ty, dst.ty)),
+                        Mutability::Mut => obls.extend([
+                            make_transmute_obl(src.ty, dst.ty),
+                            make_transmute_obl(dst.ty, src.ty),
+                        ]),
                     }
+
+                    obls
                 }
             }
         }
@@ -394,7 +421,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     ) -> Result<Vec<PredicateObligation<'tcx>>, SelectionError<'tcx>> {
         debug!(?obligation, "confirm_auto_impl_candidate");
 
-        let self_ty = self.infcx.shallow_resolve(obligation.predicate.self_ty());
+        let self_ty = obligation.predicate.self_ty().map_bound(|ty| self.infcx.shallow_resolve(ty));
         let types = self.constituent_types_for_ty(self_ty)?;
         Ok(self.vtable_auto_impl(obligation, obligation.predicate.def_id(), types))
     }
@@ -1051,8 +1078,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             })
             .map_err(|terr| {
                 SignatureMismatch(Box::new(SignatureMismatchData {
-                    expected_trait_ref: ty::Binder::dummy(obligation_trait_ref),
-                    found_trait_ref: ty::Binder::dummy(found_trait_ref),
+                    expected_trait_ref: obligation_trait_ref,
+                    found_trait_ref,
                     terr,
                 }))
             })
@@ -1350,7 +1377,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let drop_trait = self.tcx().require_lang_item(LangItem::Drop, None);
 
         let tcx = self.tcx();
-        let self_ty = self.infcx.shallow_resolve(obligation.self_ty());
+        let self_ty = obligation.self_ty().map_bound(|ty| self.infcx.shallow_resolve(ty));
 
         let mut nested = vec![];
         let cause = obligation.derived_cause(BuiltinDerivedObligation);
@@ -1417,7 +1444,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
                 // These types are built-in, so we can fast-track by registering
                 // nested predicates for their constituent type(s)
-                ty::Array(ty, _) | ty::Slice(ty) => {
+                ty::Array(ty, _) | ty::Slice(ty) | ty::Pat(ty, _) => {
                     stack.push(ty);
                 }
                 ty::Tuple(tys) => {
@@ -1469,7 +1496,15 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 // If we have any other type (e.g. an ADT), just register a nested obligation
                 // since it's either not `const Drop` (and we raise an error during selection),
                 // or it's an ADT (and we need to check for a custom impl during selection)
-                _ => {
+                ty::Error(_)
+                | ty::Dynamic(..)
+                | ty::CoroutineClosure(..)
+                | ty::Param(_)
+                | ty::Bound(..)
+                | ty::Adt(..)
+                | ty::Alias(ty::Opaque | ty::Weak, _)
+                | ty::Infer(_)
+                | ty::Placeholder(_) => {
                     let predicate = self_ty.rebind(ty::TraitPredicate {
                         trait_ref: ty::TraitRef::from_lang_item(
                             self.tcx(),

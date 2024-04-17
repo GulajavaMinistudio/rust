@@ -18,7 +18,7 @@ use rustc_middle::traits::ImplSource;
 use rustc_middle::traits::ImplSourceUserDefinedData;
 
 use crate::errors::InherentProjectionNormalizationOverflow;
-use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
+use crate::infer::type_variable::TypeVariableOrigin;
 use crate::infer::{BoundRegionConversionTime, InferOk};
 use crate::traits::normalize::normalize_with_depth;
 use crate::traits::normalize::normalize_with_depth_to;
@@ -431,7 +431,7 @@ pub(super) fn opt_normalize_projection_type<'a, 'b, 'tcx>(
 
             let projected_term = selcx.infcx.resolve_vars_if_possible(projected_term);
 
-            let mut result = if projected_term.has_projections() {
+            let mut result = if projected_term.has_aliases() {
                 let normalized_ty = normalize_with_depth_to(
                     selcx,
                     param_env,
@@ -522,7 +522,7 @@ fn normalize_to_error<'a, 'tcx>(
     };
     let tcx = selcx.infcx.tcx;
     let new_value = selcx.infcx.next_ty_var(TypeVariableOrigin {
-        kind: TypeVariableOriginKind::NormalizeProjectionType,
+        param_def_id: None,
         span: tcx.def_span(projection_ty.def_id),
     });
     Normalized { value: new_value, obligations: vec![trait_obligation] }
@@ -595,7 +595,7 @@ pub fn normalize_inherent_projection<'a, 'b, 'tcx>(
     let ty = tcx.type_of(alias_ty.def_id).instantiate(tcx, args);
 
     let mut ty = selcx.infcx.resolve_vars_if_possible(ty);
-    if ty.has_projections() {
+    if ty.has_aliases() {
         ty = normalize_with_depth_to(selcx, param_env, cause.clone(), depth + 1, ty, obligations);
     }
 
@@ -793,6 +793,9 @@ fn assemble_candidates_from_trait_def<'cx, 'tcx>(
             let Some(clause) = clause.as_projection_clause() else {
                 return ControlFlow::Continue(());
             };
+            if clause.projection_def_id() != obligation.predicate.def_id {
+                return ControlFlow::Continue(());
+            }
 
             let is_match =
                 selcx.infcx.probe(|_| selcx.match_projection_projections(obligation, clause, true));
@@ -1045,6 +1048,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                         | ty::Foreign(_)
                         | ty::Str
                         | ty::Array(..)
+                        | ty::Pat(..)
                         | ty::Slice(_)
                         | ty::RawPtr(..)
                         | ty::Ref(..)
@@ -1096,6 +1100,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                         | ty::Float(_)
                         | ty::Str
                         | ty::Array(..)
+                        | ty::Pat(..)
                         | ty::Slice(_)
                         | ty::RawPtr(..)
                         | ty::Ref(..)
@@ -1596,7 +1601,10 @@ fn confirm_closure_candidate<'cx, 'tcx>(
                 // If we know the kind and upvars, use that directly.
                 // Otherwise, defer to `AsyncFnKindHelper::Upvars` to delay
                 // the projection, like the `AsyncFn*` traits do.
-                let output_ty = if let Some(_) = kind_ty.to_opt_closure_kind() {
+                let output_ty = if let Some(_) = kind_ty.to_opt_closure_kind()
+                    // Fall back to projection if upvars aren't constrained
+                    && !args.tupled_upvars_ty().is_ty_var()
+                {
                     sig.to_coroutine_given_kind_and_upvars(
                         tcx,
                         args.parent_args(),
@@ -1726,7 +1734,10 @@ fn confirm_async_closure_candidate<'cx, 'tcx>(
 
             let term = match item_name {
                 sym::CallOnceFuture | sym::CallRefFuture => {
-                    if let Some(closure_kind) = kind_ty.to_opt_closure_kind() {
+                    if let Some(closure_kind) = kind_ty.to_opt_closure_kind()
+                        // Fall back to projection if upvars aren't constrained
+                        && !args.tupled_upvars_ty().is_ty_var()
+                    {
                         if !closure_kind.extends(goal_kind) {
                             bug!("we should not be confirming if the closure kind is not met");
                         }

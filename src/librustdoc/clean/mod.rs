@@ -1,5 +1,25 @@
-//! This module contains the "cleaned" pieces of the AST, and the functions
-//! that clean them.
+//! This module defines the primary IR[^1] used in rustdoc together with the procedures that
+//! transform rustc data types into it.
+//!
+//! This IR — commonly referred to as the *cleaned AST* — is modeled after the [AST][ast].
+//!
+//! There are two kinds of transformation — *cleaning* — procedures:
+//!
+//! 1. Cleans [HIR][hir] types. Used for user-written code and inlined local re-exports
+//!    both found in the local crate.
+//! 2. Cleans [`rustc_middle::ty`] types. Used for inlined cross-crate re-exports and anything
+//!    output by the trait solver (e.g., when synthesizing blanket and auto-trait impls).
+//!    They usually have `ty` or `middle` in their name.
+//!
+//! Their name is prefixed by `clean_`.
+//!
+//! Both the HIR and the `rustc_middle::ty` IR are quite removed from the source code.
+//! The cleaned AST on the other hand is closer to it which simplifies the rendering process.
+//! Furthermore, operating on a single IR instead of two avoids duplicating efforts down the line.
+//!
+//! This IR is consumed by both the HTML and the JSON backend.
+//!
+//! [^1]: Intermediate representation.
 
 mod auto_trait;
 mod blanket_impl;
@@ -29,7 +49,7 @@ use rustc_middle::ty::{self, AdtKind, Ty, TyCtxt};
 use rustc_middle::{bug, span_bug};
 use rustc_span::hygiene::{AstPass, MacroKind};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::{self, ExpnKind};
+use rustc_span::ExpnKind;
 use rustc_trait_selection::traits::wf::object_region_bounds;
 
 use std::borrow::Cow;
@@ -37,14 +57,14 @@ use std::collections::BTreeMap;
 use std::mem;
 use thin_vec::ThinVec;
 
-use crate::core::{self, DocContext};
+use crate::core::DocContext;
 use crate::formats::item_type::ItemType;
 use crate::visit_ast::Module as DocModule;
 
 use utils::*;
 
 pub(crate) use self::types::*;
-pub(crate) use self::utils::{get_auto_trait_and_blanket_impls, krate, register_res};
+pub(crate) use self::utils::{krate, register_res, synthesize_auto_trait_and_blanket_impls};
 
 pub(crate) fn clean_doc_module<'tcx>(doc: &DocModule<'tcx>, cx: &mut DocContext<'tcx>) -> Item {
     let mut items: Vec<Item> = vec![];
@@ -1782,6 +1802,7 @@ pub(crate) fn clean_ty<'tcx>(ty: &hir::Ty<'tcx>, cx: &mut DocContext<'tcx>) -> T
             BorrowedRef { lifetime, mutability: m.mutbl, type_: Box::new(clean_ty(m.ty, cx)) }
         }
         TyKind::Slice(ty) => Slice(Box::new(clean_ty(ty, cx))),
+        TyKind::Pat(ty, pat) => Type::Pat(Box::new(clean_ty(ty, cx)), format!("{pat:?}").into()),
         TyKind::Array(ty, ref length) => {
             let length = match length {
                 hir::ArrayLen::Infer(..) => "_".to_string(),
@@ -2008,6 +2029,10 @@ pub(crate) fn clean_middle_ty<'tcx>(
         ty::Float(float_ty) => Primitive(float_ty.into()),
         ty::Str => Primitive(PrimitiveType::Str),
         ty::Slice(ty) => Slice(Box::new(clean_middle_ty(bound_ty.rebind(ty), cx, None, None))),
+        ty::Pat(ty, pat) => Type::Pat(
+            Box::new(clean_middle_ty(bound_ty.rebind(ty), cx, None, None)),
+            format!("{pat:?}").into_boxed_str(),
+        ),
         ty::Array(ty, mut n) => {
             n = n.normalize(cx.tcx, ty::ParamEnv::reveal_all());
             let n = print_const(cx, n);
@@ -3002,22 +3027,22 @@ fn clean_use_statement_inner<'tcx>(
             // were specifically asked for it
             denied = true;
         }
-        if !denied {
-            if let Some(mut items) = inline::try_inline(
+        if !denied
+            && let Some(mut items) = inline::try_inline(
                 cx,
                 path.res,
                 name,
                 Some((attrs, Some(import_def_id))),
                 &mut Default::default(),
-            ) {
-                items.push(Item::from_def_id_and_parts(
-                    import_def_id,
-                    None,
-                    ImportItem(Import::new_simple(name, resolve_use_source(cx, path), false)),
-                    cx,
-                ));
-                return items;
-            }
+            )
+        {
+            items.push(Item::from_def_id_and_parts(
+                import_def_id,
+                None,
+                ImportItem(Import::new_simple(name, resolve_use_source(cx, path), false)),
+                cx,
+            ));
+            return items;
         }
         Import::new_simple(name, resolve_use_source(cx, path), true)
     };

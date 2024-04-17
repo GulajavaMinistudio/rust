@@ -38,6 +38,7 @@ declare_lint_pass! {
         DEPRECATED_CFG_ATTR_CRATE_TYPE_NAME,
         DEPRECATED_IN_FUTURE,
         DEPRECATED_WHERE_CLAUSE_LOCATION,
+        DEREFERENCING_MUT_BINDING,
         DUPLICATE_MACRO_ATTRIBUTES,
         ELIDED_LIFETIMES_IN_ASSOCIATED_CONSTANT,
         ELIDED_LIFETIMES_IN_PATHS,
@@ -79,6 +80,7 @@ declare_lint_pass! {
         PROC_MACRO_BACK_COMPAT,
         PROC_MACRO_DERIVE_RESOLUTION_FALLBACK,
         PUB_USE_OF_PRIVATE_EXTERN_CRATE,
+        REDUNDANT_LIFETIMES,
         REFINING_IMPL_TRAIT_INTERNAL,
         REFINING_IMPL_TRAIT_REACHABLE,
         RENAMED_AND_REMOVED_LINTS,
@@ -1627,6 +1629,42 @@ declare_lint! {
 }
 
 declare_lint! {
+    /// The `dereferencing_mut_binding` lint detects a `mut x` pattern that resets the binding mode,
+    /// as this behavior will change in rust 2024.
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// # #![warn(dereferencing_mut_binding)]
+    /// let x = Some(123u32);
+    /// let _y = match &x {
+    ///     Some(mut x) => {
+    ///         x += 1;
+    ///         x
+    ///     }
+    ///     None => 0,
+    /// };
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// Without the `mut`, `x` would have type `&u32`. Pre-2024, adding `mut` makes `x` have type
+    /// `u32`, which was deemed surprising. After edition 2024, adding `mut` will not change the
+    /// type of `x`. This lint warns users of editions before 2024 to update their code.
+    pub DEREFERENCING_MUT_BINDING,
+    Allow,
+    "detects `mut x` bindings that change the type of `x`",
+    @feature_gate = sym::mut_preserve_binding_mode_2024;
+    // FIXME uncomment below upon stabilization
+    /*@future_incompatible = FutureIncompatibleInfo {
+        reason: FutureIncompatibilityReason::EditionSemanticsChange(Edition::Edition2024),
+        reference: "123076",
+    };*/
+}
+
+declare_lint! {
     /// The `unconditional_recursion` lint detects functions that cannot
     /// return without calling themselves.
     ///
@@ -1705,6 +1743,33 @@ declare_lint! {
     pub UNUSED_LIFETIMES,
     Allow,
     "detects lifetime parameters that are never used"
+}
+
+declare_lint! {
+    /// The `redundant_lifetimes` lint detects lifetime parameters that are
+    /// redundant because they are equal to another named lifetime.
+    ///
+    /// ### Example
+    ///
+    /// ```rust,compile_fail
+    /// #[deny(redundant_lifetimes)]
+    ///
+    /// // `'a = 'static`, so all usages of `'a` can be replaced with `'static`
+    /// pub fn bar<'a: 'static>() {}
+    ///
+    /// // `'a = 'b`, so all usages of `'b` can be replaced with `'a`
+    /// pub fn bar<'a: 'b, 'b: 'a>() {}
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// Unused lifetime parameters may signal a mistake or unfinished code.
+    /// Consider removing the parameter.
+    pub REDUNDANT_LIFETIMES,
+    Allow,
+    "detects lifetime parameters that are redundant because they are equal to some other named lifetime"
 }
 
 declare_lint! {
@@ -4311,7 +4376,6 @@ declare_lint! {
     /// ### Example
     ///
     /// ```rust,compile_fail
-    /// # #![feature(type_privacy_lints)]
     /// # #![allow(unused)]
     /// #![deny(unnameable_types)]
     /// mod m {
@@ -4328,10 +4392,14 @@ declare_lint! {
     ///
     /// It is often expected that if you can obtain an object of type `T`, then
     /// you can name the type `T` as well, this lint attempts to enforce this rule.
+    /// The recommended action is to either reexport the type properly to make it nameable,
+    /// or document that users are not supposed to be able to name it for one reason or another.
+    ///
+    /// Besides types, this lint applies to traits because traits can also leak through signatures,
+    /// and you may obtain objects of their `dyn Trait` or `impl Trait` types.
     pub UNNAMEABLE_TYPES,
     Allow,
     "effective visibility of a type is larger than the area in which it can be named",
-    @feature_gate = sym::type_privacy_lints;
 }
 
 declare_lint! {

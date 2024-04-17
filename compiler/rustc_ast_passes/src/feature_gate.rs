@@ -332,6 +332,9 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             ast::TyKind::Never => {
                 gate!(&self, never_type, ty.span, "the `!` type is experimental");
             }
+            ast::TyKind::Pat(..) => {
+                gate!(&self, pattern_types, ty.span, "pattern types are unstable");
+            }
             _ => {}
         }
         visit::walk_ty(self, ty)
@@ -566,6 +569,7 @@ pub fn check_crate(krate: &ast::Crate, sess: &Session, features: &Features) {
     gate_all!(fn_delegation, "functions delegation is not yet fully implemented");
     gate_all!(postfix_match, "postfix match is experimental");
     gate_all!(mut_ref, "mutable by-reference bindings are experimental");
+    gate_all!(precise_capturing, "precise captures on `impl Trait` are experimental");
 
     if !visitor.features.never_patterns {
         if let Some(spans) = spans.get(&sym::never_patterns) {

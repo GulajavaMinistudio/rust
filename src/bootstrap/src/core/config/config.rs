@@ -145,7 +145,6 @@ impl LldMode {
 /// `config.example.toml`.
 #[derive(Default, Clone)]
 pub struct Config {
-    pub changelog_seen: Option<usize>, // FIXME: Deprecated field. Remove it at 2024.
     pub change_id: Option<usize>,
     pub bypass_bootstrap_lock: bool,
     pub ccache: Option<String>,
@@ -605,7 +604,6 @@ impl Target {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct TomlConfig {
-    changelog_seen: Option<usize>, // FIXME: Deprecated field. Remove it at 2024.
     #[serde(flatten)]
     change_id: ChangeIdWrapper,
     build: Option<Build>,
@@ -645,17 +643,7 @@ trait Merge {
 impl Merge for TomlConfig {
     fn merge(
         &mut self,
-        TomlConfig {
-            build,
-            install,
-            llvm,
-            rust,
-            dist,
-            target,
-            profile: _,
-            changelog_seen,
-            change_id,
-        }: Self,
+        TomlConfig { build, install, llvm, rust, dist, target, profile: _, change_id }: Self,
         replace: ReplaceOpt,
     ) {
         fn do_merge<T: Merge>(x: &mut Option<T>, y: Option<T>, replace: ReplaceOpt) {
@@ -667,7 +655,6 @@ impl Merge for TomlConfig {
                 }
             }
         }
-        self.changelog_seen.merge(changelog_seen, replace);
         self.change_id.inner.merge(change_id.inner, replace);
         do_merge(&mut self.build, build, replace);
         do_merge(&mut self.install, install, replace);
@@ -1400,7 +1387,6 @@ impl Config {
         }
         toml.merge(override_toml, ReplaceOpt::Override);
 
-        config.changelog_seen = toml.changelog_seen;
         config.change_id = toml.change_id.inner;
 
         let Build {
@@ -2022,7 +2008,7 @@ impl Config {
             Subcommand::Build { .. } => {
                 flags.stage.or(build_stage).unwrap_or(if download_rustc { 2 } else { 1 })
             }
-            Subcommand::Test { .. } => {
+            Subcommand::Test { .. } | Subcommand::Miri { .. } => {
                 flags.stage.or(test_stage).unwrap_or(if download_rustc { 2 } else { 1 })
             }
             Subcommand::Bench { .. } => flags.stage.or(bench_stage).unwrap_or(2),
@@ -2044,6 +2030,7 @@ impl Config {
         if flags.stage.is_none() && crate::CiEnv::current() != crate::CiEnv::None {
             match config.cmd {
                 Subcommand::Test { .. }
+                | Subcommand::Miri { .. }
                 | Subcommand::Doc { .. }
                 | Subcommand::Build { .. }
                 | Subcommand::Bench { .. }
@@ -2099,7 +2086,9 @@ impl Config {
 
     pub(crate) fn test_args(&self) -> Vec<&str> {
         let mut test_args = match self.cmd {
-            Subcommand::Test { ref test_args, .. } | Subcommand::Bench { ref test_args, .. } => {
+            Subcommand::Test { ref test_args, .. }
+            | Subcommand::Bench { ref test_args, .. }
+            | Subcommand::Miri { ref test_args, .. } => {
                 test_args.iter().flat_map(|s| s.split_whitespace()).collect()
             }
             _ => vec![],
@@ -2480,9 +2469,20 @@ impl Config {
                 llvm::is_ci_llvm_available(self, asserts)
             }
         };
+
         match download_ci_llvm {
-            None => self.channel == "dev" && if_unchanged(),
-            Some(StringOrBool::Bool(b)) => b,
+            None => {
+                (self.channel == "dev" || self.download_rustc_commit.is_some()) && if_unchanged()
+            }
+            Some(StringOrBool::Bool(b)) => {
+                if !b && self.download_rustc_commit.is_some() {
+                    panic!(
+                        "`llvm.download-ci-llvm` cannot be set to `false` if `rust.download-rustc` is set to `true` or `if-unchanged`."
+                    );
+                }
+
+                b
+            }
             // FIXME: "if-available" is deprecated. Remove this block later (around mid 2024)
             // to not break builds between the recent-to-old checkouts.
             Some(StringOrBool::String(s)) if s == "if-available" => {

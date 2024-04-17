@@ -21,7 +21,7 @@ mod object_safety;
 
 use crate::bounds::Bounds;
 use crate::collect::HirPlaceholderCollector;
-use crate::errors::AmbiguousLifetimeBound;
+use crate::errors::{AmbiguousLifetimeBound, WildPatTy};
 use crate::hir_ty_lowering::errors::{prohibit_assoc_item_binding, GenericsArgsErrExtend};
 use crate::hir_ty_lowering::generics::{check_generic_arg_count, lower_generic_args};
 use crate::middle::resolve_bound_vars as rbv;
@@ -35,10 +35,11 @@ use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Namespace, Res};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{walk_generics, Visitor as _};
-use rustc_hir::{GenericArg, GenericArgs};
+use rustc_hir::{GenericArg, GenericArgs, HirId};
 use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};
 use rustc_infer::traits::ObligationCause;
 use rustc_middle::middle::stability::AllowUnstable;
+use rustc_middle::mir::interpret::{LitToConstError, LitToConstInput};
 use rustc_middle::ty::{
     self, Const, GenericArgKind, GenericArgsRef, GenericParamDefKind, ParamEnv, Ty, TyCtxt,
     TypeVisitableExt,
@@ -157,7 +158,7 @@ pub trait HirTyLowerer<'tcx> {
     fn probe_adt(&self, span: Span, ty: Ty<'tcx>) -> Option<ty::AdtDef<'tcx>>;
 
     /// Record the lowered type of a HIR node in this context.
-    fn record_ty(&self, hir_id: hir::HirId, ty: Ty<'tcx>, span: Span);
+    fn record_ty(&self, hir_id: HirId, ty: Ty<'tcx>, span: Span);
 
     /// The inference context of the lowering context if applicable.
     fn infcx(&self) -> Option<&InferCtxt<'tcx>>;
@@ -998,7 +999,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     #[instrument(level = "debug", skip_all, ret)]
     pub fn lower_assoc_path(
         &self,
-        hir_ref_id: hir::HirId,
+        hir_ref_id: HirId,
         span: Span,
         qself_ty: Ty<'tcx>,
         qself: &'tcx hir::Ty<'tcx>,
@@ -1199,7 +1200,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         segment: &hir::PathSegment<'tcx>,
         adt_did: DefId,
         self_ty: Ty<'tcx>,
-        block: hir::HirId,
+        block: HirId,
         span: Span,
     ) -> Result<Option<(Ty<'tcx>, DefId)>, ErrorGuaranteed> {
         let tcx = self.tcx();
@@ -1348,13 +1349,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         }
     }
 
-    fn probe_assoc_ty(
-        &self,
-        name: Ident,
-        block: hir::HirId,
-        span: Span,
-        scope: DefId,
-    ) -> Option<DefId> {
+    fn probe_assoc_ty(&self, name: Ident, block: HirId, span: Span, scope: DefId) -> Option<DefId> {
         let (item, def_scope) = self.probe_assoc_ty_unchecked(name, block, scope)?;
         self.check_assoc_ty(item, name, def_scope, block, span);
         Some(item)
@@ -1363,7 +1358,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     fn probe_assoc_ty_unchecked(
         &self,
         name: Ident,
-        block: hir::HirId,
+        block: HirId,
         scope: DefId,
     ) -> Option<(DefId, DefId)> {
         let tcx = self.tcx();
@@ -1380,14 +1375,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         Some((item.def_id, def_scope))
     }
 
-    fn check_assoc_ty(
-        &self,
-        item: DefId,
-        name: Ident,
-        def_scope: DefId,
-        block: hir::HirId,
-        span: Span,
-    ) {
+    fn check_assoc_ty(&self, item: DefId, name: Ident, def_scope: DefId, block: HirId, span: Span) {
         let tcx = self.tcx();
         let kind = DefKind::AssocTy;
 
@@ -1713,7 +1701,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         &self,
         opt_self_ty: Option<Ty<'tcx>>,
         path: &hir::Path<'tcx>,
-        hir_id: hir::HirId,
+        hir_id: HirId,
         permit_variants: bool,
     ) -> Ty<'tcx> {
         debug!(?path.res, ?opt_self_ty, ?path.segments);
@@ -1878,6 +1866,17 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 self.set_tainted_by_errors(e);
                 Ty::new_error(self.tcx(), e)
             }
+            Res::Def(..) => {
+                assert_eq!(
+                    path.segments.get(0).map(|seg| seg.ident.name),
+                    Some(kw::SelfUpper),
+                    "only expected incorrect resolution for `Self`"
+                );
+                Ty::new_error(
+                    self.tcx(),
+                    self.tcx().dcx().span_delayed_bug(span, "incorrect resolution for `Self`"),
+                )
+            }
             _ => span_bug!(span, "unexpected resolution: {:?}", path.res),
         }
     }
@@ -1886,7 +1885,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     ///
     /// Early-bound type parameters get lowered to [`ty::Param`]
     /// and late-bound ones to [`ty::Bound`].
-    pub(crate) fn lower_ty_param(&self, hir_id: hir::HirId) -> Ty<'tcx> {
+    pub(crate) fn lower_ty_param(&self, hir_id: HirId) -> Ty<'tcx> {
         let tcx = self.tcx();
         match tcx.named_bound_var(hir_id) {
             Some(rbv::ResolvedArg::LateBound(debruijn, index, def_id)) => {
@@ -1913,7 +1912,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     ///
     /// Early-bound const parameters get lowered to [`ty::ConstKind::Param`]
     /// and late-bound ones to [`ty::ConstKind::Bound`].
-    pub(crate) fn lower_const_param(&self, hir_id: hir::HirId, param_ty: Ty<'tcx>) -> Const<'tcx> {
+    pub(crate) fn lower_const_param(&self, hir_id: HirId, param_ty: Ty<'tcx>) -> Const<'tcx> {
         let tcx = self.tcx();
         match tcx.named_bound_var(hir_id) {
             Some(rbv::ResolvedArg::EarlyBound(def_id)) => {
@@ -2195,6 +2194,82 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 // handled specially and will not descend into this routine.
                 self.ty_infer(None, hir_ty.span)
             }
+            hir::TyKind::Pat(ty, pat) => {
+                let ty = self.lower_ty(ty);
+                let pat_ty = match pat.kind {
+                    hir::PatKind::Wild => {
+                        let err = tcx.dcx().emit_err(WildPatTy { span: pat.span });
+                        Ty::new_error(tcx, err)
+                    }
+                    hir::PatKind::Range(start, end, include_end) => {
+                        let expr_to_const = |expr: &'tcx hir::Expr<'tcx>| -> ty::Const<'tcx> {
+                            let (expr, neg) = match expr.kind {
+                                hir::ExprKind::Unary(hir::UnOp::Neg, negated) => {
+                                    (negated, Some((expr.hir_id, expr.span)))
+                                }
+                                _ => (expr, None),
+                            };
+                            let c = match &expr.kind {
+                                hir::ExprKind::Lit(lit) => {
+                                    let lit_input =
+                                        LitToConstInput { lit: &lit.node, ty, neg: neg.is_some() };
+                                    match tcx.lit_to_const(lit_input) {
+                                        Ok(c) => c,
+                                        Err(LitToConstError::Reported(err)) => {
+                                            ty::Const::new_error(tcx, err, ty)
+                                        }
+                                        Err(LitToConstError::TypeError) => todo!(),
+                                    }
+                                }
+
+                                hir::ExprKind::Path(hir::QPath::Resolved(
+                                    _,
+                                    &hir::Path {
+                                        res: Res::Def(DefKind::ConstParam, def_id), ..
+                                    },
+                                )) => {
+                                    let ty = tcx
+                                        .type_of(def_id)
+                                        .no_bound_vars()
+                                        .expect("const parameter types cannot be generic");
+                                    self.lower_const_param(expr.hir_id, ty)
+                                }
+
+                                _ => {
+                                    let err = tcx
+                                        .dcx()
+                                        .emit_err(crate::errors::NonConstRange { span: expr.span });
+                                    ty::Const::new_error(tcx, err, ty)
+                                }
+                            };
+                            self.record_ty(expr.hir_id, c.ty(), expr.span);
+                            if let Some((id, span)) = neg {
+                                self.record_ty(id, c.ty(), span);
+                            }
+                            c
+                        };
+
+                        let start = start.map(expr_to_const);
+                        let end = end.map(expr_to_const);
+
+                        let include_end = match include_end {
+                            hir::RangeEnd::Included => true,
+                            hir::RangeEnd::Excluded => false,
+                        };
+
+                        let pat = tcx.mk_pat(ty::PatternKind::Range { start, end, include_end });
+                        Ty::new_pat(tcx, ty, pat)
+                    }
+                    hir::PatKind::Err(e) => Ty::new_error(tcx, e),
+                    _ => Ty::new_error_with_message(
+                        tcx,
+                        pat.span,
+                        format!("unsupported pattern for pattern type: {pat:#?}"),
+                    ),
+                };
+                self.record_ty(pat.hir_id, ty, pat.span);
+                pat_ty
+            }
             hir::TyKind::Err(guar) => Ty::new_error(tcx, *guar),
         };
 
@@ -2264,7 +2339,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     #[instrument(level = "debug", skip(self, hir_id, unsafety, abi, decl, generics, hir_ty), ret)]
     pub fn lower_fn_ty(
         &self,
-        hir_id: hir::HirId,
+        hir_id: HirId,
         unsafety: hir::Unsafety,
         abi: abi::Abi,
         decl: &hir::FnDecl<'tcx>,
@@ -2392,7 +2467,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     /// corresponds to the return type.
     fn suggest_trait_fn_ty_for_impl_fn_infer(
         &self,
-        fn_hir_id: hir::HirId,
+        fn_hir_id: HirId,
         arg_idx: Option<usize>,
     ) -> Option<Ty<'tcx>> {
         let tcx = self.tcx();

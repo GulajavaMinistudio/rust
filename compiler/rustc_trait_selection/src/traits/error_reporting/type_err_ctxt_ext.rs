@@ -6,11 +6,11 @@ use crate::errors::{
     AsyncClosureNotFn, ClosureFnMutLabel, ClosureFnOnceLabel, ClosureKindMismatch,
 };
 use crate::infer::error_reporting::{TyCategory, TypeAnnotationNeeded as ErrorCode};
-use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
+use crate::infer::type_variable::TypeVariableOrigin;
 use crate::infer::InferCtxtExt as _;
 use crate::infer::{self, InferCtxt};
 use crate::traits::error_reporting::infer_ctxt_ext::InferCtxtExt;
-use crate::traits::error_reporting::{ambiguity, ambiguity::Ambiguity::*};
+use crate::traits::error_reporting::{ambiguity, ambiguity::CandidateSource::*};
 use crate::traits::query::evaluate_obligation::InferCtxtExt as _;
 use crate::traits::specialize::to_pretty_impl_header;
 use crate::traits::NormalizeExt;
@@ -558,7 +558,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                                 GetSafeTransmuteErrorAndReason::Error {
                                     err_msg,
                                     safe_transmute_explanation,
-                                } => (err_msg, Some(safe_transmute_explanation)),
+                                } => (err_msg, safe_transmute_explanation),
                             }
                         } else {
                             (err_msg, None)
@@ -984,7 +984,10 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             // Already reported in the query.
             SelectionError::NotConstEvaluatable(NotConstEvaluatable::Error(guar)) |
             // Already reported.
-            Overflow(OverflowError::Error(guar)) => return guar,
+            Overflow(OverflowError::Error(guar)) => {
+                self.set_tainted_by_errors(guar);
+                return guar
+            },
 
             Overflow(_) => {
                 bug!("overflow should be handled before the `report_selection_error` path");
@@ -1804,6 +1807,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 ty::Foreign(..) => Some(19),
                 ty::CoroutineWitness(..) => Some(20),
                 ty::CoroutineClosure(..) => Some(21),
+                ty::Pat(..) => Some(22),
                 ty::Placeholder(..) | ty::Bound(..) | ty::Infer(..) | ty::Error(_) => None,
             }
         }
@@ -1973,6 +1977,9 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     for (obligation_arg, impl_arg) in
                         std::iter::zip(obligation_trait_ref.args, impl_trait_ref.args)
                     {
+                        if (obligation_arg, impl_arg).references_error() {
+                            return false;
+                        }
                         if let Err(terr) =
                             ocx.eq(&ObligationCause::dummy(), param_env, impl_arg, obligation_arg)
                         {
@@ -2386,7 +2393,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     )
                 };
 
-                let mut ambiguities = ambiguity::recompute_applicable_impls(
+                let mut ambiguities = ambiguity::compute_applicable_impls_for_diagnostics(
                     self.infcx,
                     &obligation.with(self.tcx, trait_ref),
                 );
@@ -2398,12 +2405,12 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 if ambiguities.len() > 5 {
                     let infcx = self.infcx;
                     if !ambiguities.iter().all(|option| match option {
-                        DefId(did) => infcx.fresh_args_for_item(DUMMY_SP, *did).is_empty(),
+                        DefId(did) => infcx.tcx.generics_of(*did).count() == 0,
                         ParamEnv(_) => true,
                     }) {
                         // If not all are blanket impls, we filter blanked impls out.
                         ambiguities.retain(|option| match option {
-                            DefId(did) => infcx.fresh_args_for_item(DUMMY_SP, *did).is_empty(),
+                            DefId(did) => infcx.tcx.generics_of(*did).count() == 0,
                             ParamEnv(_) => true,
                         });
                     }
@@ -2702,7 +2709,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
     fn annotate_source_of_ambiguity(
         &self,
         err: &mut Diag<'_>,
-        ambiguities: &[ambiguity::Ambiguity],
+        ambiguities: &[ambiguity::CandidateSource],
         predicate: ty::Predicate<'tcx>,
     ) {
         let mut spans = vec![];
@@ -2711,7 +2718,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         let mut has_param_env = false;
         for ambiguity in ambiguities {
             match ambiguity {
-                ambiguity::Ambiguity::DefId(impl_def_id) => {
+                ambiguity::CandidateSource::DefId(impl_def_id) => {
                     match self.tcx.span_of_impl(*impl_def_id) {
                         Ok(span) => spans.push(span),
                         Err(name) => {
@@ -2722,7 +2729,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                         }
                     }
                 }
-                ambiguity::Ambiguity::ParamEnv(span) => {
+                ambiguity::CandidateSource::ParamEnv(span) => {
                     has_param_env = true;
                     spans.push(*span);
                 }
@@ -2819,10 +2826,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                 if let ty::Param(_) = *ty.kind() {
                     let infcx = self.infcx;
                     *self.var_map.entry(ty).or_insert_with(|| {
-                        infcx.next_ty_var(TypeVariableOrigin {
-                            kind: TypeVariableOriginKind::MiscVariable,
-                            span: DUMMY_SP,
-                        })
+                        infcx.next_ty_var(TypeVariableOrigin { param_def_id: None, span: DUMMY_SP })
                     })
                 } else {
                     ty.super_fold_with(self)
@@ -3067,26 +3071,31 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             return GetSafeTransmuteErrorAndReason::Silent;
         };
 
+        let dst = trait_ref.args.type_at(0);
+        let src = trait_ref.args.type_at(1);
+        let err_msg = format!("`{src}` cannot be safely transmuted into `{dst}`");
+
         match rustc_transmute::TransmuteTypeEnv::new(self.infcx).is_transmutable(
             obligation.cause,
             src_and_dst,
             assume,
         ) {
             Answer::No(reason) => {
-                let dst = trait_ref.args.type_at(0);
-                let src = trait_ref.args.type_at(1);
-                let err_msg = format!("`{src}` cannot be safely transmuted into `{dst}`");
                 let safe_transmute_explanation = match reason {
                     rustc_transmute::Reason::SrcIsNotYetSupported => {
-                        format!("analyzing the transmutability of `{src}` is not yet supported.")
+                        format!("analyzing the transmutability of `{src}` is not yet supported")
                     }
 
                     rustc_transmute::Reason::DstIsNotYetSupported => {
-                        format!("analyzing the transmutability of `{dst}` is not yet supported.")
+                        format!("analyzing the transmutability of `{dst}` is not yet supported")
                     }
 
                     rustc_transmute::Reason::DstIsBitIncompatible => {
                         format!("at least one value of `{src}` isn't a bit-valid value of `{dst}`")
+                    }
+
+                    rustc_transmute::Reason::DstUninhabited => {
+                        format!("`{dst}` is uninhabited")
                     }
 
                     rustc_transmute::Reason::DstMayHaveSafetyInvariants => {
@@ -3134,14 +3143,23 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                         format!("`{dst}` has an unknown layout")
                     }
                 };
-                GetSafeTransmuteErrorAndReason::Error { err_msg, safe_transmute_explanation }
+                GetSafeTransmuteErrorAndReason::Error {
+                    err_msg,
+                    safe_transmute_explanation: Some(safe_transmute_explanation),
+                }
             }
             // Should never get a Yes at this point! We already ran it before, and did not get a Yes.
             Answer::Yes => span_bug!(
                 span,
                 "Inconsistent rustc_transmute::is_transmutable(...) result, got Yes",
             ),
-            other => span_bug!(span, "Unsupported rustc_transmute::Answer variant: `{other:?}`"),
+            // Reached when a different obligation (namely `Freeze`) causes the
+            // transmutability analysis to fail. In this case, silence the
+            // transmutability error message in favor of that more specific
+            // error.
+            Answer::If(_) => {
+                GetSafeTransmuteErrorAndReason::Error { err_msg, safe_transmute_explanation: None }
+            }
         }
     }
 
@@ -3365,11 +3383,11 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
     fn report_cyclic_signature_error(
         &self,
         obligation: &PredicateObligation<'tcx>,
-        found_trait_ref: ty::Binder<'tcx, ty::TraitRef<'tcx>>,
-        expected_trait_ref: ty::Binder<'tcx, ty::TraitRef<'tcx>>,
+        found_trait_ref: ty::TraitRef<'tcx>,
+        expected_trait_ref: ty::TraitRef<'tcx>,
         terr: TypeError<'tcx>,
     ) -> Diag<'tcx> {
-        let self_ty = found_trait_ref.self_ty().skip_binder();
+        let self_ty = found_trait_ref.self_ty();
         let (cause, terr) = if let ty::Closure(def_id, _) = self_ty.kind() {
             (
                 ObligationCause::dummy_with_span(self.tcx.def_span(def_id)),
@@ -3379,7 +3397,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             (obligation.cause.clone(), terr)
         };
         self.report_and_explain_type_error(
-            TypeTrace::poly_trait_refs(&cause, true, expected_trait_ref, found_trait_ref),
+            TypeTrace::trait_refs(&cause, true, expected_trait_ref, found_trait_ref),
             terr,
         )
     }
@@ -3419,17 +3437,14 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         &self,
         obligation: &PredicateObligation<'tcx>,
         span: Span,
-        found_trait_ref: ty::Binder<'tcx, ty::TraitRef<'tcx>>,
-        expected_trait_ref: ty::Binder<'tcx, ty::TraitRef<'tcx>>,
+        found_trait_ref: ty::TraitRef<'tcx>,
+        expected_trait_ref: ty::TraitRef<'tcx>,
     ) -> Result<Diag<'tcx>, ErrorGuaranteed> {
         let found_trait_ref = self.resolve_vars_if_possible(found_trait_ref);
         let expected_trait_ref = self.resolve_vars_if_possible(expected_trait_ref);
 
         expected_trait_ref.self_ty().error_reported()?;
-
-        let Some(found_trait_ty) = found_trait_ref.self_ty().no_bound_vars() else {
-            self.dcx().bug("bound vars outside binder");
-        };
+        let found_trait_ty = found_trait_ref.self_ty();
 
         let found_did = match *found_trait_ty.kind() {
             ty::Closure(did, _) | ty::FnDef(did, _) | ty::Coroutine(did, ..) => Some(did),
@@ -3447,7 +3462,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
 
         let mut not_tupled = false;
 
-        let found = match found_trait_ref.skip_binder().args.type_at(1).kind() {
+        let found = match found_trait_ref.args.type_at(1).kind() {
             ty::Tuple(tys) => vec![ArgKind::empty(); tys.len()],
             _ => {
                 not_tupled = true;
@@ -3455,7 +3470,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             }
         };
 
-        let expected_ty = expected_trait_ref.skip_binder().args.type_at(1);
+        let expected_ty = expected_trait_ref.args.type_at(1);
         let expected = match expected_ty.kind() {
             ty::Tuple(tys) => {
                 tys.iter().map(|t| ArgKind::from_expected_ty(t, Some(span))).collect()
@@ -3472,11 +3487,11 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         // traits manually, but don't make it more confusing when it does
         // happen.
         Ok(
-            if Some(expected_trait_ref.def_id()) != self.tcx.lang_items().coroutine_trait()
+            if Some(expected_trait_ref.def_id) != self.tcx.lang_items().coroutine_trait()
                 && not_tupled
             {
                 self.report_and_explain_type_error(
-                    TypeTrace::poly_trait_refs(
+                    TypeTrace::trait_refs(
                         &obligation.cause,
                         true,
                         expected_trait_ref,

@@ -92,8 +92,9 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &str, Option<&[&'static str]>)] = &[
     (Some(Mode::Std), "backtrace_in_libstd", None),
     /* Extra values not defined in the built-in targets yet, but used in std */
     (Some(Mode::Std), "target_env", Some(&["libnx", "p2"])),
-    // (Some(Mode::Std), "target_os", Some(&[])),
+    (Some(Mode::Std), "target_os", Some(&["visionos"])),
     (Some(Mode::Std), "target_arch", Some(&["arm64ec", "spirv", "nvptx", "xtensa"])),
+    (Some(Mode::ToolStd), "target_os", Some(&["visionos"])),
     /* Extra names used by dependencies */
     // FIXME: Used by serde_json, but we should not be triggering on external dependencies.
     (Some(Mode::Rustc), "no_btreemap_remove_entry", None),
@@ -629,6 +630,18 @@ impl Build {
         }
     }
 
+    /// Updates the given submodule only if it's initialized already; nothing happens otherwise.
+    pub fn update_existing_submodule(&self, submodule: &Path) {
+        // Avoid running git when there isn't a git checkout.
+        if !self.config.submodules(self.rust_info()) {
+            return;
+        }
+
+        if GitInfo::new(false, submodule).is_managed_git_subrepository() {
+            self.update_submodule(submodule);
+        }
+    }
+
     /// Executes the entire build, as configured by the flags and configuration.
     pub fn build(&mut self) {
         unsafe {
@@ -1075,6 +1088,16 @@ impl Build {
                 println!("{msg}");
             }
         }
+    }
+
+    #[must_use = "Groups should not be dropped until the Step finishes running"]
+    #[track_caller]
+    fn msg_clippy(
+        &self,
+        what: impl Display,
+        target: impl Into<Option<TargetSelection>>,
+    ) -> Option<gha::Group> {
+        self.msg(Kind::Clippy, self.config.stage, what, self.config.build, target)
     }
 
     #[must_use = "Groups should not be dropped until the Step finishes running"]
@@ -1909,15 +1932,6 @@ impl Compiler {
     /// Returns `true` if this is a snapshot compiler for `build`'s configuration
     pub fn is_snapshot(&self, build: &Build) -> bool {
         self.stage == 0 && self.host == build.build
-    }
-
-    /// Returns if this compiler should be treated as a final stage one in the
-    /// current build session.
-    /// This takes into account whether we're performing a full bootstrap or
-    /// not; don't directly compare the stage with `2`!
-    pub fn is_final_stage(&self, build: &Build) -> bool {
-        let final_stage = if build.config.full_bootstrap { 2 } else { 1 };
-        self.stage >= final_stage
     }
 }
 

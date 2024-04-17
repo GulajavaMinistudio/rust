@@ -477,7 +477,8 @@ fn plug_infer_with_placeholders<'tcx>(
             if ty.is_ty_var() {
                 let Ok(InferOk { value: (), obligations }) =
                     self.infcx.at(&ObligationCause::dummy(), ty::ParamEnv::empty()).eq(
-                        DefineOpaqueTypes::No,
+                        // Comparing against a type variable never registers hidden types anyway
+                        DefineOpaqueTypes::Yes,
                         ty,
                         Ty::new_placeholder(
                             self.infcx.tcx,
@@ -500,11 +501,13 @@ fn plug_infer_with_placeholders<'tcx>(
         }
 
         fn visit_const(&mut self, ct: ty::Const<'tcx>) {
-            let ct = self.infcx.shallow_resolve(ct);
+            let ct = self.infcx.shallow_resolve_const(ct);
             if ct.is_ct_infer() {
                 let Ok(InferOk { value: (), obligations }) =
                     self.infcx.at(&ObligationCause::dummy(), ty::ParamEnv::empty()).eq(
-                        DefineOpaqueTypes::No,
+                        // The types of the constants are the same, so there is no hidden type
+                        // registration happening anyway.
+                        DefineOpaqueTypes::Yes,
                         ct,
                         ty::Const::new_placeholder(
                             self.infcx.tcx,
@@ -532,7 +535,8 @@ fn plug_infer_with_placeholders<'tcx>(
                 if r.is_var() {
                     let Ok(InferOk { value: (), obligations }) =
                         self.infcx.at(&ObligationCause::dummy(), ty::ParamEnv::empty()).eq(
-                            DefineOpaqueTypes::No,
+                            // Lifetimes don't contain opaque types (or any types for that matter).
+                            DefineOpaqueTypes::Yes,
                             r,
                             ty::Region::new_placeholder(
                                 self.infcx.tcx,
@@ -879,6 +883,7 @@ where
             | ty::Float(..)
             | ty::Str
             | ty::FnDef(..)
+            | ty::Pat(..)
             | ty::FnPtr(_)
             | ty::Array(..)
             | ty::Slice(..)

@@ -13,9 +13,9 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::core::build_steps::llvm;
 use crate::core::build_steps::tool::{self, SourceType};
 use crate::core::build_steps::{check, clean, compile, dist, doc, install, run, setup, test};
+use crate::core::build_steps::{clippy, llvm};
 use crate::core::config::flags::{Color, Subcommand};
 use crate::core::config::{DryRun, SplitDebuginfo, TargetSelection};
 use crate::prepare_behaviour_dump_dir;
@@ -631,6 +631,7 @@ pub enum Kind {
     Format,
     #[value(alias = "t")]
     Test,
+    Miri,
     Bench,
     #[value(alias = "d")]
     Doc,
@@ -644,27 +645,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn parse(string: &str) -> Option<Kind> {
-        // these strings, including the one-letter aliases, must match the x.py help text
-        Some(match string {
-            "build" | "b" => Kind::Build,
-            "check" | "c" => Kind::Check,
-            "clippy" => Kind::Clippy,
-            "fix" => Kind::Fix,
-            "fmt" => Kind::Format,
-            "test" | "t" => Kind::Test,
-            "bench" => Kind::Bench,
-            "doc" | "d" => Kind::Doc,
-            "clean" => Kind::Clean,
-            "dist" => Kind::Dist,
-            "install" => Kind::Install,
-            "run" | "r" => Kind::Run,
-            "setup" => Kind::Setup,
-            "suggest" => Kind::Suggest,
-            _ => return None,
-        })
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Kind::Build => "build",
@@ -673,6 +653,7 @@ impl Kind {
             Kind::Fix => "fix",
             Kind::Format => "fmt",
             Kind::Test => "test",
+            Kind::Miri => "miri",
             Kind::Bench => "bench",
             Kind::Doc => "doc",
             Kind::Clean => "clean",
@@ -691,6 +672,7 @@ impl Kind {
             Kind::Doc => "Documenting",
             Kind::Run => "Running",
             Kind::Suggest => "Suggesting",
+            Kind::Clippy => "Linting",
             _ => {
                 let title_letter = self.as_str()[0..1].to_ascii_uppercase();
                 return format!("{title_letter}{}ing", &self.as_str()[1..]);
@@ -745,7 +727,35 @@ impl<'a> Builder<'a> {
                 tool::CoverageDump,
                 tool::LlvmBitcodeLinker
             ),
-            Kind::Check | Kind::Clippy | Kind::Fix => describe!(
+            Kind::Clippy => describe!(
+                clippy::Std,
+                clippy::Rustc,
+                clippy::Bootstrap,
+                clippy::BuildHelper,
+                clippy::BuildManifest,
+                clippy::CargoMiri,
+                clippy::Clippy,
+                clippy::CollectLicenseMetadata,
+                clippy::Compiletest,
+                clippy::CoverageDump,
+                clippy::Jsondocck,
+                clippy::Jsondoclint,
+                clippy::LintDocs,
+                clippy::LlvmBitcodeLinker,
+                clippy::Miri,
+                clippy::MiroptTestTools,
+                clippy::OptDist,
+                clippy::RemoteTestClient,
+                clippy::RemoteTestServer,
+                clippy::Rls,
+                clippy::RustAnalyzer,
+                clippy::RustDemangler,
+                clippy::Rustdoc,
+                clippy::Rustfmt,
+                clippy::RustInstaller,
+                clippy::Tidy,
+            ),
+            Kind::Check | Kind::Fix => describe!(
                 check::Std,
                 check::Rustc,
                 check::Rustdoc,
@@ -764,6 +774,7 @@ impl<'a> Builder<'a> {
                 test::ExpandYamlAnchors,
                 test::Tidy,
                 test::Ui,
+                test::Crashes,
                 test::RunPassValgrind,
                 test::Coverage,
                 test::CoverageMap,
@@ -806,6 +817,7 @@ impl<'a> Builder<'a> {
                 test::EditionGuide,
                 test::Rustfmt,
                 test::Miri,
+                test::CargoMiri,
                 test::Clippy,
                 test::RustDemangler,
                 test::CompiletestTest,
@@ -822,6 +834,7 @@ impl<'a> Builder<'a> {
                 // Run run-make last, since these won't pass without make on Windows
                 test::RunMake,
             ),
+            Kind::Miri => describe!(test::Crate),
             Kind::Bench => describe!(test::Crate, test::CrateLibrustc),
             Kind::Doc => describe!(
                 doc::UnstableBook,
@@ -869,6 +882,7 @@ impl<'a> Builder<'a> {
                 dist::Clippy,
                 dist::Miri,
                 dist::LlvmTools,
+                dist::LlvmBitcodeLinker,
                 dist::RustDev,
                 dist::Bootstrap,
                 dist::Extended,
@@ -970,6 +984,7 @@ impl<'a> Builder<'a> {
             Subcommand::Fix => (Kind::Fix, &paths[..]),
             Subcommand::Doc { .. } => (Kind::Doc, &paths[..]),
             Subcommand::Test { .. } => (Kind::Test, &paths[..]),
+            Subcommand::Miri { .. } => (Kind::Miri, &paths[..]),
             Subcommand::Bench { .. } => (Kind::Bench, &paths[..]),
             Subcommand::Dist => (Kind::Dist, &paths[..]),
             Subcommand::Install => (Kind::Install, &paths[..]),
@@ -1226,6 +1241,7 @@ impl<'a> Builder<'a> {
         assert!(run_compiler.stage > 0, "miri can not be invoked at stage 0");
         let build_compiler = self.compiler(run_compiler.stage - 1, self.build.build);
 
+        // Prepare the tools
         let miri = self.ensure(tool::Miri {
             compiler: build_compiler,
             target: self.build.build,
@@ -1236,7 +1252,7 @@ impl<'a> Builder<'a> {
             target: self.build.build,
             extra_features: Vec::new(),
         });
-        // Invoke cargo-miri, make sure we can find miri and cargo.
+        // Invoke cargo-miri, make sure it can find miri and cargo.
         let mut cmd = Command::new(cargo_miri);
         cmd.env("MIRI", &miri);
         cmd.env("CARGO", &self.initial_cargo);
@@ -1299,7 +1315,11 @@ impl<'a> Builder<'a> {
         if cmd == "clippy" {
             cargo = self.cargo_clippy_cmd(compiler);
             cargo.arg(cmd);
-        } else if let Some(subcmd) = cmd.strip_prefix("miri-") {
+        } else if let Some(subcmd) = cmd.strip_prefix("miri") {
+            // Command must be "miri-X".
+            let subcmd = subcmd
+                .strip_prefix("-")
+                .unwrap_or_else(|| panic!("expected `miri-$subcommand`, but got {}", cmd));
             cargo = self.cargo_miri_cmd(compiler);
             cargo.arg("miri").arg(subcmd);
         } else {
@@ -1702,6 +1722,15 @@ impl<'a> Builder<'a> {
             cargo.env("RUSTC_WRAPPER_REAL", existing_wrapper);
         }
 
+        // If this is for `miri-test`, prepare the sysroots.
+        if cmd == "miri-test" {
+            self.ensure(compile::Std::new(compiler, compiler.host));
+            let host_sysroot = self.sysroot(compiler);
+            let miri_sysroot = test::Miri::build_miri_sysroot(self, compiler, target);
+            cargo.env("MIRI_SYSROOT", &miri_sysroot);
+            cargo.env("MIRI_HOST_SYSROOT", &host_sysroot);
+        }
+
         cargo.env(profile_var("STRIP"), self.config.rust_strip.to_string());
 
         if let Some(stack_protector) = &self.config.rust_stack_protector {
@@ -2084,12 +2113,10 @@ impl<'a> Builder<'a> {
             rustdocflags.arg("--cfg=parallel_compiler");
         }
 
-        // set rustc args passed from command line
-        let rustc_args =
-            self.config.cmd.rustc_args().iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        if !rustc_args.is_empty() {
-            cargo.env("RUSTFLAGS", &rustc_args.join(" "));
-        }
+        // Pass the value of `--rustc-args` from test command. If it's not a test command, this won't set anything.
+        self.config.cmd.rustc_args().iter().for_each(|v| {
+            rustflags.arg(v);
+        });
 
         Cargo {
             command: cargo,

@@ -465,14 +465,20 @@ impl File {
         OpenOptions::new()
     }
 
-    /// Attempts to sync all OS-internal metadata to disk.
+    /// Attempts to sync all OS-internal file content and metadata to disk.
     ///
     /// This function will attempt to ensure that all in-memory data reaches the
     /// filesystem before returning.
     ///
     /// This can be used to handle errors that would otherwise only be caught
-    /// when the `File` is closed.  Dropping a file will ignore errors in
-    /// synchronizing this in-memory data.
+    /// when the `File` is closed, as dropping a `File` will ignore all errors.
+    /// Note, however, that `sync_all` is generally more expensive than closing
+    /// a file by dropping it, because the latter is not required to block until
+    /// the data has been written to the filesystem.
+    ///
+    /// If synchronizing the metadata is not required, use [`sync_data`] instead.
+    ///
+    /// [`sync_data`]: File::sync_data
     ///
     /// # Examples
     ///
@@ -489,6 +495,7 @@ impl File {
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[doc(alias = "fsync")]
     pub fn sync_all(&self) -> io::Result<()> {
         self.inner.fsync()
     }
@@ -520,6 +527,7 @@ impl File {
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[doc(alias = "fdatasync")]
     pub fn sync_data(&self) -> io::Result<()> {
         self.inner.datasync()
     }
@@ -972,20 +980,26 @@ impl OpenOptions {
     /// Note that setting `.write(true).append(true)` has the same effect as
     /// setting only `.append(true)`.
     ///
-    /// For most filesystems, the operating system guarantees that all writes are
-    /// atomic: no writes get mangled because another process writes at the same
-    /// time.
+    /// Append mode guarantees that writes will be positioned at the current end of file,
+    /// even when there are other processes or threads appending to the same file. This is
+    /// unlike <code>[seek]\([SeekFrom]::[End]\(0))</code> followed by `write()`, which
+    /// has a race between seeking and writing during which another writer can write, with
+    /// our `write()` overwriting their data.
     ///
-    /// One maybe obvious note when using append-mode: make sure that all data
-    /// that belongs together is written to the file in one operation. This
-    /// can be done by concatenating strings before passing them to [`write()`],
-    /// or using a buffered writer (with a buffer of adequate size),
-    /// and calling [`flush()`] when the message is complete.
+    /// Keep in mind that this does not necessarily guarantee that data appended by
+    /// different processes or threads does not interleave. The amount of data accepted a
+    /// single `write()` call depends on the operating system and file system. A
+    /// successful `write()` is allowed to write only part of the given data, so even if
+    /// you're careful to provide the whole message in a single call to `write()`, there
+    /// is no guarantee that it will be written out in full. If you rely on the filesystem
+    /// accepting the message in a single write, make sure that all data that belongs
+    /// together is written in one operation. This can be done by concatenating strings
+    /// before passing them to [`write()`].
     ///
     /// If a file is opened with both read and append access, beware that after
     /// opening, and after every write, the position for reading may be set at the
     /// end of the file. So, before writing, save the current position (using
-    /// <code>[seek]\([SeekFrom]::[Current]\(0))</code>), and restore it before the next read.
+    /// <code>[Seek]::[stream_position]</code>), and restore it before the next read.
     ///
     /// ## Note
     ///
@@ -994,8 +1008,10 @@ impl OpenOptions {
     ///
     /// [`write()`]: Write::write "io::Write::write"
     /// [`flush()`]: Write::flush "io::Write::flush"
+    /// [stream_position]: Seek::stream_position "io::Seek::stream_position"
     /// [seek]: Seek::seek "io::Seek::seek"
     /// [Current]: SeekFrom::Current "io::SeekFrom::Current"
+    /// [End]: SeekFrom::End "io::SeekFrom::End"
     ///
     /// # Examples
     ///

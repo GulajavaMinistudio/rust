@@ -36,6 +36,8 @@ fn sized_constraint_for_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'
         // these are never sized
         Str | Slice(..) | Dynamic(_, _, ty::Dyn) | Foreign(..) => Some(ty),
 
+        Pat(ty, _) => sized_constraint_for_ty(tcx, *ty),
+
         Tuple(tys) => tys.last().and_then(|&ty| sized_constraint_for_ty(tcx, ty)),
 
         // recursive case
@@ -89,8 +91,8 @@ fn adt_sized_constraint<'tcx>(
     let tail_ty = tcx.type_of(tail_def.did).instantiate_identity();
 
     let constraint_ty = sized_constraint_for_ty(tcx, tail_ty)?;
-    if constraint_ty.references_error() {
-        return None;
+    if let Err(guar) = constraint_ty.error_reported() {
+        return Some(ty::EarlyBinder::bind(Ty::new_error(tcx, guar)));
     }
 
     // perf hack: if there is a `constraint_ty: Sized` bound, then we know

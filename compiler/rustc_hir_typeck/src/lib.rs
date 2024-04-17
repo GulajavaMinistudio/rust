@@ -42,8 +42,9 @@ mod typeck_root_ctxt;
 mod upvar;
 mod writeback;
 
-pub use fn_ctxt::FnCtxt;
-pub use typeck_root_ctxt::TypeckRootCtxt;
+pub use coercion::can_coerce;
+use fn_ctxt::FnCtxt;
+use typeck_root_ctxt::TypeckRootCtxt;
 
 use crate::check::check_fn;
 use crate::coercion::DynamicCoerceMany;
@@ -56,10 +57,10 @@ use rustc_errors::{codes::*, struct_span_code_err, ErrorGuaranteed};
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::intravisit::Visitor;
-use rustc_hir::{HirIdMap, Node};
+use rustc_hir::{HirId, HirIdMap, Node};
 use rustc_hir_analysis::check::check_abi;
 use rustc_hir_analysis::hir_ty_lowering::HirTyLowerer;
-use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
+use rustc_infer::infer::type_variable::TypeVariableOrigin;
 use rustc_infer::traits::{ObligationCauseCode, ObligationInspector, WellFormedLoc};
 use rustc_middle::query::Providers;
 use rustc_middle::traits;
@@ -260,10 +261,7 @@ fn infer_type_if_missing<'tcx>(fcx: &FnCtxt<'_, 'tcx>, node: Node<'tcx>) -> Opti
                 tcx.impl_trait_ref(item.container_id(tcx)).unwrap().instantiate_identity().args;
             Some(tcx.type_of(trait_item).instantiate(tcx, args))
         } else {
-            Some(fcx.next_ty_var(TypeVariableOrigin {
-                kind: TypeVariableOriginKind::TypeInference,
-                span,
-            }))
+            Some(fcx.next_ty_var(TypeVariableOrigin { span, param_def_id: None }))
         }
     } else if let Node::AnonConst(_) = node {
         let id = tcx.local_def_id_to_hir_id(def_id);
@@ -271,10 +269,7 @@ fn infer_type_if_missing<'tcx>(fcx: &FnCtxt<'_, 'tcx>, node: Node<'tcx>) -> Opti
             Node::Ty(&hir::Ty { kind: hir::TyKind::Typeof(ref anon_const), span, .. })
                 if anon_const.hir_id == id =>
             {
-                Some(fcx.next_ty_var(TypeVariableOrigin {
-                    kind: TypeVariableOriginKind::TypeInference,
-                    span,
-                }))
+                Some(fcx.next_ty_var(TypeVariableOrigin { span, param_def_id: None }))
             }
             Node::Expr(&hir::Expr { kind: hir::ExprKind::InlineAsm(asm), span, .. })
             | Node::Item(&hir::Item { kind: hir::ItemKind::GlobalAsm(asm), span, .. }) => {
@@ -284,10 +279,7 @@ fn infer_type_if_missing<'tcx>(fcx: &FnCtxt<'_, 'tcx>, node: Node<'tcx>) -> Opti
                         Some(fcx.next_int_var())
                     }
                     hir::InlineAsmOperand::SymFn { anon_const } if anon_const.hir_id == id => {
-                        Some(fcx.next_ty_var(TypeVariableOrigin {
-                            kind: TypeVariableOriginKind::MiscVariable,
-                            span,
-                        }))
+                        Some(fcx.next_ty_var(TypeVariableOrigin { span, param_def_id: None }))
                     }
                     _ => None,
                 })
@@ -347,13 +339,13 @@ pub struct EnclosingBreakables<'tcx> {
 }
 
 impl<'tcx> EnclosingBreakables<'tcx> {
-    fn find_breakable(&mut self, target_id: hir::HirId) -> &mut BreakableCtxt<'tcx> {
+    fn find_breakable(&mut self, target_id: HirId) -> &mut BreakableCtxt<'tcx> {
         self.opt_find_breakable(target_id).unwrap_or_else(|| {
             bug!("could not find enclosing breakable with id {}", target_id);
         })
     }
 
-    fn opt_find_breakable(&mut self, target_id: hir::HirId) -> Option<&mut BreakableCtxt<'tcx>> {
+    fn opt_find_breakable(&mut self, target_id: HirId) -> Option<&mut BreakableCtxt<'tcx>> {
         match self.by_id.get(&target_id) {
             Some(ix) => Some(&mut self.stack[*ix]),
             None => None,
@@ -373,7 +365,7 @@ fn report_unexpected_variant_res(
         Res::Def(DefKind::Variant, _) => "struct variant",
         _ => res.descr(),
     };
-    let path_str = rustc_hir_pretty::qpath_to_string(qpath);
+    let path_str = rustc_hir_pretty::qpath_to_string(&tcx, qpath);
     let err = tcx
         .dcx()
         .struct_span_err(span, format!("expected {expected}, found {res_descr} `{path_str}`"))

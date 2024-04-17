@@ -3,12 +3,12 @@ use super::CandidateSource;
 use super::MethodError;
 use super::NoMatchData;
 
-use crate::errors::MethodCallOnUnknownRawPointee;
 use crate::FnCtxt;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
+use rustc_hir::HirId;
 use rustc_hir_analysis::autoderef::{self, Autoderef};
 use rustc_infer::infer::canonical::OriginalQueryValues;
 use rustc_infer::infer::canonical::{Canonical, QueryResponse};
@@ -87,7 +87,7 @@ pub(crate) struct ProbeContext<'a, 'tcx> {
         Vec<(ty::Predicate<'tcx>, Option<ty::Predicate<'tcx>>, Option<ObligationCause<'tcx>>)>,
     >,
 
-    scope_expr_id: hir::HirId,
+    scope_expr_id: HirId,
 }
 
 impl<'a, 'tcx> Deref for ProbeContext<'a, 'tcx> {
@@ -264,7 +264,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         mode: Mode,
         return_type: Ty<'tcx>,
         self_ty: Ty<'tcx>,
-        scope_expr_id: hir::HirId,
+        scope_expr_id: HirId,
         candidate_filter: impl Fn(&ty::AssocItem) -> bool,
     ) -> Vec<ty::AssocItem> {
         let method_names = self
@@ -308,7 +308,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         return_type: Option<Ty<'tcx>>,
         is_suggestion: IsSuggestion,
         self_ty: Ty<'tcx>,
-        scope_expr_id: hir::HirId,
+        scope_expr_id: HirId,
         scope: ProbeScope,
     ) -> PickResult<'tcx> {
         self.probe_op(
@@ -332,7 +332,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         return_type: Option<Ty<'tcx>>,
         is_suggestion: IsSuggestion,
         self_ty: Ty<'tcx>,
-        scope_expr_id: hir::HirId,
+        scope_expr_id: HirId,
         scope: ProbeScope,
     ) -> Vec<Candidate<'tcx>> {
         self.probe_op(
@@ -363,7 +363,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         return_type: Option<Ty<'tcx>>,
         is_suggestion: IsSuggestion,
         self_ty: Ty<'tcx>,
-        scope_expr_id: hir::HirId,
+        scope_expr_id: HirId,
         scope: ProbeScope,
         op: OP,
     ) -> Result<R, MethodError<'tcx>>
@@ -430,21 +430,20 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if is_suggestion.0 {
                 // Ambiguity was encountered during a suggestion. Just keep going.
                 debug!("ProbeContext: encountered ambiguity in suggestion");
-            } else if bad_ty.reached_raw_pointer && !self.tcx.features().arbitrary_self_types {
+            } else if bad_ty.reached_raw_pointer
+                && !self.tcx.features().arbitrary_self_types
+                && !self.tcx.sess.at_least_rust_2018()
+            {
                 // this case used to be allowed by the compiler,
                 // so we do a future-compat lint here for the 2015 edition
                 // (see https://github.com/rust-lang/rust/issues/46906)
-                if self.tcx.sess.at_least_rust_2018() {
-                    self.dcx().emit_err(MethodCallOnUnknownRawPointee { span });
-                } else {
-                    self.tcx.node_span_lint(
-                        lint::builtin::TYVAR_BEHIND_RAW_POINTER,
-                        scope_expr_id,
-                        span,
-                        "type annotations needed",
-                        |_| {},
-                    );
-                }
+                self.tcx.node_span_lint(
+                    lint::builtin::TYVAR_BEHIND_RAW_POINTER,
+                    scope_expr_id,
+                    span,
+                    "type annotations needed",
+                    |_| {},
+                );
             } else {
                 // Ended up encountering a type variable when doing autoderef,
                 // but it may not be a type variable after processing obligations
@@ -455,10 +454,21 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     .unwrap_or_else(|_| span_bug!(span, "instantiating {:?} failed?", ty));
                 let ty = self.resolve_vars_if_possible(ty.value);
                 let guar = match *ty.kind() {
-                    ty::Infer(ty::TyVar(_)) => self
-                        .err_ctxt()
-                        .emit_inference_failure_err(self.body_id, span, ty.into(), E0282, true)
-                        .emit(),
+                    ty::Infer(ty::TyVar(_)) => {
+                        let raw_ptr_call =
+                            bad_ty.reached_raw_pointer && !self.tcx.features().arbitrary_self_types;
+                        let mut err = self.err_ctxt().emit_inference_failure_err(
+                            self.body_id,
+                            span,
+                            ty.into(),
+                            E0282,
+                            !raw_ptr_call,
+                        );
+                        if raw_ptr_call {
+                            err.span_label(span, "cannot call a method on a raw pointer with an unknown pointee type");
+                        }
+                        err.emit()
+                    }
                     ty::Error(guar) => guar,
                     _ => bug!("unexpected bad final type in method autoderef"),
                 };
@@ -580,7 +590,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
         return_type: Option<Ty<'tcx>>,
         orig_steps_var_values: &'a OriginalQueryValues<'tcx>,
         steps: &'tcx [CandidateStep<'tcx>],
-        scope_expr_id: hir::HirId,
+        scope_expr_id: HirId,
     ) -> ProbeContext<'a, 'tcx> {
         ProbeContext {
             fcx,
@@ -1372,7 +1382,7 @@ impl<'tcx> Pick<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         span: Span,
-        scope_expr_id: hir::HirId,
+        scope_expr_id: HirId,
     ) {
         if self.unstable_candidates.is_empty() {
             return;
@@ -1687,7 +1697,7 @@ impl<'a, 'tcx> ProbeContext<'a, 'tcx> {
                 if let ProbeResult::Match = result
                     && self
                         .at(&ObligationCause::dummy(), self.param_env)
-                        .sup(DefineOpaqueTypes::No, return_ty, xform_ret_ty)
+                        .sup(DefineOpaqueTypes::Yes, return_ty, xform_ret_ty)
                         .is_err()
                 {
                     result = ProbeResult::BadReturnType;
