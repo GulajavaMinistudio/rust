@@ -72,7 +72,7 @@ pub struct PendingPredicateObligation<'tcx> {
 }
 
 // `PendingPredicateObligation` is used a lot. Make sure it doesn't unintentionally get bigger.
-#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_pointer_width = "64"))]
+#[cfg(target_pointer_width = "64")]
 static_assert_size!(PendingPredicateObligation<'_>, 72);
 
 impl<'tcx> FulfillmentContext<'tcx> {
@@ -758,9 +758,9 @@ impl<'a, 'tcx> FulfillProcessor<'a, 'tcx> {
             // no type variables present, can use evaluation for better caching.
             // FIXME: consider caching errors too.
             if self.selcx.infcx.predicate_must_hold_considering_regions(obligation) {
-                if let Some(key) = ProjectionCacheKey::from_poly_projection_predicate(
+                if let Some(key) = ProjectionCacheKey::from_poly_projection_obligation(
                     &mut self.selcx,
-                    project_obligation.predicate,
+                    &project_obligation,
                 ) {
                     // If `predicate_must_hold_considering_regions` succeeds, then we've
                     // evaluated all sub-obligations. We can therefore mark the 'root'

@@ -1351,6 +1351,21 @@ pub enum AggregateKind<'tcx> {
     Closure(DefId, GenericArgsRef<'tcx>),
     Coroutine(DefId, GenericArgsRef<'tcx>),
     CoroutineClosure(DefId, GenericArgsRef<'tcx>),
+
+    /// Construct a raw pointer from the data pointer and metadata.
+    ///
+    /// The `Ty` here is the type of the *pointee*, not the pointer itself.
+    /// The `Mutability` indicates whether this produces a `*const` or `*mut`.
+    ///
+    /// The [`Rvalue::Aggregate`] operands for thus must be
+    ///
+    /// 0. A raw pointer of matching mutability with any [`core::ptr::Thin`] pointee
+    /// 1. A value of the appropriate [`core::ptr::Pointee::Metadata`] type
+    ///
+    /// *Both* operands must always be included, even the unit value if this is
+    /// creating a thin pointer. If you're just converting between thin pointers,
+    /// you may want an [`Rvalue::Cast`] with [`CastKind::PtrToPtr`] instead.
+    RawPtr(Ty<'tcx>, Mutability),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
@@ -1453,7 +1468,7 @@ pub enum BinOp {
 }
 
 // Some nodes are used a lot. Make sure they don't unintentionally get bigger.
-#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_pointer_width = "64"))]
+#[cfg(target_pointer_width = "64")]
 mod size_asserts {
     use super::*;
     // tidy-alphabetical-start

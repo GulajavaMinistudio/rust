@@ -394,16 +394,13 @@ fn copy_self_contained_objects(
             target_deps.push((libunwind_path, DependencyType::TargetSelfContained));
         }
     } else if target.contains("-wasi") {
-        let srcdir = builder
-            .wasi_root(target)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Target {:?} does not have a \"wasi-root\" key in Config.toml",
-                    target.triple
-                )
-            })
-            .join("lib")
-            .join(target.to_string().replace("-preview1", "").replace("p2", "").replace("p1", ""));
+        let srcdir = builder.wasi_libdir(target).unwrap_or_else(|| {
+            panic!(
+                "Target {:?} does not have a \"wasi-root\" key in Config.toml \
+                    or `$WASI_SDK_PATH` set",
+                target.triple
+            )
+        });
         for &obj in &["libc.a", "crt1-command.o", "crt1-reactor.o"] {
             copy_and_stamp(
                 builder,
@@ -514,12 +511,8 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
         }
 
         if target.contains("-wasi") {
-            if let Some(p) = builder.wasi_root(target) {
-                let root = format!(
-                    "native={}/lib/{}",
-                    p.to_str().unwrap(),
-                    target.to_string().replace("-preview1", "")
-                );
+            if let Some(dir) = builder.wasi_libdir(target) {
+                let root = format!("native={}", dir.to_str().unwrap());
                 cargo.rustflag("-L").rustflag(&root);
             }
         }
@@ -1146,7 +1139,7 @@ pub fn rustc_cargo_env(
     // busting caches (e.g. like #71152).
     if builder.config.llvm_enabled(target) {
         let building_is_expensive =
-            crate::core::build_steps::llvm::prebuilt_llvm_config(builder, target).is_err();
+            crate::core::build_steps::llvm::prebuilt_llvm_config(builder, target).should_build();
         // `top_stage == stage` might be false for `check --stage 1`, if we are building the stage 1 compiler
         let can_skip_build = builder.kind == Kind::Check && builder.top_stage == stage;
         let should_skip_build = building_is_expensive && can_skip_build;
@@ -1289,11 +1282,7 @@ fn is_codegen_cfg_needed(path: &TaskPath, run: &RunConfig<'_>) -> bool {
     if path.path.to_str().unwrap().contains(CODEGEN_BACKEND_PREFIX) {
         let mut needs_codegen_backend_config = true;
         for backend in run.builder.config.codegen_backends(run.target) {
-            if path
-                .path
-                .to_str()
-                .unwrap()
-                .ends_with(&(CODEGEN_BACKEND_PREFIX.to_owned() + &backend))
+            if path.path.to_str().unwrap().ends_with(&(CODEGEN_BACKEND_PREFIX.to_owned() + backend))
             {
                 needs_codegen_backend_config = false;
             }
@@ -1853,7 +1842,7 @@ impl Step for Assemble {
                 extra_features: vec![],
             });
             let tool_exe = exe("llvm-bitcode-linker", target_compiler.host);
-            builder.copy_link(&src_path, &libdir_bin.join(&tool_exe));
+            builder.copy_link(&src_path, &libdir_bin.join(tool_exe));
         }
 
         // Ensure that `libLLVM.so` ends up in the newly build compiler directory,

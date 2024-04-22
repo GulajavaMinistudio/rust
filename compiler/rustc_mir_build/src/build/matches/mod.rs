@@ -14,7 +14,7 @@ use rustc_data_structures::{
     fx::{FxHashSet, FxIndexMap, FxIndexSet},
     stack::ensure_sufficient_stack,
 };
-use rustc_hir::{BindingAnnotation, ByRef};
+use rustc_hir::{BindingMode, ByRef};
 use rustc_middle::middle::region;
 use rustc_middle::mir::{self, *};
 use rustc_middle::thir::{self, *};
@@ -77,11 +77,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
         match expr.kind {
             ExprKind::LogicalOp { op: LogicalOp::And, lhs, rhs } => {
+                this.visit_coverage_branch_operation(LogicalOp::And, expr_span);
                 let lhs_then_block = unpack!(this.then_else_break_inner(block, lhs, args));
                 let rhs_then_block = unpack!(this.then_else_break_inner(lhs_then_block, rhs, args));
                 rhs_then_block.unit()
             }
             ExprKind::LogicalOp { op: LogicalOp::Or, lhs, rhs } => {
+                this.visit_coverage_branch_operation(LogicalOp::Or, expr_span);
                 let local_scope = this.local_scope();
                 let (lhs_success_block, failure_block) =
                     this.in_if_then_scope(local_scope, expr_span, |this| {
@@ -385,15 +387,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let fake_borrows = match_has_guard
             .then(|| util::FakeBorrowCollector::collect_fake_borrows(self, candidates));
 
+        // See the doc comment on `match_candidates` for why we have an
+        // otherwise block. Match checking will ensure this is actually
+        // unreachable.
         let otherwise_block = self.cfg.start_new_block();
 
         // This will generate code to test scrutinee_place and
         // branch to the appropriate arm block
         self.match_candidates(match_start_span, scrutinee_span, block, otherwise_block, candidates);
 
-        // See the doc comment on `match_candidates` for why we may have an
-        // otherwise block. Match checking will ensure this is actually
-        // unreachable.
         let source_info = self.source_info(scrutinee_span);
 
         // Matching on a `scrutinee_place` with an uninhabited type doesn't
@@ -621,12 +623,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     ) -> BlockAnd<()> {
         match irrefutable_pat.kind {
             // Optimize the case of `let x = ...` to write directly into `x`
-            PatKind::Binding {
-                mode: BindingAnnotation(ByRef::No, _),
-                var,
-                subpattern: None,
-                ..
-            } => {
+            PatKind::Binding { mode: BindingMode(ByRef::No, _), var, subpattern: None, .. } => {
                 let place =
                     self.storage_live_binding(block, var, irrefutable_pat.span, OutsideGuard, true);
                 unpack!(block = self.expr_into_dest(place, block, initializer_id));
@@ -652,7 +649,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     box Pat {
                         kind:
                             PatKind::Binding {
-                                mode: BindingAnnotation(ByRef::No, _),
+                                mode: BindingMode(ByRef::No, _),
                                 var,
                                 subpattern: None,
                                 ..
@@ -893,7 +890,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         f: &mut impl FnMut(
             &mut Self,
             Symbol,
-            BindingAnnotation,
+            BindingMode,
             LocalVarId,
             Span,
             Ty<'tcx>,
@@ -1148,7 +1145,7 @@ struct Binding<'tcx> {
     span: Span,
     source: Place<'tcx>,
     var_id: LocalVarId,
-    binding_mode: BindingAnnotation,
+    binding_mode: BindingMode,
 }
 
 /// Indicates that the type of `source` must be a subtype of the
@@ -2412,7 +2409,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         source_info: SourceInfo,
         visibility_scope: SourceScope,
         name: Symbol,
-        mode: BindingAnnotation,
+        mode: BindingMode,
         var_id: LocalVarId,
         var_ty: Ty<'tcx>,
         user_ty: UserTypeProjections,

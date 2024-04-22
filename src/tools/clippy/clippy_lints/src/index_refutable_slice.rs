@@ -7,8 +7,8 @@ use clippy_utils::{is_expn_of, is_lint_allowed, path_to_local};
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_errors::Applicability;
 use rustc_hir as hir;
-use rustc_hir::HirId;
 use rustc_hir::intravisit::{self, Visitor};
+use rustc_hir::HirId;
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::ty;
@@ -94,7 +94,7 @@ fn find_slice_values(cx: &LateContext<'_>, pat: &hir::Pat<'_>) -> FxIndexMap<Hir
     pat.walk_always(|pat| {
         // We'll just ignore mut and ref mut for simplicity sake right now
         if let hir::PatKind::Binding(
-            hir::BindingAnnotation(by_ref, hir::Mutability::Not),
+            hir::BindingMode(by_ref, hir::Mutability::Not),
             value_hir_id,
             ident,
             sub_pat,

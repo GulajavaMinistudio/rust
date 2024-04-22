@@ -76,6 +76,7 @@ const LLD_FILE_NAMES: &[&str] = &["ld.lld", "ld64.lld", "lld-link", "wasm-ld"];
 
 /// Extra --check-cfg to add when building
 /// (Mode restriction, config name, config values (if any))
+#[allow(clippy::type_complexity)] // It's fine for hard-coded list and type is explained above.
 const EXTRA_CHECK_CFGS: &[(Option<Mode>, &str, Option<&[&'static str]>)] = &[
     (None, "bootstrap", None),
     (Some(Mode::Rustc), "parallel_compiler", None),
@@ -1373,9 +1374,24 @@ impl Build {
         self.musl_root(target).map(|root| root.join("lib"))
     }
 
-    /// Returns the sysroot for the wasi target, if defined
-    fn wasi_root(&self, target: TargetSelection) -> Option<&Path> {
-        self.config.target_config.get(&target).and_then(|t| t.wasi_root.as_ref()).map(|p| &**p)
+    /// Returns the `lib` directory for the WASI target specified, if
+    /// configured.
+    ///
+    /// This first consults `wasi-root` as configured in per-target
+    /// configuration, and failing that it assumes that `$WASI_SDK_PATH` is
+    /// set in the environment, and failing that `None` is returned.
+    fn wasi_libdir(&self, target: TargetSelection) -> Option<PathBuf> {
+        let configured =
+            self.config.target_config.get(&target).and_then(|t| t.wasi_root.as_ref()).map(|p| &**p);
+        if let Some(path) = configured {
+            return Some(path.join("lib").join(target.to_string()));
+        }
+        let mut env_root = PathBuf::from(std::env::var_os("WASI_SDK_PATH")?);
+        env_root.push("share");
+        env_root.push("wasi-sysroot");
+        env_root.push("lib");
+        env_root.push(target.to_string());
+        Some(env_root)
     }
 
     /// Returns `true` if this is a no-std `target`, if defined
@@ -1610,10 +1626,7 @@ impl Build {
     /// Returns `true` if unstable features should be enabled for the compiler
     /// we're building.
     fn unstable_features(&self) -> bool {
-        match &self.config.channel[..] {
-            "stable" | "beta" => false,
-            "nightly" | _ => true,
-        }
+        !matches!(&self.config.channel[..], "stable" | "beta")
     }
 
     /// Returns a Vec of all the dependencies of the given root crate,

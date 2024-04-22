@@ -1991,15 +1991,17 @@ impl<T, A: Allocator> Vec<T, A> {
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_confusables("push_back", "put", "append")]
     pub fn push(&mut self, value: T) {
+        // Inform codegen that the length does not change across grow_one().
+        let len = self.len;
         // This will panic or abort if we would allocate > isize::MAX bytes
         // or if the length increment would overflow for zero-sized types.
-        if self.len == self.buf.capacity() {
+        if len == self.buf.capacity() {
             self.buf.grow_one();
         }
         unsafe {
-            let end = self.as_mut_ptr().add(self.len);
+            let end = self.as_mut_ptr().add(len);
             ptr::write(end, value);
-            self.len += 1;
+            self.len = len + 1;
         }
     }
 
@@ -2846,8 +2848,30 @@ impl<T: Clone, A: Allocator + Clone> Clone for Vec<T, A> {
         crate::slice::to_vec(&**self, alloc)
     }
 
-    fn clone_from(&mut self, other: &Self) {
-        crate::slice::SpecCloneIntoVec::clone_into(other.as_slice(), self);
+    /// Overwrites the contents of `self` with a clone of the contents of `source`.
+    ///
+    /// This method is preferred over simply assigning `source.clone()` to `self`,
+    /// as it avoids reallocation if possible. Additionally, if the element type
+    /// `T` overrides `clone_from()`, this will reuse the resources of `self`'s
+    /// elements as well.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let x = vec![5, 6, 7];
+    /// let mut y = vec![8, 9, 10];
+    /// let yp: *const i32 = y.as_ptr();
+    ///
+    /// y.clone_from(&x);
+    ///
+    /// // The value is the same
+    /// assert_eq!(x, y);
+    ///
+    /// // And no reallocation occurred
+    /// assert_eq!(yp, y.as_ptr());
+    /// ```
+    fn clone_from(&mut self, source: &Self) {
+        crate::slice::SpecCloneIntoVec::clone_into(source.as_slice(), self);
     }
 }
 
