@@ -102,6 +102,7 @@ pub struct Probe<'tcx> {
     /// What happened inside of this probe in chronological order.
     pub steps: Vec<ProbeStep<'tcx>>,
     pub kind: ProbeKind<'tcx>,
+    pub final_state: CanonicalState<'tcx, ()>,
 }
 
 impl Debug for Probe<'_> {
@@ -121,6 +122,12 @@ pub enum ProbeStep<'tcx> {
     /// used whenever there are multiple candidates to prove the
     /// current goalby .
     NestedProbe(Probe<'tcx>),
+    /// A call to `EvalCtxt::evaluate_added_goals_make_canonical_response` with
+    /// `Certainty` was made. This is the certainty passed in, so it's not unified
+    /// with the certainty of the `try_evaluate_added_goals` that is done within;
+    /// if it's `Certainty::Yes`, then we can trust that the candidate is "finished"
+    /// and we didn't force ambiguity for some reason.
+    MakeCanonicalResponse { shallow_certainty: Certainty },
 }
 
 /// What kind of probe we're in. In case the probe represents a candidate, or
@@ -134,10 +141,6 @@ pub enum ProbeKind<'tcx> {
     TryNormalizeNonRigid { result: QueryResult<'tcx> },
     /// Probe entered when normalizing the self ty during candidate assembly
     NormalizedSelfTyAssembly,
-    /// Some candidate to prove the current goal.
-    ///
-    /// FIXME: Remove this in favor of always using more strongly typed variants.
-    MiscCandidate { name: &'static str, result: QueryResult<'tcx> },
     /// A candidate for proving a trait or alias-relate goal.
     TraitCandidate { source: CandidateSource, result: QueryResult<'tcx> },
     /// Used in the probe that wraps normalizing the non-self type for the unsize
@@ -147,4 +150,6 @@ pub enum ProbeKind<'tcx> {
     /// do a probe to find out what projection type(s) may be used to prove that
     /// the source type upholds all of the target type's object bounds.
     UpcastProjectionCompatibility,
+    /// Try to unify an opaque type with an existing key in the storage.
+    OpaqueTypeStorageLookup { result: QueryResult<'tcx> },
 }

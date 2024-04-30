@@ -7,13 +7,13 @@ use rustc_middle::mir::coverage::{
     BlockMarkerId, BranchSpan, ConditionId, ConditionInfo, CoverageKind, MCDCBranchSpan,
     MCDCDecisionSpan,
 };
-use rustc_middle::mir::{self, BasicBlock, UnOp};
+use rustc_middle::mir::{self, BasicBlock, SourceInfo, UnOp};
 use rustc_middle::thir::{ExprId, ExprKind, LogicalOp, Thir};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::Span;
 
-use crate::build::Builder;
+use crate::build::{Builder, CFG};
 use crate::errors::MCDCExceedsConditionNumLimit;
 
 pub(crate) struct BranchInfoBuilder {
@@ -22,6 +22,7 @@ pub(crate) struct BranchInfoBuilder {
 
     num_block_markers: usize,
     branch_spans: Vec<BranchSpan>,
+
     mcdc_branch_spans: Vec<MCDCBranchSpan>,
     mcdc_decision_spans: Vec<MCDCDecisionSpan>,
     mcdc_state: Option<MCDCState>,
@@ -95,21 +96,19 @@ impl BranchInfoBuilder {
         }
     }
 
-    fn record_conditions_operation(&mut self, logical_op: LogicalOp, span: Span) {
-        if let Some(mcdc_state) = self.mcdc_state.as_mut() {
-            mcdc_state.record_conditions(logical_op, span);
-        }
-    }
-
-    fn fetch_condition_info(
+    fn fetch_mcdc_condition_info(
         &mut self,
         tcx: TyCtxt<'_>,
         true_marker: BlockMarkerId,
         false_marker: BlockMarkerId,
-    ) -> Option<ConditionInfo> {
+    ) -> Option<(u16, ConditionInfo)> {
         let mcdc_state = self.mcdc_state.as_mut()?;
+        let decision_depth = mcdc_state.decision_depth();
         let (mut condition_info, decision_result) =
             mcdc_state.take_condition(true_marker, false_marker);
+        // take_condition() returns Some for decision_result when the decision stack
+        // is empty, i.e. when all the conditions of the decision were instrumented,
+        // and the decision is "complete".
         if let Some(decision) = decision_result {
             match decision.conditions_num {
                 0 => {
@@ -121,14 +120,9 @@ impl BranchInfoBuilder {
                 _ => {
                     // Do not generate mcdc mappings and statements for decisions with too many conditions.
                     let rebase_idx = self.mcdc_branch_spans.len() - decision.conditions_num + 1;
-                    let to_normal_branches = self.mcdc_branch_spans.split_off(rebase_idx);
-                    self.branch_spans.extend(to_normal_branches.into_iter().map(
-                        |MCDCBranchSpan { span, true_marker, false_marker, .. }| BranchSpan {
-                            span,
-                            true_marker,
-                            false_marker,
-                        },
-                    ));
+                    for branch in &mut self.mcdc_branch_spans[rebase_idx..] {
+                        branch.condition_info = None;
+                    }
 
                     // ConditionInfo of this branch shall also be reset.
                     condition_info = None;
@@ -141,12 +135,42 @@ impl BranchInfoBuilder {
                 }
             }
         }
-        condition_info
+        condition_info.map(|cond_info| (decision_depth, cond_info))
+    }
+
+    fn add_two_way_branch<'tcx>(
+        &mut self,
+        cfg: &mut CFG<'tcx>,
+        source_info: SourceInfo,
+        true_block: BasicBlock,
+        false_block: BasicBlock,
+    ) {
+        let true_marker = self.inject_block_marker(cfg, source_info, true_block);
+        let false_marker = self.inject_block_marker(cfg, source_info, false_block);
+
+        self.branch_spans.push(BranchSpan { span: source_info.span, true_marker, false_marker });
     }
 
     fn next_block_marker_id(&mut self) -> BlockMarkerId {
         let id = BlockMarkerId::from_usize(self.num_block_markers);
         self.num_block_markers += 1;
+        id
+    }
+
+    fn inject_block_marker(
+        &mut self,
+        cfg: &mut CFG<'_>,
+        source_info: SourceInfo,
+        block: BasicBlock,
+    ) -> BlockMarkerId {
+        let id = self.next_block_marker_id();
+
+        let marker_statement = mir::Statement {
+            source_info,
+            kind: mir::StatementKind::Coverage(CoverageKind::BlockMarker { id }),
+        };
+        cfg.push(block, marker_statement);
+
         id
     }
 
@@ -157,7 +181,7 @@ impl BranchInfoBuilder {
             branch_spans,
             mcdc_branch_spans,
             mcdc_decision_spans,
-            ..
+            mcdc_state: _,
         } = self;
 
         if num_block_markers == 0 {
@@ -179,17 +203,32 @@ impl BranchInfoBuilder {
 /// This limit may be relaxed if the [upstream change](https://github.com/llvm/llvm-project/pull/82448) is merged.
 const MAX_CONDITIONS_NUM_IN_DECISION: usize = 6;
 
-struct MCDCState {
+#[derive(Default)]
+struct MCDCDecisionCtx {
     /// To construct condition evaluation tree.
     decision_stack: VecDeque<ConditionInfo>,
     processing_decision: Option<MCDCDecisionSpan>,
+}
+
+struct MCDCState {
+    decision_ctx_stack: Vec<MCDCDecisionCtx>,
 }
 
 impl MCDCState {
     fn new_if_enabled(tcx: TyCtxt<'_>) -> Option<Self> {
         tcx.sess
             .instrument_coverage_mcdc()
-            .then(|| Self { decision_stack: VecDeque::new(), processing_decision: None })
+            .then(|| Self { decision_ctx_stack: vec![MCDCDecisionCtx::default()] })
+    }
+
+    /// Decision depth is given as a u16 to reduce the size of the `CoverageKind`,
+    /// as it is very unlikely that the depth ever reaches 2^16.
+    #[inline]
+    fn decision_depth(&self) -> u16 {
+        u16::try_from(
+            self.decision_ctx_stack.len().checked_sub(1).expect("Unexpected empty decision stack"),
+        )
+        .expect("decision depth did not fit in u16, this is likely to be an instrumentation error")
     }
 
     // At first we assign ConditionIds for each sub expression.
@@ -233,19 +272,23 @@ impl MCDCState {
     // - If the op is AND, the "false_next" of LHS and RHS should be the parent's "false_next". While "true_next" of the LHS is the RHS, the "true next" of RHS is the parent's "true_next".
     // - If the op is OR, the "true_next" of LHS and RHS should be the parent's "true_next". While "false_next" of the LHS is the RHS, the "false next" of RHS is the parent's "false_next".
     fn record_conditions(&mut self, op: LogicalOp, span: Span) {
-        let decision = match self.processing_decision.as_mut() {
+        let decision_depth = self.decision_depth();
+        let decision_ctx =
+            self.decision_ctx_stack.last_mut().expect("Unexpected empty decision_ctx_stack");
+        let decision = match decision_ctx.processing_decision.as_mut() {
             Some(decision) => {
                 decision.span = decision.span.to(span);
                 decision
             }
-            None => self.processing_decision.insert(MCDCDecisionSpan {
+            None => decision_ctx.processing_decision.insert(MCDCDecisionSpan {
                 span,
                 conditions_num: 0,
                 end_markers: vec![],
+                decision_depth,
             }),
         };
 
-        let parent_condition = self.decision_stack.pop_back().unwrap_or_default();
+        let parent_condition = decision_ctx.decision_stack.pop_back().unwrap_or_default();
         let lhs_id = if parent_condition.condition_id == ConditionId::NONE {
             decision.conditions_num += 1;
             ConditionId::from(decision.conditions_num)
@@ -285,8 +328,8 @@ impl MCDCState {
             }
         };
         // We visit expressions tree in pre-order, so place the left-hand side on the top.
-        self.decision_stack.push_back(rhs);
-        self.decision_stack.push_back(lhs);
+        decision_ctx.decision_stack.push_back(rhs);
+        decision_ctx.decision_stack.push_back(lhs);
     }
 
     fn take_condition(
@@ -294,10 +337,12 @@ impl MCDCState {
         true_marker: BlockMarkerId,
         false_marker: BlockMarkerId,
     ) -> (Option<ConditionInfo>, Option<MCDCDecisionSpan>) {
-        let Some(condition_info) = self.decision_stack.pop_back() else {
+        let decision_ctx =
+            self.decision_ctx_stack.last_mut().expect("Unexpected empty decision_ctx_stack");
+        let Some(condition_info) = decision_ctx.decision_stack.pop_back() else {
             return (None, None);
         };
-        let Some(decision) = self.processing_decision.as_mut() else {
+        let Some(decision) = decision_ctx.processing_decision.as_mut() else {
             bug!("Processing decision should have been created before any conditions are taken");
         };
         if condition_info.true_next_id == ConditionId::NONE {
@@ -307,8 +352,8 @@ impl MCDCState {
             decision.end_markers.push(false_marker);
         }
 
-        if self.decision_stack.is_empty() {
-            (Some(condition_info), self.processing_decision.take())
+        if decision_ctx.decision_stack.is_empty() {
+            (Some(condition_info), decision_ctx.processing_decision.take())
         } else {
             (Some(condition_info), None)
         }
@@ -325,7 +370,7 @@ impl Builder<'_, '_> {
         mut else_block: BasicBlock,
     ) {
         // Bail out if branch coverage is not enabled for this function.
-        let Some(branch_info) = self.coverage_branch_info.as_ref() else { return };
+        let Some(branch_info) = self.coverage_branch_info.as_mut() else { return };
 
         // If this condition expression is nested within one or more `!` expressions,
         // replace it with the enclosing `!` collected by `visit_unary_not`.
@@ -335,47 +380,54 @@ impl Builder<'_, '_> {
                 std::mem::swap(&mut then_block, &mut else_block);
             }
         }
-        let source_info = self.source_info(self.thir[expr_id].span);
 
-        // Now that we have `source_info`, we can upgrade to a &mut reference.
-        let branch_info = self.coverage_branch_info.as_mut().expect("upgrading & to &mut");
+        let source_info = SourceInfo { span: self.thir[expr_id].span, scope: self.source_scope };
 
-        let mut inject_branch_marker = |block: BasicBlock| {
-            let id = branch_info.next_block_marker_id();
-
-            let marker_statement = mir::Statement {
-                source_info,
-                kind: mir::StatementKind::Coverage(CoverageKind::BlockMarker { id }),
-            };
-            self.cfg.push(block, marker_statement);
-
-            id
-        };
-
-        let true_marker = inject_branch_marker(then_block);
-        let false_marker = inject_branch_marker(else_block);
-
-        if let Some(condition_info) =
-            branch_info.fetch_condition_info(self.tcx, true_marker, false_marker)
-        {
+        // Separate path for handling branches when MC/DC is enabled.
+        if branch_info.mcdc_state.is_some() {
+            let mut inject_block_marker =
+                |block| branch_info.inject_block_marker(&mut self.cfg, source_info, block);
+            let true_marker = inject_block_marker(then_block);
+            let false_marker = inject_block_marker(else_block);
+            let (decision_depth, condition_info) = branch_info
+                .fetch_mcdc_condition_info(self.tcx, true_marker, false_marker)
+                .map_or((0, None), |(decision_depth, condition_info)| {
+                    (decision_depth, Some(condition_info))
+                });
             branch_info.mcdc_branch_spans.push(MCDCBranchSpan {
                 span: source_info.span,
                 condition_info,
                 true_marker,
                 false_marker,
+                decision_depth,
             });
-        } else {
-            branch_info.branch_spans.push(BranchSpan {
-                span: source_info.span,
-                true_marker,
-                false_marker,
-            });
+            return;
         }
+
+        branch_info.add_two_way_branch(&mut self.cfg, source_info, then_block, else_block);
     }
 
     pub(crate) fn visit_coverage_branch_operation(&mut self, logical_op: LogicalOp, span: Span) {
-        if let Some(branch_info) = self.coverage_branch_info.as_mut() {
-            branch_info.record_conditions_operation(logical_op, span);
+        if let Some(branch_info) = self.coverage_branch_info.as_mut()
+            && let Some(mcdc_state) = branch_info.mcdc_state.as_mut()
+        {
+            mcdc_state.record_conditions(logical_op, span);
         }
+    }
+
+    pub(crate) fn mcdc_increment_depth_if_enabled(&mut self) {
+        if let Some(branch_info) = self.coverage_branch_info.as_mut()
+            && let Some(mcdc_state) = branch_info.mcdc_state.as_mut()
+        {
+            mcdc_state.decision_ctx_stack.push(MCDCDecisionCtx::default());
+        };
+    }
+
+    pub(crate) fn mcdc_decrement_depth_if_enabled(&mut self) {
+        if let Some(branch_info) = self.coverage_branch_info.as_mut()
+            && let Some(mcdc_state) = branch_info.mcdc_state.as_mut()
+        {
+            mcdc_state.decision_ctx_stack.pop().expect("Unexpected empty decision stack");
+        };
     }
 }

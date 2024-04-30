@@ -1987,6 +1987,13 @@ extern "rust-intrinsic" {
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `count_ones` method. For example,
     /// [`u32::count_ones`]
+    #[cfg(not(bootstrap))]
+    #[rustc_const_stable(feature = "const_ctpop", since = "1.40.0")]
+    #[rustc_safe_intrinsic]
+    #[rustc_nounwind]
+    pub fn ctpop<T: Copy>(x: T) -> u32;
+
+    #[cfg(bootstrap)]
     #[rustc_const_stable(feature = "const_ctpop", since = "1.40.0")]
     #[rustc_safe_intrinsic]
     #[rustc_nounwind]
@@ -2028,6 +2035,13 @@ extern "rust-intrinsic" {
     /// let num_leading = ctlz(x);
     /// assert_eq!(num_leading, 16);
     /// ```
+    #[cfg(not(bootstrap))]
+    #[rustc_const_stable(feature = "const_ctlz", since = "1.40.0")]
+    #[rustc_safe_intrinsic]
+    #[rustc_nounwind]
+    pub fn ctlz<T: Copy>(x: T) -> u32;
+
+    #[cfg(bootstrap)]
     #[rustc_const_stable(feature = "const_ctlz", since = "1.40.0")]
     #[rustc_safe_intrinsic]
     #[rustc_nounwind]
@@ -2050,6 +2064,12 @@ extern "rust-intrinsic" {
     /// let num_leading = unsafe { ctlz_nonzero(x) };
     /// assert_eq!(num_leading, 3);
     /// ```
+    #[cfg(not(bootstrap))]
+    #[rustc_const_stable(feature = "constctlz", since = "1.50.0")]
+    #[rustc_nounwind]
+    pub fn ctlz_nonzero<T: Copy>(x: T) -> u32;
+
+    #[cfg(bootstrap)]
     #[rustc_const_stable(feature = "constctlz", since = "1.50.0")]
     #[rustc_nounwind]
     pub fn ctlz_nonzero<T: Copy>(x: T) -> T;
@@ -2090,6 +2110,13 @@ extern "rust-intrinsic" {
     /// let num_trailing = cttz(x);
     /// assert_eq!(num_trailing, 16);
     /// ```
+    #[cfg(not(bootstrap))]
+    #[rustc_const_stable(feature = "const_cttz", since = "1.40.0")]
+    #[rustc_safe_intrinsic]
+    #[rustc_nounwind]
+    pub fn cttz<T: Copy>(x: T) -> u32;
+
+    #[cfg(bootstrap)]
     #[rustc_const_stable(feature = "const_cttz", since = "1.40.0")]
     #[rustc_safe_intrinsic]
     #[rustc_nounwind]
@@ -2112,6 +2139,12 @@ extern "rust-intrinsic" {
     /// let num_trailing = unsafe { cttz_nonzero(x) };
     /// assert_eq!(num_trailing, 3);
     /// ```
+    #[cfg(not(bootstrap))]
+    #[rustc_const_stable(feature = "const_cttz_nonzero", since = "1.53.0")]
+    #[rustc_nounwind]
+    pub fn cttz_nonzero<T: Copy>(x: T) -> u32;
+
+    #[cfg(bootstrap)]
     #[rustc_const_stable(feature = "const_cttz_nonzero", since = "1.53.0")]
     #[rustc_nounwind]
     pub fn cttz_nonzero<T: Copy>(x: T) -> T;
@@ -2288,6 +2321,13 @@ extern "rust-intrinsic" {
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `rotate_left` method. For example,
     /// [`u32::rotate_left`]
+    #[cfg(not(bootstrap))]
+    #[rustc_const_stable(feature = "const_int_rotate", since = "1.40.0")]
+    #[rustc_safe_intrinsic]
+    #[rustc_nounwind]
+    pub fn rotate_left<T: Copy>(x: T, shift: u32) -> T;
+
+    #[cfg(bootstrap)]
     #[rustc_const_stable(feature = "const_int_rotate", since = "1.40.0")]
     #[rustc_safe_intrinsic]
     #[rustc_nounwind]
@@ -2303,6 +2343,13 @@ extern "rust-intrinsic" {
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `rotate_right` method. For example,
     /// [`u32::rotate_right`]
+    #[cfg(not(bootstrap))]
+    #[rustc_const_stable(feature = "const_int_rotate", since = "1.40.0")]
+    #[rustc_safe_intrinsic]
+    #[rustc_nounwind]
+    pub fn rotate_right<T: Copy>(x: T, shift: u32) -> T;
+
+    #[cfg(bootstrap)]
     #[rustc_const_stable(feature = "const_int_rotate", since = "1.40.0")]
     #[rustc_safe_intrinsic]
     #[rustc_nounwind]
@@ -2670,10 +2717,45 @@ where
 /// particular value, ever. However, the compiler will generally make it
 /// return `true` only if the value of the argument is actually known.
 ///
-/// When calling this in a `const fn`, both paths must be semantically
-/// equivalent, that is, the result of the `true` branch and the `false`
-/// branch must return the same value and have the same side-effects *no
-/// matter what*.
+/// # Stability concerns
+///
+/// While it is safe to call, this intrinsic may behave differently in
+/// a `const` context than otherwise. See the [`const_eval_select`]
+/// documentation for an explanation of the issues this can cause. Unlike
+/// `const_eval_select`, this intrinsic isn't guaranteed to behave
+/// deterministically even in a `const` context.
+///
+/// # Type Requirements
+///
+/// `T` must be either a `bool`, a `char`, a primitive numeric type (e.g. `f32`,
+/// but not `NonZeroISize`), or any thin pointer (e.g. `*mut String`).
+/// Any other argument types *may* cause a compiler error.
+///
+/// ## Pointers
+///
+/// When the input is a pointer, only the pointer itself is
+/// ever considered. The pointee has no effect. Currently, these functions
+/// behave identically:
+///
+/// ```
+/// #![feature(is_val_statically_known)]
+/// #![feature(core_intrinsics)]
+/// # #![allow(internal_features)]
+/// #![feature(strict_provenance)]
+/// use std::intrinsics::is_val_statically_known;
+///
+/// fn foo(x: &i32) -> bool {
+///     is_val_statically_known(x)
+/// }
+///
+/// fn bar(x: &i32) -> bool {
+///     is_val_statically_known(
+///         (x as *const i32).addr()
+///     )
+/// }
+/// # _ = foo(&5_i32);
+/// # _ = bar(&5_i32);
+/// ```
 #[rustc_const_unstable(feature = "is_val_statically_known", issue = "none")]
 #[rustc_nounwind]
 #[unstable(feature = "core_intrinsics", issue = "none")]
@@ -2720,7 +2802,7 @@ pub const unsafe fn typed_swap<T>(x: *mut T, y: *mut T) {
 #[unstable(feature = "core_intrinsics", issue = "none")]
 #[inline(always)]
 #[cfg_attr(not(bootstrap), rustc_intrinsic)] // just make it a regular fn in bootstrap
-pub(crate) const fn ub_checks() -> bool {
+pub const fn ub_checks() -> bool {
     cfg!(debug_assertions)
 }
 

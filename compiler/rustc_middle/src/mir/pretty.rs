@@ -187,6 +187,17 @@ fn dump_path<'tcx>(
             }));
             s
         }
+        ty::InstanceDef::AsyncDropGlueCtorShim(_, Some(ty)) => {
+            // Unfortunately, pretty-printed typed are not very filename-friendly.
+            // We dome some filtering.
+            let mut s = ".".to_owned();
+            s.extend(ty.to_string().chars().filter_map(|c| match c {
+                ' ' => None,
+                ':' | '<' | '>' => Some('_'),
+                c => Some(c),
+            }));
+            s
+        }
         _ => String::new(),
     };
 
@@ -485,20 +496,27 @@ fn write_coverage_branch_info(
         )?;
     }
 
-    for coverage::MCDCBranchSpan { span, condition_info, true_marker, false_marker } in
-        mcdc_branch_spans
+    for coverage::MCDCBranchSpan {
+        span,
+        condition_info,
+        true_marker,
+        false_marker,
+        decision_depth,
+    } in mcdc_branch_spans
     {
         writeln!(
             w,
-            "{INDENT}coverage mcdc branch {{ condition_id: {:?}, true: {true_marker:?}, false: {false_marker:?} }} => {span:?}",
-            condition_info.condition_id
+            "{INDENT}coverage mcdc branch {{ condition_id: {:?}, true: {true_marker:?}, false: {false_marker:?}, depth: {decision_depth:?} }} => {span:?}",
+            condition_info.map(|info| info.condition_id)
         )?;
     }
 
-    for coverage::MCDCDecisionSpan { span, conditions_num, end_markers } in mcdc_decision_spans {
+    for coverage::MCDCDecisionSpan { span, conditions_num, end_markers, decision_depth } in
+        mcdc_decision_spans
+    {
         writeln!(
             w,
-            "{INDENT}coverage mcdc decision {{ conditions_num: {conditions_num:?}, end: {end_markers:?} }} => {span:?}"
+            "{INDENT}coverage mcdc decision {{ conditions_num: {conditions_num:?}, end: {end_markers:?}, depth: {decision_depth:?} }} => {span:?}"
         )?;
     }
 
@@ -974,7 +992,8 @@ impl<'tcx> Debug for Rvalue<'tcx> {
             Ref(region, borrow_kind, ref place) => {
                 let kind_str = match borrow_kind {
                     BorrowKind::Shared => "",
-                    BorrowKind::Fake => "fake ",
+                    BorrowKind::Fake(FakeBorrowKind::Deep) => "fake ",
+                    BorrowKind::Fake(FakeBorrowKind::Shallow) => "fake shallow ",
                     BorrowKind::Mut { .. } => "mut ",
                 };
 

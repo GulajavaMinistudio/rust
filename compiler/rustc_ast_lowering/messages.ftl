@@ -5,6 +5,7 @@ ast_lowering_abi_specified_multiple_times =
 
 ast_lowering_arbitrary_expression_in_pattern =
     arbitrary expressions aren't allowed in patterns
+    .pattern_from_macro_note = the `expr` fragment specifier forces the metavariable's content to be an expression
 
 ast_lowering_argument = argument
 
@@ -163,3 +164,6 @@ ast_lowering_underscore_expr_lhs_assign =
     .label = `_` not allowed here
 
 ast_lowering_use_angle_brackets = use angle brackets instead
+ast_lowering_yield_in_closure =
+    `yield` can only be used in `#[coroutine]` closures, or `gen` blocks
+    .suggestion = use `#[coroutine]` to make this closure a coroutine

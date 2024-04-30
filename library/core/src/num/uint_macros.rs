@@ -77,7 +77,10 @@ macro_rules! uint_impl {
                       without modifying the original"]
         #[inline(always)]
         pub const fn count_ones(self) -> u32 {
-            intrinsics::ctpop(self as $ActualT) as u32
+            #[cfg(not(bootstrap))]
+            return intrinsics::ctpop(self as $ActualT);
+            #[cfg(bootstrap)]
+            return intrinsics::ctpop(self as $ActualT) as u32;
         }
 
         /// Returns the number of zeros in the binary representation of `self`.
@@ -119,7 +122,10 @@ macro_rules! uint_impl {
                       without modifying the original"]
         #[inline(always)]
         pub const fn leading_zeros(self) -> u32 {
-            intrinsics::ctlz(self as $ActualT) as u32
+            #[cfg(not(bootstrap))]
+            return intrinsics::ctlz(self as $ActualT);
+            #[cfg(bootstrap)]
+            return intrinsics::ctlz(self as $ActualT) as u32;
         }
 
         /// Returns the number of trailing zeros in the binary representation
@@ -140,7 +146,10 @@ macro_rules! uint_impl {
                       without modifying the original"]
         #[inline(always)]
         pub const fn trailing_zeros(self) -> u32 {
-            intrinsics::cttz(self) as u32
+            #[cfg(not(bootstrap))]
+            return intrinsics::cttz(self);
+            #[cfg(bootstrap)]
+            return intrinsics::cttz(self) as u32;
         }
 
         /// Returns the number of leading ones in the binary representation of `self`.
@@ -205,7 +214,10 @@ macro_rules! uint_impl {
                       without modifying the original"]
         #[inline(always)]
         pub const fn rotate_left(self, n: u32) -> Self {
-            intrinsics::rotate_left(self, n as $SelfT)
+            #[cfg(not(bootstrap))]
+            return intrinsics::rotate_left(self, n);
+            #[cfg(bootstrap)]
+            return intrinsics::rotate_left(self, n as $SelfT);
         }
 
         /// Shifts the bits to the right by a specified amount, `n`,
@@ -230,7 +242,10 @@ macro_rules! uint_impl {
                       without modifying the original"]
         #[inline(always)]
         pub const fn rotate_right(self, n: u32) -> Self {
-            intrinsics::rotate_right(self, n as $SelfT)
+            #[cfg(not(bootstrap))]
+            return intrinsics::rotate_right(self, n);
+            #[cfg(bootstrap)]
+            return intrinsics::rotate_right(self, n as $SelfT);
         }
 
         /// Reverses the byte order of the integer.
@@ -1095,18 +1110,25 @@ macro_rules! uint_impl {
                 None
             } else {
                 let mut n = 0;
-                let mut r = self;
+                let mut r = 1;
 
                 // Optimization for 128 bit wide integers.
                 if Self::BITS == 128 {
-                    let b = Self::ilog2(self) / (Self::ilog2(base) + 1);
-                    n += b;
-                    r /= base.pow(b as u32);
+                    // The following is a correct lower bound for ⌊log(base,self)⌋ because
+                    //
+                    // log(base,self) = log(2,self) / log(2,base)
+                    //                ≥ ⌊log(2,self)⌋ / (⌊log(2,base)⌋ + 1)
+                    //
+                    // hence
+                    //
+                    // ⌊log(base,self)⌋ ≥ ⌊ ⌊log(2,self)⌋ / (⌊log(2,base)⌋ + 1) ⌋ .
+                    n = self.ilog2() / (base.ilog2() + 1);
+                    r = base.pow(n);
                 }
 
-                while r >= base {
-                    r /= base;
+                while r <= self / base {
                     n += 1;
+                    r *= base;
                 }
                 Some(n)
             }

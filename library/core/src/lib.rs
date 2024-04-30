@@ -180,7 +180,6 @@
 #![feature(isqrt)]
 #![feature(link_cfg)]
 #![feature(maybe_uninit_uninit_array)]
-#![feature(non_null_convenience)]
 #![feature(offset_of_enum)]
 #![feature(offset_of_nested)]
 #![feature(panic_internals)]
@@ -193,6 +192,7 @@
 #![feature(str_split_inclusive_remainder)]
 #![feature(str_split_remainder)]
 #![feature(strict_provenance)]
+#![feature(ub_checks)]
 #![feature(unchecked_shifts)]
 #![feature(utf16_extra)]
 #![feature(utf16_extra_const)]
@@ -201,6 +201,7 @@
 //
 // Language features:
 // tidy-alphabetical-start
+#![cfg_attr(bootstrap, feature(inline_const))]
 #![feature(abi_unadjusted)]
 #![feature(adt_const_params)]
 #![feature(allow_internal_unsafe)]
@@ -231,7 +232,6 @@
 #![feature(fundamental)]
 #![feature(generic_arg_infer)]
 #![feature(if_let_guard)]
-#![feature(inline_const)]
 #![feature(intra_doc_pointers)]
 #![feature(intrinsics)]
 #![feature(lang_items)]
@@ -370,7 +370,8 @@ pub mod hint;
 pub mod intrinsics;
 pub mod mem;
 pub mod ptr;
-mod ub_checks;
+#[unstable(feature = "ub_checks", issue = "none")]
+pub mod ub_checks;
 
 /* Core language traits */
 

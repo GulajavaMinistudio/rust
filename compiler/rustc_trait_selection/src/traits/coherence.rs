@@ -30,7 +30,7 @@ use rustc_middle::ty::fast_reject::{DeepRejectCtxt, TreatParams};
 use rustc_middle::ty::visit::{TypeVisitable, TypeVisitableExt};
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeSuperVisitable, TypeVisitor};
 use rustc_span::symbol::sym;
-use rustc_span::DUMMY_SP;
+use rustc_span::{Span, DUMMY_SP};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
@@ -1022,10 +1022,14 @@ struct AmbiguityCausesVisitor<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> ProofTreeVisitor<'tcx> for AmbiguityCausesVisitor<'a, 'tcx> {
+    fn span(&self) -> Span {
+        DUMMY_SP
+    }
+
     fn visit_goal(&mut self, goal: &InspectGoal<'_, 'tcx>) {
         let infcx = goal.infcx();
         for cand in goal.candidates() {
-            cand.visit_nested(self);
+            cand.visit_nested_in_probe(self);
         }
         // When searching for intercrate ambiguity causes, we only need to look
         // at ambiguous goals, as for others the coherence unknowable candidate
@@ -1074,9 +1078,8 @@ impl<'a, 'tcx> ProofTreeVisitor<'tcx> for AmbiguityCausesVisitor<'a, 'tcx> {
         // Add ambiguity causes for unknowable goals.
         let mut ambiguity_cause = None;
         for cand in goal.candidates() {
-            // FIXME: boiiii, using string comparisions here sure is scuffed.
-            if let inspect::ProbeKind::MiscCandidate {
-                name: "coherence unknowable",
+            if let inspect::ProbeKind::TraitCandidate {
+                source: CandidateSource::CoherenceUnknowable,
                 result: Ok(_),
             } = cand.kind()
             {
@@ -1157,5 +1160,5 @@ fn search_ambiguity_causes<'tcx>(
     goal: Goal<'tcx, ty::Predicate<'tcx>>,
     causes: &mut FxIndexSet<IntercrateAmbiguityCause<'tcx>>,
 ) {
-    infcx.visit_proof_tree(goal, &mut AmbiguityCausesVisitor { causes });
+    infcx.probe(|_| infcx.visit_proof_tree(goal, &mut AmbiguityCausesVisitor { causes }));
 }
