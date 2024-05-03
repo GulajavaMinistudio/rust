@@ -9,6 +9,7 @@ use rustc_infer::infer::{
 use rustc_infer::traits::query::NoSolution;
 use rustc_infer::traits::solve::{MaybeCause, NestedNormalizationGoals};
 use rustc_infer::traits::ObligationCause;
+use rustc_macros::{extension, HashStable};
 use rustc_middle::infer::canonical::CanonicalVarInfos;
 use rustc_middle::infer::unify_key::ConstVariableOrigin;
 use rustc_middle::traits::solve::inspect;
@@ -26,6 +27,7 @@ use rustc_span::DUMMY_SP;
 use std::io::Write;
 use std::ops::ControlFlow;
 
+use crate::traits::coherence;
 use crate::traits::vtable::{count_own_vtable_entries, prepare_vtable_segments, VtblSegment};
 
 use super::inspect::ProofTreeBuilder;
@@ -939,6 +941,17 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             Answer::Yes => Ok(Certainty::Yes),
             Answer::No(_) | Answer::If(_) => Err(NoSolution),
         }
+    }
+
+    pub(super) fn trait_ref_is_knowable(
+        &mut self,
+        param_env: ty::ParamEnv<'tcx>,
+        trait_ref: ty::TraitRef<'tcx>,
+    ) -> Result<bool, NoSolution> {
+        let infcx = self.infcx;
+        let lazily_normalize_ty = |ty| self.structurally_normalize_ty(param_env, ty);
+        coherence::trait_ref_is_knowable(infcx, trait_ref, lazily_normalize_ty)
+            .map(|is_knowable| is_knowable.is_ok())
     }
 
     pub(super) fn can_define_opaque_ty(&self, def_id: impl Into<DefId>) -> bool {

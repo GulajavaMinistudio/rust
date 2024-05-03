@@ -1,7 +1,6 @@
 #![doc(rust_logo)]
 #![feature(rustdoc_internals)]
 #![feature(array_windows)]
-#![cfg_attr(bootstrap, feature(associated_type_bounds))]
 #![feature(associated_type_defaults)]
 #![feature(if_let_guard)]
 #![feature(let_chains)]
@@ -15,12 +14,6 @@
 #![feature(yeet_expr)]
 #![allow(rustc::diagnostic_outside_of_impl)]
 #![allow(internal_features)]
-
-#[macro_use]
-extern crate rustc_macros;
-
-#[macro_use]
-extern crate tracing;
 
 extern crate proc_macro as pm;
 

@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{infer::canonical::CanonicalVarValues, ty};
 use format::ProofTreeFormatter;
+use rustc_macros::{TypeFoldable, TypeVisitable};
 use std::fmt::{Debug, Write};
 
 mod format;
@@ -60,14 +61,14 @@ pub struct GoalEvaluation<'tcx> {
     pub evaluation: CanonicalGoalEvaluation<'tcx>,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug)]
 pub struct CanonicalGoalEvaluation<'tcx> {
     pub goal: CanonicalInput<'tcx>,
     pub kind: CanonicalGoalEvaluationKind<'tcx>,
     pub result: QueryResult<'tcx>,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug)]
 pub enum CanonicalGoalEvaluationKind<'tcx> {
     Overflow,
     CycleInStack,
@@ -86,7 +87,7 @@ pub struct AddedGoalsEvaluation<'tcx> {
     pub result: Result<Certainty, NoSolution>,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug)]
 pub struct GoalEvaluationStep<'tcx> {
     pub instantiated_goal: QueryInput<'tcx, ty::Predicate<'tcx>>,
 
