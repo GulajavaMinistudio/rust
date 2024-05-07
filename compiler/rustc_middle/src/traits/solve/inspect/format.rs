@@ -127,6 +127,7 @@ impl<'a, 'b> ProofTreeFormatter<'a, 'b> {
                         let source = match source {
                             GoalSource::Misc => "misc",
                             GoalSource::ImplWhereBound => "impl where-bound",
+                            GoalSource::InstantiateHigherRanked => "higher-ranked goal",
                         };
                         writeln!(this.f, "ADDED GOAL ({source}): {goal:?}")?
                     }
@@ -134,6 +135,9 @@ impl<'a, 'b> ProofTreeFormatter<'a, 'b> {
                     ProbeStep::NestedProbe(probe) => this.format_probe(probe)?,
                     ProbeStep::MakeCanonicalResponse { shallow_certainty } => {
                         writeln!(this.f, "EVALUATE GOALS AND MAKE RESPONSE: {shallow_certainty:?}")?
+                    }
+                    ProbeStep::RecordImplArgs { impl_args } => {
+                        writeln!(this.f, "RECORDED IMPL ARGS: {impl_args:?}")?
                     }
                 }
             }

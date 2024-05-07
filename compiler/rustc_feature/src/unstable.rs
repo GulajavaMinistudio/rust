@@ -454,8 +454,6 @@ declare_features! (
     (incomplete, dyn_star, "1.65.0", Some(102425)),
     /// Uses generic effect parameters for ~const bounds
     (unstable, effects, "1.72.0", Some(102090)),
-    /// Allows `X..Y` patterns.
-    (unstable, exclusive_range_pattern, "1.11.0", Some(37854)),
     /// Allows exhaustive pattern matching on types that contain uninhabited types.
     (unstable, exhaustive_patterns, "1.13.0", Some(51085)),
     /// Allows explicit tail calls via `become` expression.
@@ -581,6 +579,9 @@ declare_features! (
     (incomplete, repr128, "1.16.0", Some(56071)),
     /// Allows `repr(simd)` and importing the various simd intrinsics.
     (unstable, repr_simd, "1.4.0", Some(27731)),
+    /// Allows enums like Result<T, E> to be used across FFI, if T's niche value can
+    /// be used to describe E or vise-versa.
+    (unstable, result_ffi_guarantees, "CURRENT_RUSTC_VERSION", Some(110503)),
     /// Allows bounding the return type of AFIT/RPITIT.
     (incomplete, return_type_notation, "1.70.0", Some(109417)),
     /// Allows `extern "rust-cold"`.
@@ -619,8 +620,6 @@ declare_features! (
     /// Allows creation of instances of a struct by moving fields that have
     /// not changed from prior instances of the same struct (RFC #2528)
     (unstable, type_changing_struct_update, "1.58.0", Some(86555)),
-    /// Enables rustc to generate code that instructs libstd to NOT ignore SIGPIPE.
-    (unstable, unix_sigpipe, "1.65.0", Some(97889)),
     /// Allows unnamed fields of struct and union type
     (incomplete, unnamed_fields, "1.74.0", Some(49804)),
     /// Allows unsized fn parameters.

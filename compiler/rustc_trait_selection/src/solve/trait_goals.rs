@@ -75,6 +75,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for TraitPredicate<'tcx> {
 
         ecx.probe_trait_candidate(CandidateSource::Impl(impl_def_id)).enter(|ecx| {
             let impl_args = ecx.fresh_args_for_item(impl_def_id);
+            ecx.record_impl_args(impl_args);
             let impl_trait_ref = impl_trait_header.trait_ref.instantiate(tcx, impl_args);
 
             ecx.eq(goal.param_env, goal.predicate.trait_ref, impl_trait_ref)?;
@@ -321,7 +322,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for TraitPredicate<'tcx> {
             CandidateSource::BuiltinImpl(BuiltinImplSource::Misc),
             goal,
             pred,
-            [goal.with(tcx, output_is_sized_pred)],
+            [(GoalSource::ImplWhereBound, goal.with(tcx, output_is_sized_pred))],
         )
     }
 
@@ -367,7 +368,8 @@ impl<'tcx> assembly::GoalKind<'tcx> for TraitPredicate<'tcx> {
             pred,
             [goal.with(tcx, output_is_sized_pred)]
                 .into_iter()
-                .chain(nested_preds.into_iter().map(|pred| goal.with(tcx, pred))),
+                .chain(nested_preds.into_iter().map(|pred| goal.with(tcx, pred)))
+                .map(|goal| (GoalSource::ImplWhereBound, goal)),
         )
     }
 
