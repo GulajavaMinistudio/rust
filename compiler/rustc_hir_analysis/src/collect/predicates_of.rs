@@ -10,6 +10,7 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::ty::{GenericPredicates, ImplTraitInTraitData, ToPredicate};
+use rustc_middle::{bug, span_bug};
 use rustc_span::symbol::Ident;
 use rustc_span::{Span, DUMMY_SP};
 
@@ -73,8 +74,8 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::Gen
             // opaque lifetimes, which explains the slicing below.
             compute_bidirectional_outlives_predicates(
                 tcx,
-                &tcx.generics_of(def_id.to_def_id()).params
-                    [tcx.generics_of(fn_def_id).params.len()..],
+                &tcx.generics_of(def_id.to_def_id()).own_params
+                    [tcx.generics_of(fn_def_id).own_params.len()..],
                 &mut predicates,
             );
 
@@ -300,7 +301,7 @@ fn gather_explicit_predicates_of(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::Gen
         };
         debug!(?lifetimes);
 
-        compute_bidirectional_outlives_predicates(tcx, &generics.params, &mut predicates);
+        compute_bidirectional_outlives_predicates(tcx, &generics.own_params, &mut predicates);
         debug!(?predicates);
     }
 

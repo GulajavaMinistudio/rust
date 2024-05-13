@@ -3,10 +3,11 @@ use rustc_middle::mir;
 use rustc_middle::mir::interpret::{InterpResult, Scalar};
 use rustc_middle::ty::layout::{LayoutOf, TyAndLayout};
 use rustc_middle::ty::{self, FloatTy, ScalarInt, Ty};
+use rustc_middle::{bug, span_bug};
 use rustc_span::symbol::sym;
 use rustc_target::abi::Abi;
 
-use super::{ImmTy, Immediate, InterpCx, Machine, PlaceTy};
+use super::{err_ub, throw_ub, throw_ub_custom, ImmTy, Immediate, InterpCx, Machine, PlaceTy};
 
 use crate::fluent_generated as fluent;
 
@@ -357,7 +358,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             Offset => {
                 let ptr = left.to_scalar().to_pointer(self)?;
                 let offset_count = right.to_scalar().to_target_isize(self)?;
-                let pointee_ty = left.layout.ty.builtin_deref(true).unwrap().ty;
+                let pointee_ty = left.layout.ty.builtin_deref(true).unwrap();
 
                 // We cannot overflow i64 as a type's size must be <= isize::MAX.
                 let pointee_size = i64::try_from(self.layout_of(pointee_ty)?.size.bytes()).unwrap();

@@ -16,6 +16,7 @@ use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::{
     self, GenericArgs, GenericArgsRef, GenericParamDefKind, Ty, TyCtxt, UserArgs, UserType,
 };
+use rustc_middle::{bug, span_bug};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_trait_selection::traits;
 
@@ -450,7 +451,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         // `foo.bar::<u32>(...)` -- the `Self` type here will be the
         // type of `foo` (possibly adjusted), but we don't want to
         // include that. We want just the `[_, u32]` part.
-        if !args.is_empty() && !generics.params.is_empty() {
+        if !args.is_empty() && !generics.own_params.is_empty() {
             let user_type_annotation = self.probe(|_| {
                 let user_args = UserArgs {
                     args: GenericArgs::for_item(self.tcx, pick.item.def_id, |param, _| {
@@ -564,16 +565,12 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         // `self.add_required_obligations(self.span, def_id, &all_args);`
         for obligation in traits::predicates_for_generics(
             |idx, span| {
-                let code = if span.is_dummy() {
-                    ObligationCauseCode::ExprItemObligation(def_id, self.call_expr.hir_id, idx)
-                } else {
-                    ObligationCauseCode::ExprBindingObligation(
-                        def_id,
-                        span,
-                        self.call_expr.hir_id,
-                        idx,
-                    )
-                };
+                let code = ObligationCauseCode::WhereClauseInExpr(
+                    def_id,
+                    span,
+                    self.call_expr.hir_id,
+                    idx,
+                );
                 traits::ObligationCause::new(self.span, self.body_id, code)
             },
             self.param_env,
@@ -589,7 +586,7 @@ impl<'a, 'tcx> ConfirmContext<'a, 'tcx> {
         // the function type must also be well-formed (this is not
         // implied by the args being well-formed because of inherent
         // impls and late-bound regions - see issue #28609).
-        self.register_wf_obligation(fty.into(), self.span, traits::WellFormed(None));
+        self.register_wf_obligation(fty.into(), self.span, ObligationCauseCode::WellFormed(None));
     }
 
     ///////////////////////////////////////////////////////////////////////////

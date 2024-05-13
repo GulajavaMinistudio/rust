@@ -8,11 +8,13 @@ macro_rules! err_unsup {
         )
     };
 }
+pub use err_unsup;
 
 #[macro_export]
 macro_rules! err_unsup_format {
-    ($($tt:tt)*) => { err_unsup!(Unsupported(format!($($tt)*))) };
+    ($($tt:tt)*) => { $crate::err_unsup!(Unsupported(format!($($tt)*))) };
 }
+pub use err_unsup_format;
 
 #[macro_export]
 macro_rules! err_inval {
@@ -22,6 +24,7 @@ macro_rules! err_inval {
         )
     };
 }
+pub use err_inval;
 
 #[macro_export]
 macro_rules! err_ub {
@@ -31,11 +34,13 @@ macro_rules! err_ub {
         )
     };
 }
+pub use err_ub;
 
 #[macro_export]
 macro_rules! err_ub_format {
     ($($tt:tt)*) => { err_ub!(Ub(format!($($tt)*))) };
 }
+pub use err_ub_format;
 
 #[macro_export]
 macro_rules! err_exhaust {
@@ -45,6 +50,7 @@ macro_rules! err_exhaust {
         )
     };
 }
+pub use err_exhaust;
 
 #[macro_export]
 macro_rules! err_machine_stop {
@@ -52,42 +58,50 @@ macro_rules! err_machine_stop {
         $crate::mir::interpret::InterpError::MachineStop(Box::new($($tt)*))
     };
 }
+pub use err_machine_stop;
 
 // In the `throw_*` macros, avoid `return` to make them work with `try {}`.
 #[macro_export]
 macro_rules! throw_unsup {
-    ($($tt:tt)*) => { do yeet err_unsup!($($tt)*) };
+    ($($tt:tt)*) => { do yeet $crate::err_unsup!($($tt)*) };
 }
+pub use throw_unsup;
 
 #[macro_export]
 macro_rules! throw_unsup_format {
-    ($($tt:tt)*) => { throw_unsup!(Unsupported(format!($($tt)*))) };
+    ($($tt:tt)*) => { $crate::throw_unsup!(Unsupported(format!($($tt)*))) };
 }
+pub use throw_unsup_format;
 
 #[macro_export]
 macro_rules! throw_inval {
-    ($($tt:tt)*) => { do yeet err_inval!($($tt)*) };
+    ($($tt:tt)*) => { do yeet $crate::err_inval!($($tt)*) };
 }
+pub use throw_inval;
 
 #[macro_export]
 macro_rules! throw_ub {
-    ($($tt:tt)*) => { do yeet err_ub!($($tt)*) };
+    ($($tt:tt)*) => { do yeet $crate::err_ub!($($tt)*) };
 }
+pub use throw_ub;
 
 #[macro_export]
 macro_rules! throw_ub_format {
-    ($($tt:tt)*) => { throw_ub!(Ub(format!($($tt)*))) };
+    ($($tt:tt)*) => { $crate::throw_ub!(Ub(format!($($tt)*))) };
 }
+pub use throw_ub_format;
 
 #[macro_export]
 macro_rules! throw_exhaust {
-    ($($tt:tt)*) => { do yeet err_exhaust!($($tt)*) };
+    ($($tt:tt)*) => { do yeet $crate::err_exhaust!($($tt)*) };
 }
+pub use throw_exhaust;
 
 #[macro_export]
 macro_rules! throw_machine_stop {
-    ($($tt:tt)*) => { do yeet err_machine_stop!($($tt)*) };
+    ($($tt:tt)*) => { do yeet $crate::err_machine_stop!($($tt)*) };
 }
+pub use throw_machine_stop;
 
 #[macro_export]
 macro_rules! err_ub_custom {
@@ -95,8 +109,8 @@ macro_rules! err_ub_custom {
         $(
             let ($($name,)*) = ($($value,)*);
         )?
-        err_ub!(Custom(
-            rustc_middle::error::CustomSubdiagnostic {
+        $crate::err_ub!(Custom(
+            $crate::error::CustomSubdiagnostic {
                 msg: || $msg,
                 add_args: Box::new(move |mut set_arg| {
                     $($(
@@ -107,11 +121,13 @@ macro_rules! err_ub_custom {
         ))
     }};
 }
+pub use err_ub_custom;
 
 #[macro_export]
 macro_rules! throw_ub_custom {
-    ($($tt:tt)*) => { do yeet err_ub_custom!($($tt)*) };
+    ($($tt:tt)*) => { do yeet $crate::err_ub_custom!($($tt)*) };
 }
+pub use throw_ub_custom;
 
 mod allocation;
 mod error;
@@ -125,10 +141,11 @@ use std::io::{Read, Write};
 use std::num::NonZero;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use smallvec::{smallvec, SmallVec};
+
 use rustc_ast::LitKind;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::sync::{HashMapExt, Lock};
-use rustc_data_structures::tiny_list::TinyList;
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_macros::{HashStable, TyDecodable, TyEncodable, TypeFoldable, TypeVisitable};
@@ -266,8 +283,8 @@ type DecodingSessionId = NonZero<u32>;
 #[derive(Clone)]
 enum State {
     Empty,
-    InProgressNonAlloc(TinyList<DecodingSessionId>),
-    InProgress(TinyList<DecodingSessionId>, AllocId),
+    InProgressNonAlloc(SmallVec<[DecodingSessionId; 1]>),
+    InProgress(SmallVec<[DecodingSessionId; 1]>, AllocId),
     Done(AllocId),
 }
 
@@ -337,8 +354,7 @@ impl<'s> AllocDecodingSession<'s> {
                             // If this is an allocation, we need to reserve an
                             // `AllocId` so we can decode cyclic graphs.
                             let alloc_id = decoder.interner().reserve_alloc_id();
-                            *entry =
-                                State::InProgress(TinyList::new_single(self.session_id), alloc_id);
+                            *entry = State::InProgress(smallvec![self.session_id], alloc_id);
                             Some(alloc_id)
                         }
                         AllocDiscriminant::Fn
@@ -346,8 +362,7 @@ impl<'s> AllocDecodingSession<'s> {
                         | AllocDiscriminant::VTable => {
                             // Fns and statics cannot be cyclic, and their `AllocId`
                             // is determined later by interning.
-                            *entry =
-                                State::InProgressNonAlloc(TinyList::new_single(self.session_id));
+                            *entry = State::InProgressNonAlloc(smallvec![self.session_id]);
                             None
                         }
                     }
@@ -357,7 +372,7 @@ impl<'s> AllocDecodingSession<'s> {
                         bug!("this should be unreachable");
                     } else {
                         // Start decoding concurrently.
-                        sessions.insert(self.session_id);
+                        sessions.push(self.session_id);
                         None
                     }
                 }
@@ -367,7 +382,7 @@ impl<'s> AllocDecodingSession<'s> {
                         return alloc_id;
                     } else {
                         // Start decoding concurrently.
-                        sessions.insert(self.session_id);
+                        sessions.push(self.session_id);
                         Some(alloc_id)
                     }
                 }

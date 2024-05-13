@@ -8,6 +8,7 @@ use rustc_data_structures::obligation_forest::{ObligationForest, ObligationProce
 use rustc_infer::infer::DefineOpaqueTypes;
 use rustc_infer::traits::ProjectionCacheKey;
 use rustc_infer::traits::{PolyTraitObligation, SelectionError, TraitEngine};
+use rustc_middle::bug;
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
@@ -411,7 +412,7 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
 
                 ty::PredicateKind::ObjectSafe(trait_def_id) => {
                     if !self.selcx.tcx().check_is_object_safe(trait_def_id) {
-                        ProcessResult::Error(FulfillmentErrorCode::SelectionError(Unimplemented))
+                        ProcessResult::Error(FulfillmentErrorCode::Select(Unimplemented))
                     } else {
                         ProcessResult::Changed(vec![])
                     }
@@ -435,7 +436,7 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
                         ty,
                     ) {
                         Ok(inf_ok) => ProcessResult::Changed(mk_pending(inf_ok.into_obligations())),
-                        Err(_) => ProcessResult::Error(FulfillmentErrorCode::SelectionError(
+                        Err(_) => ProcessResult::Error(FulfillmentErrorCode::Select(
                             SelectionError::Unimplemented,
                         )),
                     }
@@ -493,10 +494,7 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
                         Ok(Err(err)) => {
                             let expected_found =
                                 ExpectedFound::new(subtype.a_is_expected, subtype.a, subtype.b);
-                            ProcessResult::Error(FulfillmentErrorCode::SubtypeError(
-                                expected_found,
-                                err,
-                            ))
+                            ProcessResult::Error(FulfillmentErrorCode::Subtype(expected_found, err))
                         }
                     }
                 }
@@ -516,10 +514,7 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
                         Ok(Ok(ok)) => ProcessResult::Changed(mk_pending(ok.obligations)),
                         Ok(Err(err)) => {
                             let expected_found = ExpectedFound::new(false, coerce.a, coerce.b);
-                            ProcessResult::Error(FulfillmentErrorCode::SubtypeError(
-                                expected_found,
-                                err,
-                            ))
+                            ProcessResult::Error(FulfillmentErrorCode::Subtype(expected_found, err))
                         }
                     }
                 }
@@ -542,7 +537,7 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
                         Err(
                             e @ NotConstEvaluatable::MentionsParam
                             | e @ NotConstEvaluatable::Error(_),
-                        ) => ProcessResult::Error(FulfillmentErrorCode::SelectionError(
+                        ) => ProcessResult::Error(FulfillmentErrorCode::Select(
                             SelectionError::NotConstEvaluatable(e),
                         )),
                     }
@@ -638,7 +633,7 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
                                     ProcessResult::Changed(mk_pending(inf_ok.into_obligations()))
                                 }
                                 Err(err) => {
-                                    ProcessResult::Error(FulfillmentErrorCode::ConstEquateError(
+                                    ProcessResult::Error(FulfillmentErrorCode::ConstEquate(
                                         ExpectedFound::new(true, c1, c2),
                                         err,
                                     ))
@@ -646,13 +641,11 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
                             }
                         }
                         (Err(ErrorHandled::Reported(reported, _)), _)
-                        | (_, Err(ErrorHandled::Reported(reported, _))) => {
-                            ProcessResult::Error(FulfillmentErrorCode::SelectionError(
-                                SelectionError::NotConstEvaluatable(NotConstEvaluatable::Error(
-                                    reported.into(),
-                                )),
-                            ))
-                        }
+                        | (_, Err(ErrorHandled::Reported(reported, _))) => ProcessResult::Error(
+                            FulfillmentErrorCode::Select(SelectionError::NotConstEvaluatable(
+                                NotConstEvaluatable::Error(reported.into()),
+                            )),
+                        ),
                         (Err(ErrorHandled::TooGeneric(_)), _)
                         | (_, Err(ErrorHandled::TooGeneric(_))) => {
                             if c1.has_non_region_infer() || c2.has_non_region_infer() {
@@ -660,7 +653,7 @@ impl<'a, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'tcx> {
                             } else {
                                 // Two different constants using generic parameters ~> error.
                                 let expected_found = ExpectedFound::new(true, c1, c2);
-                                ProcessResult::Error(FulfillmentErrorCode::ConstEquateError(
+                                ProcessResult::Error(FulfillmentErrorCode::ConstEquate(
                                     expected_found,
                                     TypeError::ConstMismatch(expected_found),
                                 ))
@@ -741,7 +734,7 @@ impl<'a, 'tcx> FulfillProcessor<'a, 'tcx> {
             Err(selection_err) => {
                 debug!("selecting trait at depth {} yielded Err", obligation.recursion_depth);
 
-                ProcessResult::Error(FulfillmentErrorCode::SelectionError(selection_err))
+                ProcessResult::Error(FulfillmentErrorCode::Select(selection_err))
             }
         }
     }
@@ -793,7 +786,7 @@ impl<'a, 'tcx> FulfillProcessor<'a, 'tcx> {
                 project_obligation.with(tcx, project_obligation.predicate),
             ])),
             ProjectAndUnifyResult::MismatchedProjectionTypes(e) => {
-                ProcessResult::Error(FulfillmentErrorCode::ProjectionError(e))
+                ProcessResult::Error(FulfillmentErrorCode::Project(e))
             }
         }
     }

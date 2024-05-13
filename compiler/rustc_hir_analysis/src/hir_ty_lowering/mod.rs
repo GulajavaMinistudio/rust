@@ -44,6 +44,7 @@ use rustc_middle::ty::{
     self, Const, GenericArgKind, GenericArgsRef, GenericParamDefKind, ParamEnv, Ty, TyCtxt,
     TypeVisitableExt,
 };
+use rustc_middle::{bug, span_bug};
 use rustc_session::lint::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;
 use rustc_span::edit_distance::find_best_match_for_name;
 use rustc_span::symbol::{kw, Ident, Symbol};
@@ -411,7 +412,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         // Traits always have `Self` as a generic parameter, which means they will not return early
         // here and so associated type bindings will be handled regardless of whether there are any
         // non-`Self` generic parameters.
-        if generics.params.is_empty() {
+        if generics.own_params.is_empty() {
             return (tcx.mk_args(parent_args), arg_count);
         }
 

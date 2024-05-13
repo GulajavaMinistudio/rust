@@ -15,11 +15,11 @@ use rustc_hir::def_id::LocalDefId;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{GenericArg, GenericParam, GenericParamKind, HirId, HirIdMap, LifetimeName, Node};
 use rustc_macros::extension;
-use rustc_middle::bug;
 use rustc_middle::hir::nested_filter;
 use rustc_middle::middle::resolve_bound_vars::*;
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{self, TyCtxt, TypeSuperVisitable, TypeVisitor};
+use rustc_middle::{bug, span_bug};
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::Span;
@@ -1562,7 +1562,7 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
                 ObjectLifetimeDefault::Ambiguous => None,
             };
             generics
-                .params
+                .own_params
                 .iter()
                 .filter_map(|param| {
                     match self.tcx.def_kind(param.def_id) {
@@ -1668,7 +1668,7 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
                         binding.ident,
                         ty::AssocKind::Fn,
                     ) {
-                    bound_vars.extend(self.tcx.generics_of(assoc_fn.def_id).params.iter().map(
+                    bound_vars.extend(self.tcx.generics_of(assoc_fn.def_id).own_params.iter().map(
                         |param| match param.kind {
                             ty::GenericParamDefKind::Lifetime => ty::BoundVariableKind::Region(
                                 ty::BoundRegionKind::BrNamed(param.def_id, param.name),
@@ -2003,7 +2003,8 @@ fn is_late_bound_map(
                     // just consider args to be unconstrained.
                     let generics = self.tcx.generics_of(alias_def);
                     let mut walker = ConstrainedCollectorPostHirTyLowering {
-                        arg_is_constrained: vec![false; generics.params.len()].into_boxed_slice(),
+                        arg_is_constrained: vec![false; generics.own_params.len()]
+                            .into_boxed_slice(),
                     };
                     walker.visit_ty(self.tcx.type_of(alias_def).instantiate_identity());
 

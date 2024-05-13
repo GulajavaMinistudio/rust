@@ -29,6 +29,7 @@ use rustc_middle::ty::{
     self, AdtKind, CanonicalUserType, GenericParamDefKind, IsIdentity, Ty, TyCtxt, UserType,
 };
 use rustc_middle::ty::{GenericArgKind, GenericArgsRef, UserArgs, UserSelfTy};
+use rustc_middle::{bug, span_bug};
 use rustc_session::lint;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::hygiene::DesugaringKind;
@@ -409,7 +410,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub fn lower_ty(&self, hir_ty: &hir::Ty<'tcx>) -> LoweredTy<'tcx> {
         let ty = self.lowerer().lower_ty(hir_ty);
-        self.register_wf_obligation(ty.into(), hir_ty.span, traits::WellFormed(None));
+        self.register_wf_obligation(ty.into(), hir_ty.span, ObligationCauseCode::WellFormed(None));
         LoweredTy::from_raw(self, hir_ty.span, ty)
     }
 
@@ -520,7 +521,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         for arg in args.iter().filter(|arg| {
             matches!(arg.unpack(), GenericArgKind::Type(..) | GenericArgKind::Const(..))
         }) {
-            self.register_wf_obligation(arg, expr.span, traits::WellFormed(None));
+            self.register_wf_obligation(arg, expr.span, ObligationCauseCode::WellFormed(None));
         }
     }
 
@@ -624,10 +625,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// returns a type of `&T`, but the actual type we assign to the
     /// *expression* is `T`. So this function just peels off the return
     /// type by one layer to yield `T`.
-    pub(crate) fn make_overloaded_place_return_type(
-        &self,
-        method: MethodCallee<'tcx>,
-    ) -> ty::TypeAndMut<'tcx> {
+    pub(crate) fn make_overloaded_place_return_type(&self, method: MethodCallee<'tcx>) -> Ty<'tcx> {
         // extract method return type, which will be &T;
         let ret_ty = method.sig.output();
 
@@ -775,7 +773,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
         if let Some(&cached_result) = self.typeck_results.borrow().type_dependent_defs().get(hir_id)
         {
-            self.register_wf_obligation(ty.raw.into(), qself.span, traits::WellFormed(None));
+            self.register_wf_obligation(
+                ty.raw.into(),
+                qself.span,
+                ObligationCauseCode::WellFormed(None),
+            );
             // Return directly on cache hit. This is useful to avoid doubly reporting
             // errors with default match binding modes. See #44614.
             let def = cached_result.map_or(Res::Err, |(kind, def_id)| Res::Def(kind, def_id));
@@ -814,7 +816,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     self.register_wf_obligation(
                         ty.raw.into(),
                         qself.span,
-                        traits::WellFormed(None),
+                        ObligationCauseCode::WellFormed(None),
                     );
                 }
 
@@ -848,7 +850,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             });
 
         if result.is_ok() {
-            self.register_wf_obligation(ty.raw.into(), qself.span, traits::WellFormed(None));
+            self.register_wf_obligation(
+                ty.raw.into(),
+                qself.span,
+                ObligationCauseCode::WellFormed(None),
+            );
         }
 
         // Write back the new resolution.
@@ -1404,11 +1410,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         hir_id: HirId,
     ) {
         self.add_required_obligations_with_code(span, def_id, args, |idx, span| {
-            if span.is_dummy() {
-                ObligationCauseCode::ExprItemObligation(def_id, hir_id, idx)
-            } else {
-                ObligationCauseCode::ExprBindingObligation(def_id, span, hir_id, idx)
-            }
+            ObligationCauseCode::WhereClauseInExpr(def_id, span, hir_id, idx)
         })
     }
 

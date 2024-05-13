@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use either::{Left, Right};
 
 use rustc_hir::def::DefKind;
+use rustc_middle::bug;
 use rustc_middle::mir::interpret::{AllocId, ErrorHandled, InterpErrorInfo};
 use rustc_middle::mir::{self, ConstAlloc, ConstValue};
 use rustc_middle::query::TyCtxtAt;
@@ -24,7 +25,7 @@ use crate::interpret::{
     InternKind, InterpCx, InterpError, InterpResult, MPlaceTy, MemoryKind, OpTy, RefTracking,
     StackPopCleanup,
 };
-use crate::interpret::{eval_nullary_intrinsic, InternResult};
+use crate::interpret::{eval_nullary_intrinsic, throw_exhaust, InternResult};
 use crate::CTRL_C_RECEIVED;
 
 // Returns a pointer to where the result lives
@@ -222,7 +223,7 @@ pub(super) fn op_to_const<'tcx>(
                 // This codepath solely exists for `valtree_to_const_value` to not need to generate
                 // a `ConstValue::Indirect` for wide references, so it is tightly restricted to just
                 // that case.
-                let pointee_ty = imm.layout.ty.builtin_deref(false).unwrap().ty; // `false` = no raw ptrs
+                let pointee_ty = imm.layout.ty.builtin_deref(false).unwrap(); // `false` = no raw ptrs
                 debug_assert!(
                     matches!(
                         ecx.tcx.struct_tail_without_normalization(pointee_ty).kind(),

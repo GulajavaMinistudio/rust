@@ -1,11 +1,12 @@
 use std::mem;
 
 use super::StructurallyRelateAliases;
-use crate::infer::type_variable::{TypeVariableOrigin, TypeVariableValue};
+use crate::infer::type_variable::TypeVariableValue;
 use crate::infer::{InferCtxt, ObligationEmittingRelation, RegionVariableOrigin};
 use rustc_data_structures::sso::SsoHashMap;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir::def_id::DefId;
+use rustc_middle::bug;
 use rustc_middle::infer::unify_key::ConstVariableValue;
 use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::relate::{self, Relate, RelateResult, TypeRelation};
@@ -357,10 +358,7 @@ impl<'tcx> Generalizer<'_, 'tcx> {
         //
         // cc trait-system-refactor-initiative#110
         if self.infcx.next_trait_solver() && !alias.has_escaping_bound_vars() && !self.in_alias {
-            return Ok(self.infcx.next_ty_var_in_universe(
-                TypeVariableOrigin { param_def_id: None, span: self.span },
-                self.for_universe,
-            ));
+            return Ok(self.infcx.next_ty_var_in_universe(self.span, self.for_universe));
         }
 
         let is_nested_alias = mem::replace(&mut self.in_alias, true);
@@ -380,10 +378,7 @@ impl<'tcx> Generalizer<'_, 'tcx> {
                     }
 
                     debug!("generalization failure in alias");
-                    Ok(self.infcx.next_ty_var_in_universe(
-                        TypeVariableOrigin { param_def_id: None, span: self.span },
-                        self.for_universe,
-                    ))
+                    Ok(self.infcx.next_ty_var_in_universe(self.span, self.for_universe))
                 }
             }
         };

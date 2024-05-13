@@ -17,6 +17,7 @@ use rustc_middle::ty::fast_reject::{DeepRejectCtxt, TreatParams};
 use rustc_middle::ty::NormalizesTo;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::ty::{ToPredicate, TypeVisitableExt};
+use rustc_middle::{bug, span_bug};
 use rustc_span::{sym, ErrorGuaranteed, DUMMY_SP};
 
 mod anon_const;
@@ -25,7 +26,7 @@ mod opaque_types;
 mod weak_types;
 
 impl<'tcx> EvalCtxt<'_, 'tcx> {
-    #[instrument(level = "debug", skip(self), ret)]
+    #[instrument(level = "trace", skip(self), ret)]
     pub(super) fn compute_normalizes_to_goal(
         &mut self,
         goal: Goal<'tcx, NormalizesTo<'tcx>>,
@@ -59,7 +60,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
 
     /// Normalize the given alias by at least one step. If the alias is rigid, this
     /// returns `NoSolution`.
-    #[instrument(level = "debug", skip(self), ret)]
+    #[instrument(level = "trace", skip(self), ret)]
     fn normalize_at_least_one_step(
         &mut self,
         goal: Goal<'tcx, NormalizesTo<'tcx>>,
@@ -368,7 +369,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
                 }
             };
         let output_is_sized_pred = tupled_inputs_and_output.map_bound(|(_, output)| {
-            ty::TraitRef::from_lang_item(tcx, LangItem::Sized, DUMMY_SP, [output])
+            ty::TraitRef::new(tcx, tcx.require_lang_item(LangItem::Sized, None), [output])
         });
 
         let pred = tupled_inputs_and_output
@@ -414,7 +415,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
             )?;
         let output_is_sized_pred = tupled_inputs_and_output_and_coroutine.map_bound(
             |AsyncCallableRelevantTypes { output_coroutine_ty: output_ty, .. }| {
-                ty::TraitRef::from_lang_item(tcx, LangItem::Sized, DUMMY_SP, [output_ty])
+                ty::TraitRef::new(tcx, tcx.require_lang_item(LangItem::Sized, None), [output_ty])
             },
         );
 
@@ -576,10 +577,9 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
                     // and opaque types: If the `self_ty` is `Sized`, then the metadata is `()`.
                     // FIXME(ptr_metadata): This impl overlaps with the other impls and shouldn't
                     // exist. Instead, `Pointee<Metadata = ()>` should be a supertrait of `Sized`.
-                    let sized_predicate = ty::TraitRef::from_lang_item(
+                    let sized_predicate = ty::TraitRef::new(
                         tcx,
-                        LangItem::Sized,
-                        DUMMY_SP,
+                        tcx.require_lang_item(LangItem::Sized, None),
                         [ty::GenericArg::from(goal.predicate.self_ty())],
                     );
                     // FIXME(-Znext-solver=coinductive): Should this be `GoalSource::ImplWhereBound`?
@@ -898,7 +898,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for NormalizesTo<'tcx> {
 ///
 /// FIXME: We should merge these 3 implementations as it's likely that they otherwise
 /// diverge.
-#[instrument(level = "debug", skip(ecx, param_env), ret)]
+#[instrument(level = "trace", skip(ecx, param_env), ret)]
 fn fetch_eligible_assoc_item_def<'tcx>(
     ecx: &EvalCtxt<'_, 'tcx>,
     param_env: ty::ParamEnv<'tcx>,
@@ -921,7 +921,7 @@ fn fetch_eligible_assoc_item_def<'tcx>(
             let poly_trait_ref = ecx.resolve_vars_if_possible(goal_trait_ref);
             !poly_trait_ref.still_further_specializable()
         } else {
-            debug!(?node_item.item.def_id, "not eligible due to default");
+            trace!(?node_item.item.def_id, "not eligible due to default");
             false
         }
     };
