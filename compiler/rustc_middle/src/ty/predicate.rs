@@ -12,7 +12,6 @@ use crate::ty::{
     Upcast, UpcastFrom, WithCachedTypeInfo,
 };
 
-pub type Goal<'tcx, P> = ir::Goal<TyCtxt<'tcx>, P>;
 pub type TraitRef<'tcx> = ir::TraitRef<TyCtxt<'tcx>>;
 pub type AliasTerm<'tcx> = ir::AliasTerm<TyCtxt<'tcx>>;
 pub type ProjectionPredicate<'tcx> = ir::ProjectionPredicate<TyCtxt<'tcx>>;
@@ -38,7 +37,11 @@ pub struct Predicate<'tcx>(
     pub(super) Interned<'tcx, WithCachedTypeInfo<ty::Binder<'tcx, PredicateKind<'tcx>>>>,
 );
 
-impl<'tcx> rustc_type_ir::inherent::Predicate<TyCtxt<'tcx>> for Predicate<'tcx> {}
+impl<'tcx> rustc_type_ir::inherent::Predicate<TyCtxt<'tcx>> for Predicate<'tcx> {
+    fn is_coinductive(self, interner: TyCtxt<'tcx>) -> bool {
+        self.is_coinductive(interner)
+    }
+}
 
 impl<'tcx> rustc_type_ir::visit::Flags for Predicate<'tcx> {
     fn flags(&self) -> TypeFlags {
@@ -702,7 +705,7 @@ impl<'tcx> UpcastFrom<TyCtxt<'tcx>, NormalizesTo<'tcx>> for Predicate<'tcx> {
 }
 
 impl<'tcx> Predicate<'tcx> {
-    pub fn to_opt_poly_trait_pred(self) -> Option<PolyTraitPredicate<'tcx>> {
+    pub fn as_trait_clause(self) -> Option<PolyTraitPredicate<'tcx>> {
         let predicate = self.kind();
         match predicate.skip_binder() {
             PredicateKind::Clause(ClauseKind::Trait(t)) => Some(predicate.rebind(t)),
@@ -722,7 +725,7 @@ impl<'tcx> Predicate<'tcx> {
         }
     }
 
-    pub fn to_opt_poly_projection_pred(self) -> Option<PolyProjectionPredicate<'tcx>> {
+    pub fn as_projection_clause(self) -> Option<PolyProjectionPredicate<'tcx>> {
         let predicate = self.kind();
         match predicate.skip_binder() {
             PredicateKind::Clause(ClauseKind::Projection(t)) => Some(predicate.rebind(t)),

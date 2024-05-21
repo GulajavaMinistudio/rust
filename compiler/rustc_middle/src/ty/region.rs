@@ -1,13 +1,12 @@
-use polonius_engine::Atom;
 use rustc_data_structures::intern::Interned;
 use rustc_errors::MultiSpan;
 use rustc_hir::def_id::DefId;
-use rustc_index::Idx;
 use rustc_macros::{HashStable, TyDecodable, TyEncodable};
 use rustc_span::symbol::sym;
 use rustc_span::symbol::{kw, Symbol};
 use rustc_span::{ErrorGuaranteed, DUMMY_SP};
 use rustc_type_ir::RegionKind as IrRegionKind;
+pub use rustc_type_ir::RegionVid;
 use std::ops::Deref;
 
 use crate::ty::{self, BoundVar, TyCtxt, TypeFlags};
@@ -348,21 +347,6 @@ impl std::fmt::Debug for EarlyParamRegion {
     }
 }
 
-rustc_index::newtype_index! {
-    /// A **region** (lifetime) **v**ariable **ID**.
-    #[derive(HashStable)]
-    #[encodable]
-    #[orderable]
-    #[debug_format = "'?{}"]
-    pub struct RegionVid {}
-}
-
-impl Atom for RegionVid {
-    fn index(self) -> usize {
-        Idx::index(self)
-    }
-}
-
 #[derive(Clone, PartialEq, Eq, Hash, TyEncodable, TyDecodable, Copy)]
 #[derive(HashStable)]
 /// The parameter representation of late-bound function parameters, "some region
@@ -394,6 +378,12 @@ pub enum BoundRegionKind {
 pub struct BoundRegion {
     pub var: BoundVar,
     pub kind: BoundRegionKind,
+}
+
+impl<'tcx> rustc_type_ir::inherent::BoundVarLike<TyCtxt<'tcx>> for BoundRegion {
+    fn var(self) -> BoundVar {
+        self.var
+    }
 }
 
 impl core::fmt::Debug for BoundRegion {

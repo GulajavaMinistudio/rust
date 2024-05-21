@@ -18,7 +18,6 @@ use rustc_index::IndexVec;
 use rustc_infer::infer::canonical::query_response::make_query_region_constraints;
 use rustc_infer::infer::canonical::CanonicalVarValues;
 use rustc_infer::infer::canonical::{CanonicalExt, QueryRegionConstraints};
-use rustc_infer::infer::resolve::EagerResolver;
 use rustc_infer::infer::RegionVariableOrigin;
 use rustc_infer::infer::{InferCtxt, InferOk};
 use rustc_infer::traits::solve::NestedNormalizationGoals;
@@ -31,6 +30,7 @@ use rustc_middle::traits::solve::{
 use rustc_middle::traits::ObligationCause;
 use rustc_middle::ty::{self, BoundVar, GenericArgKind, Ty, TyCtxt, TypeFoldable};
 use rustc_next_trait_solver::canonicalizer::{CanonicalizeMode, Canonicalizer};
+use rustc_next_trait_solver::resolve::EagerResolver;
 use rustc_span::{Span, DUMMY_SP};
 use std::assert_matches::assert_matches;
 use std::iter;
@@ -40,19 +40,19 @@ trait ResponseT<'tcx> {
     fn var_values(&self) -> CanonicalVarValues<'tcx>;
 }
 
-impl<'tcx> ResponseT<'tcx> for Response<'tcx> {
+impl<'tcx> ResponseT<'tcx> for Response<TyCtxt<'tcx>> {
     fn var_values(&self) -> CanonicalVarValues<'tcx> {
         self.var_values
     }
 }
 
-impl<'tcx, T> ResponseT<'tcx> for inspect::State<'tcx, T> {
+impl<'tcx, T> ResponseT<'tcx> for inspect::State<TyCtxt<'tcx>, T> {
     fn var_values(&self) -> CanonicalVarValues<'tcx> {
         self.var_values
     }
 }
 
-impl<'tcx> EvalCtxt<'_, 'tcx> {
+impl<'tcx> EvalCtxt<'_, InferCtxt<'tcx>> {
     /// Canonicalizes the goal remembering the original values
     /// for each bound variable.
     pub(super) fn canonicalize_goal<T: TypeFoldable<TyCtxt<'tcx>>>(
@@ -384,7 +384,7 @@ pub(in crate::solve) fn make_canonical_state<'tcx, T: TypeFoldable<TyCtxt<'tcx>>
     var_values: &[ty::GenericArg<'tcx>],
     max_input_universe: ty::UniverseIndex,
     data: T,
-) -> inspect::CanonicalState<'tcx, T> {
+) -> inspect::CanonicalState<TyCtxt<'tcx>, T> {
     let var_values = CanonicalVarValues { var_values: infcx.tcx.mk_args(var_values) };
     let state = inspect::State { var_values, data };
     let state = state.fold_with(&mut EagerResolver::new(infcx));
@@ -414,7 +414,7 @@ pub(in crate::solve) fn instantiate_canonical_state<'tcx, T: TypeFoldable<TyCtxt
     span: Span,
     param_env: ty::ParamEnv<'tcx>,
     orig_values: &mut Vec<ty::GenericArg<'tcx>>,
-    state: inspect::CanonicalState<'tcx, T>,
+    state: inspect::CanonicalState<TyCtxt<'tcx>, T>,
 ) -> T {
     // In case any fresh inference variables have been created between `state`
     // and the previous instantiation, extend `orig_values` for it.
