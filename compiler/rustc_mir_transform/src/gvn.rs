@@ -223,7 +223,7 @@ enum Value<'tcx> {
     NullaryOp(NullOp<'tcx>, Ty<'tcx>),
     UnaryOp(UnOp, VnIndex),
     BinaryOp(BinOp, VnIndex, VnIndex),
-    CheckedBinaryOp(BinOp, VnIndex, VnIndex),
+    CheckedBinaryOp(BinOp, VnIndex, VnIndex), // FIXME get rid of this, work like MIR instead
     Cast {
         kind: CastKind,
         value: VnIndex,
@@ -234,7 +234,7 @@ enum Value<'tcx> {
 
 struct VnState<'body, 'tcx> {
     tcx: TyCtxt<'tcx>,
-    ecx: InterpCx<'tcx, 'tcx, DummyMachine>,
+    ecx: InterpCx<'tcx, DummyMachine>,
     param_env: ty::ParamEnv<'tcx>,
     local_decls: &'body LocalDecls<'tcx>,
     /// Value stored in each local.
@@ -497,7 +497,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
             UnaryOp(un_op, operand) => {
                 let operand = self.evaluated[operand].as_ref()?;
                 let operand = self.ecx.read_immediate(operand).ok()?;
-                let (val, _) = self.ecx.overflowing_unary_op(un_op, &operand).ok()?;
+                let val = self.ecx.unary_op(un_op, &operand).ok()?;
                 val.into()
             }
             BinaryOp(bin_op, lhs, rhs) => {
@@ -505,7 +505,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
                 let lhs = self.ecx.read_immediate(lhs).ok()?;
                 let rhs = self.evaluated[rhs].as_ref()?;
                 let rhs = self.ecx.read_immediate(rhs).ok()?;
-                let (val, _) = self.ecx.overflowing_binary_op(bin_op, &lhs, &rhs).ok()?;
+                let val = self.ecx.binary_op(bin_op, &lhs, &rhs).ok()?;
                 val.into()
             }
             CheckedBinaryOp(bin_op, lhs, rhs) => {
@@ -513,14 +513,11 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
                 let lhs = self.ecx.read_immediate(lhs).ok()?;
                 let rhs = self.evaluated[rhs].as_ref()?;
                 let rhs = self.ecx.read_immediate(rhs).ok()?;
-                let (val, overflowed) = self.ecx.overflowing_binary_op(bin_op, &lhs, &rhs).ok()?;
-                let tuple = Ty::new_tup_from_iter(
-                    self.tcx,
-                    [val.layout.ty, self.tcx.types.bool].into_iter(),
-                );
-                let tuple = self.ecx.layout_of(tuple).ok()?;
-                ImmTy::from_scalar_pair(val.to_scalar(), Scalar::from_bool(overflowed), tuple)
-                    .into()
+                let val = self
+                    .ecx
+                    .binary_op(bin_op.wrapping_to_overflowing().unwrap(), &lhs, &rhs)
+                    .ok()?;
+                val.into()
             }
             Cast { kind, value, from: _, to } => match kind {
                 CastKind::IntToInt | CastKind::IntToFloat => {
@@ -1142,7 +1139,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
 }
 
 fn op_to_prop_const<'tcx>(
-    ecx: &mut InterpCx<'_, 'tcx, DummyMachine>,
+    ecx: &mut InterpCx<'tcx, DummyMachine>,
     op: &OpTy<'tcx>,
 ) -> Option<ConstValue<'tcx>> {
     // Do not attempt to propagate unsized locals.

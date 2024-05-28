@@ -61,6 +61,7 @@ use rustc_span::{ExpnId, ExpnKind, Span};
 use rustc_target::abi::{Align, FieldIdx, Integer, IntegerType, VariantIdx};
 pub use rustc_target::abi::{ReprFlags, ReprOptions};
 pub use rustc_type_ir::{DebugWithInfcx, InferCtxtLike, WithInfcx};
+use tracing::{debug, instrument};
 pub use vtable::*;
 
 use std::assert_matches::assert_matches;
@@ -113,9 +114,9 @@ pub use self::rvalue_scopes::RvalueScopes;
 pub use self::sty::{
     AliasTy, Article, Binder, BoundTy, BoundTyKind, BoundVariableKind, CanonicalPolyFnSig,
     ClosureArgs, ClosureArgsParts, CoroutineArgs, CoroutineArgsParts, CoroutineClosureArgs,
-    CoroutineClosureArgsParts, CoroutineClosureSignature, FnSig, GenSig, InlineConstArgs,
-    InlineConstArgsParts, ParamConst, ParamTy, PolyFnSig, TyKind, TypeAndMut, UpvarArgs,
-    VarianceDiagInfo,
+    CoroutineClosureArgsParts, CoroutineClosureSignature, EarlyBinder, FnSig, GenSig,
+    InlineConstArgs, InlineConstArgsParts, ParamConst, ParamTy, PolyFnSig, TyKind, TypeAndMut,
+    UpvarArgs, VarianceDiagInfo,
 };
 pub use self::trait_def::TraitDef;
 pub use self::typeck_results::{
@@ -265,7 +266,7 @@ pub struct ImplHeader<'tcx> {
 
 #[derive(Copy, Clone, Debug, TyEncodable, TyDecodable, HashStable)]
 pub struct ImplTraitHeader<'tcx> {
-    pub trait_ref: ty::EarlyBinder<ty::TraitRef<'tcx>>,
+    pub trait_ref: ty::EarlyBinder<'tcx, ty::TraitRef<'tcx>>,
     pub polarity: ImplPolarity,
     pub safety: hir::Safety,
 }

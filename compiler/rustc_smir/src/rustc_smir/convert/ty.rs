@@ -194,7 +194,7 @@ where
     }
 }
 
-impl<'tcx, S, V> Stable<'tcx> for ty::EarlyBinder<S>
+impl<'tcx, S, V> Stable<'tcx> for ty::EarlyBinder<'tcx, S>
 where
     S: Stable<'tcx, T = V>,
 {
@@ -707,12 +707,11 @@ impl<'tcx> Stable<'tcx> for ty::TraitPredicate<'tcx> {
     }
 }
 
-impl<'tcx, A, B, U, V> Stable<'tcx> for ty::OutlivesPredicate<A, B>
+impl<'tcx, T> Stable<'tcx> for ty::OutlivesPredicate<'tcx, T>
 where
-    A: Stable<'tcx, T = U>,
-    B: Stable<'tcx, T = V>,
+    T: Stable<'tcx>,
 {
-    type T = stable_mir::ty::OutlivesPredicate<U, V>;
+    type T = stable_mir::ty::OutlivesPredicate<T::T, Region>;
 
     fn stable(&self, tables: &mut Tables<'_>) -> Self::T {
         let ty::OutlivesPredicate(a, b) = self;
@@ -772,7 +771,6 @@ impl<'tcx> Stable<'tcx> for ty::RegionKind<'tcx> {
         use stable_mir::ty::{BoundRegion, EarlyParamRegion, RegionKind};
         match self {
             ty::ReEarlyParam(early_reg) => RegionKind::ReEarlyParam(EarlyParamRegion {
-                def_id: tables.region_def(early_reg.def_id),
                 index: early_reg.index,
                 name: early_reg.name.to_string(),
             }),

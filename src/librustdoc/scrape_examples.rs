@@ -283,7 +283,7 @@ pub(crate) fn run(
         // Collect CrateIds corresponding to provided target crates
         // If two different versions of the crate in the dependency tree, then examples will be collected from both.
         let all_crates = tcx
-            .crates(())
+            .crates_including_speculative(())
             .iter()
             .chain([&LOCAL_CRATE])
             .map(|crate_num| (crate_num, tcx.crate_name(*crate_num)))
@@ -344,7 +344,9 @@ pub(crate) fn load_call_locations(
             Ok(bytes) => bytes,
             Err(e) => dcx.fatal(format!("failed to load examples: {e}")),
         };
-        let mut decoder = MemDecoder::new(&bytes, 0);
+        let Ok(mut decoder) = MemDecoder::new(&bytes, 0) else {
+            dcx.fatal(format!("Corrupt metadata encountered in {path}"))
+        };
         let calls = AllCallLocations::decode(&mut decoder);
 
         for (function, fn_calls) in calls.into_iter() {

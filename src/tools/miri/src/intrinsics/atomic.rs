@@ -4,15 +4,15 @@ use crate::*;
 use helpers::check_arg_count;
 
 pub enum AtomicOp {
-    /// The `bool` indicates whether the result of the operation should be negated
-    /// (must be a boolean-typed operation).
+    /// The `bool` indicates whether the result of the operation should be negated (`UnOp::Not`,
+    /// must be a boolean-typed operation).
     MirOp(mir::BinOp, bool),
     Max,
     Min,
 }
 
-impl<'mir, 'tcx: 'mir> EvalContextExt<'mir, 'tcx> for crate::MiriInterpCx<'mir, 'tcx> {}
-pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
+impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
+pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     /// Calls the atomic intrinsic `intrinsic`; the `atomic_` prefix has already been removed.
     /// Returns `Ok(true)` if the intrinsic was handled.
     fn emulate_atomic_intrinsic(
@@ -120,8 +120,8 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
     }
 }
 
-impl<'mir, 'tcx: 'mir> EvalContextPrivExt<'mir, 'tcx> for MiriInterpCx<'mir, 'tcx> {}
-trait EvalContextPrivExt<'mir, 'tcx: 'mir>: MiriInterpCxExt<'mir, 'tcx> {
+impl<'tcx> EvalContextPrivExt<'tcx> for MiriInterpCx<'tcx> {}
+trait EvalContextPrivExt<'tcx>: MiriInterpCxExt<'tcx> {
     fn atomic_load(
         &mut self,
         args: &[OpTy<'tcx, Provenance>],
@@ -213,8 +213,8 @@ trait EvalContextPrivExt<'mir, 'tcx: 'mir>: MiriInterpCxExt<'mir, 'tcx> {
                 this.write_immediate(*old, dest)?; // old value is returned
                 Ok(())
             }
-            AtomicOp::MirOp(op, neg) => {
-                let old = this.atomic_rmw_op_immediate(&place, &rhs, op, neg, atomic)?;
+            AtomicOp::MirOp(op, not) => {
+                let old = this.atomic_rmw_op_immediate(&place, &rhs, op, not, atomic)?;
                 this.write_immediate(*old, dest)?; // old value is returned
                 Ok(())
             }

@@ -15,9 +15,6 @@
 //! The backend-agnostic functions of this crate use functions defined in various traits that
 //! have to be implemented by each backend.
 
-#[macro_use]
-extern crate tracing;
-
 use rustc_ast as ast;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::fx::FxIndexMap;
@@ -195,6 +192,7 @@ pub enum CodegenErrors {
     EmptyVersionNumber,
     EncodingVersionMismatch { version_array: String, rlink_version: u32 },
     RustcVersionMismatch { rustc_version: String },
+    CorruptFile,
 }
 
 pub fn provide(providers: &mut Providers) {
@@ -265,7 +263,9 @@ impl CodegenResults {
             });
         }
 
-        let mut decoder = MemDecoder::new(&data[4..], 0);
+        let Ok(mut decoder) = MemDecoder::new(&data[4..], 0) else {
+            return Err(CodegenErrors::CorruptFile);
+        };
         let rustc_version = decoder.read_str();
         if rustc_version != sess.cfg_version {
             return Err(CodegenErrors::RustcVersionMismatch {

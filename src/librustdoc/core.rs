@@ -347,7 +347,7 @@ pub(crate) fn run_global_ctxt(
         show_coverage,
     };
 
-    for cnum in tcx.crates(()) {
+    for cnum in tcx.crates_including_speculative(()) {
         crate::visit_lib::lib_embargo_visit_item(&mut ctxt, cnum.as_def_id());
     }
 
@@ -372,8 +372,8 @@ pub(crate) fn run_global_ctxt(
         tcx.node_lint(
             crate::lint::MISSING_CRATE_LEVEL_DOCS,
             DocContext::as_local_hir_id(tcx, krate.module.item_id).unwrap(),
-            "no documentation found for this crate's top-level module",
             |lint| {
+                lint.primary_message("no documentation found for this crate's top-level module");
                 lint.help(help);
             },
         );

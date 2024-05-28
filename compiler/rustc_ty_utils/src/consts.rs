@@ -11,6 +11,7 @@ use rustc_middle::ty::{self, Expr, TyCtxt, TypeVisitableExt};
 use rustc_middle::{mir, thir};
 use rustc_span::Span;
 use rustc_target::abi::{VariantIdx, FIRST_VARIANT};
+use tracing::{debug, instrument};
 
 use std::iter;
 
@@ -397,10 +398,10 @@ impl<'a, 'tcx> visit::Visitor<'a, 'tcx> for IsThirPolymorphic<'a, 'tcx> {
 }
 
 /// Builds an abstract const, do not use this directly, but use `AbstractConst::new` instead.
-fn thir_abstract_const(
-    tcx: TyCtxt<'_>,
+fn thir_abstract_const<'tcx>(
+    tcx: TyCtxt<'tcx>,
     def: LocalDefId,
-) -> Result<Option<ty::EarlyBinder<ty::Const<'_>>>, ErrorGuaranteed> {
+) -> Result<Option<ty::EarlyBinder<'tcx, ty::Const<'tcx>>>, ErrorGuaranteed> {
     if !tcx.features().generic_const_exprs {
         return Ok(None);
     }

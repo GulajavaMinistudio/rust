@@ -627,7 +627,7 @@ impl Item {
         ) -> hir::FnHeader {
             let sig = tcx.fn_sig(def_id).skip_binder();
             let constness =
-                if tcx.is_const_fn(def_id) && is_unstable_const_fn(tcx, def_id).is_none() {
+                if tcx.is_const_fn(def_id) || is_unstable_const_fn(tcx, def_id).is_some() {
                     hir::Constness::Const
                 } else {
                     hir::Constness::NotConst
@@ -649,9 +649,8 @@ impl Item {
                         hir::Safety::Unsafe
                     },
                     abi,
-                    constness: if abi == Abi::RustIntrinsic
-                        && tcx.is_const_fn(def_id)
-                        && is_unstable_const_fn(tcx, def_id).is_none()
+                    constness: if tcx.is_const_fn(def_id)
+                        || is_unstable_const_fn(tcx, def_id).is_some()
                     {
                         hir::Constness::Const
                     } else {
@@ -1937,7 +1936,7 @@ impl PrimitiveType {
             let mut primitive_locations = FxHashMap::default();
             // NOTE: technically this misses crates that are only passed with `--extern` and not loaded when checking the crate.
             // This is a degenerate case that I don't plan to support.
-            for &crate_num in tcx.crates(()) {
+            for &crate_num in tcx.crates_including_speculative(()) {
                 let e = ExternalCrate { crate_num };
                 let crate_name = e.name(tcx);
                 debug!(?crate_num, ?crate_name);

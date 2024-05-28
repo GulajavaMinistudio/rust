@@ -37,6 +37,7 @@ use rustc_span::symbol::Symbol;
 use rustc_span::{Span, DUMMY_SP};
 
 use either::Either;
+use tracing::trace;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -623,7 +624,7 @@ impl<'tcx> Body<'tcx> {
 
     /// Returns the return type; it always return first element from `local_decls` array.
     #[inline]
-    pub fn bound_return_ty(&self) -> ty::EarlyBinder<Ty<'tcx>> {
+    pub fn bound_return_ty(&self) -> ty::EarlyBinder<'tcx, Ty<'tcx>> {
         ty::EarlyBinder::bind(self.local_decls[RETURN_PLACE].ty)
     }
 

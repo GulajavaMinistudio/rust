@@ -314,7 +314,6 @@ pub struct Config {
     pub save_toolstates: Option<PathBuf>,
     pub print_step_timings: bool,
     pub print_step_rusage: bool,
-    pub missing_tools: bool, // FIXME: Deprecated field. Remove it at 2024.
 
     // Fallback musl-root for all targets
     pub musl_root: Option<PathBuf>,
@@ -360,7 +359,7 @@ pub enum RustfmtState {
     LazyEvaluated,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum LlvmLibunwind {
     #[default]
     No,
@@ -381,7 +380,7 @@ impl FromStr for LlvmLibunwind {
     }
 }
 
-#[derive(Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SplitDebuginfo {
     Packed,
     Unpacked,
@@ -542,7 +541,7 @@ impl PartialEq<&str> for TargetSelection {
 }
 
 /// Per-target configuration stored in the global configuration structure.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Target {
     /// Some(path to llvm-config) if using an external LLVM.
     pub llvm_config: Option<PathBuf>,
@@ -644,7 +643,20 @@ impl Merge for TomlConfig {
         do_merge(&mut self.llvm, llvm, replace);
         do_merge(&mut self.rust, rust, replace);
         do_merge(&mut self.dist, dist, replace);
-        assert!(target.is_none(), "merging target-specific config is not currently supported");
+
+        match (self.target.as_mut(), target) {
+            (_, None) => {}
+            (None, Some(target)) => self.target = Some(target),
+            (Some(original_target), Some(new_target)) => {
+                for (triple, new) in new_target {
+                    if let Some(original) = original_target.get_mut(&triple) {
+                        original.merge(new, replace);
+                    } else {
+                        original_target.insert(triple, new);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -892,14 +904,13 @@ define_config! {
         sign_folder: Option<String> = "sign-folder",
         upload_addr: Option<String> = "upload-addr",
         src_tarball: Option<bool> = "src-tarball",
-        missing_tools: Option<bool> = "missing-tools",
         compression_formats: Option<Vec<String>> = "compression-formats",
         compression_profile: Option<String> = "compression-profile",
         include_mingw_linker: Option<bool> = "include-mingw-linker",
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum StringOrBool {
     String(String),
@@ -1923,7 +1934,6 @@ impl Config {
                 sign_folder,
                 upload_addr,
                 src_tarball,
-                missing_tools,
                 compression_formats,
                 compression_profile,
                 include_mingw_linker,
@@ -1933,7 +1943,6 @@ impl Config {
             config.dist_compression_formats = compression_formats;
             set(&mut config.dist_compression_profile, compression_profile);
             set(&mut config.rust_dist_src, src_tarball);
-            set(&mut config.missing_tools, missing_tools);
             set(&mut config.dist_include_mingw_linker, include_mingw_linker)
         }
 

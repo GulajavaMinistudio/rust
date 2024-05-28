@@ -10,6 +10,7 @@ use rustc_middle::ty::{self, FloatTy, Ty};
 use rustc_middle::{bug, span_bug};
 use rustc_target::abi::Integer;
 use rustc_type_ir::TyKind::*;
+use tracing::trace;
 
 use super::{
     err_inval, throw_ub, throw_ub_custom, util::ensure_monomorphic_enough, FnVal, ImmTy, Immediate,
@@ -18,7 +19,7 @@ use super::{
 
 use crate::fluent_generated as fluent;
 
-impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
+impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
     pub fn cast(
         &mut self,
         src: &OpTy<'tcx, M::Provenance>,
@@ -323,13 +324,12 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         use rustc_type_ir::TyKind::*;
 
         fn adjust_nan<
-            'mir,
-            'tcx: 'mir,
-            M: Machine<'mir, 'tcx>,
+            'tcx,
+            M: Machine<'tcx>,
             F1: rustc_apfloat::Float + FloatConvert<F2>,
             F2: rustc_apfloat::Float,
         >(
-            ecx: &InterpCx<'mir, 'tcx, M>,
+            ecx: &InterpCx<'tcx, M>,
             f1: F1,
             f2: F2,
         ) -> F2 {

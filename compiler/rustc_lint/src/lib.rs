@@ -39,9 +39,6 @@
 #![feature(rustc_attrs)]
 #![allow(internal_features)]
 
-#[macro_use]
-extern crate tracing;
-
 mod async_fn_in_trait;
 pub mod builtin;
 mod context;
@@ -539,6 +536,16 @@ fn register_builtins(store: &mut LintStore) {
     );
     store.register_removed(
         "const_patterns_without_partial_eq",
+        "converted into hard error, see RFC #3535 \
+         <https://rust-lang.github.io/rfcs/3535-constants-in-patterns.html> for more information",
+    );
+    store.register_removed(
+        "indirect_structural_match",
+        "converted into hard error, see RFC #3535 \
+         <https://rust-lang.github.io/rfcs/3535-constants-in-patterns.html> for more information",
+    );
+    store.register_removed(
+        "pointer_structural_match",
         "converted into hard error, see RFC #3535 \
          <https://rust-lang.github.io/rfcs/3535-constants-in-patterns.html> for more information",
     );

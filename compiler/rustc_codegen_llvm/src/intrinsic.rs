@@ -14,12 +14,14 @@ use rustc_codegen_ssa::mir::operand::{OperandRef, OperandValue};
 use rustc_codegen_ssa::mir::place::PlaceRef;
 use rustc_codegen_ssa::traits::*;
 use rustc_hir as hir;
+use rustc_middle::mir::BinOp;
 use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, LayoutOf};
 use rustc_middle::ty::{self, GenericArgsRef, Ty};
 use rustc_middle::{bug, span_bug};
 use rustc_span::{sym, Span, Symbol};
 use rustc_target::abi::{self, Align, Float, HasDataLayout, Primitive, Size};
 use rustc_target::spec::{HasTargetSpec, PanicStrategy};
+use tracing::debug;
 
 use std::cmp::Ordering;
 
@@ -1104,12 +1106,12 @@ fn generic_simd_intrinsic<'ll, 'tcx>(
     let in_ty = arg_tys[0];
 
     let comparison = match name {
-        sym::simd_eq => Some(hir::BinOpKind::Eq),
-        sym::simd_ne => Some(hir::BinOpKind::Ne),
-        sym::simd_lt => Some(hir::BinOpKind::Lt),
-        sym::simd_le => Some(hir::BinOpKind::Le),
-        sym::simd_gt => Some(hir::BinOpKind::Gt),
-        sym::simd_ge => Some(hir::BinOpKind::Ge),
+        sym::simd_eq => Some(BinOp::Eq),
+        sym::simd_ne => Some(BinOp::Ne),
+        sym::simd_lt => Some(BinOp::Lt),
+        sym::simd_le => Some(BinOp::Le),
+        sym::simd_gt => Some(BinOp::Gt),
+        sym::simd_ge => Some(BinOp::Ge),
         _ => None,
     };
 

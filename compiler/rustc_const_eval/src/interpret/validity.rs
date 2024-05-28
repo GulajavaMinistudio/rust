@@ -8,6 +8,7 @@ use std::fmt::Write;
 use std::num::NonZero;
 
 use either::{Left, Right};
+use tracing::trace;
 
 use hir::def::DefKind;
 use rustc_ast::Mutability;
@@ -204,7 +205,7 @@ fn write_path(out: &mut String, path: &[PathElem]) {
     }
 }
 
-struct ValidityVisitor<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> {
+struct ValidityVisitor<'rt, 'tcx, M: Machine<'tcx>> {
     /// The `path` may be pushed to, but the part that is present when a function
     /// starts must not be changed!  `visit_fields` and `visit_array` rely on
     /// this stack discipline.
@@ -212,10 +213,10 @@ struct ValidityVisitor<'rt, 'mir, 'tcx, M: Machine<'mir, 'tcx>> {
     ref_tracking: Option<&'rt mut RefTracking<MPlaceTy<'tcx, M::Provenance>, Vec<PathElem>>>,
     /// `None` indicates this is not validating for CTFE (but for runtime).
     ctfe_mode: Option<CtfeValidationMode>,
-    ecx: &'rt InterpCx<'mir, 'tcx, M>,
+    ecx: &'rt InterpCx<'tcx, M>,
 }
 
-impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, 'tcx, M> {
+impl<'rt, 'tcx, M: Machine<'tcx>> ValidityVisitor<'rt, 'tcx, M> {
     fn aggregate_field_path_elem(&mut self, layout: TyAndLayout<'tcx>, field: usize) -> PathElem {
         // First, check if we are projecting to a variant.
         match layout.variants {
@@ -434,6 +435,11 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 found_bytes: has.bytes()
             },
         );
+        // Make sure this is non-null. We checked dereferenceability above, but if `size` is zero
+        // that does not imply non-null.
+        if self.ecx.scalar_may_be_null(Scalar::from_maybe_pointer(place.ptr(), self.ecx))? {
+            throw_validation_failure!(self.path, NullPtr { ptr_kind })
+        }
         // Do not allow pointers to uninhabited types.
         if place.layout.abi.is_uninhabited() {
             let ty = place.layout.ty;
@@ -456,8 +462,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             // `!` is a ZST and we want to validate it.
             if let Ok((alloc_id, _offset, _prov)) = self.ecx.ptr_try_get_alloc_id(place.ptr()) {
                 let mut skip_recursive_check = false;
-                let alloc_actual_mutbl = mutability(self.ecx, alloc_id);
-                if let GlobalAlloc::Static(did) = self.ecx.tcx.global_alloc(alloc_id) {
+                if let Some(GlobalAlloc::Static(did)) = self.ecx.tcx.try_get_global_alloc(alloc_id)
+                {
                     let DefKind::Static { nested, .. } = self.ecx.tcx.def_kind(did) else { bug!() };
                     // Special handling for pointers to statics (irrespective of their type).
                     assert!(!self.ecx.tcx.is_thread_local_static(did));
@@ -495,6 +501,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 // If this allocation has size zero, there is no actual mutability here.
                 let (size, _align, _alloc_kind) = self.ecx.get_alloc_info(alloc_id);
                 if size != Size::ZERO {
+                    let alloc_actual_mutbl = mutability(self.ecx, alloc_id);
                     // Mutable pointer to immutable memory is no good.
                     if ptr_expected_mutbl == Mutability::Mut
                         && alloc_actual_mutbl == Mutability::Not
@@ -699,10 +706,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
 /// Returns whether the allocation is mutable, and whether it's actually a static.
 /// For "root" statics we look at the type to account for interior
 /// mutability; for nested statics we have no type and directly use the annotated mutability.
-fn mutability<'mir, 'tcx: 'mir>(
-    ecx: &InterpCx<'mir, 'tcx, impl Machine<'mir, 'tcx>>,
-    alloc_id: AllocId,
-) -> Mutability {
+fn mutability<'tcx>(ecx: &InterpCx<'tcx, impl Machine<'tcx>>, alloc_id: AllocId) -> Mutability {
     // Let's see what kind of memory this points to.
     // We're not using `try_global_alloc` since dangling pointers have already been handled.
     match ecx.tcx.global_alloc(alloc_id) {
@@ -744,13 +748,11 @@ fn mutability<'mir, 'tcx: 'mir>(
     }
 }
 
-impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
-    for ValidityVisitor<'rt, 'mir, 'tcx, M>
-{
+impl<'rt, 'tcx, M: Machine<'tcx>> ValueVisitor<'tcx, M> for ValidityVisitor<'rt, 'tcx, M> {
     type V = OpTy<'tcx, M::Provenance>;
 
     #[inline(always)]
-    fn ecx(&self) -> &InterpCx<'mir, 'tcx, M> {
+    fn ecx(&self) -> &InterpCx<'tcx, M> {
         self.ecx
     }
 
@@ -831,6 +833,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
         trace!("visit_value: {:?}, {:?}", *op, op.layout);
 
         // Check primitive types -- the leaves of our recursive descent.
+        // We assume that the Scalar validity range does not restrict these values
+        // any further than `try_visit_primitive` does!
         if self.try_visit_primitive(op)? {
             return Ok(());
         }
@@ -1000,7 +1004,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
     }
 }
 
-impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
+impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
     fn validate_operand_internal(
         &self,
         op: &OpTy<'tcx, M::Provenance>,

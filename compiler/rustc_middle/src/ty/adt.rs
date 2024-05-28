@@ -17,6 +17,7 @@ use rustc_query_system::ich::StableHashingContext;
 use rustc_session::DataTypeKind;
 use rustc_span::symbol::sym;
 use rustc_target::abi::{ReprOptions, VariantIdx, FIRST_VARIANT};
+use tracing::{debug, info, trace};
 
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -578,7 +579,7 @@ impl<'tcx> AdtDef<'tcx> {
 
     /// Returns a type such that `Self: Sized` if and only if that type is `Sized`,
     /// or `None` if the type is always sized.
-    pub fn sized_constraint(self, tcx: TyCtxt<'tcx>) -> Option<ty::EarlyBinder<Ty<'tcx>>> {
+    pub fn sized_constraint(self, tcx: TyCtxt<'tcx>) -> Option<ty::EarlyBinder<'tcx, Ty<'tcx>>> {
         if self.is_struct() { tcx.adt_sized_constraint(self.did()) } else { None }
     }
 }

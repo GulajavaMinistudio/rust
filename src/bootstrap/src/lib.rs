@@ -84,13 +84,14 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &str, Option<&[&'static str]>)] = &[
     (Some(Mode::ToolRustc), "rust_analyzer", None),
     (Some(Mode::ToolStd), "rust_analyzer", None),
     (Some(Mode::Codegen), "parallel_compiler", None),
+    // NOTE: consider updating `check-cfg` entries in `std/Cargo.toml` too.
+    // cfg(bootstrap) remove these once the bootstrap compiler supports
+    // `lints.rust.unexpected_cfgs.check-cfg`
     (Some(Mode::Std), "stdarch_intel_sde", None),
     (Some(Mode::Std), "no_fp_fmt_parse", None),
     (Some(Mode::Std), "no_global_oom_handling", None),
     (Some(Mode::Std), "no_rc", None),
     (Some(Mode::Std), "no_sync", None),
-    (Some(Mode::Std), "netbsd10", None),
-    (Some(Mode::Std), "backtrace_in_libstd", None),
     /* Extra values not defined in the built-in targets yet, but used in std */
     (Some(Mode::Std), "target_env", Some(&["libnx", "p2"])),
     (Some(Mode::Std), "target_os", Some(&["visionos"])),

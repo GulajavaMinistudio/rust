@@ -9,6 +9,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_session::lint;
 use rustc_span::{Span, DUMMY_SP};
+use tracing::{debug, instrument};
 
 impl<'tcx> TyCtxt<'tcx> {
     /// Evaluates a constant without providing any generic parameters. This is useful to evaluate consts
@@ -112,8 +113,7 @@ impl<'tcx> TyCtxt<'tcx> {
                                 lint::builtin::CONST_EVALUATABLE_UNCHECKED,
                                 self.local_def_id_to_hir_id(local_def_id),
                                 self.def_span(ct.def),
-                                "cannot use constants which depend on generic parameters in types",
-                                |_| {},
+                                |lint| { lint.primary_message("cannot use constants which depend on generic parameters in types"); },
                             )
                         }
                     }

@@ -2860,10 +2860,9 @@ where
     }
 }
 
-impl<'tcx, T, U, P: PrettyPrinter<'tcx>> Print<'tcx, P> for ty::OutlivesPredicate<T, U>
+impl<'tcx, T, P: PrettyPrinter<'tcx>> Print<'tcx, P> for ty::OutlivesPredicate<'tcx, T>
 where
     T: Print<'tcx, P>,
-    U: Print<'tcx, P>,
 {
     fn print(&self, cx: &mut P) -> Result<(), PrintError> {
         define_scoped_cx!(cx);
@@ -2934,12 +2933,13 @@ impl<'tcx> ty::TraitRef<'tcx> {
     }
 }
 
+#[extension(pub trait PrintPolyTraitRefExt<'tcx>)]
 impl<'tcx> ty::Binder<'tcx, ty::TraitRef<'tcx>> {
-    pub fn print_only_trait_path(self) -> ty::Binder<'tcx, TraitRefPrintOnlyTraitPath<'tcx>> {
+    fn print_only_trait_path(self) -> ty::Binder<'tcx, TraitRefPrintOnlyTraitPath<'tcx>> {
         self.map_bound(|tr| tr.print_only_trait_path())
     }
 
-    pub fn print_trait_sugared(self) -> ty::Binder<'tcx, TraitRefPrintSugared<'tcx>> {
+    fn print_trait_sugared(self) -> ty::Binder<'tcx, TraitRefPrintSugared<'tcx>> {
         self.map_bound(|tr| tr.print_trait_sugared())
     }
 }
@@ -2960,8 +2960,9 @@ impl<'tcx> ty::TraitPredicate<'tcx> {
     }
 }
 
+#[extension(pub trait PrintPolyTraitPredicateExt<'tcx>)]
 impl<'tcx> ty::PolyTraitPredicate<'tcx> {
-    pub fn print_modifiers_and_trait_path(
+    fn print_modifiers_and_trait_path(
         self,
     ) -> ty::Binder<'tcx, TraitPredPrintModifiersAndPath<'tcx>> {
         self.map_bound(TraitPredPrintModifiersAndPath)
@@ -3014,21 +3015,7 @@ forward_display_to_print! {
     ty::Region<'tcx>,
     Ty<'tcx>,
     &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
-    ty::Const<'tcx>,
-
-    // HACK(eddyb) these are exhaustive instead of generic,
-    // because `for<'tcx>` isn't possible yet.
-    ty::PolyExistentialProjection<'tcx>,
-    ty::PolyExistentialTraitRef<'tcx>,
-    ty::Binder<'tcx, ty::TraitRef<'tcx>>,
-    ty::Binder<'tcx, TraitRefPrintOnlyTraitPath<'tcx>>,
-    ty::Binder<'tcx, TraitRefPrintSugared<'tcx>>,
-    ty::Binder<'tcx, ty::FnSig<'tcx>>,
-    ty::Binder<'tcx, ty::TraitPredicate<'tcx>>,
-    ty::Binder<'tcx, TraitPredPrintModifiersAndPath<'tcx>>,
-    ty::Binder<'tcx, ty::ProjectionPredicate<'tcx>>,
-    ty::OutlivesPredicate<Ty<'tcx>, ty::Region<'tcx>>,
-    ty::OutlivesPredicate<ty::Region<'tcx>, ty::Region<'tcx>>
+    ty::Const<'tcx>
 }
 
 define_print! {
@@ -3271,7 +3258,7 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
     let queue = &mut Vec::new();
     let mut seen_defs: DefIdSet = Default::default();
 
-    for &cnum in tcx.crates(()).iter() {
+    for &cnum in tcx.crates_including_speculative(()).iter() {
         let def_id = cnum.as_def_id();
 
         // Ignore crates that are not direct dependencies.
@@ -3327,7 +3314,7 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
 ///
 /// The implementation uses similar import discovery logic to that of 'use' suggestions.
 ///
-/// See also [`DelayDm`](rustc_error_messages::DelayDm) and [`with_no_trimmed_paths!`].
+/// See also [`with_no_trimmed_paths!`].
 // this is pub to be able to intra-doc-link it
 pub fn trimmed_def_paths(tcx: TyCtxt<'_>, (): ()) -> DefIdMap<Symbol> {
     // Trimming paths is expensive and not optimized, since we expect it to only be used for error

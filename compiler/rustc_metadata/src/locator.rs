@@ -231,6 +231,7 @@ use rustc_session::Session;
 use rustc_span::symbol::Symbol;
 use rustc_span::Span;
 use rustc_target::spec::{Target, TargetTriple};
+use tracing::{debug, info};
 
 use snap::read::FrameDecoder;
 use std::borrow::Cow;
@@ -853,7 +854,12 @@ fn get_metadata_section<'p>(
             slice_owned(mmap, Deref::deref)
         }
     };
-    let blob = MetadataBlob(raw_bytes);
+    let Ok(blob) = MetadataBlob::new(raw_bytes) else {
+        return Err(MetadataError::LoadFailure(format!(
+            "corrupt metadata encountered in {}",
+            filename.display()
+        )));
+    };
     match blob.check_compatibility(cfg_version) {
         Ok(()) => Ok(blob),
         Err(None) => Err(MetadataError::LoadFailure(format!(

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use either::Either;
+use tracing::trace;
 
 use rustc_middle::span_bug;
 use rustc_middle::{
@@ -45,7 +46,7 @@ impl<'tcx, Prov: Provenance> FnArg<'tcx, Prov> {
     }
 }
 
-impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
+impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
     /// Make a copy of the given fn_arg. Any `InPlace` are degenerated to copies, no protection of the
     /// original memory occurs.
     pub fn copy_fn_arg(&self, arg: &FnArg<'tcx, M::Provenance>) -> OpTy<'tcx, M::Provenance> {
@@ -97,7 +98,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 for (const_int, target) in targets.iter() {
                     // Compare using MIR BinOp::Eq, to also support pointer values.
                     // (Avoiding `self.binary_op` as that does some redundant layout computation.)
-                    let res = self.wrapping_binary_op(
+                    let res = self.binary_op(
                         mir::BinOp::Eq,
                         &discr,
                         &ImmTy::from_uint(const_int, discr.layout),
