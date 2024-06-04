@@ -40,7 +40,7 @@ mod search_graph;
 mod trait_goals;
 
 pub use eval_ctxt::{EvalCtxt, GenerateProofTree, InferCtxtEvalExt, InferCtxtSelectExt};
-pub use fulfill::FulfillmentCtxt;
+pub use fulfill::{FulfillmentCtxt, NextSolverError};
 pub(crate) use normalize::deeply_normalize_for_diagnostics;
 pub use normalize::{deeply_normalize, deeply_normalize_with_skipped_universes};
 
@@ -133,7 +133,7 @@ impl<'a, 'tcx> EvalCtxt<'a, InferCtxt<'tcx>> {
     }
 
     fn compute_object_safe_goal(&mut self, trait_def_id: DefId) -> QueryResult<'tcx> {
-        if self.interner().check_is_object_safe(trait_def_id) {
+        if self.interner().is_object_safe(trait_def_id) {
             self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         } else {
             Err(NoSolution)

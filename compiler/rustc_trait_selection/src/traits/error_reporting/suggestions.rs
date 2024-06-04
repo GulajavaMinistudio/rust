@@ -29,10 +29,11 @@ use rustc_macros::extension;
 use rustc_middle::hir::map;
 use rustc_middle::traits::IsConstable;
 use rustc_middle::ty::error::TypeError::{self, Sorts};
+use rustc_middle::ty::print::PrintPolyTraitRefExt;
 use rustc_middle::ty::{
     self, suggest_arbitrary_trait_bound, suggest_constraining_type_param, AdtKind, GenericArgs,
-    InferTy, IsSuggestable, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeSuperFoldable,
-    TypeVisitableExt, TypeckResults, Upcast,
+    InferTy, IsSuggestable, ToPolyTraitRef, Ty, TyCtxt, TypeFoldable, TypeFolder,
+    TypeSuperFoldable, TypeVisitableExt, TypeckResults, Upcast,
 };
 use rustc_middle::{bug, span_bug};
 use rustc_span::def_id::LocalDefId;
@@ -219,15 +220,15 @@ pub fn suggest_restriction<'tcx, G: EmissionGuarantee>(
             (_, None) => predicate_constraint(hir_generics, trait_pred.upcast(tcx)),
             (None, Some((ident, []))) => (
                 ident.span.shrink_to_hi(),
-                format!(": {}", trait_pred.print_modifiers_and_trait_path()),
+                format!(": {}", trait_pred.to_poly_trait_ref().print_trait_sugared()),
             ),
             (_, Some((_, [.., bounds]))) => (
                 bounds.span().shrink_to_hi(),
-                format!(" + {}", trait_pred.print_modifiers_and_trait_path()),
+                format!(" + {}", trait_pred.to_poly_trait_ref().print_trait_sugared()),
             ),
             (Some(_), Some((_, []))) => (
                 hir_generics.span.shrink_to_hi(),
-                format!(": {}", trait_pred.print_modifiers_and_trait_path()),
+                format!(": {}", trait_pred.to_poly_trait_ref().print_trait_sugared()),
             ),
         };
 
@@ -450,7 +451,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
     }
 
     /// When after several dereferencing, the reference satisfies the trait
-    /// binding. This function provides dereference suggestion for this
+    /// bound. This function provides dereference suggestion for this
     /// specific situation.
     fn suggest_dereferences(
         &self,
@@ -777,7 +778,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
     }
 
     /// We tried to apply the bound to an `fn` or closure. Check whether calling it would
-    /// evaluate to a type that *would* satisfy the trait binding. If it would, suggest calling
+    /// evaluate to a type that *would* satisfy the trait bound. If it would, suggest calling
     /// it: `bar(foo)` → `bar(foo())`. This case is *very* likely to be hit if `foo` is `async`.
     fn suggest_fn_call(
         &self,
@@ -1240,7 +1241,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
 
         let param_env = obligation.param_env;
 
-        // Try to apply the original trait binding obligation by borrowing.
+        // Try to apply the original trait bound by borrowing.
         let mut try_borrowing = |old_pred: ty::PolyTraitPredicate<'tcx>,
                                  blacklist: &[DefId]|
          -> bool {
@@ -4903,14 +4904,12 @@ pub fn suggest_desugaring_async_fn_to_impl_future_in_trait<'tcx>(
         // `async fn` should always lower to a single bound... but don't ICE.
         return None;
     };
-    let Some(hir::PathSegment { args: Some(generics), .. }) =
-        trait_ref.trait_ref.path.segments.last()
+    let Some(hir::PathSegment { args: Some(args), .. }) = trait_ref.trait_ref.path.segments.last()
     else {
         // desugaring to a single path segment for `Future<...>`.
         return None;
     };
-    let Some(hir::TypeBindingKind::Equality { term: hir::Term::Ty(future_output_ty) }) =
-        generics.bindings.get(0).map(|binding| binding.kind)
+    let Some(future_output_ty) = args.constraints.first().and_then(|constraint| constraint.ty())
     else {
         // Also should never happen.
         return None;
