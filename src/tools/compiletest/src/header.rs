@@ -799,6 +799,7 @@ const KNOWN_DIRECTIVE_NAMES: &[&str] = &[
     "ignore-none",
     "ignore-nto",
     "ignore-nvptx64",
+    "ignore-nvptx64-nvidia-cuda",
     "ignore-openbsd",
     "ignore-pass",
     "ignore-remote",
@@ -1267,6 +1268,8 @@ fn expand_variables(mut value: String, config: &Config) -> String {
     const CWD: &str = "{{cwd}}";
     const SRC_BASE: &str = "{{src-base}}";
     const BUILD_BASE: &str = "{{build-base}}";
+    const SYSROOT_BASE: &str = "{{sysroot-base}}";
+    const TARGET_LINKER: &str = "{{target-linker}}";
 
     if value.contains(CWD) {
         let cwd = env::current_dir().unwrap();
@@ -1279,6 +1282,14 @@ fn expand_variables(mut value: String, config: &Config) -> String {
 
     if value.contains(BUILD_BASE) {
         value = value.replace(BUILD_BASE, &config.build_base.to_string_lossy());
+    }
+
+    if value.contains(SYSROOT_BASE) {
+        value = value.replace(SYSROOT_BASE, &config.sysroot_base.to_string_lossy());
+    }
+
+    if value.contains(TARGET_LINKER) {
+        value = value.replace(TARGET_LINKER, config.target_linker.as_deref().unwrap_or(""));
     }
 
     value

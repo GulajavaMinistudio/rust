@@ -1,6 +1,6 @@
 use crate::callee::{self, DeferredCallResolution};
 use crate::errors::{self, CtorIsPrivate};
-use crate::method::{self, MethodCallee, SelfSource};
+use crate::method::{self, MethodCallee};
 use crate::rvalue_scopes;
 use crate::{BreakableCtxt, Diverges, Expectation, FnCtxt, LoweredTy};
 use rustc_data_structures::fx::FxHashSet;
@@ -16,7 +16,7 @@ use rustc_hir_analysis::hir_ty_lowering::generics::{
 };
 use rustc_hir_analysis::hir_ty_lowering::{
     ExplicitLateBound, GenericArgCountMismatch, GenericArgCountResult, GenericArgsLowerer,
-    GenericPathSegment, HirTyLowerer, IsMethodCall,
+    GenericPathSegment, HirTyLowerer, IsMethodCall, RegionInferReason,
 };
 use rustc_infer::infer::canonical::{Canonical, OriginalQueryValues, QueryResponse};
 use rustc_infer::infer::error_reporting::TypeAnnotationNeeded::E0282;
@@ -436,7 +436,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub fn lower_array_length(&self, length: &hir::ArrayLen<'tcx>) -> ty::Const<'tcx> {
         match length {
-            hir::ArrayLen::Infer(inf) => self.ct_infer(self.tcx.types.usize, None, inf.span),
+            hir::ArrayLen::Infer(inf) => self.ct_infer(None, inf.span),
             hir::ArrayLen::Body(anon_const) => {
                 let span = self.tcx.def_span(anon_const.def_id);
                 let c = ty::Const::from_anon_const(self.tcx, anon_const.def_id);
@@ -735,7 +735,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         qpath: &'tcx QPath<'tcx>,
         hir_id: HirId,
         span: Span,
-        args: Option<&'tcx [hir::Expr<'tcx>]>,
     ) -> (Res, Option<LoweredTy<'tcx>>, &'tcx [hir::PathSegment<'tcx>]) {
         debug!(
             "resolve_ty_and_res_fully_qualified_call: qpath={:?} hir_id={:?} span={:?}",
@@ -828,14 +827,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
                 if item_name.name != kw::Empty {
                     if let Some(e) = self.report_method_error(
-                        span,
-                        None,
-                        ty.normalized,
-                        item_name,
                         hir_id,
-                        SelfSource::QPath(qself),
+                        ty.normalized,
                         error,
-                        args,
                         Expectation::NoExpectation,
                         trait_missing_method && span.edition().at_least_rust_2021(), // emits missing method for trait only after edition 2021
                     ) {
@@ -1072,7 +1066,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     ty::ImplContainer => {
                         if segments.len() == 1 {
                             // `<T>::assoc` will end up here, and so
-                            // can `T::assoc`. It this came from an
+                            // can `T::assoc`. If this came from an
                             // inherent impl, we need to record the
                             // `T` for posterity (see `UserSelfTy` for
                             // details).
@@ -1118,7 +1112,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // to add defaults. If the user provided *too many* types, that's
         // a problem.
 
-        let mut infer_args_for_err = FxHashSet::default();
+        let mut infer_args_for_err = None;
 
         let mut explicit_late_bound = ExplicitLateBound::No;
         for &GenericPathSegment(def_id, index) in &generic_segments {
@@ -1136,9 +1130,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 explicit_late_bound = ExplicitLateBound::Yes;
             }
 
-            if let Err(GenericArgCountMismatch { reported: Some(e), .. }) = arg_count.correct {
-                infer_args_for_err.insert(index);
-                self.set_tainted_by_errors(e); // See issue #53251.
+            if let Err(GenericArgCountMismatch { reported, .. }) = arg_count.correct {
+                infer_args_for_err
+                    .get_or_insert_with(|| (reported, FxHashSet::default()))
+                    .1
+                    .insert(index);
+                self.set_tainted_by_errors(reported); // See issue #53251.
             }
         }
 
@@ -1232,14 +1229,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
         let def_id = res.def_id();
 
-        let arg_count = GenericArgCountResult {
-            explicit_late_bound,
-            correct: if infer_args_for_err.is_empty() {
-                Ok(())
-            } else {
-                Err(GenericArgCountMismatch::default())
-            },
+        let (correct, infer_args_for_err) = match infer_args_for_err {
+            Some((reported, args)) => {
+                (Err(GenericArgCountMismatch { reported, invalid_args: vec![] }), args)
+            }
+            None => (Ok(()), Default::default()),
         };
+
+        let arg_count = GenericArgCountResult { explicit_late_bound, correct };
 
         struct CtorGenericArgsCtxt<'a, 'tcx> {
             fcx: &'a FnCtxt<'a, 'tcx>,
@@ -1272,13 +1269,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             fn provided_kind(
                 &mut self,
+                _preceding_args: &[ty::GenericArg<'tcx>],
                 param: &ty::GenericParamDef,
                 arg: &GenericArg<'tcx>,
             ) -> ty::GenericArg<'tcx> {
                 match (&param.kind, arg) {
-                    (GenericParamDefKind::Lifetime, GenericArg::Lifetime(lt)) => {
-                        self.fcx.lowerer().lower_lifetime(lt, Some(param)).into()
-                    }
+                    (GenericParamDefKind::Lifetime, GenericArg::Lifetime(lt)) => self
+                        .fcx
+                        .lowerer()
+                        .lower_lifetime(lt, RegionInferReason::Param(param))
+                        .into(),
                     (GenericParamDefKind::Type { .. }, GenericArg::Type(ty)) => {
                         self.fcx.lower_ty(ty).raw.into()
                     }
@@ -1292,20 +1292,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         &GenericParamDefKind::Const { has_default, is_host_effect },
                         GenericArg::Infer(inf),
                     ) => {
-                        let tcx = self.fcx.tcx();
-
                         if has_default && is_host_effect {
                             self.fcx.var_for_effect(param)
                         } else {
-                            self.fcx
-                                .ct_infer(
-                                    tcx.type_of(param.def_id)
-                                        .no_bound_vars()
-                                        .expect("const parameter types cannot be generic"),
-                                    Some(param),
-                                    inf.span,
-                                )
-                                .into()
+                            self.fcx.ct_infer(Some(param), inf.span).into()
                         }
                     }
                     _ => unreachable!(),
@@ -1314,21 +1304,25 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             fn inferred_kind(
                 &mut self,
-                args: Option<&[ty::GenericArg<'tcx>]>,
+                preceding_args: &[ty::GenericArg<'tcx>],
                 param: &ty::GenericParamDef,
                 infer_args: bool,
             ) -> ty::GenericArg<'tcx> {
                 let tcx = self.fcx.tcx();
                 match param.kind {
-                    GenericParamDefKind::Lifetime => {
-                        self.fcx.re_infer(Some(param), self.span).unwrap().into()
-                    }
+                    GenericParamDefKind::Lifetime => self
+                        .fcx
+                        .re_infer(
+                            self.span,
+                            rustc_hir_analysis::hir_ty_lowering::RegionInferReason::Param(param),
+                        )
+                        .into(),
                     GenericParamDefKind::Type { has_default, .. } => {
                         if !infer_args && has_default {
                             // If we have a default, then it doesn't matter that we're not
                             // inferring the type arguments: we provide the default where any
                             // is missing.
-                            tcx.type_of(param.def_id).instantiate(tcx, args.unwrap()).into()
+                            tcx.type_of(param.def_id).instantiate(tcx, preceding_args).into()
                         } else {
                             // If no type arguments were provided, we have to infer them.
                             // This case also occurs as a result of some malformed input, e.g.
@@ -1353,7 +1347,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             } else if !infer_args {
                                 return tcx
                                     .const_param_default(param.def_id)
-                                    .instantiate(tcx, args.unwrap())
+                                    .instantiate(tcx, preceding_args)
                                     .into();
                             }
                         }
@@ -1412,11 +1406,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ) {
                 Ok(ok) => self.register_infer_ok_obligations(ok),
                 Err(_) => {
-                    self.dcx().span_delayed_bug(
+                    self.dcx().span_bug(
                         span,
                         format!(
-                        "instantiate_value_path: (UFCS) {self_ty:?} was a subtype of {impl_ty:?} but now is not?",
-                    ),
+                            "instantiate_value_path: (UFCS) {self_ty:?} was a subtype of {impl_ty:?} but now is not?",
+                        ),
                     );
                 }
             }

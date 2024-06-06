@@ -1077,7 +1077,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                         }
 
                         p!(")");
-                        if let Some(ty) = return_ty.skip_binder().ty() {
+                        if let Some(ty) = return_ty.skip_binder().as_type() {
                             if !ty.is_unit() {
                                 p!(" -> ", print(return_ty));
                             }
@@ -1144,7 +1144,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                     for (assoc_item_def_id, term) in assoc_items {
                         // Skip printing `<{coroutine@} as Coroutine<_>>::Return` from async blocks,
                         // unless we can find out what coroutine return type it comes from.
-                        let term = if let Some(ty) = term.skip_binder().ty()
+                        let term = if let Some(ty) = term.skip_binder().as_type()
                             && let ty::Alias(ty::Projection, proj) = ty.kind()
                             && let Some(assoc) = tcx.opt_associated_item(proj.def_id)
                             && assoc.trait_container(tcx) == tcx.lang_items().coroutine_trait()
@@ -1322,7 +1322,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                             p!(pretty_fn_sig(
                                 tys,
                                 false,
-                                proj.skip_binder().term.ty().expect("Return type was a const")
+                                proj.skip_binder().term.as_type().expect("Return type was a const")
                             ));
                             resugared = true;
                         }
@@ -1459,23 +1459,6 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             return Ok(());
         }
 
-        macro_rules! print_underscore {
-            () => {{
-                if print_ty {
-                    self.typed_value(
-                        |this| {
-                            write!(this, "_")?;
-                            Ok(())
-                        },
-                        |this| this.print_type(ct.ty()),
-                        ": ",
-                    )?;
-                } else {
-                    write!(self, "_")?;
-                }
-            }};
-        }
-
         match ct.kind() {
             ty::ConstKind::Unevaluated(ty::UnevaluatedConst { def, args }) => {
                 match self.tcx().def_kind(def) {
@@ -1508,11 +1491,11 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 ty::InferConst::Var(ct_vid) if let Some(name) = self.const_infer_name(ct_vid) => {
                     p!(write("{}", name))
                 }
-                _ => print_underscore!(),
+                _ => write!(self, "_")?,
             },
             ty::ConstKind::Param(ParamConst { name, .. }) => p!(write("{}", name)),
-            ty::ConstKind::Value(value) => {
-                return self.pretty_print_const_valtree(value, ct.ty(), print_ty);
+            ty::ConstKind::Value(ty, value) => {
+                return self.pretty_print_const_valtree(value, ty, print_ty);
             }
 
             ty::ConstKind::Bound(debruijn, bound_var) => {
@@ -1533,8 +1516,10 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
         print_ty: bool,
     ) -> Result<(), PrintError> {
         define_scoped_cx!(self);
-        match expr {
-            Expr::Binop(op, c1, c2) => {
+        match expr.kind {
+            ty::ExprKind::Binop(op) => {
+                let (_, _, c1, c2) = expr.binop_args();
+
                 let precedence = |binop: rustc_middle::mir::BinOp| {
                     use rustc_ast::util::parser::AssocOp;
                     AssocOp::from_ast_binop(binop.to_hir_binop().into()).precedence()
@@ -1543,22 +1528,26 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 let formatted_op = op.to_hir_binop().as_str();
                 let (lhs_parenthesized, rhs_parenthesized) = match (c1.kind(), c2.kind()) {
                     (
-                        ty::ConstKind::Expr(Expr::Binop(lhs_op, _, _)),
-                        ty::ConstKind::Expr(Expr::Binop(rhs_op, _, _)),
+                        ty::ConstKind::Expr(ty::Expr { kind: ty::ExprKind::Binop(lhs_op), .. }),
+                        ty::ConstKind::Expr(ty::Expr { kind: ty::ExprKind::Binop(rhs_op), .. }),
                     ) => (precedence(lhs_op) < op_precedence, precedence(rhs_op) < op_precedence),
-                    (ty::ConstKind::Expr(Expr::Binop(lhs_op, ..)), ty::ConstKind::Expr(_)) => {
-                        (precedence(lhs_op) < op_precedence, true)
-                    }
-                    (ty::ConstKind::Expr(_), ty::ConstKind::Expr(Expr::Binop(rhs_op, ..))) => {
-                        (true, precedence(rhs_op) < op_precedence)
-                    }
+                    (
+                        ty::ConstKind::Expr(ty::Expr { kind: ty::ExprKind::Binop(lhs_op), .. }),
+                        ty::ConstKind::Expr(_),
+                    ) => (precedence(lhs_op) < op_precedence, true),
+                    (
+                        ty::ConstKind::Expr(_),
+                        ty::ConstKind::Expr(ty::Expr { kind: ty::ExprKind::Binop(rhs_op), .. }),
+                    ) => (true, precedence(rhs_op) < op_precedence),
                     (ty::ConstKind::Expr(_), ty::ConstKind::Expr(_)) => (true, true),
-                    (ty::ConstKind::Expr(Expr::Binop(lhs_op, ..)), _) => {
-                        (precedence(lhs_op) < op_precedence, false)
-                    }
-                    (_, ty::ConstKind::Expr(Expr::Binop(rhs_op, ..))) => {
-                        (false, precedence(rhs_op) < op_precedence)
-                    }
+                    (
+                        ty::ConstKind::Expr(ty::Expr { kind: ty::ExprKind::Binop(lhs_op), .. }),
+                        _,
+                    ) => (precedence(lhs_op) < op_precedence, false),
+                    (
+                        _,
+                        ty::ConstKind::Expr(ty::Expr { kind: ty::ExprKind::Binop(rhs_op), .. }),
+                    ) => (false, precedence(rhs_op) < op_precedence),
                     (ty::ConstKind::Expr(_), _) => (true, false),
                     (_, ty::ConstKind::Expr(_)) => (false, true),
                     _ => (false, false),
@@ -1574,7 +1563,9 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                     rhs_parenthesized,
                 )?;
             }
-            Expr::UnOp(op, ct) => {
+            ty::ExprKind::UnOp(op) => {
+                let (_, ct) = expr.unop_args();
+
                 use rustc_middle::mir::UnOp;
                 let formatted_op = match op {
                     UnOp::Not => "!",
@@ -1583,7 +1574,9 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 };
                 let parenthesized = match ct.kind() {
                     _ if op == UnOp::PtrMetadata => true,
-                    ty::ConstKind::Expr(Expr::UnOp(c_op, ..)) => c_op != op,
+                    ty::ConstKind::Expr(ty::Expr { kind: ty::ExprKind::UnOp(c_op), .. }) => {
+                        c_op != op
+                    }
                     ty::ConstKind::Expr(_) => true,
                     _ => false,
                 };
@@ -1593,61 +1586,37 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                     parenthesized,
                 )?
             }
-            Expr::FunctionCall(fn_def, fn_args) => {
-                use ty::TyKind;
-                match fn_def.ty().kind() {
-                    TyKind::FnDef(def_id, gen_args) => {
-                        p!(print_value_path(*def_id, gen_args), "(");
-                        if print_ty {
-                            let tcx = self.tcx();
-                            let sig = tcx.fn_sig(def_id).instantiate(tcx, gen_args).skip_binder();
+            ty::ExprKind::FunctionCall => {
+                let (_, fn_def, fn_args) = expr.call_args();
 
-                            let mut args_with_ty = fn_args.iter().map(|ct| (ct, ct.ty()));
-                            let output_ty = sig.output();
-
-                            if let Some((ct, ty)) = args_with_ty.next() {
-                                self.typed_value(
-                                    |this| this.pretty_print_const(ct, print_ty),
-                                    |this| this.pretty_print_type(ty),
-                                    ": ",
-                                )?;
-                                for (ct, ty) in args_with_ty {
-                                    p!(", ");
-                                    self.typed_value(
-                                        |this| this.pretty_print_const(ct, print_ty),
-                                        |this| this.pretty_print_type(ty),
-                                        ": ",
-                                    )?;
-                                }
-                            }
-                            p!(write(") -> {output_ty}"));
-                        } else {
-                            p!(comma_sep(fn_args.iter()), ")");
-                        }
-                    }
-                    _ => bug!("unexpected type of fn def"),
-                }
+                write!(self, "(")?;
+                self.pretty_print_const(fn_def, print_ty)?;
+                p!(")(", comma_sep(fn_args), ")");
             }
-            Expr::Cast(kind, ct, ty) => {
+            ty::ExprKind::Cast(kind) => {
+                let (_, value, to_ty) = expr.cast_args();
+
                 use ty::abstract_const::CastKind;
                 if kind == CastKind::As || (kind == CastKind::Use && self.should_print_verbose()) {
-                    let parenthesized = match ct.kind() {
-                        ty::ConstKind::Expr(Expr::Cast(_, _, _)) => false,
+                    let parenthesized = match value.kind() {
+                        ty::ConstKind::Expr(ty::Expr {
+                            kind: ty::ExprKind::Cast { .. }, ..
+                        }) => false,
                         ty::ConstKind::Expr(_) => true,
                         _ => false,
                     };
                     self.maybe_parenthesized(
                         |this| {
                             this.typed_value(
-                                |this| this.pretty_print_const(ct, print_ty),
-                                |this| this.pretty_print_type(ty),
+                                |this| this.pretty_print_const(value, print_ty),
+                                |this| this.pretty_print_type(to_ty),
                                 " as ",
                             )
                         },
                         parenthesized,
                     )?;
                 } else {
-                    self.pretty_print_const(ct, print_ty)?
+                    self.pretty_print_const(value, print_ty)?
                 }
             }
         }
@@ -1680,7 +1649,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             ty::Ref(_, inner, _) => {
                 if let ty::Array(elem, len) = inner.kind() {
                     if let ty::Uint(ty::UintTy::U8) = elem.kind() {
-                        if let ty::ConstKind::Value(ty::ValTree::Leaf(int)) = len.kind() {
+                        if let ty::ConstKind::Value(_, ty::ValTree::Leaf(int)) = len.kind() {
                             match self.tcx().try_get_global_alloc(prov.alloc_id()) {
                                 Some(GlobalAlloc::Memory(alloc)) => {
                                     let len = int.assert_bits(self.tcx().data_layout.pointer_size);

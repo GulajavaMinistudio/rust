@@ -29,9 +29,9 @@ use rustc_errors::{Diag, DiagCtxt, ErrorGuaranteed};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_macros::extension;
 use rustc_middle::infer::canonical::{Canonical, CanonicalVarValues};
+use rustc_middle::infer::unify_key::ConstVariableOrigin;
 use rustc_middle::infer::unify_key::ConstVariableValue;
 use rustc_middle::infer::unify_key::EffectVarValue;
-use rustc_middle::infer::unify_key::{ConstVariableOrigin, ToType};
 use rustc_middle::infer::unify_key::{ConstVidKey, EffectVidKey};
 use rustc_middle::mir::interpret::{ErrorHandled, EvalToValTreeResult};
 use rustc_middle::mir::ConstraintCategory;
@@ -41,7 +41,7 @@ use rustc_middle::ty::fold::BoundVarReplacerDelegate;
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 use rustc_middle::ty::relate::RelateResult;
 use rustc_middle::ty::visit::TypeVisitableExt;
-use rustc_middle::ty::{self, GenericParamDefKind, InferConst, InferTy, Ty, TyCtxt};
+use rustc_middle::ty::{self, GenericParamDefKind, InferConst, Ty, TyCtxt};
 use rustc_middle::ty::{ConstVid, EffectVid, FloatVid, IntVid, TyVid};
 use rustc_middle::ty::{GenericArg, GenericArgKind, GenericArgs, GenericArgsRef};
 use rustc_middle::{bug, span_bug};
@@ -392,18 +392,18 @@ impl<'tcx> ty::InferCtxtLike for InferCtxt<'tcx> {
         self.opportunistic_resolve_float_var(vid)
     }
 
-    fn opportunistic_resolve_ct_var(&self, vid: ConstVid, ty: Ty<'tcx>) -> ty::Const<'tcx> {
+    fn opportunistic_resolve_ct_var(&self, vid: ConstVid) -> ty::Const<'tcx> {
         match self.probe_const_var(vid) {
             Ok(ct) => ct,
-            Err(_) => ty::Const::new_var(self.tcx, self.root_const_var(vid), ty),
+            Err(_) => ty::Const::new_var(self.tcx, self.root_const_var(vid)),
         }
     }
 
-    fn opportunistic_resolve_effect_var(&self, vid: EffectVid, ty: Ty<'tcx>) -> ty::Const<'tcx> {
+    fn opportunistic_resolve_effect_var(&self, vid: EffectVid) -> ty::Const<'tcx> {
         match self.probe_effect_var(vid) {
             Some(ct) => ct,
             None => {
-                ty::Const::new_infer(self.tcx, InferConst::EffectVar(self.root_effect_var(vid)), ty)
+                ty::Const::new_infer(self.tcx, InferConst::EffectVar(self.root_effect_var(vid)))
             }
         }
     }
@@ -424,8 +424,8 @@ pub enum ValuePairs<'tcx> {
 impl<'tcx> ValuePairs<'tcx> {
     pub fn ty(&self) -> Option<(Ty<'tcx>, Ty<'tcx>)> {
         if let ValuePairs::Terms(ExpectedFound { expected, found }) = self
-            && let Some(expected) = expected.ty()
-            && let Some(found) = found.ty()
+            && let Some(expected) = expected.as_type()
+            && let Some(found) = found.as_type()
         {
             Some((expected, found))
         } else {
@@ -587,6 +587,7 @@ pub enum FixupError {
     UnresolvedFloatTy(FloatVid),
     UnresolvedTy(TyVid),
     UnresolvedConst(ConstVid),
+    UnresolvedEffect(EffectVid),
 }
 
 /// See the `region_obligations` field for more information.
@@ -614,6 +615,7 @@ impl fmt::Display for FixupError {
             ),
             UnresolvedTy(_) => write!(f, "unconstrained type"),
             UnresolvedConst(_) => write!(f, "unconstrained const value"),
+            UnresolvedEffect(_) => write!(f, "unconstrained effect value"),
         }
     }
 }
@@ -811,13 +813,13 @@ impl<'tcx> InferCtxt<'tcx> {
         vars.extend(
             (0..inner.int_unification_table().len())
                 .map(|i| ty::IntVid::from_u32(i as u32))
-                .filter(|&vid| inner.int_unification_table().probe_value(vid).is_none())
+                .filter(|&vid| inner.int_unification_table().probe_value(vid).is_unknown())
                 .map(|v| Ty::new_int_var(self.tcx, v)),
         );
         vars.extend(
             (0..inner.float_unification_table().len())
                 .map(|i| ty::FloatVid::from_u32(i as u32))
-                .filter(|&vid| inner.float_unification_table().probe_value(vid).is_none())
+                .filter(|&vid| inner.float_unification_table().probe_value(vid).is_unknown())
                 .map(|v| Ty::new_float_var(self.tcx, v)),
         );
         vars
@@ -830,9 +832,7 @@ impl<'tcx> InferCtxt<'tcx> {
         (0..table.len())
             .map(|i| ty::EffectVid::from_usize(i))
             .filter(|&vid| table.probe_value(vid).is_unknown())
-            .map(|v| {
-                ty::Const::new_infer(self.tcx, ty::InferConst::EffectVar(v), self.tcx.types.bool)
-            })
+            .map(|v| ty::Const::new_infer(self.tcx, ty::InferConst::EffectVar(v)))
             .collect()
     }
 
@@ -991,27 +991,22 @@ impl<'tcx> InferCtxt<'tcx> {
         Ty::new_var(self.tcx, vid)
     }
 
-    pub fn next_const_var(&self, ty: Ty<'tcx>, span: Span) -> ty::Const<'tcx> {
-        self.next_const_var_with_origin(ty, ConstVariableOrigin { span, param_def_id: None })
+    pub fn next_const_var(&self, span: Span) -> ty::Const<'tcx> {
+        self.next_const_var_with_origin(ConstVariableOrigin { span, param_def_id: None })
     }
 
-    pub fn next_const_var_with_origin(
-        &self,
-        ty: Ty<'tcx>,
-        origin: ConstVariableOrigin,
-    ) -> ty::Const<'tcx> {
+    pub fn next_const_var_with_origin(&self, origin: ConstVariableOrigin) -> ty::Const<'tcx> {
         let vid = self
             .inner
             .borrow_mut()
             .const_unification_table()
             .new_key(ConstVariableValue::Unknown { origin, universe: self.universe() })
             .vid;
-        ty::Const::new_var(self.tcx, vid, ty)
+        ty::Const::new_var(self.tcx, vid)
     }
 
     pub fn next_const_var_in_universe(
         &self,
-        ty: Ty<'tcx>,
         span: Span,
         universe: ty::UniverseIndex,
     ) -> ty::Const<'tcx> {
@@ -1022,17 +1017,31 @@ impl<'tcx> InferCtxt<'tcx> {
             .const_unification_table()
             .new_key(ConstVariableValue::Unknown { origin, universe })
             .vid;
-        ty::Const::new_var(self.tcx, vid, ty)
+        ty::Const::new_var(self.tcx, vid)
+    }
+
+    pub fn next_const_var_id(&self, origin: ConstVariableOrigin) -> ConstVid {
+        self.inner
+            .borrow_mut()
+            .const_unification_table()
+            .new_key(ConstVariableValue::Unknown { origin, universe: self.universe() })
+            .vid
+    }
+
+    fn next_int_var_id(&self) -> IntVid {
+        self.inner.borrow_mut().int_unification_table().new_key(ty::IntVarValue::Unknown)
     }
 
     pub fn next_int_var(&self) -> Ty<'tcx> {
-        let vid = self.inner.borrow_mut().int_unification_table().new_key(None);
-        Ty::new_int_var(self.tcx, vid)
+        Ty::new_int_var(self.tcx, self.next_int_var_id())
+    }
+
+    fn next_float_var_id(&self) -> FloatVid {
+        self.inner.borrow_mut().float_unification_table().new_key(ty::FloatVarValue::Unknown)
     }
 
     pub fn next_float_var(&self) -> Ty<'tcx> {
-        let vid = self.inner.borrow_mut().float_unification_table().new_key(None);
-        Ty::new_float_var(self.tcx, vid)
+        Ty::new_float_var(self.tcx, self.next_float_var_id())
     }
 
     /// Creates a fresh region variable with the next available index.
@@ -1119,15 +1128,7 @@ impl<'tcx> InferCtxt<'tcx> {
                     .const_unification_table()
                     .new_key(ConstVariableValue::Unknown { origin, universe: self.universe() })
                     .vid;
-                ty::Const::new_var(
-                    self.tcx,
-                    const_var_id,
-                    self.tcx
-                        .type_of(param.def_id)
-                        .no_bound_vars()
-                        .expect("const parameter types cannot be generic"),
-                )
-                .into()
+                ty::Const::new_var(self.tcx, const_var_id).into()
             }
         }
     }
@@ -1141,7 +1142,7 @@ impl<'tcx> InferCtxt<'tcx> {
             .no_bound_vars()
             .expect("const parameter types cannot be generic");
         debug_assert_eq!(self.tcx.types.bool, ty);
-        ty::Const::new_infer(self.tcx, ty::InferConst::EffectVar(effect_vid), ty).into()
+        ty::Const::new_infer(self.tcx, ty::InferConst::EffectVar(effect_vid)).into()
     }
 
     /// Given a set of generics defined on a type or impl, returns the generic parameters mapping each
@@ -1234,45 +1235,44 @@ impl<'tcx> InferCtxt<'tcx> {
     }
 
     pub fn shallow_resolve(&self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        if let ty::Infer(v) = ty.kind() { self.fold_infer_ty(*v).unwrap_or(ty) } else { ty }
-    }
+        if let ty::Infer(v) = *ty.kind() {
+            match v {
+                ty::TyVar(v) => {
+                    // Not entirely obvious: if `typ` is a type variable,
+                    // it can be resolved to an int/float variable, which
+                    // can then be recursively resolved, hence the
+                    // recursion. Note though that we prevent type
+                    // variables from unifying to other type variables
+                    // directly (though they may be embedded
+                    // structurally), and we prevent cycles in any case,
+                    // so this recursion should always be of very limited
+                    // depth.
+                    //
+                    // Note: if these two lines are combined into one we get
+                    // dynamic borrow errors on `self.inner`.
+                    let known = self.inner.borrow_mut().type_variables().probe(v).known();
+                    known.map_or(ty, |t| self.shallow_resolve(t))
+                }
 
-    // This is separate from `shallow_resolve` to keep that method small and inlinable.
-    #[inline(never)]
-    fn fold_infer_ty(&self, v: InferTy) -> Option<Ty<'tcx>> {
-        match v {
-            ty::TyVar(v) => {
-                // Not entirely obvious: if `typ` is a type variable,
-                // it can be resolved to an int/float variable, which
-                // can then be recursively resolved, hence the
-                // recursion. Note though that we prevent type
-                // variables from unifying to other type variables
-                // directly (though they may be embedded
-                // structurally), and we prevent cycles in any case,
-                // so this recursion should always be of very limited
-                // depth.
-                //
-                // Note: if these two lines are combined into one we get
-                // dynamic borrow errors on `self.inner`.
-                let known = self.inner.borrow_mut().type_variables().probe(v).known();
-                known.map(|t| self.shallow_resolve(t))
+                ty::IntVar(v) => {
+                    match self.inner.borrow_mut().int_unification_table().probe_value(v) {
+                        ty::IntVarValue::IntType(ty) => Ty::new_int(self.tcx, ty),
+                        ty::IntVarValue::UintType(ty) => Ty::new_uint(self.tcx, ty),
+                        ty::IntVarValue::Unknown => ty,
+                    }
+                }
+
+                ty::FloatVar(v) => {
+                    match self.inner.borrow_mut().float_unification_table().probe_value(v) {
+                        ty::FloatVarValue::Known(ty) => Ty::new_float(self.tcx, ty),
+                        ty::FloatVarValue::Unknown => ty,
+                    }
+                }
+
+                ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_) => ty,
             }
-
-            ty::IntVar(v) => self
-                .inner
-                .borrow_mut()
-                .int_unification_table()
-                .probe_value(v)
-                .map(|v| v.to_type(self.tcx)),
-
-            ty::FloatVar(v) => self
-                .inner
-                .borrow_mut()
-                .float_unification_table()
-                .probe_value(v)
-                .map(|v| v.to_type(self.tcx)),
-
-            ty::FreshTy(_) | ty::FreshIntTy(_) | ty::FreshFloatTy(_) => None,
+        } else {
+            ty
         }
     }
 
@@ -1299,7 +1299,7 @@ impl<'tcx> InferCtxt<'tcx> {
             | ty::ConstKind::Bound(_, _)
             | ty::ConstKind::Placeholder(_)
             | ty::ConstKind::Unevaluated(_)
-            | ty::ConstKind::Value(_)
+            | ty::ConstKind::Value(_, _)
             | ty::ConstKind::Error(_)
             | ty::ConstKind::Expr(_) => ct,
         }
@@ -1321,10 +1321,13 @@ impl<'tcx> InferCtxt<'tcx> {
     /// or else the root int var in the unification table.
     pub fn opportunistic_resolve_int_var(&self, vid: ty::IntVid) -> Ty<'tcx> {
         let mut inner = self.inner.borrow_mut();
-        if let Some(value) = inner.int_unification_table().probe_value(vid) {
-            value.to_type(self.tcx)
-        } else {
-            Ty::new_int_var(self.tcx, inner.int_unification_table().find(vid))
+        let value = inner.int_unification_table().probe_value(vid);
+        match value {
+            ty::IntVarValue::IntType(ty) => Ty::new_int(self.tcx, ty),
+            ty::IntVarValue::UintType(ty) => Ty::new_uint(self.tcx, ty),
+            ty::IntVarValue::Unknown => {
+                Ty::new_int_var(self.tcx, inner.int_unification_table().find(vid))
+            }
         }
     }
 
@@ -1332,10 +1335,12 @@ impl<'tcx> InferCtxt<'tcx> {
     /// or else the root float var in the unification table.
     pub fn opportunistic_resolve_float_var(&self, vid: ty::FloatVid) -> Ty<'tcx> {
         let mut inner = self.inner.borrow_mut();
-        if let Some(value) = inner.float_unification_table().probe_value(vid) {
-            value.to_type(self.tcx)
-        } else {
-            Ty::new_float_var(self.tcx, inner.float_unification_table().find(vid))
+        let value = inner.float_unification_table().probe_value(vid);
+        match value {
+            ty::FloatVarValue::Known(ty) => Ty::new_float(self.tcx, ty),
+            ty::FloatVarValue::Unknown => {
+                Ty::new_float_var(self.tcx, inner.float_unification_table().find(vid))
+            }
         }
     }
 
@@ -1449,10 +1454,10 @@ impl<'tcx> InferCtxt<'tcx> {
                     .or_insert_with(|| self.infcx.next_ty_var(self.span).into())
                     .expect_ty()
             }
-            fn replace_const(&mut self, bv: ty::BoundVar, ty: Ty<'tcx>) -> ty::Const<'tcx> {
+            fn replace_const(&mut self, bv: ty::BoundVar) -> ty::Const<'tcx> {
                 self.map
                     .entry(bv)
-                    .or_insert_with(|| self.infcx.next_const_var(ty, self.span).into())
+                    .or_insert_with(|| self.infcx.next_const_var(self.span).into())
                     .expect_const()
             }
         }
@@ -1506,11 +1511,14 @@ impl<'tcx> InferCtxt<'tcx> {
         &self,
         param_env: ty::ParamEnv<'tcx>,
         unevaluated: ty::UnevaluatedConst<'tcx>,
-        ty: Ty<'tcx>,
         span: Span,
     ) -> Result<ty::Const<'tcx>, ErrorHandled> {
         match self.const_eval_resolve(param_env, unevaluated, span) {
-            Ok(Some(val)) => Ok(ty::Const::new_value(self.tcx, val, ty)),
+            Ok(Some(val)) => Ok(ty::Const::new_value(
+                self.tcx,
+                val,
+                self.tcx.type_of(unevaluated.def).instantiate(self.tcx, unevaluated.args),
+            )),
             Ok(None) => {
                 let tcx = self.tcx;
                 let def_id = unevaluated.def;
@@ -1626,7 +1634,7 @@ impl<'tcx> InferCtxt<'tcx> {
                 // If `inlined_probe_value` returns a value it's always a
                 // `ty::Int(_)` or `ty::UInt(_)`, which never matches a
                 // `ty::Infer(_)`.
-                self.inner.borrow_mut().int_unification_table().inlined_probe_value(v).is_some()
+                self.inner.borrow_mut().int_unification_table().inlined_probe_value(v).is_known()
             }
 
             TyOrConstInferVar::TyFloat(v) => {
@@ -1634,7 +1642,7 @@ impl<'tcx> InferCtxt<'tcx> {
                 // `ty::Float(_)`, which never matches a `ty::Infer(_)`.
                 //
                 // Not `inlined_probe_value(v)` because this call site is colder.
-                self.inner.borrow_mut().float_unification_table().probe_value(v).is_some()
+                self.inner.borrow_mut().float_unification_table().probe_value(v).is_known()
             }
 
             TyOrConstInferVar::Const(v) => {
@@ -1944,11 +1952,6 @@ fn replace_param_and_infer_args_with_placeholder<'tcx>(
 
         fn fold_const(&mut self, c: ty::Const<'tcx>) -> ty::Const<'tcx> {
             if let ty::ConstKind::Infer(_) = c.kind() {
-                let ty = c.ty();
-                // If the type references param or infer then ICE ICE ICE
-                if ty.has_non_region_param() || ty.has_non_region_infer() {
-                    bug!("const `{c}`'s type should not reference params or types");
-                }
                 ty::Const::new_placeholder(
                     self.tcx,
                     ty::PlaceholderConst {
@@ -1959,7 +1962,6 @@ fn replace_param_and_infer_args_with_placeholder<'tcx>(
                             idx
                         }),
                     },
-                    ty,
                 )
             } else {
                 c.super_fold_with(self)

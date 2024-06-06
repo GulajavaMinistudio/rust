@@ -177,8 +177,6 @@ declare_features! (
 
     /// Allows using the `unadjusted` ABI; perma-unstable.
     (internal, abi_unadjusted, "1.16.0", None),
-    /// Allows using the `vectorcall` ABI.
-    (unstable, abi_vectorcall, "1.7.0", None),
     /// Allows using `#![needs_allocator]`, an implementation detail of `#[global_allocator]`.
     (internal, allocator_internals, "1.20.0", None),
     /// Allows using `#[allow_internal_unsafe]`. This is an
@@ -243,6 +241,8 @@ declare_features! (
     // feature-group-start: internal feature gates
     // -------------------------------------------------------------------------
 
+    /// Allows using the `vectorcall` ABI.
+    (unstable, abi_vectorcall, "1.7.0", Some(124485)),
     /// Allows features specific to auto traits.
     /// Renamed from `optin_builtin_traits`.
     (unstable, auto_traits, "1.50.0", Some(13231)),
@@ -529,8 +529,6 @@ declare_features! (
     (unstable, more_qualified_paths, "1.54.0", Some(86935)),
     /// Allows the `#[must_not_suspend]` attribute.
     (unstable, must_not_suspend, "1.57.0", Some(83310)),
-    /// Make `mut` not reset the binding mode on edition >= 2024.
-    (incomplete, mut_preserve_binding_mode_2024, "1.79.0", Some(123076)),
     /// Allows `mut ref` and `mut ref mut` identifier patterns.
     (incomplete, mut_ref, "1.79.0", Some(123076)),
     /// Allows using `#[naked]` on functions.
@@ -573,8 +571,6 @@ declare_features! (
     (unstable, raw_ref_op, "1.41.0", Some(64490)),
     /// Makes `&` and `&mut` patterns eat only one layer of references in Rust 2024.
     (incomplete, ref_pat_eat_one_layer_2024, "1.79.0", Some(123076)),
-    /// Allows `&` and `&mut` patterns to consume match-ergonomics-inserted references.
-    (incomplete, ref_pat_everywhere, "1.79.0", Some(123076)),
     /// Allows using the `#[register_tool]` attribute.
     (unstable, register_tool, "1.41.0", Some(66079)),
     /// Allows the `#[repr(i128)]` attribute for enums.

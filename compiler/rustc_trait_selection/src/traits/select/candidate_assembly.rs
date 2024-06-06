@@ -921,6 +921,12 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         param_env: ty::ParamEnv<'tcx>,
         cause: &ObligationCause<'tcx>,
     ) -> Option<ty::PolyExistentialTraitRef<'tcx>> {
+        // Don't drop any candidates in intercrate mode, as it's incomplete.
+        // (Not that it matters, since `Unsize` is not a stable trait.)
+        if self.infcx.intercrate {
+            return None;
+        }
+
         let tcx = self.tcx();
         if tcx.features().trait_upcasting {
             return None;
@@ -946,7 +952,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 // since we don't actually use them.
                 &mut vec![],
             )
-            .ty()
+            .as_type()
             .unwrap();
 
             if let ty::Dynamic(data, ..) = ty.kind() { data.principal() } else { None }

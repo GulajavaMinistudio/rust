@@ -414,7 +414,6 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     ty::PredicateKind::Clause(ty::ClauseKind::Trait(trait_predicate)) => {
                         let trait_predicate = bound_predicate.rebind(trait_predicate);
                         let trait_predicate = self.resolve_vars_if_possible(trait_predicate);
-                        let trait_predicate = self.apply_do_not_recommend(trait_predicate, &mut obligation);
 
                         // Let's use the root obligation as the main message, when we care about the
                         // most general case ("X doesn't implement Pattern<'_>") over the case that
@@ -877,55 +876,24 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                         }
                     }
 
-                    ty::PredicateKind::Clause(ty::ClauseKind::ConstEvaluatable(..)) => {
-                        // Errors for `ConstEvaluatable` predicates show up as
-                        // `SelectionError::ConstEvalFailure`,
-                        // not `Unimplemented`.
+                    // Errors for `ConstEvaluatable` predicates show up as
+                    // `SelectionError::ConstEvalFailure`,
+                    // not `Unimplemented`.
+                    ty::PredicateKind::Clause(ty::ClauseKind::ConstEvaluatable(..))
+                    // Errors for `ConstEquate` predicates show up as
+                    // `SelectionError::ConstEvalFailure`,
+                    // not `Unimplemented`.
+                    | ty::PredicateKind::ConstEquate { .. }
+                    // Ambiguous predicates should never error
+                    | ty::PredicateKind::Ambiguous
+                    | ty::PredicateKind::NormalizesTo { .. }
+                    | ty::PredicateKind::AliasRelate { .. }
+                    | ty::PredicateKind::Clause(ty::ClauseKind::ConstArgHasType { .. }) => {
                         span_bug!(
                             span,
-                            "const-evaluatable requirement gave wrong error: `{:?}`",
+                            "Unexpected `Predicate` for `SelectionError`: `{:?}`",
                             obligation
                         )
-                    }
-
-                    ty::PredicateKind::ConstEquate(..) => {
-                        // Errors for `ConstEquate` predicates show up as
-                        // `SelectionError::ConstEvalFailure`,
-                        // not `Unimplemented`.
-                        span_bug!(
-                            span,
-                            "const-equate requirement gave wrong error: `{:?}`",
-                            obligation
-                        )
-                    }
-
-                    ty::PredicateKind::Ambiguous => span_bug!(span, "ambiguous"),
-
-                    ty::PredicateKind::NormalizesTo(..) => span_bug!(
-                        span,
-                        "NormalizesTo predicate should never be the predicate cause of a SelectionError"
-                    ),
-
-                    ty::PredicateKind::AliasRelate(..) => span_bug!(
-                        span,
-                        "AliasRelate predicate should never be the predicate cause of a SelectionError"
-                    ),
-
-                    ty::PredicateKind::Clause(ty::ClauseKind::ConstArgHasType(ct, ty)) => {
-                        let mut diag = self.dcx().struct_span_err(
-                            span,
-                            format!("the constant `{ct}` is not of type `{ty}`"),
-                        );
-                        self.note_type_err(
-                            &mut diag,
-                            &obligation.cause,
-                            None,
-                            None,
-                            TypeError::Sorts(ty::error::ExpectedFound::new(true, ty, ct.ty())),
-                            false,
-                            false,
-                        );
-                        diag
                     }
                 }
             }
@@ -989,6 +957,24 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             Overflow(_) => {
                 bug!("overflow should be handled before the `report_selection_error` path");
             }
+
+            SelectionError::ConstArgHasWrongType { ct, ct_ty, expected_ty } => {
+                let mut diag = self.dcx().struct_span_err(
+                    span,
+                    format!("the constant `{ct}` is not of type `{expected_ty}`"),
+                );
+
+                self.note_type_err(
+                    &mut diag,
+                    &obligation.cause,
+                    None,
+                    None,
+                    TypeError::Sorts(ty::error::ExpectedFound::new(true, expected_ty, ct_ty)),
+                    false,
+                    false,
+                );
+                diag
+            }
         };
 
         self.note_obligation_cause(&mut err, &obligation);
@@ -996,12 +982,9 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
         err.emit()
     }
 
-    fn apply_do_not_recommend(
-        &self,
-        mut trait_predicate: ty::Binder<'tcx, ty::TraitPredicate<'tcx>>,
-        obligation: &'_ mut PredicateObligation<'tcx>,
-    ) -> ty::Binder<'tcx, ty::TraitPredicate<'tcx>> {
+    fn apply_do_not_recommend(&self, obligation: &mut PredicateObligation<'tcx>) -> bool {
         let mut base_cause = obligation.cause.code().clone();
+        let mut applied_do_not_recommend = false;
         loop {
             if let ObligationCauseCode::ImplDerived(ref c) = base_cause {
                 if self.tcx.has_attrs_with_path(
@@ -1011,7 +994,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     let code = (*c.derived.parent_code).clone();
                     obligation.cause.map_code(|_| code);
                     obligation.predicate = c.derived.parent_trait_pred.upcast(self.tcx);
-                    trait_predicate = c.derived.parent_trait_pred.clone();
+                    applied_do_not_recommend = true;
                 }
             }
             if let Some((parent_cause, _parent_pred)) = base_cause.parent() {
@@ -1021,7 +1004,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             }
         }
 
-        trait_predicate
+        applied_do_not_recommend
     }
 
     fn emit_specialized_closure_kind_error(
@@ -1521,6 +1504,20 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
 
     #[instrument(skip(self), level = "debug")]
     fn report_fulfillment_error(&self, error: &FulfillmentError<'tcx>) -> ErrorGuaranteed {
+        let mut error = FulfillmentError {
+            obligation: error.obligation.clone(),
+            code: error.code.clone(),
+            root_obligation: error.root_obligation.clone(),
+        };
+        if matches!(
+            error.code,
+            FulfillmentErrorCode::Select(crate::traits::SelectionError::Unimplemented)
+                | FulfillmentErrorCode::Project(_)
+        ) && self.apply_do_not_recommend(&mut error.obligation)
+        {
+            error.code = FulfillmentErrorCode::Select(SelectionError::Unimplemented);
+        }
+
         match error.code {
             FulfillmentErrorCode::Select(ref selection_error) => self.report_selection_error(
                 error.obligation.clone(),

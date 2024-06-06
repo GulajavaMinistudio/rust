@@ -2198,9 +2198,6 @@ fn param_env_with_gat_bounds<'tcx>(
                         tcx,
                         ty::INNERMOST,
                         ty::BoundVar::from_usize(bound_vars.len() - 1),
-                        tcx.type_of(param.def_id)
-                            .no_bound_vars()
-                            .expect("const parameter types cannot be generic"),
                     )
                     .into()
                 }
@@ -2281,7 +2278,7 @@ fn try_report_async_mismatch<'tcx>(
             && let Some(proj) = proj.no_bound_vars()
             && infcx.can_eq(
                 error.root_obligation.param_env,
-                proj.term.ty().unwrap(),
+                proj.term.expect_type(),
                 impl_sig.output(),
             )
         {
