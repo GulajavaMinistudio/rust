@@ -202,6 +202,9 @@ pub(super) fn decorate_lint(sess: &Session, diagnostic: BuiltinLintDiag, diag: &
             };
             lints::DeprecatedWhereClauseLocation { suggestion }.decorate_lint(diag);
         }
+        BuiltinLintDiag::MissingUnsafeOnExtern { suggestion } => {
+            lints::MissingUnsafeOnExtern { suggestion }.decorate_lint(diag);
+        }
         BuiltinLintDiag::SingleUseLifetime {
             param_span,
             use_span: Some((use_span, elide)),
@@ -337,8 +340,9 @@ pub(super) fn decorate_lint(sess: &Session, diagnostic: BuiltinLintDiag, diag: &
             lints::MacroUseDeprecated.decorate_lint(diag);
         }
         BuiltinLintDiag::UnusedMacroUse => lints::UnusedMacroUse.decorate_lint(diag),
-        BuiltinLintDiag::PrivateExternCrateReexport(ident) => {
-            lints::PrivateExternCrateReexport { ident }.decorate_lint(diag);
+        BuiltinLintDiag::PrivateExternCrateReexport { source: ident, extern_crate_span } => {
+            lints::PrivateExternCrateReexport { ident, sugg: extern_crate_span.shrink_to_lo() }
+                .decorate_lint(diag);
         }
         BuiltinLintDiag::UnusedLabel => lints::UnusedLabel.decorate_lint(diag),
         BuiltinLintDiag::MacroIsPrivate(ident) => {

@@ -15,6 +15,7 @@ use rustc_lint_defs::builtin::REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS;
 use rustc_middle::middle::resolve_bound_vars::ResolvedArg;
 use rustc_middle::middle::stability::EvalResult;
 use rustc_middle::span_bug;
+use rustc_middle::ty::error::TypeErrorToStringExt;
 use rustc_middle::ty::fold::BottomUpFolder;
 use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::util::{Discr, InspectCoroutineFields, IntTypeExt};
@@ -801,7 +802,7 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 
                         let item = tcx.hir().foreign_item(item.id);
                         match &item.kind {
-                            hir::ForeignItemKind::Fn(fn_decl, _, _) => {
+                            hir::ForeignItemKind::Fn(fn_decl, _, _, _) => {
                                 require_c_abi_if_c_variadic(tcx, fn_decl, abi, item.span);
                             }
                             hir::ForeignItemKind::Static(..) => {

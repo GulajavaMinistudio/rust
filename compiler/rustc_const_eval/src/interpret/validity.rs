@@ -653,8 +653,8 @@ impl<'rt, 'tcx, M: Machine<'tcx>> ValidityVisitor<'rt, 'tcx, M> {
         let WrappingRange { start, end } = valid_range;
         let max_value = size.unsigned_int_max();
         assert!(end <= max_value);
-        let bits = match scalar.try_to_int() {
-            Ok(int) => int.assert_bits(size),
+        let bits = match scalar.try_to_scalar_int() {
+            Ok(int) => int.to_bits(size),
             Err(_) => {
                 // So this is a pointer then, and casting to an int failed.
                 // Can only happen during CTFE.
@@ -711,7 +711,9 @@ fn mutability<'tcx>(ecx: &InterpCx<'tcx, impl Machine<'tcx>>, alloc_id: AllocId)
     // We're not using `try_global_alloc` since dangling pointers have already been handled.
     match ecx.tcx.global_alloc(alloc_id) {
         GlobalAlloc::Static(did) => {
-            let DefKind::Static { mutability, nested } = ecx.tcx.def_kind(did) else { bug!() };
+            let DefKind::Static { safety: _, mutability, nested } = ecx.tcx.def_kind(did) else {
+                bug!()
+            };
             if nested {
                 assert!(
                     ecx.memory.alloc_map.get(alloc_id).is_none(),

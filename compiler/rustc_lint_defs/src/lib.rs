@@ -626,6 +626,9 @@ pub enum BuiltinLintDiag {
     UnexpectedCfgName((Symbol, Span), Option<(Symbol, Span)>),
     UnexpectedCfgValue((Symbol, Span), Option<(Symbol, Span)>),
     DeprecatedWhereclauseLocation(Span, Option<(Span, String)>),
+    MissingUnsafeOnExtern {
+        suggestion: Span,
+    },
     SingleUseLifetime {
         /// Span of the parameter which declares this lifetime.
         param_span: Span,
@@ -703,7 +706,10 @@ pub enum BuiltinLintDiag {
     },
     MacroUseDeprecated,
     UnusedMacroUse,
-    PrivateExternCrateReexport(Ident),
+    PrivateExternCrateReexport {
+        source: Ident,
+        extern_crate_span: Span,
+    },
     UnusedLabel,
     MacroIsPrivate(Ident),
     UnusedMacroDefinition(Symbol),

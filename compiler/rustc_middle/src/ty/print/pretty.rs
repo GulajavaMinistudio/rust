@@ -1652,7 +1652,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                         if let ty::ConstKind::Value(_, ty::ValTree::Leaf(int)) = len.kind() {
                             match self.tcx().try_get_global_alloc(prov.alloc_id()) {
                                 Some(GlobalAlloc::Memory(alloc)) => {
-                                    let len = int.assert_bits(self.tcx().data_layout.pointer_size);
+                                    let len = int.to_bits(self.tcx().data_layout.pointer_size);
                                     let range =
                                         AllocRange { start: offset, size: Size::from_bytes(len) };
                                     if let Ok(byte_str) =
@@ -1730,7 +1730,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             }
             // Pointer types
             ty::Ref(..) | ty::RawPtr(_, _) | ty::FnPtr(_) => {
-                let data = int.assert_bits(self.tcx().data_layout.pointer_size);
+                let data = int.to_bits(self.tcx().data_layout.pointer_size);
                 self.typed_value(
                     |this| {
                         write!(this, "0x{data:x}")?;
@@ -3232,7 +3232,7 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
     let queue = &mut Vec::new();
     let mut seen_defs: DefIdSet = Default::default();
 
-    for &cnum in tcx.crates_including_speculative(()).iter() {
+    for &cnum in tcx.crates(()).iter() {
         let def_id = cnum.as_def_id();
 
         // Ignore crates that are not direct dependencies.

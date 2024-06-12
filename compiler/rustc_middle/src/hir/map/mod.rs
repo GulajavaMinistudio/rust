@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use crate::hir::ModuleItems;
 use crate::middle::debugger_visualizer::DebuggerVisualizerFile;
 use crate::query::LocalCrate;
@@ -256,26 +254,13 @@ impl<'hir> Map<'hir> {
 
     /// Given a `LocalDefId`, returns the `BodyId` associated with it,
     /// if the node is a body owner, otherwise returns `None`.
-    pub fn maybe_body_owned_by(self, id: LocalDefId) -> Option<Cow<'hir, Body<'hir>>> {
-        Some(match self.tcx.def_kind(id) {
-            // Inline consts do not have bodies of their own, so create one to make the follow-up logic simpler.
-            DefKind::InlineConst => {
-                let e = self.expect_expr(self.tcx.local_def_id_to_hir_id(id));
-                Cow::Owned(Body {
-                    params: &[],
-                    value: match e.kind {
-                        ExprKind::ConstBlock(body) => body,
-                        _ => span_bug!(e.span, "InlineConst was not a ConstBlock: {e:#?}"),
-                    },
-                })
-            }
-            _ => Cow::Borrowed(self.body(self.tcx.hir_node_by_def_id(id).body_id()?)),
-        })
+    pub fn maybe_body_owned_by(self, id: LocalDefId) -> Option<&'hir Body<'hir>> {
+        Some(self.body(self.tcx.hir_node_by_def_id(id).body_id()?))
     }
 
     /// Given a body owner's id, returns the `BodyId` associated with it.
     #[track_caller]
-    pub fn body_owned_by(self, id: LocalDefId) -> Cow<'hir, Body<'hir>> {
+    pub fn body_owned_by(self, id: LocalDefId) -> &'hir Body<'hir> {
         self.maybe_body_owned_by(id).unwrap_or_else(|| {
             let hir_id = self.tcx.local_def_id_to_hir_id(id);
             span_bug!(
@@ -305,7 +290,9 @@ impl<'hir> Map<'hir> {
             DefKind::InlineConst => BodyOwnerKind::Const { inline: true },
             DefKind::Ctor(..) | DefKind::Fn | DefKind::AssocFn => BodyOwnerKind::Fn,
             DefKind::Closure => BodyOwnerKind::Closure,
-            DefKind::Static { mutability, nested: false } => BodyOwnerKind::Static(mutability),
+            DefKind::Static { safety: _, mutability, nested: false } => {
+                BodyOwnerKind::Static(mutability)
+            }
             dk => bug!("{:?} is not a body node: {:?}", def_id, dk),
         }
     }
@@ -336,7 +323,7 @@ impl<'hir> Map<'hir> {
 
     /// Returns an iterator of the `DefId`s for all body-owners in this
     /// crate. If you would prefer to iterate over the bodies
-    /// themselves, you can do `self.hir().krate().owners.iter()`.
+    /// themselves, you can do `self.hir().krate().body_ids.iter()`.
     #[inline]
     pub fn body_owners(self) -> impl Iterator<Item = LocalDefId> + 'hir {
         self.tcx.hir_crate_items(()).body_owners.iter().copied()
@@ -523,17 +510,7 @@ impl<'hir> Map<'hir> {
     /// Whether the expression pointed at by `hir_id` belongs to a `const` evaluation context.
     /// Used exclusively for diagnostics, to avoid suggestion function calls.
     pub fn is_inside_const_context(self, hir_id: HirId) -> bool {
-        for (_, node) in self.parent_iter(hir_id) {
-            if let Some((def_id, _)) = node.associated_body() {
-                return self.body_const_context(def_id).is_some();
-            }
-            if let Node::Expr(e) = node {
-                if let ExprKind::ConstBlock(_) = e.kind {
-                    return true;
-                }
-            }
-        }
-        false
+        self.body_const_context(self.enclosing_body_owner(hir_id)).is_some()
     }
 
     /// Retrieves the `HirId` for `id`'s enclosing function *if* the `id` block or return is
@@ -886,7 +863,7 @@ impl<'hir> Map<'hir> {
             Node::Variant(variant) => named_span(variant.span, variant.ident, None),
             Node::ImplItem(item) => named_span(item.span, item.ident, Some(item.generics)),
             Node::ForeignItem(item) => match item.kind {
-                ForeignItemKind::Fn(decl, _, _) => until_within(item.span, decl.output.span()),
+                ForeignItemKind::Fn(decl, _, _, _) => until_within(item.span, decl.output.span()),
                 _ => named_span(item.span, item.ident, None),
             },
             Node::Ctor(_) => return self.span(self.tcx.parent_hir_id(hir_id)),
@@ -916,6 +893,7 @@ impl<'hir> Map<'hir> {
             Node::Variant(variant) => variant.span,
             Node::Field(field) => field.span,
             Node::AnonConst(constant) => constant.span,
+            Node::ConstBlock(constant) => self.body(constant.body).value.span,
             Node::Expr(expr) => expr.span,
             Node::ExprField(field) => field.span,
             Node::Stmt(stmt) => stmt.span,
@@ -1040,7 +1018,7 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, _: LocalCrate) -> Svh {
     let krate = tcx.hir_crate(());
     let hir_body_hash = krate.opt_hir_hash.expect("HIR hash missing while computing crate hash");
 
-    let upstream_crates = upstream_crates_for_hashing(tcx);
+    let upstream_crates = upstream_crates(tcx);
 
     let resolutions = tcx.resolutions(());
 
@@ -1109,9 +1087,9 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, _: LocalCrate) -> Svh {
     Svh::new(crate_hash)
 }
 
-fn upstream_crates_for_hashing(tcx: TyCtxt<'_>) -> Vec<(StableCrateId, Svh)> {
+fn upstream_crates(tcx: TyCtxt<'_>) -> Vec<(StableCrateId, Svh)> {
     let mut upstream_crates: Vec<_> = tcx
-        .crates_including_speculative(())
+        .crates(())
         .iter()
         .map(|&cnum| {
             let stable_crate_id = tcx.stable_crate_id(cnum);
@@ -1185,6 +1163,7 @@ fn hir_id_to_string(map: Map<'_>, id: HirId) -> String {
             format!("{id} (field `{}` in {})", field.ident, path_str(field.def_id))
         }
         Node::AnonConst(_) => node_str("const"),
+        Node::ConstBlock(_) => node_str("const"),
         Node::Expr(_) => node_str("expr"),
         Node::ExprField(_) => node_str("expr field"),
         Node::Stmt(_) => node_str("stmt"),
@@ -1332,6 +1311,11 @@ impl<'hir> Visitor<'hir> for ItemCollector<'hir> {
     fn visit_anon_const(&mut self, c: &'hir AnonConst) {
         self.body_owners.push(c.def_id);
         intravisit::walk_anon_const(self, c)
+    }
+
+    fn visit_inline_const(&mut self, c: &'hir ConstBlock) {
+        self.body_owners.push(c.def_id);
+        intravisit::walk_inline_const(self, c)
     }
 
     fn visit_expr(&mut self, ex: &'hir Expr<'hir>) {

@@ -647,8 +647,10 @@ fn noop_visit_attribute<T: MutVisitor>(attr: &mut Attribute, vis: &mut T) {
     let Attribute { kind, id: _, style: _, span } = attr;
     match kind {
         AttrKind::Normal(normal) => {
-            let NormalAttr { item: AttrItem { path, args, tokens }, tokens: attr_tokens } =
-                &mut **normal;
+            let NormalAttr {
+                item: AttrItem { unsafety: _, path, args, tokens },
+                tokens: attr_tokens,
+            } = &mut **normal;
             vis.visit_path(path);
             visit_attr_args(args, vis);
             visit_lazy_tts(tokens, vis);
@@ -678,7 +680,7 @@ fn noop_visit_meta_list_item<T: MutVisitor>(li: &mut NestedMetaItem, vis: &mut T
 }
 
 fn noop_visit_meta_item<T: MutVisitor>(mi: &mut MetaItem, vis: &mut T) {
-    let MetaItem { path: _, kind, span } = mi;
+    let MetaItem { unsafety: _, path: _, kind, span } = mi;
     match kind {
         MetaItemKind::Word => {}
         MetaItemKind::List(mis) => visit_thin_vec(mis, |mi| vis.visit_meta_list_item(mi)),
@@ -840,7 +842,7 @@ fn visit_nonterminal<T: MutVisitor>(nt: &mut token::Nonterminal, vis: &mut T) {
         token::NtTy(ty) => vis.visit_ty(ty),
         token::NtLiteral(expr) => vis.visit_expr(expr),
         token::NtMeta(item) => {
-            let AttrItem { path, args, tokens } = item.deref_mut();
+            let AttrItem { unsafety: _, path, args, tokens } = item.deref_mut();
             vis.visit_path(path);
             visit_attr_args(args, vis);
             visit_lazy_tts(tokens, vis);
@@ -862,6 +864,7 @@ fn visit_defaultness<T: MutVisitor>(defaultness: &mut Defaultness, vis: &mut T) 
 fn visit_safety<T: MutVisitor>(safety: &mut Safety, vis: &mut T) {
     match safety {
         Safety::Unsafe(span) => vis.visit_span(span),
+        Safety::Safe(span) => vis.visit_span(span),
         Safety::Default => {}
     }
 }
@@ -1079,7 +1082,7 @@ impl NoopVisitItemKind for ItemKind {
         match self {
             ItemKind::ExternCrate(_orig_name) => {}
             ItemKind::Use(use_tree) => vis.visit_use_tree(use_tree),
-            ItemKind::Static(box StaticItem { ty, mutability: _, expr }) => {
+            ItemKind::Static(box StaticItem { ty, safety: _, mutability: _, expr }) => {
                 vis.visit_ty(ty);
                 visit_opt(expr, |expr| vis.visit_expr(expr));
             }
@@ -1289,7 +1292,12 @@ pub fn noop_flat_map_item<K: NoopVisitItemKind>(
 impl NoopVisitItemKind for ForeignItemKind {
     fn noop_visit(&mut self, visitor: &mut impl MutVisitor) {
         match self {
-            ForeignItemKind::Static(box StaticForeignItem { ty, mutability: _, expr }) => {
+            ForeignItemKind::Static(box StaticForeignItem {
+                ty,
+                mutability: _,
+                expr,
+                safety: _,
+            }) => {
                 visitor.visit_ty(ty);
                 visit_opt(expr, |expr| visitor.visit_expr(expr));
             }
@@ -1411,7 +1419,7 @@ pub fn noop_visit_expr<T: MutVisitor>(
     match kind {
         ExprKind::Array(exprs) => visit_thin_exprs(exprs, vis),
         ExprKind::ConstBlock(anon_const) => {
-            vis.visit_expr(anon_const);
+            vis.visit_anon_const(anon_const);
         }
         ExprKind::Repeat(expr, count) => {
             vis.visit_expr(expr);

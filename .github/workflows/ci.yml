@@ -38,6 +38,8 @@ concurrency:
   cancel-in-progress: true
 env:
   TOOLSTATE_REPO: "https://github.com/rust-lang-nursery/rust-toolstate"
+  # This will be empty in PR jobs.
+  TOOLSTATE_REPO_ACCESS_TOKEN: ${{ secrets.TOOLSTATE_REPO_ACCESS_TOKEN }}
 jobs:
   # The job matrix for `calculate_matrix` is defined in src/ci/github-actions/jobs.yml.
   # It calculates which jobs should be executed, based on the data of the ${{ github }} context.
@@ -154,12 +156,6 @@ jobs:
 
       - name: checkout submodules
         run: src/ci/scripts/checkout-submodules.sh
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-        if: runner.environment == 'github-hosted'
 
       - name: install MinGW
         run: src/ci/scripts/install-mingw.sh
@@ -242,6 +238,5 @@ jobs:
         shell: bash
         if: needs.calculate_matrix.outputs.run_type == 'auto'
         env:
-          TOOLSTATE_REPO_ACCESS_TOKEN: ${{ secrets.TOOLSTATE_REPO_ACCESS_TOKEN }}
           TOOLSTATE_ISSUES_API_URL: https://api.github.com/repos/rust-lang/rust/issues
           TOOLSTATE_PUBLISH: 1

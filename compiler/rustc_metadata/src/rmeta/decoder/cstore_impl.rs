@@ -314,6 +314,7 @@ provide! { tcx, def_id, other, cdata,
     extern_crate => { cdata.extern_crate.map(|c| &*tcx.arena.alloc(c)) }
     is_no_builtins => { cdata.root.no_builtins }
     symbol_mangling_version => { cdata.root.symbol_mangling_version }
+    specialization_enabled_in => { cdata.root.specialization_enabled_in }
     reachable_non_generics => {
         let reachable_non_generics = tcx
             .exported_symbols(cdata.cnum)
@@ -439,7 +440,7 @@ pub(in crate::rmeta) fn provide(providers: &mut Providers) {
             // traversal, but not globally minimal across all crates.
             let bfs_queue = &mut VecDeque::new();
 
-            for &cnum in tcx.crates_including_speculative(()) {
+            for &cnum in tcx.crates(()) {
                 // Ignore crates without a corresponding local `extern crate` item.
                 if tcx.missing_extern_crate_item(cnum) {
                     continue;
@@ -509,7 +510,7 @@ pub(in crate::rmeta) fn provide(providers: &mut Providers) {
             tcx.arena
                 .alloc_slice(&CStore::from_tcx(tcx).crate_dependencies_in_postorder(LOCAL_CRATE))
         },
-        crates_including_speculative: |tcx, ()| {
+        crates: |tcx, ()| {
             // The list of loaded crates is now frozen in query cache,
             // so make sure cstore is not mutably accessed from here on.
             tcx.untracked().cstore.freeze();

@@ -122,7 +122,6 @@ run-make/link-framework/Makefile
 run-make/link-path-order/Makefile
 run-make/linkage-attr-on-static/Makefile
 run-make/llvm-ident/Makefile
-run-make/llvm-outputs/Makefile
 run-make/long-linker-command-lines-cmd-exe/Makefile
 run-make/long-linker-command-lines/Makefile
 run-make/longjmp-across-rust/Makefile
@@ -135,7 +134,6 @@ run-make/lto-readonly-lib/Makefile
 run-make/lto-smoke-c/Makefile
 run-make/macos-deployment-target/Makefile
 run-make/macos-fat-archive/Makefile
-run-make/manual-crate-name/Makefile
 run-make/manual-link/Makefile
 run-make/many-crates-but-no-match/Makefile
 run-make/metadata-dep-info/Makefile
@@ -146,7 +144,6 @@ run-make/mismatching-target-triples/Makefile
 run-make/missing-crate-dependency/Makefile
 run-make/mixing-libs/Makefile
 run-make/msvc-opt-minsize/Makefile
-run-make/multiple-emits/Makefile
 run-make/native-link-modifier-bundle/Makefile
 run-make/native-link-modifier-verbatim-linker/Makefile
 run-make/native-link-modifier-verbatim-rustc/Makefile
@@ -178,7 +175,6 @@ run-make/pgo-gen/Makefile
 run-make/pgo-indirect-call-promotion/Makefile
 run-make/pgo-use/Makefile
 run-make/pointer-auth-link-with-c/Makefile
-run-make/prefer-dylib/Makefile
 run-make/prefer-rlib/Makefile
 run-make/pretty-print-to-file/Makefile
 run-make/pretty-print-with-dep-file/Makefile

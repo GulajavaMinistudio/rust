@@ -741,6 +741,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 expn_data,
                 expn_hashes,
                 def_path_hash_map,
+                specialization_enabled_in: tcx.specialization_enabled_in(LOCAL_CRATE),
             })
         });
 
@@ -1899,7 +1900,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
         let deps = self
             .tcx
-            .crates_including_speculative(())
+            .crates(())
             .iter()
             .map(|&cnum| {
                 let dep = CrateDep {

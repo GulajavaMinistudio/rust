@@ -488,6 +488,7 @@ pub struct Crate {
 /// E.g., `#[test]`, `#[derive(..)]`, `#[rustfmt::skip]` or `#[feature = "foo"]`.
 #[derive(Clone, Encodable, Decodable, Debug, HashStable_Generic)]
 pub struct MetaItem {
+    pub unsafety: Safety,
     pub path: Path,
     pub kind: MetaItemKind,
     pub span: Span,
@@ -1392,7 +1393,7 @@ pub enum ExprKind {
     /// An array (e.g, `[a, b, c, d]`).
     Array(ThinVec<P<Expr>>),
     /// Allow anonymous constants from an inline `const` block
-    ConstBlock(P<Expr>),
+    ConstBlock(AnonConst),
     /// A function call
     ///
     /// The first field resolves to the function itself,
@@ -2501,6 +2502,8 @@ pub enum IsAuto {
 pub enum Safety {
     /// `unsafe` an item is explicitly marked as `unsafe`.
     Unsafe(Span),
+    /// `safe` an item is explicitly marked as `safe`.
+    Safe(Span),
     /// Default means no value was provided, it will take a default value given the context in
     /// which is used.
     Default,
@@ -2821,7 +2824,12 @@ pub struct NormalAttr {
 impl NormalAttr {
     pub fn from_ident(ident: Ident) -> Self {
         Self {
-            item: AttrItem { path: Path::from_ident(ident), args: AttrArgs::Empty, tokens: None },
+            item: AttrItem {
+                unsafety: Safety::Default,
+                path: Path::from_ident(ident),
+                args: AttrArgs::Empty,
+                tokens: None,
+            },
             tokens: None,
         }
     }
@@ -2829,6 +2837,7 @@ impl NormalAttr {
 
 #[derive(Clone, Encodable, Decodable, Debug, HashStable_Generic)]
 pub struct AttrItem {
+    pub unsafety: Safety,
     pub path: Path,
     pub args: AttrArgs,
     // Tokens for the meta item, e.g. just the `foo` within `#[foo]` or `#![foo]`.
@@ -3162,6 +3171,7 @@ pub struct DelegationMac {
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct StaticItem {
     pub ty: P<Ty>,
+    pub safety: Safety,
     pub mutability: Mutability,
     pub expr: Option<P<Expr>>,
 }
@@ -3171,6 +3181,7 @@ pub struct StaticItem {
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct StaticForeignItem {
     pub ty: P<Ty>,
+    pub safety: Safety,
     pub mutability: Mutability,
     pub expr: Option<P<Expr>>,
 }
@@ -3179,6 +3190,7 @@ impl From<StaticItem> for StaticForeignItem {
     fn from(static_item: StaticItem) -> StaticForeignItem {
         StaticForeignItem {
             ty: static_item.ty,
+            safety: static_item.safety,
             mutability: static_item.mutability,
             expr: static_item.expr,
         }
@@ -3189,6 +3201,7 @@ impl From<StaticForeignItem> for StaticItem {
     fn from(static_item: StaticForeignItem) -> StaticItem {
         StaticItem {
             ty: static_item.ty,
+            safety: static_item.safety,
             mutability: static_item.mutability,
             expr: static_item.expr,
         }

@@ -26,6 +26,7 @@
 #![feature(trait_alias)]
 #![feature(try_blocks)]
 #![feature(unnamed_fields)]
+#![feature(unsafe_extern_blocks)]
 #![feature(yeet_expr)]
 #![allow(incomplete_features)]
 #[prelude_import]
@@ -82,8 +83,7 @@ mod expressions {
     fn expr_const_block() {
         const {};
         const { 1 };
-        const
-            {
+        const {
                 struct S;
             };
     }
@@ -451,8 +451,8 @@ mod items {
     mod item_mod { }
     /// ItemKind::ForeignMod
     mod item_foreign_mod {
-        extern "C++" {}
-        extern {}
+        unsafe extern "C++" {}
+        unsafe extern {}
     }
     /// ItemKind::GlobalAsm
     mod item_global_asm {

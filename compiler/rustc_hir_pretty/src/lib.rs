@@ -84,6 +84,7 @@ impl<'a> State<'a> {
             Node::ImplItem(a) => self.print_impl_item(a),
             Node::Variant(a) => self.print_variant(a),
             Node::AnonConst(a) => self.print_anon_const(a),
+            Node::ConstBlock(a) => self.print_inline_const(a),
             Node::Expr(a) => self.print_expr(a),
             Node::ExprField(a) => self.print_expr_field(a),
             Node::Stmt(a) => self.print_stmt(a),
@@ -345,12 +346,12 @@ impl<'a> State<'a> {
         self.maybe_print_comment(item.span.lo());
         self.print_outer_attributes(self.attrs(item.hir_id()));
         match item.kind {
-            hir::ForeignItemKind::Fn(decl, arg_names, generics) => {
+            hir::ForeignItemKind::Fn(decl, arg_names, generics, safety) => {
                 self.head("");
                 self.print_fn(
                     decl,
                     hir::FnHeader {
-                        safety: hir::Safety::Safe,
+                        safety,
                         constness: hir::Constness::NotConst,
                         abi: Abi::Rust,
                         asyncness: hir::IsAsync::NotAsync,
@@ -364,7 +365,8 @@ impl<'a> State<'a> {
                 self.word(";");
                 self.end() // end the outer fn box
             }
-            hir::ForeignItemKind::Static(t, m) => {
+            hir::ForeignItemKind::Static(t, m, safety) => {
+                self.print_safety(safety);
                 self.head("static");
                 if m.is_mut() {
                     self.word_space("mut");
@@ -1048,10 +1050,10 @@ impl<'a> State<'a> {
         self.end()
     }
 
-    fn print_inline_const(&mut self, constant: &hir::Expr<'_>) {
+    fn print_inline_const(&mut self, constant: &hir::ConstBlock) {
         self.ibox(INDENT_UNIT);
         self.word_space("const");
-        self.print_expr(constant);
+        self.ann.nested(self, Nested::Body(constant.body));
         self.end()
     }
 
