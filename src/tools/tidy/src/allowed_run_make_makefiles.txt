@@ -168,14 +168,12 @@ run-make/pass-linker-flags/Makefile
 run-make/pass-non-c-like-enum-to-c/Makefile
 run-make/pdb-alt-path/Makefile
 run-make/pdb-buildinfo-cl-cmd/Makefile
-run-make/pgo-branch-weights/Makefile
 run-make/pgo-gen-lto/Makefile
 run-make/pgo-gen-no-imp-symbols/Makefile
 run-make/pgo-gen/Makefile
 run-make/pgo-indirect-call-promotion/Makefile
 run-make/pgo-use/Makefile
 run-make/pointer-auth-link-with-c/Makefile
-run-make/prefer-rlib/Makefile
 run-make/pretty-print-to-file/Makefile
 run-make/pretty-print-with-dep-file/Makefile
 run-make/print-calling-conventions/Makefile
@@ -215,7 +213,6 @@ run-make/sepcomp-cci-copies/Makefile
 run-make/sepcomp-inlining/Makefile
 run-make/sepcomp-separate/Makefile
 run-make/share-generics-dylib/Makefile
-run-make/short-ice/Makefile
 run-make/silly-file-names/Makefile
 run-make/simd-ffi/Makefile
 run-make/split-debuginfo/Makefile
@@ -229,9 +226,6 @@ run-make/std-core-cycle/Makefile
 run-make/symbol-mangling-hashed/Makefile
 run-make/symbol-visibility/Makefile
 run-make/symbols-include-type-name/Makefile
-run-make/symlinked-extern/Makefile
-run-make/symlinked-libraries/Makefile
-run-make/symlinked-rlib/Makefile
 run-make/sysroot-crates-are-unstable/Makefile
 run-make/target-cpu-native/Makefile
 run-make/target-specs/Makefile

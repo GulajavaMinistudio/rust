@@ -9,7 +9,7 @@ mod command;
 pub mod diff;
 mod drop_bomb;
 pub mod fs_wrapper;
-pub mod llvm_readobj;
+pub mod llvm;
 pub mod run;
 pub mod rustc;
 pub mod rustdoc;
@@ -29,8 +29,10 @@ pub use wasmparser;
 pub use cc::{cc, extra_c_flags, extra_cxx_flags, Cc};
 pub use clang::{clang, Clang};
 pub use diff::{diff, Diff};
-pub use llvm_readobj::{llvm_readobj, LlvmReadobj};
-pub use run::{cmd, run, run_fail};
+pub use llvm::{
+    llvm_filecheck, llvm_profdata, llvm_readobj, LlvmFilecheck, LlvmProfdata, LlvmReadobj,
+};
+pub use run::{cmd, run, run_fail, run_with_args};
 pub use rustc::{aux_build, rustc, Rustc};
 pub use rustdoc::{bare_rustdoc, rustdoc, Rustdoc};
 
@@ -91,6 +93,34 @@ pub fn path<P: AsRef<Path>>(p: P) -> PathBuf {
 /// Path to the root rust-lang/rust source checkout.
 pub fn source_root() -> PathBuf {
     env_var("SOURCE_ROOT").into()
+}
+
+/// Creates a new symlink to a path on the filesystem, adjusting for Windows or Unix.
+#[cfg(target_family = "windows")]
+pub fn create_symlink<P: AsRef<Path>, Q: AsRef<Path>>(original: P, link: Q) {
+    if link.as_ref().exists() {
+        std::fs::remove_dir(link.as_ref()).unwrap();
+    }
+    use std::os::windows::fs;
+    fs::symlink_file(original.as_ref(), link.as_ref()).expect(&format!(
+        "failed to create symlink {:?} for {:?}",
+        link.as_ref().display(),
+        original.as_ref().display(),
+    ));
+}
+
+/// Creates a new symlink to a path on the filesystem, adjusting for Windows or Unix.
+#[cfg(target_family = "unix")]
+pub fn create_symlink<P: AsRef<Path>, Q: AsRef<Path>>(original: P, link: Q) {
+    if link.as_ref().exists() {
+        std::fs::remove_dir(link.as_ref()).unwrap();
+    }
+    use std::os::unix::fs;
+    fs::symlink(original.as_ref(), link.as_ref()).expect(&format!(
+        "failed to create symlink {:?} for {:?}",
+        link.as_ref().display(),
+        original.as_ref().display(),
+    ));
 }
 
 /// Construct the static library name based on the platform.
