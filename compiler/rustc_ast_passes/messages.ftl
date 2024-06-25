@@ -28,7 +28,10 @@ ast_passes_auto_super_lifetime = auto traits cannot have super traits or lifetim
     .label = {ast_passes_auto_super_lifetime}
     .suggestion = remove the super traits or lifetime bounds
 
-ast_passes_bad_c_variadic = only foreign or `unsafe extern "C"` functions may be C-variadic
+ast_passes_bad_c_variadic = only foreign, `unsafe extern "C"`, or `unsafe extern "C-unwind"` functions may have a C-variadic arg
+
+ast_passes_bare_fn_invalid_safety = function pointers cannot be declared with `safe` safety qualifier
+    .suggestion = remove safe from this item
 
 ast_passes_body_in_extern = incorrect `{$kind}` inside `extern` block
     .cannot_have = cannot have a body
@@ -167,6 +170,9 @@ ast_passes_invalid_unnamed_field_ty =
     unnamed fields can only have struct or union types
     .label = not a struct or union
 
+ast_passes_item_invalid_safety = items outside of `unsafe extern {"{ }"}` cannot be declared with `safe` safety qualifier
+    .suggestion = remove safe from this item
+
 ast_passes_item_underscore = `{$kind}` items in this context need a name
     .label = `_` is not a valid name for this `{$kind}` item
 
@@ -214,6 +220,11 @@ ast_passes_pattern_in_fn_pointer = patterns aren't allowed in function pointer t
 
 ast_passes_pattern_in_foreign = patterns aren't allowed in foreign function declarations
     .label = pattern not allowed in foreign function
+
+ast_passes_precise_capturing_duplicated = duplicate `use<...>` precise capturing syntax
+    .label = second `use<...>` here
+
+ast_passes_precise_capturing_not_allowed_here = `use<...>` precise capturing syntax not allowed in {$loc}
 
 ast_passes_show_span = {$msg}
 

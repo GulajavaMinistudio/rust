@@ -19,7 +19,7 @@ use rustc_macros::{Decodable, Encodable, HashStable_Generic};
 use rustc_span::edition::{Edition, DEFAULT_EDITION, EDITION_NAME_LIST, LATEST_STABLE_EDITION};
 use rustc_span::source_map::FilePathMapping;
 use rustc_span::{FileName, FileNameDisplayPreference, RealFileName, SourceFileHashAlgorithm};
-use rustc_target::spec::{LinkSelfContainedComponents, LinkerFeatures};
+use rustc_target::spec::{FramePointer, LinkSelfContainedComponents, LinkerFeatures};
 use rustc_target::spec::{SplitDebuginfo, Target, TargetTriple};
 use std::collections::btree_map::{
     Iter as BTreeMapIter, Keys as BTreeMapKeysIter, Values as BTreeMapValuesIter,
@@ -149,7 +149,14 @@ pub enum InstrumentCoverage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct CoverageOptions {
     pub level: CoverageLevel,
-    // Other boolean or enum-valued options might be added here.
+
+    /// `-Z coverage-options=no-mir-spans`: Don't extract block coverage spans
+    /// from MIR statements/terminators, making it easier to inspect/debug
+    /// branch and MC/DC coverage mappings.
+    ///
+    /// For internal debugging only. If other code changes would make it hard
+    /// to keep supporting this flag, remove it.
+    pub no_mir_spans: bool,
 }
 
 /// Controls whether branch coverage or MC/DC coverage is enabled.
@@ -1303,6 +1310,20 @@ pub fn build_target_config(early_dcx: &EarlyDiagCtxt, opts: &Options, sysroot: &
         Ok((target, warnings)) => {
             for warning in warnings.warning_messages() {
                 early_dcx.early_warn(warning)
+            }
+
+            // The `wasm32-wasi` target is being renamed to `wasm32-wasip1` as
+            // part of rust-lang/compiler-team#607 and
+            // rust-lang/compiler-team#695. Warn unconditionally on usage to
+            // raise awareness of the renaming. This code will be deleted in
+            // October 2024.
+            if opts.target_triple.triple() == "wasm32-wasi" {
+                early_dcx.early_warn(
+                    "the `wasm32-wasi` target is being renamed to \
+                    `wasm32-wasip1` and the `wasm32-wasi` target will be \
+                    removed from nightly in October 2024 and removed from \
+                    stable Rust in January 2025",
+                )
             }
             if !matches!(target.pointer_width, 16 | 32 | 64) {
                 early_dcx.early_fatal(format!(
@@ -2503,6 +2524,15 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         }
     }
 
+    if !nightly_options::is_unstable_enabled(matches)
+        && cg.force_frame_pointers == FramePointer::NonLeaf
+    {
+        early_dcx.early_fatal(
+            "`-Cforce-frame-pointers=non-leaf` or `always` also requires `-Zunstable-options` \
+                and a nightly compiler",
+        )
+    }
+
     // For testing purposes, until we have more feedback about these options: ensure `-Z
     // unstable-options` is required when using the unstable `-C link-self-contained` and `-C
     // linker-flavor` options.
@@ -2945,10 +2975,8 @@ pub(crate) mod dep_tracking {
     use rustc_span::edition::Edition;
     use rustc_span::RealFileName;
     use rustc_target::spec::{
-        CodeModel, MergeFunctions, OnBrokenPipe, PanicStrategy, RelocModel, WasmCAbi,
-    };
-    use rustc_target::spec::{
-        RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TargetTriple, TlsModel,
+        CodeModel, FramePointer, MergeFunctions, OnBrokenPipe, PanicStrategy, RelocModel,
+        RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TargetTriple, TlsModel, WasmCAbi,
     };
     use std::collections::BTreeMap;
     use std::hash::{DefaultHasher, Hash};
@@ -3002,6 +3030,7 @@ pub(crate) mod dep_tracking {
         lint::Level,
         WasiExecModel,
         u32,
+        FramePointer,
         RelocModel,
         CodeModel,
         TlsModel,

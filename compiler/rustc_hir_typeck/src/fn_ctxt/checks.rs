@@ -1435,7 +1435,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         {
             // The user provided `ptr::null()`, but the function expects
             // `ptr::null_mut()`.
-            err.subdiagnostic(self.dcx(), SuggestPtrNullMut { span: arg.span });
+            err.subdiagnostic(SuggestPtrNullMut { span: arg.span });
         }
     }
 
@@ -1578,7 +1578,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // type of the place it is referencing, and not some
             // supertype thereof.
             let init_ty = self.check_expr_with_needs(init, Needs::maybe_mut_place(m));
-            if let Some(mut diag) = self.demand_eqtype_diag(init.span, local_ty, init_ty) {
+            if let Err(mut diag) = self.demand_eqtype_diag(init.span, local_ty, init_ty) {
                 self.emit_type_mismatch_suggestions(
                     &mut diag,
                     init.peel_drop_temps(),
@@ -1624,7 +1624,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             let previous_diverges = self.diverges.get();
             let else_ty = self.check_block_with_expected(blk, NoExpectation);
             let cause = self.cause(blk.span, ObligationCauseCode::LetElse);
-            if let Some(err) = self.demand_eqtype_with_origin(&cause, self.tcx.types.never, else_ty)
+            if let Err(err) = self.demand_eqtype_with_origin(&cause, self.tcx.types.never, else_ty)
             {
                 err.emit();
             }

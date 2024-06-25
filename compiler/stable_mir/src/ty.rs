@@ -2,10 +2,11 @@ use super::{
     mir::{Body, Mutability, Safety},
     with, DefId, Error, Symbol,
 };
-use crate::abi::Layout;
+use crate::abi::{FnAbi, Layout};
+use crate::crate_def::{CrateDef, CrateDefType};
 use crate::mir::alloc::{read_target_int, read_target_uint, AllocId};
+use crate::mir::mono::StaticDef;
 use crate::target::MachineInfo;
-use crate::{crate_def::CrateDef, mir::mono::StaticDef};
 use crate::{Filename, Opaque};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Range;
@@ -504,6 +505,15 @@ impl TyKind {
     pub fn discriminant_ty(&self) -> Option<Ty> {
         self.rigid().map(|ty| with(|cx| cx.rigid_ty_discriminant_ty(ty)))
     }
+
+    /// Deconstruct a function type if this is one.
+    pub fn fn_def(&self) -> Option<(FnDef, &GenericArgs)> {
+        if let TyKind::RigidTy(RigidTy::FnDef(def, args)) = self {
+            Some((*def, args))
+        } else {
+            None
+        }
+    }
 }
 
 pub struct TypeAndMut {
@@ -629,7 +639,7 @@ impl ForeignModule {
     }
 }
 
-crate_def! {
+crate_def_with_ty! {
     /// Hold information about a ForeignItem in a crate.
     pub ForeignDef;
 }
@@ -647,7 +657,7 @@ pub enum ForeignItemKind {
     Type(Ty),
 }
 
-crate_def! {
+crate_def_with_ty! {
     /// Hold information about a function definition in a crate.
     pub FnDef;
 }
@@ -656,6 +666,11 @@ impl FnDef {
     // Get the function body if available.
     pub fn body(&self) -> Option<Body> {
         with(|ctx| ctx.has_body(self.0).then(|| ctx.mir_body(self.0)))
+    }
+
+    // Check if the function body is available.
+    pub fn has_body(&self) -> bool {
+        with(|ctx| ctx.has_body(self.0))
     }
 
     /// Get the information of the intrinsic if this function is a definition of one.
@@ -668,9 +683,15 @@ impl FnDef {
     pub fn is_intrinsic(&self) -> bool {
         self.as_intrinsic().is_some()
     }
+
+    /// Get the function signature for this function definition.
+    pub fn fn_sig(&self) -> PolyFnSig {
+        let kind = self.ty().kind();
+        kind.fn_sig().unwrap()
+    }
 }
 
-crate_def! {
+crate_def_with_ty! {
     pub IntrinsicDef;
 }
 
@@ -684,7 +705,7 @@ impl IntrinsicDef {
     /// Returns whether the intrinsic has no meaningful body and all backends
     /// need to shim all calls to it.
     pub fn must_be_overridden(&self) -> bool {
-        with(|cx| cx.intrinsic_must_be_overridden(*self))
+        with(|cx| !cx.has_body(self.0))
     }
 }
 
@@ -710,7 +731,7 @@ crate_def! {
     pub BrNamedDef;
 }
 
-crate_def! {
+crate_def_with_ty! {
     pub AdtDef;
 }
 
@@ -866,7 +887,7 @@ crate_def! {
     pub GenericDef;
 }
 
-crate_def! {
+crate_def_with_ty! {
     pub ConstDef;
 }
 
@@ -974,6 +995,16 @@ pub struct AliasTerm {
 }
 
 pub type PolyFnSig = Binder<FnSig>;
+
+impl PolyFnSig {
+    /// Compute a `FnAbi` suitable for indirect calls, i.e. to `fn` pointers.
+    ///
+    /// NB: this doesn't handle virtual calls - those should use `Instance::fn_abi`
+    /// instead, where the instance is an `InstanceKind::Virtual`.
+    pub fn fn_ptr_abi(self) -> Result<FnAbi, Error> {
+        with(|cx| cx.fn_ptr_abi(self))
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FnSig {

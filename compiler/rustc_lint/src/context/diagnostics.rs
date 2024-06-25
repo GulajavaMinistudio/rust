@@ -319,11 +319,30 @@ pub(super) fn decorate_lint(sess: &Session, diagnostic: BuiltinLintDiag, diag: &
         BuiltinLintDiag::UnusedQualifications { removal_span } => {
             lints::UnusedQualifications { removal_span }.decorate_lint(diag);
         }
-        BuiltinLintDiag::AssociatedConstElidedLifetime { elided, span: lt_span } => {
+        BuiltinLintDiag::UnsafeAttrOutsideUnsafe {
+            attribute_name_span,
+            sugg_spans: (left, right),
+        } => {
+            lints::UnsafeAttrOutsideUnsafe {
+                span: attribute_name_span,
+                suggestion: lints::UnsafeAttrOutsideUnsafeSuggestion { left, right },
+            }
+            .decorate_lint(diag);
+        }
+        BuiltinLintDiag::AssociatedConstElidedLifetime {
+            elided,
+            span: lt_span,
+            lifetimes_in_scope,
+        } => {
             let lt_span = if elided { lt_span.shrink_to_hi() } else { lt_span };
             let code = if elided { "'static " } else { "'static" };
-            lints::AssociatedConstElidedLifetime { span: lt_span, code, elided }
-                .decorate_lint(diag);
+            lints::AssociatedConstElidedLifetime {
+                span: lt_span,
+                code,
+                elided,
+                lifetimes_in_scope,
+            }
+            .decorate_lint(diag);
         }
         BuiltinLintDiag::RedundantImportVisibility { max_vis, span: vis_span, import_vis } => {
             lints::RedundantImportVisibility { span: vis_span, help: (), max_vis, import_vis }

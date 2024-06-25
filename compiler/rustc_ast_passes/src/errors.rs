@@ -226,6 +226,20 @@ pub struct InvalidSafetyOnExtern {
 }
 
 #[derive(Diagnostic)]
+#[diag(ast_passes_item_invalid_safety)]
+pub struct InvalidSafetyOnItem {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(ast_passes_bare_fn_invalid_safety)]
+pub struct InvalidSafetyOnBareFn {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag(ast_passes_bound_in_context)]
 pub struct BoundInContext<'a> {
     #[primary_span]
@@ -843,4 +857,21 @@ pub struct MatchArmWithNoBody {
     pub span: Span,
     #[suggestion(code = " => todo!(),", applicability = "has-placeholders")]
     pub suggestion: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(ast_passes_precise_capturing_not_allowed_here)]
+pub struct PreciseCapturingNotAllowedHere {
+    #[primary_span]
+    pub span: Span,
+    pub loc: &'static str,
+}
+
+#[derive(Diagnostic)]
+#[diag(ast_passes_precise_capturing_duplicated)]
+pub struct DuplicatePreciseCapturing {
+    #[primary_span]
+    pub bound1: Span,
+    #[label]
+    pub bound2: Span,
 }

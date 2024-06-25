@@ -23,7 +23,7 @@ use std::fmt::Display;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::str;
 use std::sync::OnceLock;
 
@@ -41,7 +41,7 @@ use crate::core::builder::Kind;
 use crate::core::config::{flags, LldMode};
 use crate::core::config::{DryRun, Target};
 use crate::core::config::{LlvmLibunwind, TargetSelection};
-use crate::utils::exec::{BehaviorOnFailure, BootstrapCommand, OutputMode};
+use crate::utils::exec::{BehaviorOnFailure, BootstrapCommand, CommandOutput, OutputMode};
 use crate::utils::helpers::{self, dir_is_empty, exe, libdir, mtime, output, symlink_dir};
 
 mod core;
@@ -520,33 +520,27 @@ impl Build {
             return;
         }
 
-        // check_submodule
-        let checked_out_hash =
-            output(Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&absolute_path));
-        // update_submodules
-        let recorded = output(
-            Command::new("git")
-                .args(["ls-tree", "HEAD"])
-                .arg(relative_path)
-                .current_dir(&self.config.src),
-        );
+        let submodule_git = || helpers::git(Some(&absolute_path));
+
+        // Determine commit checked out in submodule.
+        let checked_out_hash = output(submodule_git().args(["rev-parse", "HEAD"]));
+        let checked_out_hash = checked_out_hash.trim_end();
+        // Determine commit that the submodule *should* have.
+        let recorded =
+            output(helpers::git(Some(&self.src)).args(["ls-tree", "HEAD"]).arg(relative_path));
         let actual_hash = recorded
             .split_whitespace()
             .nth(2)
             .unwrap_or_else(|| panic!("unexpected output `{}`", recorded));
 
-        // update_submodule
-        if actual_hash == checked_out_hash.trim_end() {
+        if actual_hash == checked_out_hash {
             // already checked out
             return;
         }
 
         println!("Updating submodule {}", relative_path.display());
         self.run(
-            Command::new("git")
-                .args(["submodule", "-q", "sync"])
-                .arg(relative_path)
-                .current_dir(&self.config.src),
+            helpers::git(Some(&self.src)).args(["submodule", "-q", "sync"]).arg(relative_path),
         );
 
         // Try passing `--progress` to start, then run git again without if that fails.
@@ -554,9 +548,7 @@ impl Build {
             // Git is buggy and will try to fetch submodules from the tracking branch for *this* repository,
             // even though that has no relation to the upstream for the submodule.
             let current_branch = {
-                let output = self
-                    .config
-                    .git()
+                let output = helpers::git(Some(&self.src))
                     .args(["symbolic-ref", "--short", "HEAD"])
                     .stderr(Stdio::inherit())
                     .output();
@@ -568,7 +560,7 @@ impl Build {
                 }
             };
 
-            let mut git = self.config.git();
+            let mut git = helpers::git(Some(&self.src));
             if let Some(branch) = current_branch {
                 // If there is a tag named after the current branch, git will try to disambiguate by prepending `heads/` to the branch name.
                 // This syntax isn't accepted by `branch.{branch}`. Strip it.
@@ -590,26 +582,22 @@ impl Build {
         // Save any local changes, but avoid running `git stash pop` if there are none (since it will exit with an error).
         // diff-index reports the modifications through the exit status
         let has_local_modifications = !self.run_cmd(
-            BootstrapCommand::from(
-                Command::new("git")
-                    .args(["diff-index", "--quiet", "HEAD"])
-                    .current_dir(&absolute_path),
-            )
-            .allow_failure()
-            .output_mode(match self.is_verbose() {
-                true => OutputMode::PrintAll,
-                false => OutputMode::PrintOutput,
-            }),
+            BootstrapCommand::from(submodule_git().args(["diff-index", "--quiet", "HEAD"]))
+                .allow_failure()
+                .output_mode(match self.is_verbose() {
+                    true => OutputMode::All,
+                    false => OutputMode::OnlyOutput,
+                }),
         );
         if has_local_modifications {
-            self.run(Command::new("git").args(["stash", "push"]).current_dir(&absolute_path));
+            self.run(submodule_git().args(["stash", "push"]));
         }
 
-        self.run(Command::new("git").args(["reset", "-q", "--hard"]).current_dir(&absolute_path));
-        self.run(Command::new("git").args(["clean", "-qdfx"]).current_dir(&absolute_path));
+        self.run(submodule_git().args(["reset", "-q", "--hard"]));
+        self.run(submodule_git().args(["clean", "-qdfx"]));
 
         if has_local_modifications {
-            self.run(Command::new("git").args(["stash", "pop"]).current_dir(absolute_path));
+            self.run(submodule_git().args(["stash", "pop"]));
         }
     }
 
@@ -621,8 +609,7 @@ impl Build {
             return;
         }
         let output = output(
-            self.config
-                .git()
+            helpers::git(Some(&self.src))
                 .args(["config", "--file"])
                 .arg(self.config.src.join(".gitmodules"))
                 .args(["--get-regexp", "path"]),
@@ -671,6 +658,9 @@ impl Build {
             }
             Subcommand::Suggest { run } => {
                 return core::build_steps::suggest::suggest(&builder::Builder::new(self), *run);
+            }
+            Subcommand::Perf { .. } => {
+                return core::build_steps::perf::perf(&builder::Builder::new(self));
             }
             _ => (),
         }
@@ -971,73 +961,36 @@ impl Build {
         })
     }
 
-    /// Runs a command, printing out nice contextual information if it fails.
-    fn run(&self, cmd: &mut Command) {
-        self.run_cmd(BootstrapCommand::from(cmd).fail_fast().output_mode(
-            match self.is_verbose() {
-                true => OutputMode::PrintAll,
-                false => OutputMode::PrintOutput,
-            },
-        ));
-    }
-
-    /// Runs a command, printing out contextual info if it fails, and delaying errors until the build finishes.
-    pub(crate) fn run_delaying_failure(&self, cmd: &mut Command) -> bool {
-        self.run_cmd(BootstrapCommand::from(cmd).delay_failure().output_mode(
-            match self.is_verbose() {
-                true => OutputMode::PrintAll,
-                false => OutputMode::PrintOutput,
-            },
-        ))
-    }
-
-    /// Runs a command, printing out nice contextual information if it fails.
-    fn run_quiet(&self, cmd: &mut Command) {
-        self.run_cmd(
-            BootstrapCommand::from(cmd).fail_fast().output_mode(OutputMode::SuppressOnSuccess),
-        );
-    }
-
-    /// Runs a command, printing out nice contextual information if it fails.
-    /// Exits if the command failed to execute at all, otherwise returns its
-    /// `status.success()`.
-    fn run_quiet_delaying_failure(&self, cmd: &mut Command) -> bool {
-        self.run_cmd(
-            BootstrapCommand::from(cmd).delay_failure().output_mode(OutputMode::SuppressOnSuccess),
-        )
-    }
-
-    /// A centralized function for running commands that do not return output.
-    pub(crate) fn run_cmd<'a, C: Into<BootstrapCommand<'a>>>(&self, cmd: C) -> bool {
+    /// Execute a command and return its output.
+    fn run_tracked(&self, command: BootstrapCommand<'_>) -> CommandOutput {
         if self.config.dry_run() {
-            return true;
+            return CommandOutput::default();
         }
 
-        let command = cmd.into();
         self.verbose(|| println!("running: {command:?}"));
 
-        let (output, print_error) = match command.output_mode {
-            mode @ (OutputMode::PrintAll | OutputMode::PrintOutput) => (
-                command.command.status().map(|status| Output {
-                    status,
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                }),
-                matches!(mode, OutputMode::PrintAll),
+        let output_mode = command.output_mode.unwrap_or_else(|| match self.is_verbose() {
+            true => OutputMode::All,
+            false => OutputMode::OnlyOutput,
+        });
+        let (output, print_error): (io::Result<CommandOutput>, bool) = match output_mode {
+            mode @ (OutputMode::All | OutputMode::OnlyOutput) => (
+                command.command.status().map(|status| status.into()),
+                matches!(mode, OutputMode::All),
             ),
-            OutputMode::SuppressOnSuccess => (command.command.output(), true),
+            OutputMode::OnlyOnFailure => (command.command.output().map(|o| o.into()), true),
         };
 
         let output = match output {
             Ok(output) => output,
             Err(e) => fail(&format!("failed to execute command: {:?}\nerror: {}", command, e)),
         };
-        let result = if !output.status.success() {
+        if !output.is_success() {
             if print_error {
                 println!(
                     "\n\nCommand did not execute successfully.\
-                    \nExpected success, got: {}",
-                    output.status,
+                \nExpected success, got: {}",
+                    output.status(),
                 );
 
                 if !self.is_verbose() {
@@ -1047,37 +1000,45 @@ impl Build {
                 self.verbose(|| {
                     println!(
                         "\nSTDOUT ----\n{}\n\
-                        STDERR ----\n{}\n",
-                        String::from_utf8_lossy(&output.stdout),
-                        String::from_utf8_lossy(&output.stderr)
+                    STDERR ----\n{}\n",
+                        output.stdout(),
+                        output.stderr(),
                     )
                 });
             }
-            Err(())
-        } else {
-            Ok(())
-        };
 
-        match result {
-            Ok(_) => true,
-            Err(_) => {
-                match command.failure_behavior {
-                    BehaviorOnFailure::DelayFail => {
-                        if self.fail_fast {
-                            exit!(1);
-                        }
-
-                        let mut failures = self.delayed_failures.borrow_mut();
-                        failures.push(format!("{command:?}"));
-                    }
-                    BehaviorOnFailure::Exit => {
+            match command.failure_behavior {
+                BehaviorOnFailure::DelayFail => {
+                    if self.fail_fast {
                         exit!(1);
                     }
-                    BehaviorOnFailure::Ignore => {}
+
+                    let mut failures = self.delayed_failures.borrow_mut();
+                    failures.push(format!("{command:?}"));
                 }
-                false
+                BehaviorOnFailure::Exit => {
+                    exit!(1);
+                }
+                BehaviorOnFailure::Ignore => {}
             }
         }
+        output
+    }
+
+    /// Runs a command, printing out nice contextual information if it fails.
+    fn run(&self, cmd: &mut Command) {
+        self.run_cmd(BootstrapCommand::from(cmd).fail_fast().output_mode(
+            match self.is_verbose() {
+                true => OutputMode::All,
+                false => OutputMode::OnlyOutput,
+            },
+        ));
+    }
+
+    /// A centralized function for running commands that do not return output.
+    pub(crate) fn run_cmd<'a, C: Into<BootstrapCommand<'a>>>(&self, cmd: C) -> bool {
+        let command = cmd.into();
+        self.run_tracked(command).is_success()
     }
 
     /// Check if verbosity is greater than the `level`
@@ -1563,10 +1524,14 @@ impl Build {
             // Figure out how many merge commits happened since we branched off master.
             // That's our beta number!
             // (Note that we use a `..` range, not the `...` symmetric difference.)
-            output(self.config.git().arg("rev-list").arg("--count").arg("--merges").arg(format!(
-                "refs/remotes/origin/{}..HEAD",
-                self.config.stage0_metadata.config.nightly_branch
-            )))
+            output(
+                helpers::git(Some(&self.src)).arg("rev-list").arg("--count").arg("--merges").arg(
+                    format!(
+                        "refs/remotes/origin/{}..HEAD",
+                        self.config.stage0_metadata.config.nightly_branch
+                    ),
+                ),
+            )
         });
         let n = count.trim().parse().unwrap();
         self.prerelease_version.set(Some(n));
@@ -1984,15 +1949,13 @@ fn envify(s: &str) -> String {
 /// In case of errors during `git` command execution (e.g., in tarball sources), default values
 /// are used to prevent panics.
 pub fn generate_smart_stamp_hash(dir: &Path, additional_input: &str) -> String {
-    let diff = Command::new("git")
-        .current_dir(dir)
+    let diff = helpers::git(Some(dir))
         .arg("diff")
         .output()
         .map(|o| String::from_utf8(o.stdout).unwrap_or_default())
         .unwrap_or_default();
 
-    let status = Command::new("git")
-        .current_dir(dir)
+    let status = helpers::git(Some(dir))
         .arg("status")
         .arg("--porcelain")
         .arg("-z")

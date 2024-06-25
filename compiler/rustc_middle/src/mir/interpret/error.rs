@@ -438,9 +438,6 @@ pub enum ValidationErrorKind<'tcx> {
         ptr_kind: PointerKind,
         ty: Ty<'tcx>,
     },
-    PtrToStatic {
-        ptr_kind: PointerKind,
-    },
     ConstRefToMutable,
     ConstRefToExtern,
     MutableRefToImmutable,
@@ -523,6 +520,8 @@ pub enum UnsupportedOpInfo {
     Unsupported(String),
     /// Unsized local variables.
     UnsizedLocal,
+    /// Extern type field with an indeterminate offset.
+    ExternTypeField,
     //
     // The variants below are only reachable from CTFE/const prop, miri will never emit them.
     //

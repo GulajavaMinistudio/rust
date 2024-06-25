@@ -20,9 +20,9 @@ use rustc_span::source_map::{RealFileLoader, SourceMapInputs};
 use rustc_span::symbol::sym;
 use rustc_span::{FileName, SourceFileHashAlgorithm};
 use rustc_target::spec::{
-    CodeModel, LinkerFlavorCli, MergeFunctions, OnBrokenPipe, PanicStrategy, RelocModel, WasmCAbi,
+    CodeModel, FramePointer, LinkerFlavorCli, MergeFunctions, OnBrokenPipe, PanicStrategy,
+    RelocModel, RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TlsModel, WasmCAbi,
 };
-use rustc_target::spec::{RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TlsModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
@@ -70,7 +70,7 @@ where
             Arc::default(),
             Default::default(),
         );
-        let cfg = parse_cfg(&sess.dcx(), matches.opt_strs("cfg"));
+        let cfg = parse_cfg(sess.dcx(), matches.opt_strs("cfg"));
         let cfg = build_configuration(&sess, cfg);
         f(sess, cfg)
     });
@@ -605,7 +605,7 @@ fn test_codegen_options_tracking_hash() {
     tracked!(debug_assertions, Some(true));
     tracked!(debuginfo, DebugInfo::Limited);
     tracked!(embed_bitcode, false);
-    tracked!(force_frame_pointers, Some(false));
+    tracked!(force_frame_pointers, FramePointer::Always);
     tracked!(force_unwind_tables, Some(true));
     tracked!(inline_threshold, Some(0xf007ba11));
     tracked!(instrument_coverage, InstrumentCoverage::Yes);
@@ -761,7 +761,7 @@ fn test_unstable_options_tracking_hash() {
         })
     );
     tracked!(codegen_backend, Some("abc".to_string()));
-    tracked!(coverage_options, CoverageOptions { level: CoverageLevel::Mcdc });
+    tracked!(coverage_options, CoverageOptions { level: CoverageLevel::Mcdc, no_mir_spans: true });
     tracked!(crate_attr, vec!["abc".to_string()]);
     tracked!(cross_crate_inline_threshold, InliningThreshold::Always);
     tracked!(debug_info_for_profiling, true);

@@ -4,8 +4,7 @@ use std::{fmt, mem};
 use either::{Either, Left, Right};
 use tracing::{debug, info, info_span, instrument, trace};
 
-use hir::CRATE_HIR_ID;
-use rustc_errors::DiagCtxt;
+use rustc_errors::DiagCtxtHandle;
 use rustc_hir::{self as hir, def_id::DefId, definitions::DefPathData};
 use rustc_index::IndexVec;
 use rustc_middle::mir;
@@ -250,7 +249,7 @@ impl<'tcx, Prov: Provenance> Frame<'tcx, Prov> {
 impl<'tcx, Prov: Provenance, Extra> Frame<'tcx, Prov, Extra> {
     /// Get the current location within the Frame.
     ///
-    /// If this is `Left`, we are not currently executing any particular statement in
+    /// If this is `Right`, we are not currently executing any particular statement in
     /// this frame (can happen e.g. during frame initialization, and during unwinding on
     /// frames without cleanup code).
     ///
@@ -271,13 +270,18 @@ impl<'tcx, Prov: Provenance, Extra> Frame<'tcx, Prov, Extra> {
         }
     }
 
-    pub fn lint_root(&self) -> Option<hir::HirId> {
-        self.current_source_info().and_then(|source_info| {
-            match &self.body.source_scopes[source_info.scope].local_data {
+    pub fn lint_root(&self, tcx: TyCtxt<'tcx>) -> Option<hir::HirId> {
+        // We first try to get a HirId via the current source scope,
+        // and fall back to `body.source`.
+        self.current_source_info()
+            .and_then(|source_info| match &self.body.source_scopes[source_info.scope].local_data {
                 mir::ClearCrossCrate::Set(data) => Some(data.lint_root),
                 mir::ClearCrossCrate::Clear => None,
-            }
-        })
+            })
+            .or_else(|| {
+                let def_id = self.body.source.def_id().as_local();
+                def_id.map(|def_id| tcx.local_def_id_to_hir_id(def_id))
+            })
     }
 
     /// Returns the address of the buffer where the locals are stored. This is used by `Place` as a
@@ -470,7 +474,7 @@ pub(super) fn from_known_layout<'tcx>(
 ///
 /// This is NOT the preferred way to render an error; use `report` from `const_eval` instead.
 /// However, this is useful when error messages appear in ICEs.
-pub fn format_interp_error<'tcx>(dcx: &DiagCtxt, e: InterpErrorInfo<'tcx>) -> String {
+pub fn format_interp_error<'tcx>(dcx: DiagCtxtHandle<'_>, e: InterpErrorInfo<'tcx>) -> String {
     let (e, backtrace) = e.into_parts();
     backtrace.print_backtrace();
     // FIXME(fee1-dead), HACK: we want to use the error as title therefore we can just extract the
@@ -500,6 +504,8 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         }
     }
 
+    /// Returns the span of the currently executed statement/terminator.
+    /// This is the span typically used for error reporting.
     #[inline(always)]
     pub fn cur_span(&self) -> Span {
         // This deliberately does *not* honor `requires_caller_location` since it is used for much
@@ -507,16 +513,6 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         self.stack().last().map_or(self.tcx.span, |f| f.current_span())
     }
 
-    #[inline(always)]
-    /// Find the first stack frame that is within the current crate, if any, otherwise return the crate's HirId
-    pub fn best_lint_scope(&self) -> hir::HirId {
-        self.stack()
-            .iter()
-            .find_map(|frame| frame.body.source.def_id().as_local())
-            .map_or(CRATE_HIR_ID, |def_id| self.tcx.local_def_id_to_hir_id(def_id))
-    }
-
-    #[inline(always)]
     pub(crate) fn stack(&self) -> &[Frame<'tcx, M::Provenance, M::FrameExtra>] {
         M::stack(self)
     }
@@ -566,7 +562,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
 
     pub fn load_mir(
         &self,
-        instance: ty::InstanceDef<'tcx>,
+        instance: ty::InstanceKind<'tcx>,
         promoted: Option<mir::Promoted>,
     ) -> InterpResult<'tcx, &'tcx mir::Body<'tcx>> {
         trace!("load mir(instance={:?}, promoted={:?})", instance, promoted);
@@ -632,7 +628,8 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
     }
 
     /// Walks up the callstack from the intrinsic's callsite, searching for the first callsite in a
-    /// frame which is not `#[track_caller]`. This is the fancy version of `cur_span`.
+    /// frame which is not `#[track_caller]`. This matches the `caller_location` intrinsic,
+    /// and is primarily intended for the panic machinery.
     pub(crate) fn find_closest_untracked_caller_location(&self) -> Span {
         for frame in self.stack().iter().rev() {
             debug!("find_closest_untracked_caller_location: checking frame {:?}", frame.instance);
@@ -1103,11 +1100,9 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
             Operand::Immediate(Immediate::Uninit)
         });
 
-        // StorageLive expects the local to be dead, and marks it live.
+        // If the local is already live, deallocate its old memory.
         let old = mem::replace(&mut self.frame_mut().locals[local].value, local_val);
-        if !matches!(old, LocalValue::Dead) {
-            throw_ub_custom!(fluent::const_eval_double_storage_live);
-        }
+        self.deallocate_local(old)?;
         Ok(())
     }
 
@@ -1121,7 +1116,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         assert!(local != mir::RETURN_PLACE, "Cannot make return place dead");
         trace!("{:?} is now dead", local);
 
-        // It is entirely okay for this local to be already dead (at least that's how we currently generate MIR)
+        // If the local is already dead, this is a NOP.
         let old = mem::replace(&mut self.frame_mut().locals[local].value, LocalValue::Dead);
         self.deallocate_local(old)?;
         Ok(())

@@ -46,6 +46,7 @@ use crate::traits::{
 };
 use crate::ty::fast_reject::SimplifiedType;
 use crate::ty::layout::ValidityRequirement;
+use crate::ty::print::PrintTraitRefExt;
 use crate::ty::util::AlwaysRequiresDrop;
 use crate::ty::TyCtxtFeed;
 use crate::ty::{
@@ -574,7 +575,7 @@ rustc_queries! {
     /// Summarizes coverage IDs inserted by the `InstrumentCoverage` MIR pass
     /// (for compiler option `-Cinstrument-coverage`), after MIR optimizations
     /// have had a chance to potentially remove some of them.
-    query coverage_ids_info(key: ty::InstanceDef<'tcx>) -> &'tcx mir::CoverageIdsInfo {
+    query coverage_ids_info(key: ty::InstanceKind<'tcx>) -> &'tcx mir::CoverageIdsInfo {
         desc { |tcx| "retrieving coverage IDs info from MIR for `{}`", tcx.def_path_str(key.def_id()) }
         arena_cache
     }
@@ -1032,7 +1033,7 @@ rustc_queries! {
     }
 
     /// Obtain all the calls into other local functions
-    query mir_inliner_callees(key: ty::InstanceDef<'tcx>) -> &'tcx [(DefId, GenericArgsRef<'tcx>)] {
+    query mir_inliner_callees(key: ty::InstanceKind<'tcx>) -> &'tcx [(DefId, GenericArgsRef<'tcx>)] {
         fatal_cycle
         desc { |tcx|
             "computing all local function calls in `{}`",
@@ -1139,7 +1140,7 @@ rustc_queries! {
     }
 
     /// Generates a MIR body for the shim.
-    query mir_shims(key: ty::InstanceDef<'tcx>) -> &'tcx mir::Body<'tcx> {
+    query mir_shims(key: ty::InstanceKind<'tcx>) -> &'tcx mir::Body<'tcx> {
         arena_cache
         desc { |tcx| "generating MIR shim for `{}`", tcx.def_path_str(key.def_id()) }
     }
@@ -1271,7 +1272,11 @@ rustc_queries! {
         desc { |tcx| "finding all vtable entries for trait `{}`", tcx.def_path_str(key.def_id()) }
     }
 
-    query vtable_trait_upcasting_coercion_new_vptr_slot(key: (Ty<'tcx>, Ty<'tcx>)) -> Option<usize> {
+    query first_method_vtable_slot(key: ty::TraitRef<'tcx>) -> usize {
+        desc { |tcx| "finding the slot within the vtable of `{}` for the implementation of `{}`", key.self_ty(), key.print_only_trait_name() }
+    }
+
+    query supertrait_vtable_slot(key: (Ty<'tcx>, Ty<'tcx>)) -> Option<usize> {
         desc { |tcx| "finding the slot within vtable for trait object `{}` vtable ptr during trait upcasting coercion from `{}` vtable",
             key.1, key.0 }
     }
@@ -1405,7 +1410,7 @@ rustc_queries! {
     /// Compute a `FnAbi` suitable for indirect calls, i.e. to `fn` pointers.
     ///
     /// NB: this doesn't handle virtual calls - those should use `fn_abi_of_instance`
-    /// instead, where the instance is an `InstanceDef::Virtual`.
+    /// instead, where the instance is an `InstanceKind::Virtual`.
     query fn_abi_of_fn_ptr(
         key: ty::ParamEnvAnd<'tcx, (ty::PolyFnSig<'tcx>, &'tcx ty::List<Ty<'tcx>>)>
     ) -> Result<&'tcx abi::call::FnAbi<'tcx, Ty<'tcx>>, &'tcx ty::layout::FnAbiError<'tcx>> {
@@ -1416,7 +1421,7 @@ rustc_queries! {
     /// direct calls to an `fn`.
     ///
     /// NB: that includes virtual calls, which are represented by "direct calls"
-    /// to an `InstanceDef::Virtual` instance (of `<dyn Trait as Trait>::fn`).
+    /// to an `InstanceKind::Virtual` instance (of `<dyn Trait as Trait>::fn`).
     query fn_abi_of_instance(
         key: ty::ParamEnvAnd<'tcx, (ty::Instance<'tcx>, &'tcx ty::List<Ty<'tcx>>)>
     ) -> Result<&'tcx abi::call::FnAbi<'tcx, Ty<'tcx>>, &'tcx ty::layout::FnAbiError<'tcx>> {
@@ -1549,12 +1554,13 @@ rustc_queries! {
         }
     }
 
-    /// The entire set of monomorphizations the local crate can safely link
-    /// to because they are exported from upstream crates. Do not depend on
-    /// this directly, as its value changes anytime a monomorphization gets
-    /// added or removed in any upstream crate. Instead use the narrower
-    /// `upstream_monomorphizations_for`, `upstream_drop_glue_for`, or, even
-    /// better, `Instance::upstream_monomorphization()`.
+    /// The entire set of monomorphizations the local crate can safely
+    /// link to because they are exported from upstream crates. Do
+    /// not depend on this directly, as its value changes anytime
+    /// a monomorphization gets added or removed in any upstream
+    /// crate. Instead use the narrower `upstream_monomorphizations_for`,
+    /// `upstream_drop_glue_for`, `upstream_async_drop_glue_for`, or,
+    /// even better, `Instance::upstream_monomorphization()`.
     query upstream_monomorphizations(_: ()) -> &'tcx DefIdMap<UnordMap<GenericArgsRef<'tcx>, CrateNum>> {
         arena_cache
         desc { "collecting available upstream monomorphizations" }
@@ -1594,6 +1600,26 @@ rustc_queries! {
     ///       (like `Clone::clone` for example).
     query upstream_drop_glue_for(args: GenericArgsRef<'tcx>) -> Option<CrateNum> {
         desc { "available upstream drop-glue for `{:?}`", args }
+    }
+
+    /// Returns the upstream crate that exports async-drop-glue for
+    /// the given type (`args` is expected to be a single-item list
+    /// containing the type one wants async-drop-glue for).
+    ///
+    /// This is a subset of `upstream_monomorphizations_for` in order
+    /// to increase dep-tracking granularity. Otherwise adding or
+    /// removing any type with async-drop-glue in any upstream crate
+    /// would invalidate all functions calling async-drop-glue of an
+    /// upstream type.
+    ///
+    /// You likely want to call `Instance::upstream_monomorphization()`
+    /// instead of invoking this query directly.
+    ///
+    /// NOTE: This query could easily be extended to also support other
+    ///       common functions that have are large set of monomorphizations
+    ///       (like `Clone::clone` for example).
+    query upstream_async_drop_glue_for(args: GenericArgsRef<'tcx>) -> Option<CrateNum> {
+        desc { "available upstream async-drop-glue for `{:?}`", args }
     }
 
     /// Returns a list of all `extern` blocks of a crate.
@@ -1913,7 +1939,7 @@ rustc_queries! {
         desc { "getting codegen unit `{sym}`" }
     }
 
-    query unused_generic_params(key: ty::InstanceDef<'tcx>) -> UnusedGenericParams {
+    query unused_generic_params(key: ty::InstanceKind<'tcx>) -> UnusedGenericParams {
         cache_on_disk_if { key.def_id().is_local() }
         desc {
             |tcx| "determining which generic parameters are unused by `{}`",

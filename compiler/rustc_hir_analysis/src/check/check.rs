@@ -481,9 +481,12 @@ fn sanity_check_found_hidden_type<'tcx>(
 /// 2. Checking that all lifetimes that are implicitly captured are mentioned.
 /// 3. Asserting that all parameters mentioned in the captures list are invariant.
 fn check_opaque_precise_captures<'tcx>(tcx: TyCtxt<'tcx>, opaque_def_id: LocalDefId) {
-    let hir::OpaqueTy { precise_capturing_args, .. } =
+    let hir::OpaqueTy { bounds, .. } =
         *tcx.hir_node_by_def_id(opaque_def_id).expect_item().expect_opaque_ty();
-    let Some((precise_capturing_args, _)) = precise_capturing_args else {
+    let Some(precise_capturing_args) = bounds.iter().find_map(|bound| match *bound {
+        hir::GenericBound::Use(bounds, ..) => Some(bounds),
+        _ => None,
+    }) else {
         // No precise capturing args; nothing to validate
         return;
     };
@@ -716,7 +719,7 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
                             tcx,
                             assoc_item,
                             assoc_item,
-                            ty::TraitRef::new(tcx, def_id.to_def_id(), trait_args),
+                            ty::TraitRef::new_from_args(tcx, def_id.to_def_id(), trait_args),
                         );
                     }
                     _ => {}

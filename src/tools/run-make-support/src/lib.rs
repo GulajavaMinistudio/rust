@@ -30,13 +30,15 @@ pub use cc::{cc, extra_c_flags, extra_cxx_flags, Cc};
 pub use clang::{clang, Clang};
 pub use diff::{diff, Diff};
 pub use llvm::{
-    llvm_filecheck, llvm_profdata, llvm_readobj, LlvmFilecheck, LlvmProfdata, LlvmReadobj,
+    llvm_filecheck, llvm_objdump, llvm_profdata, llvm_readobj, LlvmFilecheck, LlvmObjdump,
+    LlvmProfdata, LlvmReadobj,
 };
 pub use run::{cmd, run, run_fail, run_with_args};
 pub use rustc::{aux_build, rustc, Rustc};
 pub use rustdoc::{bare_rustdoc, rustdoc, Rustdoc};
 
 #[track_caller]
+#[must_use]
 pub fn env_var(name: &str) -> String {
     match env::var(name) {
         Ok(v) => v,
@@ -45,6 +47,7 @@ pub fn env_var(name: &str) -> String {
 }
 
 #[track_caller]
+#[must_use]
 pub fn env_var_os(name: &str) -> OsString {
     match env::var_os(name) {
         Some(v) => v,
@@ -53,32 +56,38 @@ pub fn env_var_os(name: &str) -> OsString {
 }
 
 /// `TARGET`
+#[must_use]
 pub fn target() -> String {
     env_var("TARGET")
 }
 
 /// Check if target is windows-like.
+#[must_use]
 pub fn is_windows() -> bool {
     target().contains("windows")
 }
 
 /// Check if target uses msvc.
+#[must_use]
 pub fn is_msvc() -> bool {
     target().contains("msvc")
 }
 
 /// Check if target uses macOS.
+#[must_use]
 pub fn is_darwin() -> bool {
     target().contains("darwin")
 }
 
 #[track_caller]
+#[must_use]
 pub fn python_command() -> Command {
     let python_path = env_var("PYTHON");
     Command::new(python_path)
 }
 
 #[track_caller]
+#[must_use]
 pub fn htmldocck() -> Command {
     let mut python = python_command();
     python.arg(source_root().join("src/etc/htmldocck.py"));
@@ -91,6 +100,7 @@ pub fn path<P: AsRef<Path>>(p: P) -> PathBuf {
 }
 
 /// Path to the root rust-lang/rust source checkout.
+#[must_use]
 pub fn source_root() -> PathBuf {
     env_var("SOURCE_ROOT").into()
 }
@@ -124,6 +134,7 @@ pub fn create_symlink<P: AsRef<Path>, Q: AsRef<Path>>(original: P, link: Q) {
 }
 
 /// Construct the static library name based on the platform.
+#[must_use]
 pub fn static_lib_name(name: &str) -> String {
     // See tools.mk (irrelevant lines omitted):
     //
@@ -148,6 +159,7 @@ pub fn static_lib_name(name: &str) -> String {
 }
 
 /// Construct the dynamic library name based on the platform.
+#[must_use]
 pub fn dynamic_lib_name(name: &str) -> String {
     // See tools.mk (irrelevant lines omitted):
     //
@@ -174,6 +186,7 @@ pub fn dynamic_lib_name(name: &str) -> String {
     }
 }
 
+#[must_use]
 pub fn dynamic_lib_extension() -> &'static str {
     if is_darwin() {
         "dylib"
@@ -185,23 +198,59 @@ pub fn dynamic_lib_extension() -> &'static str {
 }
 
 /// Generate the name a rust library (rlib) would have.
+#[must_use]
 pub fn rust_lib_name(name: &str) -> String {
     format!("lib{name}.rlib")
 }
 
 /// Construct the binary name based on platform.
+#[must_use]
 pub fn bin_name(name: &str) -> String {
     if is_windows() { format!("{name}.exe") } else { name.to_string() }
 }
 
 /// Return the current working directory.
+#[must_use]
 pub fn cwd() -> PathBuf {
     env::current_dir().unwrap()
+}
+
+// FIXME(Oneirical): This will no longer be required after compiletest receives the ability
+// to manipulate read-only files. See https://github.com/rust-lang/rust/issues/126334
+/// Ensure that the path P is read-only while the test runs, and restore original permissions
+/// at the end so compiletest can clean up.
+/// This will panic on Windows if the path is a directory (as it would otherwise do nothing)
+#[track_caller]
+pub fn test_while_readonly<P: AsRef<Path>, F: FnOnce() + std::panic::UnwindSafe>(
+    path: P,
+    closure: F,
+) {
+    let path = path.as_ref();
+    if is_windows() && path.is_dir() {
+        eprintln!("This helper function cannot be used on Windows to make directories readonly.");
+        eprintln!(
+            "See the official documentation:
+            https://doc.rust-lang.org/std/fs/struct.Permissions.html#method.set_readonly"
+        );
+        panic!("`test_while_readonly` on directory detected while on Windows.");
+    }
+    let metadata = fs_wrapper::metadata(&path);
+    let original_perms = metadata.permissions();
+
+    let mut new_perms = original_perms.clone();
+    new_perms.set_readonly(true);
+    fs_wrapper::set_permissions(&path, new_perms);
+
+    let success = std::panic::catch_unwind(closure);
+
+    fs_wrapper::set_permissions(&path, original_perms);
+    success.unwrap();
 }
 
 /// Use `cygpath -w` on a path to get a Windows path string back. This assumes that `cygpath` is
 /// available on the platform!
 #[track_caller]
+#[must_use]
 pub fn cygpath_windows<P: AsRef<Path>>(path: P) -> String {
     let caller = panic::Location::caller();
     let mut cygpath = Command::new("cygpath");
@@ -217,6 +266,7 @@ pub fn cygpath_windows<P: AsRef<Path>>(path: P) -> String {
 
 /// Run `uname`. This assumes that `uname` is available on the platform!
 #[track_caller]
+#[must_use]
 pub fn uname() -> String {
     let caller = panic::Location::caller();
     let mut uname = Command::new("uname");
@@ -252,6 +302,34 @@ pub fn set_host_rpath(cmd: &mut Command) {
         }
         env::join_paths(paths.iter()).unwrap()
     });
+}
+
+/// Read the contents of a file that cannot simply be read by
+/// read_to_string, due to invalid utf8 data, then assert that it contains `expected`.
+#[track_caller]
+pub fn invalid_utf8_contains<P: AsRef<Path>>(path: P, expected: &str) {
+    let buffer = fs_wrapper::read(path.as_ref());
+    if !String::from_utf8_lossy(&buffer).contains(expected) {
+        eprintln!("=== FILE CONTENTS (LOSSY) ===");
+        eprintln!("{}", String::from_utf8_lossy(&buffer));
+        eprintln!("=== SPECIFIED TEXT ===");
+        eprintln!("{}", expected);
+        panic!("specified text was not found in file");
+    }
+}
+
+/// Read the contents of a file that cannot simply be read by
+/// read_to_string, due to invalid utf8 data, then assert that it does not contain `expected`.
+#[track_caller]
+pub fn invalid_utf8_not_contains<P: AsRef<Path>>(path: P, expected: &str) {
+    let buffer = fs_wrapper::read(path.as_ref());
+    if String::from_utf8_lossy(&buffer).contains(expected) {
+        eprintln!("=== FILE CONTENTS (LOSSY) ===");
+        eprintln!("{}", String::from_utf8_lossy(&buffer));
+        eprintln!("=== SPECIFIED TEXT ===");
+        eprintln!("{}", expected);
+        panic!("specified text was unexpectedly found in file");
+    }
 }
 
 /// Copy a directory into another.
@@ -309,9 +387,33 @@ pub fn recursive_diff(dir1: impl AsRef<Path>, dir2: impl AsRef<Path>) {
     });
 }
 
-pub fn read_dir<F: Fn(&Path)>(dir: impl AsRef<Path>, callback: F) {
+pub fn read_dir<F: FnMut(&Path)>(dir: impl AsRef<Path>, mut callback: F) {
     for entry in fs_wrapper::read_dir(dir) {
         callback(&entry.unwrap().path());
+    }
+}
+
+/// Check that `actual` is equal to `expected`. Panic otherwise.
+#[track_caller]
+pub fn assert_equals(actual: &str, expected: &str) {
+    if actual != expected {
+        eprintln!("=== ACTUAL TEXT ===");
+        eprintln!("{}", actual);
+        eprintln!("=== EXPECTED ===");
+        eprintln!("{}", expected);
+        panic!("expected text was not found in actual text");
+    }
+}
+
+/// Check that `haystack` contains `needle`. Panic otherwise.
+#[track_caller]
+pub fn assert_contains(haystack: &str, needle: &str) {
+    if !haystack.contains(needle) {
+        eprintln!("=== HAYSTACK ===");
+        eprintln!("{}", haystack);
+        eprintln!("=== NEEDLE ===");
+        eprintln!("{}", needle);
+        panic!("needle was not found in haystack");
     }
 }
 
@@ -437,6 +539,15 @@ macro_rules! impl_common_helpers {
             #[track_caller]
             pub fn run_fail(&mut self) -> crate::command::CompletedProcess {
                 self.cmd.run_fail()
+            }
+
+            /// Run the command but do not check its exit status.
+            /// Only use if you explicitly don't care about the exit status.
+            /// Prefer to use [`Self::run`] and [`Self::run_fail`]
+            /// whenever possible.
+            #[track_caller]
+            pub fn run_unchecked(&mut self) -> crate::command::CompletedProcess {
+                self.cmd.run_unchecked()
             }
 
             /// Set the path where the command will be run.

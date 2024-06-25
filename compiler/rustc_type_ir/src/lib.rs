@@ -7,31 +7,24 @@
 #![cfg_attr(feature = "nightly", allow(internal_features))]
 // tidy-alphabetical-end
 
-#[cfg(feature = "nightly")]
 extern crate self as rustc_type_ir;
 
 #[cfg(feature = "nightly")]
-use rustc_data_structures::sso::SsoHashSet;
-#[cfg(feature = "nightly")]
-use rustc_data_structures::sync::Lrc;
-#[cfg(feature = "nightly")]
 use rustc_macros::{Decodable, Encodable, HashStable_NoContext};
-#[cfg(not(feature = "nightly"))]
-use std::collections::HashSet as SsoHashSet;
 use std::fmt;
 use std::hash::Hash;
-#[cfg(not(feature = "nightly"))]
-use std::sync::Arc as Lrc;
 
 // These modules are `pub` since they are not glob-imported.
 #[macro_use]
 pub mod visit;
 #[cfg(feature = "nightly")]
 pub mod codec;
+pub mod data_structures;
 pub mod error;
 pub mod fold;
 pub mod inherent;
 pub mod ir_print;
+pub mod lang_items;
 pub mod lift;
 pub mod relate;
 pub mod solve;
@@ -44,8 +37,8 @@ mod canonical;
 mod const_kind;
 mod flags;
 mod generic_arg;
-mod infcx;
 mod interner;
+mod opaque_ty;
 mod predicate;
 mod predicate_kind;
 mod region_kind;
@@ -60,8 +53,8 @@ pub use codec::*;
 pub use const_kind::*;
 pub use flags::*;
 pub use generic_arg::*;
-pub use infcx::InferCtxtLike;
 pub use interner::*;
+pub use opaque_ty::*;
 pub use predicate::*;
 pub use predicate_kind::*;
 pub use region_kind::*;
@@ -73,6 +66,7 @@ pub use DynKind::*;
 pub use InferTy::*;
 pub use RegionKind::*;
 pub use TyKind::*;
+pub use Variance::*;
 
 rustc_index::newtype_index! {
     /// A [De Bruijn index][dbi] is a standard means of representing

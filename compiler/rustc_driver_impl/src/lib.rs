@@ -1133,7 +1133,11 @@ pub fn describe_flag_categories(early_dcx: &EarlyDiagCtxt, matches: &Matches) ->
     }
 
     if cg_flags.iter().any(|x| *x == "no-stack-check") {
-        early_dcx.early_warn("the --no-stack-check flag is deprecated and does nothing");
+        early_dcx.early_warn("the `-Cno-stack-check` flag is deprecated and does nothing");
+    }
+
+    if cg_flags.iter().any(|x| x.starts_with("inline-threshold")) {
+        early_dcx.early_warn("the `-Cinline-threshold` flag is deprecated and does nothing (consider using `-Cllvm-args=--inline-threshold=...`)");
     }
 
     if cg_flags.iter().any(|x| *x == "passes=list") {
@@ -1444,6 +1448,7 @@ fn report_ice(
         fallback_bundle,
     ));
     let dcx = rustc_errors::DiagCtxt::new(emitter);
+    let dcx = dcx.handle();
 
     // a .span_bug or .bug call has already printed what
     // it wants to print.
@@ -1509,7 +1514,7 @@ fn report_ice(
 
     let num_frames = if backtrace { None } else { Some(2) };
 
-    interface::try_print_query_stack(&dcx, num_frames, file);
+    interface::try_print_query_stack(dcx, num_frames, file);
 
     // We don't trust this callback not to panic itself, so run it at the end after we're sure we've
     // printed all the relevant info.

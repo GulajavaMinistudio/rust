@@ -499,7 +499,7 @@ impl<'tcx> Ty<'tcx> {
 
     #[inline]
     pub fn new_opaque(tcx: TyCtxt<'tcx>, def_id: DefId, args: GenericArgsRef<'tcx>) -> Ty<'tcx> {
-        Ty::new_alias(tcx, ty::Opaque, AliasTy::new(tcx, def_id, args))
+        Ty::new_alias(tcx, ty::Opaque, AliasTy::new_from_args(tcx, def_id, args))
     }
 
     /// Constructs a `TyKind::Error` type with current `ErrorGuaranteed`
@@ -670,6 +670,15 @@ impl<'tcx> Ty<'tcx> {
     }
 
     #[inline]
+    pub fn new_projection_from_args(
+        tcx: TyCtxt<'tcx>,
+        item_def_id: DefId,
+        args: ty::GenericArgsRef<'tcx>,
+    ) -> Ty<'tcx> {
+        Ty::new_alias(tcx, ty::Projection, AliasTy::new_from_args(tcx, item_def_id, args))
+    }
+
+    #[inline]
     pub fn new_projection(
         tcx: TyCtxt<'tcx>,
         item_def_id: DefId,
@@ -784,6 +793,10 @@ impl<'tcx> Ty<'tcx> {
 impl<'tcx> rustc_type_ir::inherent::Ty<TyCtxt<'tcx>> for Ty<'tcx> {
     fn new_bool(tcx: TyCtxt<'tcx>) -> Self {
         tcx.types.bool
+    }
+
+    fn new_u8(tcx: TyCtxt<'tcx>) -> Self {
+        tcx.types.u8
     }
 
     fn new_infer(tcx: TyCtxt<'tcx>, infer: ty::InferTy) -> Self {
@@ -925,6 +938,22 @@ impl<'tcx> rustc_type_ir::inherent::Ty<TyCtxt<'tcx>> for Ty<'tcx> {
 
     fn new_pat(interner: TyCtxt<'tcx>, ty: Self, pat: ty::Pattern<'tcx>) -> Self {
         Ty::new_pat(interner, ty, pat)
+    }
+
+    fn new_unit(interner: TyCtxt<'tcx>) -> Self {
+        interner.types.unit
+    }
+
+    fn new_usize(interner: TyCtxt<'tcx>) -> Self {
+        interner.types.usize
+    }
+
+    fn discriminant_ty(self, interner: TyCtxt<'tcx>) -> Ty<'tcx> {
+        self.discriminant_ty(interner)
+    }
+
+    fn async_destructor_ty(self, interner: TyCtxt<'tcx>) -> Ty<'tcx> {
+        self.async_destructor_ty(interner)
     }
 }
 
@@ -1389,7 +1418,7 @@ impl<'tcx> Ty<'tcx> {
                 let assoc_items = tcx.associated_item_def_ids(
                     tcx.require_lang_item(hir::LangItem::DiscriminantKind, None),
                 );
-                Ty::new_projection(tcx, assoc_items[0], tcx.mk_args(&[self.into()]))
+                Ty::new_projection_from_args(tcx, assoc_items[0], tcx.mk_args(&[self.into()]))
             }
 
             ty::Pat(ty, _) => ty.discriminant_ty(tcx),

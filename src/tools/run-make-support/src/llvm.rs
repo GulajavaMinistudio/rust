@@ -2,22 +2,31 @@ use std::path::{Path, PathBuf};
 
 use crate::{env_var, Command};
 
-/// Construct a new `llvm-readobj` invocation. This assumes that `llvm-readobj` is available
-/// at `$LLVM_BIN_DIR/llvm-readobj`.
+/// Construct a new `llvm-readobj` invocation with the `GNU` output style.
+/// This assumes that `llvm-readobj` is available at `$LLVM_BIN_DIR/llvm-readobj`.
+#[track_caller]
 pub fn llvm_readobj() -> LlvmReadobj {
     LlvmReadobj::new()
 }
 
 /// Construct a new `llvm-profdata` invocation. This assumes that `llvm-profdata` is available
 /// at `$LLVM_BIN_DIR/llvm-profdata`.
+#[track_caller]
 pub fn llvm_profdata() -> LlvmProfdata {
     LlvmProfdata::new()
 }
 
 /// Construct a new `llvm-filecheck` invocation. This assumes that `llvm-filecheck` is available
 /// at `$LLVM_FILECHECK`.
+#[track_caller]
 pub fn llvm_filecheck() -> LlvmFilecheck {
     LlvmFilecheck::new()
+}
+
+/// Construct a new `llvm-objdump` invocation. This assumes that `llvm-objdump` is available
+/// at `$LLVM_BIN_DIR/llvm-objdump`.
+pub fn llvm_objdump() -> LlvmObjdump {
+    LlvmObjdump::new()
 }
 
 /// A `llvm-readobj` invocation builder.
@@ -41,9 +50,17 @@ pub struct LlvmFilecheck {
     cmd: Command,
 }
 
+/// A `llvm-objdump` invocation builder.
+#[derive(Debug)]
+#[must_use]
+pub struct LlvmObjdump {
+    cmd: Command,
+}
+
 crate::impl_common_helpers!(LlvmReadobj);
 crate::impl_common_helpers!(LlvmProfdata);
 crate::impl_common_helpers!(LlvmFilecheck);
+crate::impl_common_helpers!(LlvmObjdump);
 
 /// Generate the path to the bin directory of LLVM.
 #[must_use]
@@ -53,12 +70,24 @@ pub fn llvm_bin_dir() -> PathBuf {
 }
 
 impl LlvmReadobj {
-    /// Construct a new `llvm-readobj` invocation. This assumes that `llvm-readobj` is available
-    /// at `$LLVM_BIN_DIR/llvm-readobj`.
+    /// Construct a new `llvm-readobj` invocation with the `GNU` output style.
+    /// This assumes that `llvm-readobj` is available at `$LLVM_BIN_DIR/llvm-readobj`.
+    #[track_caller]
     pub fn new() -> Self {
         let llvm_readobj = llvm_bin_dir().join("llvm-readobj");
         let cmd = Command::new(llvm_readobj);
-        Self { cmd }
+        let mut readobj = Self { cmd };
+        readobj.elf_output_style("GNU");
+        readobj
+    }
+
+    /// Specify the format of the ELF information.
+    ///
+    /// Valid options are `LLVM` (default), `GNU`, and `JSON`.
+    pub fn elf_output_style(&mut self, style: &str) -> &mut Self {
+        self.cmd.arg("--elf-output-style");
+        self.cmd.arg(style);
+        self
     }
 
     /// Provide an input file.
@@ -72,11 +101,37 @@ impl LlvmReadobj {
         self.cmd.arg("--file-header");
         self
     }
+
+    /// Pass `--program-headers` to display program headers.
+    pub fn program_headers(&mut self) -> &mut Self {
+        self.cmd.arg("--program-headers");
+        self
+    }
+
+    /// Pass `--symbols` to display the symbol.
+    pub fn symbols(&mut self) -> &mut Self {
+        self.cmd.arg("--symbols");
+        self
+    }
+
+    /// Pass `--dynamic-table` to display the dynamic symbol table.
+    pub fn dynamic_table(&mut self) -> &mut Self {
+        self.cmd.arg("--dynamic-table");
+        self
+    }
+
+    /// Specify the section to display.
+    pub fn section(&mut self, section: &str) -> &mut Self {
+        self.cmd.arg("--string-dump");
+        self.cmd.arg(section);
+        self
+    }
 }
 
 impl LlvmProfdata {
     /// Construct a new `llvm-profdata` invocation. This assumes that `llvm-profdata` is available
     /// at `$LLVM_BIN_DIR/llvm-profdata`.
+    #[track_caller]
     pub fn new() -> Self {
         let llvm_profdata = llvm_bin_dir().join("llvm-profdata");
         let cmd = Command::new(llvm_profdata);
@@ -107,6 +162,7 @@ impl LlvmProfdata {
 impl LlvmFilecheck {
     /// Construct a new `llvm-filecheck` invocation. This assumes that `llvm-filecheck` is available
     /// at `$LLVM_FILECHECK`.
+    #[track_caller]
     pub fn new() -> Self {
         let llvm_filecheck = env_var("LLVM_FILECHECK");
         let cmd = Command::new(llvm_filecheck);
@@ -115,12 +171,28 @@ impl LlvmFilecheck {
 
     /// Pipe a read file into standard input containing patterns that will be matched against the .patterns(path) call.
     pub fn stdin<I: AsRef<[u8]>>(&mut self, input: I) -> &mut Self {
-        self.cmd.set_stdin(input.as_ref().to_vec().into_boxed_slice());
+        self.cmd.stdin(input);
         self
     }
 
     /// Provide the patterns that need to be matched.
     pub fn patterns<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.cmd.arg(path.as_ref());
+        self
+    }
+}
+
+impl LlvmObjdump {
+    /// Construct a new `llvm-objdump` invocation. This assumes that `llvm-objdump` is available
+    /// at `$LLVM_BIN_DIR/llvm-objdump`.
+    pub fn new() -> Self {
+        let llvm_objdump = llvm_bin_dir().join("llvm-objdump");
+        let cmd = Command::new(llvm_objdump);
+        Self { cmd }
+    }
+
+    /// Provide an input file.
+    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.cmd.arg(path.as_ref());
         self
     }

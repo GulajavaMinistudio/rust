@@ -33,7 +33,6 @@ use super::{IntErrorKind, ParseIntError};
     reason = "implementation detail which may disappear or be replaced at any time",
     issue = "none"
 )]
-#[const_trait]
 pub unsafe trait ZeroablePrimitive: Sized + Copy + private::Sealed {
     #[doc(hidden)]
     type NonZeroInner: Sized + Copy;
@@ -47,7 +46,6 @@ macro_rules! impl_zeroable_primitive {
                 reason = "implementation detail which may disappear or be replaced at any time",
                 issue = "none"
             )]
-            #[const_trait]
             pub trait Sealed {}
 
             $(
@@ -70,14 +68,14 @@ macro_rules! impl_zeroable_primitive {
                 reason = "implementation detail which may disappear or be replaced at any time",
                 issue = "none"
             )]
-            impl const private::Sealed for $primitive {}
+            impl private::Sealed for $primitive {}
 
             #[unstable(
                 feature = "nonzero_internals",
                 reason = "implementation detail which may disappear or be replaced at any time",
                 issue = "none"
             )]
-            unsafe impl const ZeroablePrimitive for $primitive {
+            unsafe impl ZeroablePrimitive for $primitive {
                 type NonZeroInner = private::$NonZeroInner;
             }
         )+
@@ -1059,7 +1057,7 @@ macro_rules! nonzero_integer_signedness_dependent_methods {
             unsafe { Self::new_unchecked(self.get().unchecked_add(other)) }
         }
 
-        /// Returns the smallest power of two greater than or equal to n.
+        /// Returns the smallest power of two greater than or equal to `self`.
         /// Checks for overflow and returns [`None`]
         /// if the next power of two is greater than the type’s maximum value.
         /// As a consequence, the result cannot wrap to zero.

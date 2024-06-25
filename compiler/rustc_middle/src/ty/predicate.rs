@@ -49,6 +49,18 @@ impl<'tcx> rustc_type_ir::inherent::Predicate<TyCtxt<'tcx>> for Predicate<'tcx> 
     fn is_coinductive(self, interner: TyCtxt<'tcx>) -> bool {
         self.is_coinductive(interner)
     }
+
+    fn allow_normalization(self) -> bool {
+        self.allow_normalization()
+    }
+}
+
+impl<'tcx> rustc_type_ir::inherent::IntoKind for Predicate<'tcx> {
+    type Kind = ty::Binder<'tcx, ty::PredicateKind<'tcx>>;
+
+    fn kind(self) -> Self::Kind {
+        self.kind()
+    }
 }
 
 impl<'tcx> rustc_type_ir::visit::Flags for Predicate<'tcx> {
@@ -120,6 +132,7 @@ impl<'tcx> Predicate<'tcx> {
     /// unsoundly accept some programs. See #91068.
     #[inline]
     pub fn allow_normalization(self) -> bool {
+        // Keep this in sync with the one in `rustc_type_ir::inherent`!
         match self.kind().skip_binder() {
             PredicateKind::Clause(ClauseKind::WellFormed(_))
             | PredicateKind::AliasRelate(..)
@@ -161,6 +174,14 @@ pub struct Clause<'tcx>(
 );
 
 impl<'tcx> rustc_type_ir::inherent::Clause<TyCtxt<'tcx>> for Clause<'tcx> {}
+
+impl<'tcx> rustc_type_ir::inherent::IntoKind for Clause<'tcx> {
+    type Kind = ty::Binder<'tcx, ClauseKind<'tcx>>;
+
+    fn kind(self) -> Self::Kind {
+        self.kind()
+    }
+}
 
 impl<'tcx> Clause<'tcx> {
     pub fn as_predicate(self) -> Predicate<'tcx> {
@@ -237,6 +258,28 @@ impl<'tcx> ExistentialPredicate<'tcx> {
 }
 
 pub type PolyExistentialPredicate<'tcx> = ty::Binder<'tcx, ExistentialPredicate<'tcx>>;
+
+impl<'tcx> rustc_type_ir::inherent::BoundExistentialPredicates<TyCtxt<'tcx>>
+    for &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>
+{
+    fn principal_def_id(self) -> Option<DefId> {
+        self.principal_def_id()
+    }
+
+    fn principal(self) -> Option<ty::PolyExistentialTraitRef<'tcx>> {
+        self.principal()
+    }
+
+    fn auto_traits(self) -> impl IntoIterator<Item = DefId> {
+        self.auto_traits()
+    }
+
+    fn projection_bounds(
+        self,
+    ) -> impl IntoIterator<Item = ty::Binder<'tcx, ExistentialProjection<'tcx>>> {
+        self.projection_bounds()
+    }
+}
 
 impl<'tcx> ty::List<ty::PolyExistentialPredicate<'tcx>> {
     /// Returns the "principal `DefId`" of this set of existential predicates.
@@ -468,12 +511,6 @@ impl<'tcx> UpcastFrom<TyCtxt<'tcx>, TraitRef<'tcx>> for Predicate<'tcx> {
     }
 }
 
-impl<'tcx> UpcastFrom<TyCtxt<'tcx>, TraitRef<'tcx>> for TraitPredicate<'tcx> {
-    fn upcast_from(from: TraitRef<'tcx>, _tcx: TyCtxt<'tcx>) -> Self {
-        TraitPredicate { trait_ref: from, polarity: PredicatePolarity::Positive }
-    }
-}
-
 impl<'tcx> UpcastFrom<TyCtxt<'tcx>, TraitRef<'tcx>> for Clause<'tcx> {
     fn upcast_from(from: TraitRef<'tcx>, tcx: TyCtxt<'tcx>) -> Self {
         let p: Predicate<'tcx> = from.upcast(tcx);
@@ -527,6 +564,12 @@ impl<'tcx> UpcastFrom<TyCtxt<'tcx>, PolyTraitPredicate<'tcx>> for Clause<'tcx> {
     fn upcast_from(from: PolyTraitPredicate<'tcx>, tcx: TyCtxt<'tcx>) -> Self {
         let p: Predicate<'tcx> = from.upcast(tcx);
         p.expect_clause()
+    }
+}
+
+impl<'tcx> UpcastFrom<TyCtxt<'tcx>, RegionOutlivesPredicate<'tcx>> for Predicate<'tcx> {
+    fn upcast_from(from: RegionOutlivesPredicate<'tcx>, tcx: TyCtxt<'tcx>) -> Self {
+        ty::Binder::dummy(PredicateKind::Clause(ClauseKind::RegionOutlives(from))).upcast(tcx)
     }
 }
 

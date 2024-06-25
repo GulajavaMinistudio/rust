@@ -160,7 +160,7 @@ pub struct ErrorConstraintInfo<'tcx> {
     pub(super) span: Span,
 }
 
-impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
+impl<'tcx> MirBorrowckCtxt<'_, '_, '_, 'tcx> {
     /// Converts a region inference variable into a `ty::Region` that
     /// we can use for error reporting. If `r` is universally bound,
     /// then we use the name that we have on record for it. If `r` is
@@ -631,13 +631,13 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                 let upvars_map = self.infcx.tcx.upvars_mentioned(def_id).unwrap();
                 let upvar_def_span = self.infcx.tcx.hir().span(def_hir);
                 let upvar_span = upvars_map.get(&def_hir).unwrap().span;
-                diag.subdiagnostic(self.dcx(), VarHereDenote::Defined { span: upvar_def_span });
-                diag.subdiagnostic(self.dcx(), VarHereDenote::Captured { span: upvar_span });
+                diag.subdiagnostic(VarHereDenote::Defined { span: upvar_def_span });
+                diag.subdiagnostic(VarHereDenote::Captured { span: upvar_span });
             }
         }
 
         if let Some(fr_span) = self.give_region_a_name(*outlived_fr).unwrap().span() {
-            diag.subdiagnostic(self.dcx(), VarHereDenote::FnMutInferred { span: fr_span });
+            diag.subdiagnostic(VarHereDenote::FnMutInferred { span: fr_span });
         }
 
         self.suggest_move_on_borrowing_closure(&mut diag);
@@ -810,7 +810,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             },
         };
 
-        diag.subdiagnostic(self.dcx(), err_category);
+        diag.subdiagnostic(err_category);
 
         self.add_static_impl_trait_suggestion(&mut diag, *fr, fr_name, *outlived_fr);
         self.suggest_adding_lifetime_params(&mut diag, *fr, *outlived_fr);
@@ -895,7 +895,6 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             for alias_ty in alias_tys {
                 if alias_ty.span.desugaring_kind().is_some() {
                     // Skip `async` desugaring `impl Future`.
-                    ()
                 }
                 if let TyKind::TraitObject(_, lt, _) = alias_ty.kind {
                     if lt.ident.name == kw::Empty {
@@ -1008,7 +1007,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
                     ident.span,
                     "calling this method introduces the `impl`'s `'static` requirement",
                 );
-                err.subdiagnostic(self.dcx(), RequireStaticErr::UsedImpl { multi_span });
+                err.subdiagnostic(RequireStaticErr::UsedImpl { multi_span });
                 err.span_suggestion_verbose(
                     span.shrink_to_hi(),
                     "consider relaxing the implicit `'static` requirement",

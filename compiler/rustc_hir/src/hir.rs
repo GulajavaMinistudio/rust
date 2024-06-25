@@ -463,6 +463,7 @@ pub enum TraitBoundModifier {
 pub enum GenericBound<'hir> {
     Trait(PolyTraitRef<'hir>, TraitBoundModifier),
     Outlives(&'hir Lifetime),
+    Use(&'hir [PreciseCapturingArg<'hir>], Span),
 }
 
 impl GenericBound<'_> {
@@ -477,6 +478,7 @@ impl GenericBound<'_> {
         match self {
             GenericBound::Trait(t, ..) => t.span,
             GenericBound::Outlives(l) => l.ident.span,
+            GenericBound::Use(_, span) => *span,
         }
     }
 }
@@ -2471,6 +2473,15 @@ pub enum AssocItemConstraintKind<'hir> {
     Bound { bounds: &'hir [GenericBound<'hir>] },
 }
 
+impl<'hir> AssocItemConstraintKind<'hir> {
+    pub fn descr(&self) -> &'static str {
+        match self {
+            AssocItemConstraintKind::Equality { .. } => "binding",
+            AssocItemConstraintKind::Bound { .. } => "constraint",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct Ty<'hir> {
     pub hir_id: HirId,
@@ -2680,8 +2691,6 @@ pub struct OpaqueTy<'hir> {
     /// originating from a trait method. This makes it so that the opaque is
     /// lowered as an associated type.
     pub in_trait: bool,
-    /// List of arguments captured via `impl use<'a, P, ...> Trait` syntax.
-    pub precise_capturing_args: Option<(&'hir [PreciseCapturingArg<'hir>], Span)>,
 }
 
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
@@ -3759,6 +3768,21 @@ impl<'hir> Node<'hir> {
             | Node::ForeignItem(ForeignItem {
                 kind: ForeignItemKind::Fn(fn_decl, _, _, _), ..
             }) => Some(fn_decl),
+            _ => None,
+        }
+    }
+
+    /// Get a `hir::Impl` if the node is an impl block for the given `trait_def_id`.
+    pub fn impl_block_of_trait(self, trait_def_id: DefId) -> Option<&'hir Impl<'hir>> {
+        match self {
+            Node::Item(Item { kind: ItemKind::Impl(impl_block), .. })
+                if impl_block
+                    .of_trait
+                    .and_then(|trait_ref| trait_ref.trait_def_id())
+                    .is_some_and(|trait_id| trait_id == trait_def_id) =>
+            {
+                Some(impl_block)
+            }
             _ => None,
         }
     }

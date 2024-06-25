@@ -1245,11 +1245,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     expr,
                 );
 
-                return self
+                return Err(self
                     .commit_if_ok(|_| {
-                        self.at(cause, self.param_env).lub(DefineOpaqueTypes::No, prev_ty, new_ty)
+                        self.at(cause, self.param_env).lub(DefineOpaqueTypes::Yes, prev_ty, new_ty)
                     })
-                    .map(|ok| self.register_infer_ok_obligations(ok));
+                    .unwrap_err());
             }
         }
 
@@ -1259,10 +1259,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if let Some(e) = first_error {
                     Err(e)
                 } else {
-                    self.commit_if_ok(|_| {
-                        self.at(cause, self.param_env).lub(DefineOpaqueTypes::No, prev_ty, new_ty)
-                    })
-                    .map(|ok| self.register_infer_ok_obligations(ok))
+                    Err(self
+                        .commit_if_ok(|_| {
+                            self.at(cause, self.param_env).lub(
+                                DefineOpaqueTypes::Yes,
+                                prev_ty,
+                                new_ty,
+                            )
+                        })
+                        .unwrap_err())
                 }
             }
             Ok(ok) => {
@@ -1782,20 +1787,14 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
         }
 
         let rpid_def_span = fcx.tcx.def_span(rpit_def_id);
-        err.subdiagnostic(
-            fcx.tcx.dcx(),
-            SuggestBoxingForReturnImplTrait::ChangeReturnType {
-                start_sp: rpid_def_span.with_hi(rpid_def_span.lo() + BytePos(4)),
-                end_sp: rpid_def_span.shrink_to_hi(),
-            },
-        );
+        err.subdiagnostic(SuggestBoxingForReturnImplTrait::ChangeReturnType {
+            start_sp: rpid_def_span.with_hi(rpid_def_span.lo() + BytePos(4)),
+            end_sp: rpid_def_span.shrink_to_hi(),
+        });
 
         let (starts, ends) =
             arm_spans.map(|span| (span.shrink_to_lo(), span.shrink_to_hi())).unzip();
-        err.subdiagnostic(
-            fcx.tcx.dcx(),
-            SuggestBoxingForReturnImplTrait::BoxReturnExpr { starts, ends },
-        );
+        err.subdiagnostic(SuggestBoxingForReturnImplTrait::BoxReturnExpr { starts, ends });
     }
 
     fn report_return_mismatched_types<'a>(

@@ -7,7 +7,7 @@ use crate::ty::{
     ConstInt, Expr, ParamConst, ScalarInt, Term, TermKind, TypeFoldable, TypeSuperFoldable,
     TypeSuperVisitable, TypeVisitable, TypeVisitableExt,
 };
-use rustc_apfloat::ieee::{Double, Single};
+use rustc_apfloat::ieee::{Double, Half, Quad, Single};
 use rustc_apfloat::Float;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_data_structures::unord::UnordMap;
@@ -999,7 +999,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                     let trait_ref = bound_predicate.rebind(pred.trait_ref);
 
                     // Don't print `+ Sized`, but rather `+ ?Sized` if absent.
-                    if Some(trait_ref.def_id()) == tcx.lang_items().sized_trait() {
+                    if tcx.is_lang_item(trait_ref.def_id(), LangItem::Sized) {
                         match pred.polarity {
                             ty::PredicatePolarity::Positive => {
                                 has_sized_bound = true;
@@ -1254,14 +1254,14 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 }
                 entry.has_fn_once = true;
                 return;
-            } else if Some(trait_def_id) == self.tcx().lang_items().fn_mut_trait() {
+            } else if self.tcx().is_lang_item(trait_def_id, LangItem::FnMut) {
                 let super_trait_ref = supertraits_for_pretty_printing(self.tcx(), trait_ref)
                     .find(|super_trait_ref| super_trait_ref.def_id() == fn_once_trait)
                     .unwrap();
 
                 fn_traits.entry(super_trait_ref).or_default().fn_mut_trait_ref = Some(trait_ref);
                 return;
-            } else if Some(trait_def_id) == self.tcx().lang_items().fn_trait() {
+            } else if self.tcx().is_lang_item(trait_def_id, LangItem::Fn) {
                 let super_trait_ref = supertraits_for_pretty_printing(self.tcx(), trait_ref)
                     .find(|super_trait_ref| super_trait_ref.def_id() == fn_once_trait)
                     .unwrap();
@@ -1710,6 +1710,10 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             ty::Bool if int == ScalarInt::FALSE => p!("false"),
             ty::Bool if int == ScalarInt::TRUE => p!("true"),
             // Float
+            ty::Float(ty::FloatTy::F16) => {
+                let val = Half::try_from(int).unwrap();
+                p!(write("{}{}f16", val, if val.is_finite() { "" } else { "_" }))
+            }
             ty::Float(ty::FloatTy::F32) => {
                 let val = Single::try_from(int).unwrap();
                 p!(write("{}{}f32", val, if val.is_finite() { "" } else { "_" }))
@@ -1717,6 +1721,10 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             ty::Float(ty::FloatTy::F64) => {
                 let val = Double::try_from(int).unwrap();
                 p!(write("{}{}f64", val, if val.is_finite() { "" } else { "_" }))
+            }
+            ty::Float(ty::FloatTy::F128) => {
+                let val = Quad::try_from(int).unwrap();
+                p!(write("{}{}f128", val, if val.is_finite() { "" } else { "_" }))
             }
             // Int
             ty::Uint(_) | ty::Int(_) => {
@@ -2521,7 +2529,7 @@ struct RegionFolder<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> ty::TypeFolder<TyCtxt<'tcx>> for RegionFolder<'a, 'tcx> {
-    fn interner(&self) -> TyCtxt<'tcx> {
+    fn cx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
 

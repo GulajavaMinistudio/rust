@@ -19,8 +19,8 @@ use crate::mem::{self, ManuallyDrop};
 use crate::process;
 use crate::sync::atomic::{AtomicBool, Ordering};
 use crate::sync::{PoisonError, RwLock};
+use crate::sys::backtrace;
 use crate::sys::stdio::panic_output;
-use crate::sys_common::backtrace;
 use crate::thread;
 
 #[cfg(not(test))]
@@ -593,19 +593,18 @@ pub fn panicking() -> bool {
 #[panic_handler]
 pub fn begin_panic_handler(info: &core::panic::PanicInfo<'_>) -> ! {
     struct FormatStringPayload<'a> {
-        inner: &'a fmt::Arguments<'a>,
+        inner: &'a core::panic::PanicMessage<'a>,
         string: Option<String>,
     }
 
     impl FormatStringPayload<'_> {
         fn fill(&mut self) -> &mut String {
-            use crate::fmt::Write;
-
             let inner = self.inner;
             // Lazily, the first time this gets called, run the actual string formatting.
             self.string.get_or_insert_with(|| {
                 let mut s = String::new();
-                let _err = s.write_fmt(*inner);
+                let mut fmt = fmt::Formatter::new(&mut s);
+                let _err = fmt::Display::fmt(&inner, &mut fmt);
                 s
             })
         }
@@ -627,7 +626,11 @@ pub fn begin_panic_handler(info: &core::panic::PanicInfo<'_>) -> ! {
 
     impl fmt::Display for FormatStringPayload<'_> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            if let Some(s) = &self.string { f.write_str(s) } else { f.write_fmt(*self.inner) }
+            if let Some(s) = &self.string {
+                f.write_str(s)
+            } else {
+                fmt::Display::fmt(&self.inner, f)
+            }
         }
     }
 
@@ -655,7 +658,7 @@ pub fn begin_panic_handler(info: &core::panic::PanicInfo<'_>) -> ! {
 
     let loc = info.location().unwrap(); // The current implementation always returns Some
     let msg = info.message();
-    crate::sys_common::backtrace::__rust_end_short_backtrace(move || {
+    crate::sys::backtrace::__rust_end_short_backtrace(move || {
         if let Some(s) = msg.as_str() {
             rust_panic_with_hook(
                 &mut StaticStrPayload(s),
@@ -727,7 +730,7 @@ pub const fn begin_panic<M: Any + Send>(msg: M) -> ! {
     }
 
     let loc = Location::caller();
-    crate::sys_common::backtrace::__rust_end_short_backtrace(move || {
+    crate::sys::backtrace::__rust_end_short_backtrace(move || {
         rust_panic_with_hook(
             &mut Payload { inner: Some(msg) },
             loc,

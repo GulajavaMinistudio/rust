@@ -4,12 +4,12 @@ pub use lexical_region_resolve::RegionResolutionError;
 pub use relate::combine::CombineFields;
 pub use relate::combine::PredicateEmittingRelation;
 pub use relate::StructurallyRelateAliases;
+use rustc_errors::DiagCtxtHandle;
 pub use rustc_macros::{TypeFoldable, TypeVisitable};
 pub use rustc_middle::ty::IntVarValue;
 pub use BoundRegionConversionTime::*;
 pub use RegionVariableOrigin::*;
 pub use SubregionOrigin::*;
-pub use ValuePairs::*;
 
 use crate::infer::relate::RelateResult;
 use crate::traits::{self, ObligationCause, ObligationInspector, PredicateObligation, TraitEngine};
@@ -24,7 +24,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::undo_log::Rollback;
 use rustc_data_structures::unify as ut;
-use rustc_errors::{Diag, DiagCtxt, ErrorGuaranteed};
+use rustc_errors::{Diag, ErrorGuaranteed};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_macros::extension;
 use rustc_middle::infer::canonical::{Canonical, CanonicalVarValues};
@@ -35,6 +35,7 @@ use rustc_middle::infer::unify_key::{ConstVidKey, EffectVidKey};
 use rustc_middle::mir::interpret::{ErrorHandled, EvalToValTreeResult};
 use rustc_middle::mir::ConstraintCategory;
 use rustc_middle::traits::select;
+use rustc_middle::traits::solve::{Goal, NoSolution};
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::fold::BoundVarReplacerDelegate;
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
@@ -334,79 +335,6 @@ pub struct InferCtxt<'tcx> {
     pub obligation_inspector: Cell<Option<ObligationInspector<'tcx>>>,
 }
 
-impl<'tcx> ty::InferCtxtLike for InferCtxt<'tcx> {
-    type Interner = TyCtxt<'tcx>;
-
-    fn interner(&self) -> TyCtxt<'tcx> {
-        self.tcx
-    }
-
-    fn universe_of_ty(&self, vid: TyVid) -> Option<ty::UniverseIndex> {
-        // FIXME(BoxyUwU): this is kind of jank and means that printing unresolved
-        // ty infers will give you the universe of the var it resolved to not the universe
-        // it actually had. It also means that if you have a `?0.1` and infer it to `u8` then
-        // try to print out `?0.1` it will just print `?0`.
-        match self.probe_ty_var(vid) {
-            Err(universe) => Some(universe),
-            Ok(_) => None,
-        }
-    }
-
-    fn universe_of_ct(&self, ct: ConstVid) -> Option<ty::UniverseIndex> {
-        // Same issue as with `universe_of_ty`
-        match self.probe_const_var(ct) {
-            Err(universe) => Some(universe),
-            Ok(_) => None,
-        }
-    }
-
-    fn universe_of_lt(&self, lt: ty::RegionVid) -> Option<ty::UniverseIndex> {
-        match self.inner.borrow_mut().unwrap_region_constraints().probe_value(lt) {
-            Err(universe) => Some(universe),
-            Ok(_) => None,
-        }
-    }
-
-    fn opportunistic_resolve_lt_var(&self, vid: ty::RegionVid) -> ty::Region<'tcx> {
-        self.inner.borrow_mut().unwrap_region_constraints().opportunistic_resolve_var(self.tcx, vid)
-    }
-
-    fn defining_opaque_types(&self) -> &'tcx ty::List<LocalDefId> {
-        self.defining_opaque_types
-    }
-
-    fn opportunistic_resolve_ty_var(&self, vid: TyVid) -> Ty<'tcx> {
-        match self.probe_ty_var(vid) {
-            Ok(ty) => ty,
-            Err(_) => Ty::new_var(self.tcx, self.root_var(vid)),
-        }
-    }
-
-    fn opportunistic_resolve_int_var(&self, vid: IntVid) -> Ty<'tcx> {
-        self.opportunistic_resolve_int_var(vid)
-    }
-
-    fn opportunistic_resolve_float_var(&self, vid: FloatVid) -> Ty<'tcx> {
-        self.opportunistic_resolve_float_var(vid)
-    }
-
-    fn opportunistic_resolve_ct_var(&self, vid: ConstVid) -> ty::Const<'tcx> {
-        match self.probe_const_var(vid) {
-            Ok(ct) => ct,
-            Err(_) => ty::Const::new_var(self.tcx, self.root_const_var(vid)),
-        }
-    }
-
-    fn opportunistic_resolve_effect_var(&self, vid: EffectVid) -> ty::Const<'tcx> {
-        match self.probe_effect_var(vid) {
-            Some(ct) => ct,
-            None => {
-                ty::Const::new_infer(self.tcx, InferConst::EffectVar(self.root_effect_var(vid)))
-            }
-        }
-    }
-}
-
 /// See the `error_reporting` module for more details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, TypeFoldable, TypeVisitable)]
 pub enum ValuePairs<'tcx> {
@@ -417,6 +345,7 @@ pub enum ValuePairs<'tcx> {
     PolySigs(ExpectedFound<ty::PolyFnSig<'tcx>>),
     ExistentialTraitRef(ExpectedFound<ty::PolyExistentialTraitRef<'tcx>>),
     ExistentialProjection(ExpectedFound<ty::PolyExistentialProjection<'tcx>>),
+    Dummy,
 }
 
 impl<'tcx> ValuePairs<'tcx> {
@@ -755,8 +684,12 @@ impl<'tcx> InferOk<'tcx, ()> {
 }
 
 impl<'tcx> InferCtxt<'tcx> {
-    pub fn dcx(&self) -> &'tcx DiagCtxt {
+    pub fn dcx(&self) -> DiagCtxtHandle<'tcx> {
         self.tcx.dcx()
+    }
+
+    pub fn defining_opaque_types(&self) -> &'tcx ty::List<LocalDefId> {
+        self.defining_opaque_types
     }
 
     pub fn next_trait_solver(&self) -> bool {
@@ -810,13 +743,13 @@ impl<'tcx> InferCtxt<'tcx> {
             .collect();
         vars.extend(
             (0..inner.int_unification_table().len())
-                .map(|i| ty::IntVid::from_u32(i as u32))
+                .map(|i| ty::IntVid::from_usize(i))
                 .filter(|&vid| inner.int_unification_table().probe_value(vid).is_unknown())
                 .map(|v| Ty::new_int_var(self.tcx, v)),
         );
         vars.extend(
             (0..inner.float_unification_table().len())
-                .map(|i| ty::FloatVid::from_u32(i as u32))
+                .map(|i| ty::FloatVid::from_usize(i))
                 .filter(|&vid| inner.float_unification_table().probe_value(vid).is_unknown())
                 .map(|v| Ty::new_float_var(self.tcx, v)),
         );
@@ -945,9 +878,9 @@ impl<'tcx> InferCtxt<'tcx> {
 
         self.enter_forall(predicate, |ty::SubtypePredicate { a_is_expected, a, b }| {
             if a_is_expected {
-                Ok(self.at(cause, param_env).sub(DefineOpaqueTypes::No, a, b))
+                Ok(self.at(cause, param_env).sub(DefineOpaqueTypes::Yes, a, b))
             } else {
-                Ok(self.at(cause, param_env).sup(DefineOpaqueTypes::No, b, a))
+                Ok(self.at(cause, param_env).sup(DefineOpaqueTypes::Yes, b, a))
             }
         })
     }
@@ -1786,7 +1719,7 @@ struct InferenceLiteralEraser<'tcx> {
 }
 
 impl<'tcx> TypeFolder<TyCtxt<'tcx>> for InferenceLiteralEraser<'tcx> {
-    fn interner(&self) -> TyCtxt<'tcx> {
+    fn cx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
 
@@ -1812,7 +1745,7 @@ impl<'tcx> TypeTrace<'tcx> {
     ) -> TypeTrace<'tcx> {
         TypeTrace {
             cause: cause.clone(),
-            values: Terms(ExpectedFound::new(a_is_expected, a.into(), b.into())),
+            values: ValuePairs::Terms(ExpectedFound::new(a_is_expected, a.into(), b.into())),
         }
     }
 
@@ -1824,7 +1757,7 @@ impl<'tcx> TypeTrace<'tcx> {
     ) -> TypeTrace<'tcx> {
         TypeTrace {
             cause: cause.clone(),
-            values: TraitRefs(ExpectedFound::new(a_is_expected, a, b)),
+            values: ValuePairs::TraitRefs(ExpectedFound::new(a_is_expected, a, b)),
         }
     }
 
@@ -1836,8 +1769,12 @@ impl<'tcx> TypeTrace<'tcx> {
     ) -> TypeTrace<'tcx> {
         TypeTrace {
             cause: cause.clone(),
-            values: Terms(ExpectedFound::new(a_is_expected, a.into(), b.into())),
+            values: ValuePairs::Terms(ExpectedFound::new(a_is_expected, a.into(), b.into())),
         }
+    }
+
+    fn dummy(cause: &ObligationCause<'tcx>) -> TypeTrace<'tcx> {
+        TypeTrace { cause: cause.clone(), values: ValuePairs::Dummy }
     }
 }
 
@@ -1922,7 +1859,7 @@ fn replace_param_and_infer_args_with_placeholder<'tcx>(
     }
 
     impl<'tcx> TypeFolder<TyCtxt<'tcx>> for ReplaceParamAndInferWithPlaceholder<'tcx> {
-        fn interner(&self) -> TyCtxt<'tcx> {
+        fn cx(&self) -> TyCtxt<'tcx> {
             self.tcx
         }
 
