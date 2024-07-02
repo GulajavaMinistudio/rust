@@ -274,7 +274,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
 
         self.check_repr(attrs, span, target, item, hir_id);
-        self.check_used(attrs, target);
+        self.check_used(attrs, target, span);
     }
 
     fn inline_attr_str_error_with_macro_def(&self, hir_id: HirId, attr: &Attribute, sym: &str) {
@@ -369,13 +369,16 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    /// Checks that `#[coverage(..)]` is applied to a function or closure.
+    /// Checks that `#[coverage(..)]` is applied to a function/closure/method,
+    /// or to an impl block or module.
     fn check_coverage(&self, attr: &Attribute, span: Span, target: Target) -> bool {
         match target {
-            // #[coverage(..)] on function is fine
             Target::Fn
             | Target::Closure
-            | Target::Method(MethodKind::Trait { body: true } | MethodKind::Inherent) => true,
+            | Target::Method(MethodKind::Trait { body: true } | MethodKind::Inherent)
+            | Target::Impl
+            | Target::Mod => true,
+
             _ => {
                 self.dcx().emit_err(errors::CoverageNotFnOrClosure {
                     attr_span: attr.span,
@@ -1927,12 +1930,16 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    fn check_used(&self, attrs: &[Attribute], target: Target) {
+    fn check_used(&self, attrs: &[Attribute], target: Target, target_span: Span) {
         let mut used_linker_span = None;
         let mut used_compiler_span = None;
         for attr in attrs.iter().filter(|attr| attr.has_name(sym::used)) {
             if target != Target::Static {
-                self.dcx().emit_err(errors::UsedStatic { span: attr.span });
+                self.dcx().emit_err(errors::UsedStatic {
+                    attr_span: attr.span,
+                    span: target_span,
+                    target: target.name(),
+                });
             }
             let inner = attr.meta_item_list();
             match inner.as_deref() {

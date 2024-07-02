@@ -1,11 +1,13 @@
 use rustc_ast::{ast, attr, MetaItemKind, NestedMetaItem};
 use rustc_attr::{list_contains_name, InlineAttr, InstructionSetAttr, OptimizeAttr};
-use rustc_errors::{codes::*, struct_span_code_err};
+use rustc_errors::{codes::*, struct_span_code_err, DiagMessage, SubdiagMessage};
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId, LOCAL_CRATE};
 use rustc_hir::{lang_items, weak_lang_items::WEAK_LANG_ITEMS, LangItem};
-use rustc_middle::middle::codegen_fn_attrs::{CodegenFnAttrFlags, CodegenFnAttrs};
+use rustc_middle::middle::codegen_fn_attrs::{
+    CodegenFnAttrFlags, CodegenFnAttrs, PatchableFunctionEntry,
+};
 use rustc_middle::mir::mono::Linkage;
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{self as ty, TyCtxt};
@@ -122,22 +124,6 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: LocalDefId) -> CodegenFnAttrs {
                             ),
                         )
                         .emit();
-                }
-            }
-            sym::coverage => {
-                let inner = attr.meta_item_list();
-                match inner.as_deref() {
-                    Some([item]) if item.has_name(sym::off) => {
-                        codegen_fn_attrs.flags |= CodegenFnAttrFlags::NO_COVERAGE;
-                    }
-                    Some([item]) if item.has_name(sym::on) => {
-                        // Allow #[coverage(on)] for being explicit, maybe also in future to enable
-                        // coverage on a smaller scope within an excluded larger scope.
-                    }
-                    Some(_) | None => {
-                        tcx.dcx()
-                            .span_delayed_bug(attr.span, "unexpected value of coverage attribute");
-                    }
                 }
             }
             sym::rustc_std_internal_symbol => {
@@ -463,6 +449,80 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: LocalDefId) -> CodegenFnAttrs {
                     None
                 };
             }
+            sym::patchable_function_entry => {
+                codegen_fn_attrs.patchable_function_entry = attr.meta_item_list().and_then(|l| {
+                    let mut prefix = None;
+                    let mut entry = None;
+                    for item in l {
+                        let Some(meta_item) = item.meta_item() else {
+                            tcx.dcx().span_err(item.span(), "expected name value pair");
+                            continue;
+                        };
+
+                        let Some(name_value_lit) = meta_item.name_value_literal() else {
+                            tcx.dcx().span_err(item.span(), "expected name value pair");
+                            continue;
+                        };
+
+                        fn emit_error_with_label(
+                            tcx: TyCtxt<'_>,
+                            span: Span,
+                            error: impl Into<DiagMessage>,
+                            label: impl Into<SubdiagMessage>,
+                        ) {
+                            let mut err: rustc_errors::Diag<'_, _> =
+                                tcx.dcx().struct_span_err(span, error);
+                            err.span_label(span, label);
+                            err.emit();
+                        }
+
+                        let attrib_to_write = match meta_item.name_or_empty() {
+                            sym::prefix_nops => &mut prefix,
+                            sym::entry_nops => &mut entry,
+                            _ => {
+                                emit_error_with_label(
+                                    tcx,
+                                    item.span(),
+                                    "unexpected parameter name",
+                                    format!("expected {} or {}", sym::prefix_nops, sym::entry_nops),
+                                );
+                                continue;
+                            }
+                        };
+
+                        let rustc_ast::LitKind::Int(val, _) = name_value_lit.kind else {
+                            emit_error_with_label(
+                                tcx,
+                                name_value_lit.span,
+                                "invalid literal value",
+                                "value must be an integer between `0` and `255`",
+                            );
+                            continue;
+                        };
+
+                        let Ok(val) = val.get().try_into() else {
+                            emit_error_with_label(
+                                tcx,
+                                name_value_lit.span,
+                                "integer value out of range",
+                                "value must be between `0` and `255`",
+                            );
+                            continue;
+                        };
+
+                        *attrib_to_write = Some(val);
+                    }
+
+                    if let (None, None) = (prefix, entry) {
+                        tcx.dcx().span_err(attr.span, "must specify at least one parameter");
+                    }
+
+                    Some(PatchableFunctionEntry::from_prefix_and_entry(
+                        prefix.unwrap_or(0),
+                        entry.unwrap_or(0),
+                    ))
+                })
+            }
             _ => {}
         }
     }
@@ -584,7 +644,6 @@ fn codegen_fn_attrs(tcx: TyCtxt<'_>, did: LocalDefId) -> CodegenFnAttrs {
     }
 
     if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::NAKED) {
-        codegen_fn_attrs.flags |= CodegenFnAttrFlags::NO_COVERAGE;
         codegen_fn_attrs.inline = InlineAttr::Never;
     }
 

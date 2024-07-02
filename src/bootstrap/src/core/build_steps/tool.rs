@@ -9,6 +9,7 @@ use crate::core::builder;
 use crate::core::builder::{Builder, Cargo as CargoCommand, RunConfig, ShouldRun, Step};
 use crate::core::config::TargetSelection;
 use crate::utils::channel::GitInfo;
+use crate::utils::exec::BootstrapCommand;
 use crate::utils::helpers::output;
 use crate::utils::helpers::{add_dylib_path, exe, t};
 use crate::Compiler;
@@ -211,6 +212,13 @@ pub fn prepare_tool_cargo(
     // See https://github.com/rust-lang/rust/issues/116538
     cargo.rustflag("-Zunstable-options");
 
+    // `-Zon-broken-pipe=kill` breaks cargo tests
+    if !path.ends_with("cargo") {
+        // If the output is piped to e.g. `head -n1` we want the process to be killed,
+        // rather than having an error bubble up and cause a panic.
+        cargo.rustflag("-Zon-broken-pipe=kill");
+    }
+
     cargo
 }
 
@@ -329,6 +337,7 @@ bootstrap_tool!(
     GenerateWindowsSys, "src/tools/generate-windows-sys", "generate-windows-sys";
     RustdocGUITest, "src/tools/rustdoc-gui-test", "rustdoc-gui-test", is_unstable_tool = true, allow_features = "test";
     CoverageDump, "src/tools/coverage-dump", "coverage-dump";
+    RustcPerfWrapper, "src/tools/rustc-perf-wrapper", "rustc-perf-wrapper";
 );
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -425,12 +434,12 @@ pub struct ErrorIndex {
 }
 
 impl ErrorIndex {
-    pub fn command(builder: &Builder<'_>) -> Command {
+    pub fn command(builder: &Builder<'_>) -> BootstrapCommand {
         // Error-index-generator links with the rustdoc library, so we need to add `rustc_lib_paths`
         // for rustc_private and libLLVM.so, and `sysroot_lib` for libstd, etc.
         let host = builder.config.build;
         let compiler = builder.compiler_for(builder.top_stage, host, host);
-        let mut cmd = Command::new(builder.ensure(ErrorIndex { compiler }));
+        let mut cmd = BootstrapCommand::new(builder.ensure(ErrorIndex { compiler }));
         let mut dylib_paths = builder.rustc_lib_paths(compiler);
         dylib_paths.push(PathBuf::from(&builder.sysroot_libdir(compiler, compiler.host)));
         add_dylib_path(dylib_paths, &mut cmd);
@@ -544,24 +553,23 @@ impl Step for Rustdoc {
             return builder.initial_rustc.with_file_name(exe("rustdoc", target_compiler.host));
         }
         let target = target_compiler.host;
-        // Similar to `compile::Assemble`, build with the previous stage's compiler. Otherwise
-        // we'd have stageN/bin/rustc and stageN/bin/rustdoc be effectively different stage
-        // compilers, which isn't what we want. Rustdoc should be linked in the same way as the
-        // rustc compiler it's paired with, so it must be built with the previous stage compiler.
-        let build_compiler = builder.compiler(target_compiler.stage - 1, builder.config.build);
+
+        let build_compiler = if builder.download_rustc() && target_compiler.stage == 1 {
+            // We already have the stage 1 compiler, we don't need to cut the stage.
+            builder.compiler(target_compiler.stage, builder.config.build)
+        } else {
+            // Similar to `compile::Assemble`, build with the previous stage's compiler. Otherwise
+            // we'd have stageN/bin/rustc and stageN/bin/rustdoc be effectively different stage
+            // compilers, which isn't what we want. Rustdoc should be linked in the same way as the
+            // rustc compiler it's paired with, so it must be built with the previous stage compiler.
+            builder.compiler(target_compiler.stage - 1, builder.config.build)
+        };
 
         // When using `download-rustc` and a stage0 build_compiler, copying rustc doesn't actually
         // build stage0 libstd (because the libstd in sysroot has the wrong ABI). Explicitly build
         // it.
         builder.ensure(compile::Std::new(build_compiler, target_compiler.host));
         builder.ensure(compile::Rustc::new(build_compiler, target_compiler.host));
-        // NOTE: this implies that `download-rustc` is pretty useless when compiling with the stage0
-        // compiler, since you do just as much work.
-        if !builder.config.dry_run() && builder.download_rustc() && build_compiler.stage == 0 {
-            println!(
-                "WARNING: `download-rustc` does nothing when building stage1 tools; consider using `--stage 2` instead"
-            );
-        }
 
         // The presence of `target_compiler` ensures that the necessary libraries (codegen backends,
         // compiler libraries, ...) are built. Rustdoc does not require the presence of any
@@ -575,7 +583,8 @@ impl Step for Rustdoc {
             features.push("jemalloc".to_string());
         }
 
-        let mut cargo = prepare_tool_cargo(
+        // NOTE: Never modify the rustflags here, it breaks the build cache for other tools!
+        let cargo = prepare_tool_cargo(
             builder,
             build_compiler,
             Mode::ToolRustc,
@@ -586,11 +595,6 @@ impl Step for Rustdoc {
             features.as_slice(),
         );
 
-        // If the rustdoc output is piped to e.g. `head -n1` we want the process
-        // to be killed, rather than having an error bubble up and cause a
-        // panic.
-        cargo.rustflag("-Zon-broken-pipe=kill");
-
         let _guard = builder.msg_tool(
             Kind::Build,
             Mode::ToolRustc,
@@ -599,7 +603,7 @@ impl Step for Rustdoc {
             &self.compiler.host,
             &target,
         );
-        builder.run(&mut cargo.into());
+        builder.run(cargo);
 
         // Cargo adds a number of paths to the dylib search path on windows, which results in
         // the wrong rustdoc being executed. To avoid the conflicting rustdocs, we name the "tool"
@@ -654,6 +658,8 @@ impl Step for Cargo {
     }
 
     fn run(self, builder: &Builder<'_>) -> PathBuf {
+        builder.build.update_submodule(Path::new("src/tools/cargo"));
+
         builder.ensure(ToolBuild {
             compiler: self.compiler,
             target: self.target,
@@ -852,7 +858,7 @@ impl Step for LlvmBitcodeLinker {
             &self.extra_features,
         );
 
-        builder.run(&mut cargo.into());
+        builder.run(cargo);
 
         let tool_out = builder
             .cargo_out(self.compiler, Mode::ToolRustc, self.target)
@@ -907,13 +913,13 @@ impl Step for LibcxxVersionTool {
             }
 
             let compiler = builder.cxx(self.target).unwrap();
-            let mut cmd = Command::new(compiler);
+            let mut cmd = BootstrapCommand::new(compiler);
 
             cmd.arg("-o")
                 .arg(&executable)
                 .arg(builder.src.join("src/tools/libcxx-version/main.cpp"));
 
-            builder.run_cmd(&mut cmd);
+            builder.run(cmd);
 
             if !executable.exists() {
                 panic!("Something went wrong. {} is not present", executable.display());
@@ -1041,10 +1047,10 @@ tool_extended!((self, builder),
 );
 
 impl<'a> Builder<'a> {
-    /// Gets a `Command` which is ready to run `tool` in `stage` built for
+    /// Gets a `BootstrapCommand` which is ready to run `tool` in `stage` built for
     /// `host`.
-    pub fn tool_cmd(&self, tool: Tool) -> Command {
-        let mut cmd = Command::new(self.tool_exe(tool));
+    pub fn tool_cmd(&self, tool: Tool) -> BootstrapCommand {
+        let mut cmd = BootstrapCommand::new(self.tool_exe(tool));
         let compiler = self.compiler(0, self.config.build);
         let host = &compiler.host;
         // Prepares the `cmd` provided to be able to run the `compiler` provided.

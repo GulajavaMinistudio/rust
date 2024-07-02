@@ -142,14 +142,19 @@ struct LoweringContext<'a, 'hir> {
     generics_def_id_map: Vec<LocalDefIdMap<LocalDefId>>,
 
     host_param_id: Option<LocalDefId>,
+    ast_index: &'a IndexSlice<LocalDefId, AstOwner<'a>>,
 }
 
 impl<'a, 'hir> LoweringContext<'a, 'hir> {
-    fn new(tcx: TyCtxt<'hir>, resolver: &'a mut ResolverAstLowering) -> Self {
+    fn new(
+        tcx: TyCtxt<'hir>,
+        resolver: &'a mut ResolverAstLowering,
+        ast_index: &'a IndexSlice<LocalDefId, AstOwner<'a>>,
+    ) -> Self {
         Self {
             // Pseudo-globals.
             tcx,
-            resolver: resolver,
+            resolver,
             arena: tcx.hir_arena,
 
             // HirId handling.
@@ -185,6 +190,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             allow_async_iterator: [sym::gen_future, sym::async_iterator].into(),
             generics_def_id_map: Default::default(),
             host_param_id: None,
+            ast_index,
         }
     }
 
@@ -1594,6 +1600,26 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         };
         debug!(?captured_lifetimes_to_duplicate);
 
+        match fn_kind {
+            // Deny `use<>` on RPITIT in trait/trait-impl for now.
+            Some(FnDeclKind::Trait | FnDeclKind::Impl) => {
+                if let Some(span) = bounds.iter().find_map(|bound| match *bound {
+                    ast::GenericBound::Use(_, span) => Some(span),
+                    _ => None,
+                }) {
+                    self.tcx.dcx().emit_err(errors::NoPreciseCapturesOnRpitit { span });
+                }
+            }
+            None
+            | Some(
+                FnDeclKind::Fn
+                | FnDeclKind::Inherent
+                | FnDeclKind::ExternFn
+                | FnDeclKind::Closure
+                | FnDeclKind::Pointer,
+            ) => {}
+        }
+
         self.lower_opaque_inner(
             opaque_ty_node_id,
             origin,
@@ -2115,7 +2141,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         param: &GenericParam,
         source: hir::GenericParamSource,
     ) -> hir::GenericParam<'hir> {
-        let (name, kind) = self.lower_generic_param_kind(param, source);
+        let (name, kind) = self.lower_generic_param_kind(
+            param,
+            source,
+            attr::contains_name(&param.attrs, sym::rustc_runtime),
+        );
 
         let hir_id = self.lower_node_id(param.id);
         self.lower_attrs(hir_id, &param.attrs);
@@ -2135,6 +2165,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         &mut self,
         param: &GenericParam,
         source: hir::GenericParamSource,
+        is_host_effect: bool,
     ) -> (hir::ParamName, hir::GenericParamKind<'hir>) {
         match &param.kind {
             GenericParamKind::Lifetime => {
@@ -2200,7 +2231,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
                 (
                     hir::ParamName::Plain(self.lower_ident(param.ident)),
-                    hir::GenericParamKind::Const { ty, default, is_host_effect: false },
+                    hir::GenericParamKind::Const { ty, default, is_host_effect, synthetic: false },
                 )
             }
         }
@@ -2587,78 +2618,6 @@ struct GenericArgsCtor<'hir> {
 }
 
 impl<'hir> GenericArgsCtor<'hir> {
-    fn push_constness(
-        &mut self,
-        lcx: &mut LoweringContext<'_, 'hir>,
-        constness: ast::BoundConstness,
-    ) {
-        if !lcx.tcx.features().effects {
-            return;
-        }
-
-        let (span, body) = match constness {
-            BoundConstness::Never => return,
-            BoundConstness::Always(span) => {
-                let span = lcx.lower_span(span);
-
-                let body = hir::ExprKind::Lit(
-                    lcx.arena.alloc(hir::Lit { node: LitKind::Bool(false), span }),
-                );
-
-                (span, body)
-            }
-            BoundConstness::Maybe(span) => {
-                let span = lcx.lower_span(span);
-
-                let Some(host_param_id) = lcx.host_param_id else {
-                    lcx.dcx().span_delayed_bug(
-                        span,
-                        "no host param id for call in const yet no errors reported",
-                    );
-                    return;
-                };
-
-                let hir_id = lcx.next_id();
-                let res = Res::Def(DefKind::ConstParam, host_param_id.to_def_id());
-                let body = hir::ExprKind::Path(hir::QPath::Resolved(
-                    None,
-                    lcx.arena.alloc(hir::Path {
-                        span,
-                        res,
-                        segments: arena_vec![
-                            lcx;
-                            hir::PathSegment::new(
-                                Ident { name: sym::host, span },
-                                hir_id,
-                                res
-                            )
-                        ],
-                    }),
-                ));
-
-                (span, body)
-            }
-        };
-        let body = lcx.lower_body(|lcx| (&[], lcx.expr(span, body)));
-
-        let id = lcx.next_node_id();
-        let hir_id = lcx.next_id();
-
-        let def_id = lcx.create_def(
-            lcx.current_hir_id_owner.def_id,
-            id,
-            kw::Empty,
-            DefKind::AnonConst,
-            span,
-        );
-
-        lcx.children.push((def_id, hir::MaybeOwner::NonOwner(hir_id)));
-        self.args.push(hir::GenericArg::Const(hir::ConstArg {
-            value: lcx.arena.alloc(hir::AnonConst { def_id, hir_id, body, span }),
-            is_desugared_from_effects: true,
-        }))
-    }
-
     fn is_empty(&self) -> bool {
         self.args.is_empty()
             && self.constraints.is_empty()

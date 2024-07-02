@@ -74,6 +74,7 @@ declare_lint_pass! {
         NON_CONTIGUOUS_RANGE_ENDPOINTS,
         NON_EXHAUSTIVE_OMITTED_PATTERNS,
         ORDER_DEPENDENT_TRAIT_OBJECTS,
+        OUT_OF_SCOPE_MACRO_CALLS,
         OVERLAPPING_RANGE_ENDPOINTS,
         PATTERNS_IN_FNS_WITHOUT_BODY,
         PRIVATE_BOUNDS,
@@ -608,13 +609,13 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `unfulfilled_lint_expectations` lint detects lint trigger expectations
-    /// that have not been fulfilled.
+    /// The `unfulfilled_lint_expectations` lint detects when a lint expectation is
+    /// unfulfilled.
     ///
     /// ### Example
     ///
     /// ```rust
-    /// #![feature(lint_reasons)]
+    /// #![cfg_attr(bootstrap, feature(lint_reasons))]
     ///
     /// #[expect(unused_variables)]
     /// let x = 10;
@@ -625,24 +626,14 @@ declare_lint! {
     ///
     /// ### Explanation
     ///
-    /// It was expected that the marked code would emit a lint. This expectation
-    /// has not been fulfilled.
+    /// The `#[expect]` attribute can be used to create a lint expectation. The
+    /// expectation is fulfilled, if a `#[warn]` attribute at the same location
+    /// would result in a lint emission. If the expectation is unfulfilled,
+    /// because no lint was emitted, this lint will be emitted on the attribute.
     ///
-    /// The `expect` attribute can be removed if this is intended behavior otherwise
-    /// it should be investigated why the expected lint is no longer issued.
-    ///
-    /// In rare cases, the expectation might be emitted at a different location than
-    /// shown in the shown code snippet. In most cases, the `#[expect]` attribute
-    /// works when added to the outer scope. A few lints can only be expected
-    /// on a crate level.
-    ///
-    /// Part of RFC 2383. The progress is being tracked in [#54503]
-    ///
-    /// [#54503]: https://github.com/rust-lang/rust/issues/54503
     pub UNFULFILLED_LINT_EXPECTATIONS,
     Warn,
-    "unfulfilled lint expectation",
-    @feature_gate = rustc_span::sym::lint_reasons;
+    "unfulfilled lint expectation"
 }
 
 declare_lint! {
@@ -4943,5 +4934,44 @@ declare_lint! {
     @future_incompatible = FutureIncompatibleInfo {
         reason: FutureIncompatibilityReason::EditionError(Edition::Edition2024),
         reference: "issue #123757 <https://github.com/rust-lang/rust/issues/123757>",
+    };
+}
+
+declare_lint! {
+    /// The `out_of_scope_macro_calls` lint detects `macro_rules` called when they are not in scope,
+    /// above their definition, which may happen in key-value attributes.
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// #![doc = in_root!()]
+    ///
+    /// macro_rules! in_root { () => { "" } }
+    ///
+    /// fn main() {}
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// The scope in which a `macro_rules` item is visible starts at that item and continues
+    /// below it. This is more similar to `let` than to other items, which are in scope both above
+    /// and below their definition.
+    /// Due to a bug `macro_rules` were accidentally in scope inside some key-value attributes
+    /// above their definition. The lint catches such cases.
+    /// To address the issue turn the `macro_rules` into a regularly scoped item by importing it
+    /// with `use`.
+    ///
+    /// This is a [future-incompatible] lint to transition this to a
+    /// hard error in the future.
+    ///
+    /// [future-incompatible]: ../index.md#future-incompatible-lints
+    pub OUT_OF_SCOPE_MACRO_CALLS,
+    Warn,
+    "detects out of scope calls to `macro_rules` in key-value attributes",
+    @future_incompatible = FutureIncompatibleInfo {
+        reason: FutureIncompatibilityReason::FutureReleaseErrorDontReportInDeps,
+        reference: "issue #124535 <https://github.com/rust-lang/rust/issues/124535>",
     };
 }

@@ -67,12 +67,6 @@ pub struct BuiltinWhileTrue {
 }
 
 #[derive(LintDiagnostic)]
-#[diag(lint_builtin_box_pointers)]
-pub struct BuiltinBoxPointers<'a> {
-    pub ty: Ty<'a>,
-}
-
-#[derive(LintDiagnostic)]
 #[diag(lint_builtin_non_shorthand_field_patterns)]
 pub struct BuiltinNonShorthandFieldPatterns {
     pub ident: Ident,
@@ -2910,4 +2904,11 @@ pub struct UnsafeAttrOutsideUnsafeSuggestion {
     pub left: Span,
     #[suggestion_part(code = ")")]
     pub right: Span,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(lint_out_of_scope_macro_calls)]
+#[help]
+pub struct OutOfScopeMacroCalls {
+    pub path: String,
 }
