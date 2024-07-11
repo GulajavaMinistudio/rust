@@ -10,14 +10,12 @@ use rustc_hir::GenericBound::Trait;
 use rustc_hir::QPath::Resolved;
 use rustc_hir::WherePredicate::BoundPredicate;
 use rustc_hir::{PolyTraitRef, TyKind, WhereBoundPredicate};
-use rustc_infer::infer::{
-    error_reporting::nice_region_error::{
-        self, find_anon_type, find_param_with_region, suggest_adding_lifetime_params,
-        HirTraitObjectVisitor, NiceRegionError, TraitObjectVisitor,
-    },
-    error_reporting::unexpected_hidden_region_diagnostic,
-    NllRegionVariableOrigin, RelateParamBound,
+use rustc_infer::infer::error_reporting::nice_region_error::{
+    self, find_anon_type, find_param_with_region, suggest_adding_lifetime_params,
+    HirTraitObjectVisitor, NiceRegionError, TraitObjectVisitor,
 };
+use rustc_infer::infer::error_reporting::region::unexpected_hidden_region_diagnostic;
+use rustc_infer::infer::{NllRegionVariableOrigin, RelateParamBound};
 use rustc_middle::bug;
 use rustc_middle::hir::place::PlaceBase;
 use rustc_middle::mir::{ConstraintCategory, ReturnConstraint};
@@ -66,7 +64,8 @@ impl<'tcx> ConstraintDescription for ConstraintCategory<'tcx> {
             ConstraintCategory::Predicate(_)
             | ConstraintCategory::Boring
             | ConstraintCategory::BoringNoLocation
-            | ConstraintCategory::Internal => "",
+            | ConstraintCategory::Internal
+            | ConstraintCategory::IllegalUniverse => "",
         }
     }
 }
@@ -948,7 +947,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, '_, 'infcx, 'tcx> {
                 return;
             }
 
-            if let Ok(Some(instance)) = ty::Instance::resolve(
+            if let Ok(Some(instance)) = ty::Instance::try_resolve(
                 tcx,
                 self.param_env,
                 *fn_did,

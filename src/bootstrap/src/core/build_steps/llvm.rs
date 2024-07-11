@@ -14,7 +14,6 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 
 use crate::core::builder::{Builder, RunConfig, ShouldRun, Step};
@@ -25,6 +24,7 @@ use crate::utils::helpers::{
 };
 use crate::{generate_smart_stamp_hash, CLang, GitRepo, Kind};
 
+use crate::utils::exec::command;
 use build_helper::ci::CiEnv;
 use build_helper::git::get_git_merge_base;
 
@@ -172,7 +172,7 @@ pub(crate) fn detect_llvm_sha(config: &Config, is_git: bool) -> String {
             // the LLVM shared object file is named `LLVM-12-rust-{version}-nightly`
             config.src.join("src/version"),
         ]);
-        output(&mut rev_list).trim().to_owned()
+        output(&mut rev_list.command).trim().to_owned()
     } else if let Some(info) = channel::read_commit_info_file(&config.src) {
         info.sha.trim().to_owned()
     } else {
@@ -253,7 +253,8 @@ pub(crate) fn is_ci_llvm_modified(config: &Config) -> bool {
         // We assume we have access to git, so it's okay to unconditionally pass
         // `true` here.
         let llvm_sha = detect_llvm_sha(config, true);
-        let head_sha = output(helpers::git(Some(&config.src)).arg("rev-parse").arg("HEAD"));
+        let head_sha =
+            output(&mut helpers::git(Some(&config.src)).arg("rev-parse").arg("HEAD").command);
         let head_sha = head_sha.trim();
         llvm_sha == head_sha
     }
@@ -477,7 +478,8 @@ impl Step for Llvm {
             let LlvmResult { llvm_config, .. } =
                 builder.ensure(Llvm { target: builder.config.build });
             if !builder.config.dry_run() {
-                let llvm_bindir = output(Command::new(&llvm_config).arg("--bindir"));
+                let llvm_bindir =
+                    command(&llvm_config).capture_stdout().arg("--bindir").run(builder).stdout();
                 let host_bin = Path::new(llvm_bindir.trim());
                 cfg.define(
                     "LLVM_TABLEGEN",
@@ -527,8 +529,8 @@ impl Step for Llvm {
 
         // Helper to find the name of LLVM's shared library on darwin and linux.
         let find_llvm_lib_name = |extension| {
-            let mut cmd = Command::new(&res.llvm_config);
-            let version = output(cmd.arg("--version"));
+            let version =
+                command(&res.llvm_config).capture_stdout().arg("--version").run(builder).stdout();
             let major = version.split('.').next().unwrap();
 
             match &llvm_version_suffix {
@@ -584,8 +586,7 @@ fn check_llvm_version(builder: &Builder<'_>, llvm_config: &Path) {
         return;
     }
 
-    let mut cmd = Command::new(llvm_config);
-    let version = output(cmd.arg("--version"));
+    let version = command(llvm_config).capture_stdout().arg("--version").run(builder).stdout();
     let mut parts = version.split('.').take(2).filter_map(|s| s.parse::<u32>().ok());
     if let (Some(major), Some(_minor)) = (parts.next(), parts.next()) {
         if major >= 17 {
@@ -752,7 +753,7 @@ fn configure_cmake(
     }
 
     if builder.config.llvm_clang_cl.is_some() {
-        cflags.push(&format!(" --target={target}"));
+        cflags.push(format!(" --target={target}"));
     }
     cfg.define("CMAKE_C_FLAGS", cflags);
     let mut cxxflags: OsString = builder
@@ -771,7 +772,7 @@ fn configure_cmake(
         cxxflags.push(s);
     }
     if builder.config.llvm_clang_cl.is_some() {
-        cxxflags.push(&format!(" --target={target}"));
+        cxxflags.push(format!(" --target={target}"));
     }
     cfg.define("CMAKE_CXX_FLAGS", cxxflags);
     if let Some(ar) = builder.ar(target) {
@@ -912,7 +913,7 @@ impl Step for Lld {
                 // Find clang's runtime library directory and push that as a search path to the
                 // cmake linker flags.
                 let clang_rt_dir = get_clang_cl_resource_dir(clang_cl_path);
-                ldflags.push_all(&format!("/libpath:{}", clang_rt_dir.display()));
+                ldflags.push_all(format!("/libpath:{}", clang_rt_dir.display()));
             }
         }
 

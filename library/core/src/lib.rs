@@ -127,7 +127,6 @@
 #![feature(const_fmt_arguments_new)]
 #![feature(const_hash)]
 #![feature(const_heap)]
-#![feature(const_hint_assert_unchecked)]
 #![feature(const_index_range_slice_index)]
 #![feature(const_int_from_str)]
 #![feature(const_intrinsic_copy)]
@@ -396,6 +395,8 @@ pub mod panicking;
 #[unstable(feature = "core_pattern_types", issue = "none")]
 pub mod pat;
 pub mod pin;
+#[unstable(feature = "new_range_api", issue = "125687")]
+pub mod range;
 pub mod result;
 pub mod sync;
 

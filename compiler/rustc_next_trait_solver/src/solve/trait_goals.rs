@@ -2,10 +2,11 @@
 
 use rustc_ast_ir::Movability;
 use rustc_type_ir::data_structures::IndexSet;
+use rustc_type_ir::fast_reject::{DeepRejectCtxt, TreatParams};
 use rustc_type_ir::inherent::*;
 use rustc_type_ir::lang_items::TraitSolverLangItem;
 use rustc_type_ir::visit::TypeVisitableExt as _;
-use rustc_type_ir::{self as ty, Interner, TraitPredicate, Upcast as _};
+use rustc_type_ir::{self as ty, elaborate, Interner, TraitPredicate, Upcast as _};
 use tracing::{instrument, trace};
 
 use crate::delegate::SolverDelegate;
@@ -46,7 +47,8 @@ where
         let cx = ecx.cx();
 
         let impl_trait_ref = cx.impl_trait_ref(impl_def_id);
-        if !cx.args_may_unify_deep(goal.predicate.trait_ref.args, impl_trait_ref.skip_binder().args)
+        if !DeepRejectCtxt::new(ecx.cx(), TreatParams::ForLookup)
+            .args_may_unify(goal.predicate.trait_ref.args, impl_trait_ref.skip_binder().args)
         {
             return Err(NoSolution);
         }
@@ -785,7 +787,7 @@ where
             ));
         } else if let Some(a_principal) = a_data.principal() {
             for new_a_principal in
-                D::elaborate_supertraits(self.cx(), a_principal.with_self_ty(cx, a_ty)).skip(1)
+                elaborate::supertraits(self.cx(), a_principal.with_self_ty(cx, a_ty)).skip(1)
             {
                 responses.extend(self.consider_builtin_upcast_to_principal(
                     goal,
@@ -860,8 +862,7 @@ where
             .auto_traits()
             .into_iter()
             .chain(a_data.principal_def_id().into_iter().flat_map(|principal_def_id| {
-                self.cx()
-                    .supertrait_def_ids(principal_def_id)
+                elaborate::supertrait_def_ids(self.cx(), principal_def_id)
                     .into_iter()
                     .filter(|def_id| self.cx().trait_is_auto(*def_id))
             }))

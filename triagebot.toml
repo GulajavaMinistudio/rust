@@ -941,7 +941,6 @@ compiler = [
 libs = [
     "@cuviper",
     "@Mark-Simulacrum",
-    "@m-ou-se",
     "@Amanieu",
     "@Nilstrieb",
     "@workingjubilee",
@@ -952,7 +951,6 @@ bootstrap = [
     "@Mark-Simulacrum",
     "@albertlarsan68",
     "@onur-ozkan",
-    "@clubby789",
     "@kobzol",
 ]
 infra-ci = [
@@ -1051,7 +1049,6 @@ project-const-traits = [
 project-stable-mir = [
     "@celinval",
     "@oli-obk",
-    "@spastorino",
     "@ouz-a",
 ]
 

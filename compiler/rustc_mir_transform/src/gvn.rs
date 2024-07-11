@@ -8,7 +8,7 @@
 //! `Value` is interned as a `VnIndex`, which allows us to cheaply compute identical values.
 //!
 //! From those assignments, we construct a mapping `VnIndex -> Vec<(Local, Location)>` of available
-//! values, the locals in which they are stored, and a the assignment location.
+//! values, the locals in which they are stored, and the assignment location.
 //!
 //! In a second pass, we traverse all (non SSA) assignments `x = rvalue` and operands. For each
 //! one, we compute the `VnIndex` of the rvalue. If this `VnIndex` is associated to a constant, we
@@ -1391,11 +1391,15 @@ fn op_to_prop_const<'tcx>(
         let (prov, offset) = pointer.into_parts();
         let alloc_id = prov.alloc_id();
         intern_const_alloc_for_constprop(ecx, alloc_id).ok()?;
-        if matches!(ecx.tcx.global_alloc(alloc_id), GlobalAlloc::Memory(_)) {
-            // `alloc_id` may point to a static. Codegen will choke on an `Indirect` with anything
-            // by `GlobalAlloc::Memory`, so do fall through to copying if needed.
-            // FIXME: find a way to treat this more uniformly
-            // (probably by fixing codegen)
+
+        // `alloc_id` may point to a static. Codegen will choke on an `Indirect` with anything
+        // by `GlobalAlloc::Memory`, so do fall through to copying if needed.
+        // FIXME: find a way to treat this more uniformly (probably by fixing codegen)
+        if let GlobalAlloc::Memory(alloc) = ecx.tcx.global_alloc(alloc_id)
+            // Transmuting a constant is just an offset in the allocation. If the alignment of the
+            // allocation is not enough, fallback to copying into a properly aligned value.
+            && alloc.inner().align >= op.layout.align.abi
+        {
             return Some(ConstValue::Indirect { alloc_id, offset });
         }
     }

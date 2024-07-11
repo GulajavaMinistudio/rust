@@ -37,7 +37,7 @@ use crate::ty::{GenericArg, GenericArgs, GenericArgsRef};
 use rustc_ast::{self as ast, attr};
 use rustc_data_structures::defer;
 use rustc_data_structures::fingerprint::Fingerprint;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::intern::Interned;
 use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_data_structures::sharded::{IntoPointer, ShardedHashMap};
@@ -92,6 +92,8 @@ use std::ops::{Bound, Deref};
 impl<'tcx> Interner for TyCtxt<'tcx> {
     type DefId = DefId;
     type LocalDefId = LocalDefId;
+    type Span = Span;
+
     type GenericArgs = ty::GenericArgsRef<'tcx>;
 
     type GenericArgsSlice = &'tcx [ty::GenericArg<'tcx>];
@@ -345,12 +347,16 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
     fn explicit_super_predicates_of(
         self,
         def_id: DefId,
-    ) -> ty::EarlyBinder<'tcx, impl IntoIterator<Item = ty::Clause<'tcx>>> {
+    ) -> ty::EarlyBinder<'tcx, impl IntoIterator<Item = (ty::Clause<'tcx>, Span)>> {
+        ty::EarlyBinder::bind(self.explicit_super_predicates_of(def_id).instantiate_identity(self))
+    }
+
+    fn explicit_implied_predicates_of(
+        self,
+        def_id: DefId,
+    ) -> ty::EarlyBinder<'tcx, impl IntoIterator<Item = (ty::Clause<'tcx>, Span)>> {
         ty::EarlyBinder::bind(
-            self.explicit_super_predicates_of(def_id)
-                .instantiate_identity(self)
-                .predicates
-                .into_iter(),
+            self.explicit_implied_predicates_of(def_id).instantiate_identity(self),
         )
     }
 
@@ -366,22 +372,15 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
         self.is_lang_item(def_id, trait_lang_item_to_lang_item(lang_item))
     }
 
+    fn as_lang_item(self, def_id: DefId) -> Option<TraitSolverLangItem> {
+        lang_item_to_trait_lang_item(self.lang_items().from_def_id(def_id)?)
+    }
+
     fn associated_type_def_ids(self, def_id: DefId) -> impl IntoIterator<Item = DefId> {
         self.associated_items(def_id)
             .in_definition_order()
             .filter(|assoc_item| matches!(assoc_item.kind, ty::AssocKind::Type))
             .map(|assoc_item| assoc_item.def_id)
-    }
-
-    fn args_may_unify_deep(
-        self,
-        obligation_args: ty::GenericArgsRef<'tcx>,
-        impl_args: ty::GenericArgsRef<'tcx>,
-    ) -> bool {
-        ty::fast_reject::DeepRejectCtxt {
-            treat_obligation_params: ty::fast_reject::TreatParams::ForLookup,
-        }
-        .args_may_unify(obligation_args, impl_args)
     }
 
     // This implementation is a bit different from `TyCtxt::for_each_relevant_impl`,
@@ -529,20 +528,12 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
         self.is_object_safe(trait_def_id)
     }
 
+    fn trait_is_fundamental(self, def_id: DefId) -> bool {
+        self.trait_def(def_id).is_fundamental
+    }
+
     fn trait_may_be_implemented_via_object(self, trait_def_id: DefId) -> bool {
         self.trait_def(trait_def_id).implement_via_object
-    }
-
-    fn fn_trait_kind_from_def_id(self, trait_def_id: DefId) -> Option<ty::ClosureKind> {
-        self.fn_trait_kind_from_def_id(trait_def_id)
-    }
-
-    fn async_fn_trait_kind_from_def_id(self, trait_def_id: DefId) -> Option<ty::ClosureKind> {
-        self.async_fn_trait_kind_from_def_id(trait_def_id)
-    }
-
-    fn supertrait_def_ids(self, trait_def_id: DefId) -> impl IntoIterator<Item = DefId> {
-        self.supertrait_def_ids(trait_def_id)
     }
 
     fn delay_bug(self, msg: impl ToString) -> ErrorGuaranteed {
@@ -582,49 +573,83 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
     ) -> Ty<'tcx> {
         placeholder.find_const_ty_from_env(param_env)
     }
-}
 
-fn trait_lang_item_to_lang_item(lang_item: TraitSolverLangItem) -> LangItem {
-    match lang_item {
-        TraitSolverLangItem::AsyncDestruct => LangItem::AsyncDestruct,
-        TraitSolverLangItem::AsyncFnKindHelper => LangItem::AsyncFnKindHelper,
-        TraitSolverLangItem::AsyncFnKindUpvars => LangItem::AsyncFnKindUpvars,
-        TraitSolverLangItem::AsyncFnOnceOutput => LangItem::AsyncFnOnceOutput,
-        TraitSolverLangItem::AsyncIterator => LangItem::AsyncIterator,
-        TraitSolverLangItem::CallOnceFuture => LangItem::CallOnceFuture,
-        TraitSolverLangItem::CallRefFuture => LangItem::CallRefFuture,
-        TraitSolverLangItem::Clone => LangItem::Clone,
-        TraitSolverLangItem::Copy => LangItem::Copy,
-        TraitSolverLangItem::Coroutine => LangItem::Coroutine,
-        TraitSolverLangItem::CoroutineReturn => LangItem::CoroutineReturn,
-        TraitSolverLangItem::CoroutineYield => LangItem::CoroutineYield,
-        TraitSolverLangItem::Destruct => LangItem::Destruct,
-        TraitSolverLangItem::DiscriminantKind => LangItem::DiscriminantKind,
-        TraitSolverLangItem::DynMetadata => LangItem::DynMetadata,
-        TraitSolverLangItem::EffectsMaybe => LangItem::EffectsMaybe,
-        TraitSolverLangItem::EffectsIntersection => LangItem::EffectsIntersection,
-        TraitSolverLangItem::EffectsIntersectionOutput => LangItem::EffectsIntersectionOutput,
-        TraitSolverLangItem::EffectsNoRuntime => LangItem::EffectsNoRuntime,
-        TraitSolverLangItem::EffectsRuntime => LangItem::EffectsRuntime,
-        TraitSolverLangItem::FnPtrTrait => LangItem::FnPtrTrait,
-        TraitSolverLangItem::FusedIterator => LangItem::FusedIterator,
-        TraitSolverLangItem::Future => LangItem::Future,
-        TraitSolverLangItem::FutureOutput => LangItem::FutureOutput,
-        TraitSolverLangItem::Iterator => LangItem::Iterator,
-        TraitSolverLangItem::Metadata => LangItem::Metadata,
-        TraitSolverLangItem::Option => LangItem::Option,
-        TraitSolverLangItem::PointeeTrait => LangItem::PointeeTrait,
-        TraitSolverLangItem::PointerLike => LangItem::PointerLike,
-        TraitSolverLangItem::Poll => LangItem::Poll,
-        TraitSolverLangItem::Sized => LangItem::Sized,
-        TraitSolverLangItem::TransmuteTrait => LangItem::TransmuteTrait,
-        TraitSolverLangItem::Tuple => LangItem::Tuple,
-        TraitSolverLangItem::Unpin => LangItem::Unpin,
-        TraitSolverLangItem::Unsize => LangItem::Unsize,
+    fn anonymize_bound_vars<T: TypeFoldable<TyCtxt<'tcx>>>(
+        self,
+        binder: ty::Binder<'tcx, T>,
+    ) -> ty::Binder<'tcx, T> {
+        self.anonymize_bound_vars(binder)
     }
 }
 
+macro_rules! bidirectional_lang_item_map {
+    ($($name:ident),+ $(,)?) => {
+        fn trait_lang_item_to_lang_item(lang_item: TraitSolverLangItem) -> LangItem {
+            match lang_item {
+                $(TraitSolverLangItem::$name => LangItem::$name,)+
+            }
+        }
+
+        fn lang_item_to_trait_lang_item(lang_item: LangItem) -> Option<TraitSolverLangItem> {
+            Some(match lang_item {
+                $(LangItem::$name => TraitSolverLangItem::$name,)+
+                _ => return None,
+            })
+        }
+    }
+}
+
+bidirectional_lang_item_map! {
+// tidy-alphabetical-start
+    AsyncDestruct,
+    AsyncFn,
+    AsyncFnKindHelper,
+    AsyncFnKindUpvars,
+    AsyncFnMut,
+    AsyncFnOnce,
+    AsyncFnOnceOutput,
+    AsyncIterator,
+    CallOnceFuture,
+    CallRefFuture,
+    Clone,
+    Copy,
+    Coroutine,
+    CoroutineReturn,
+    CoroutineYield,
+    Destruct,
+    DiscriminantKind,
+    DynMetadata,
+    EffectsIntersection,
+    EffectsIntersectionOutput,
+    EffectsMaybe,
+    EffectsNoRuntime,
+    EffectsRuntime,
+    Fn,
+    FnMut,
+    FnOnce,
+    FnPtrTrait,
+    FusedIterator,
+    Future,
+    FutureOutput,
+    Iterator,
+    Metadata,
+    Option,
+    PointeeTrait,
+    PointerLike,
+    Poll,
+    Sized,
+    TransmuteTrait,
+    Tuple,
+    Unpin,
+    Unsize,
+// tidy-alphabetical-end
+}
+
 impl<'tcx> rustc_type_ir::inherent::DefId<TyCtxt<'tcx>> for DefId {
+    fn is_local(self) -> bool {
+        self.is_local()
+    }
+
     fn as_local(self) -> Option<LocalDefId> {
         self.as_local()
     }
@@ -2474,25 +2499,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// to identify which traits may define a given associated type to help avoid cycle errors,
     /// and to make size estimates for vtable layout computation.
     pub fn supertrait_def_ids(self, trait_def_id: DefId) -> impl Iterator<Item = DefId> + 'tcx {
-        let mut set = FxHashSet::default();
-        let mut stack = vec![trait_def_id];
-
-        set.insert(trait_def_id);
-
-        iter::from_fn(move || -> Option<DefId> {
-            let trait_did = stack.pop()?;
-            let generic_predicates = self.explicit_super_predicates_of(trait_did);
-
-            for (predicate, _) in generic_predicates.predicates {
-                if let ty::ClauseKind::Trait(data) = predicate.kind().skip_binder() {
-                    if set.insert(data.def_id()) {
-                        stack.push(data.def_id());
-                    }
-                }
-            }
-
-            Some(trait_did)
-        })
+        rustc_type_ir::elaborate::supertrait_def_ids(self, trait_def_id)
     }
 
     /// Given a closure signature, returns an equivalent fn signature. Detuples
