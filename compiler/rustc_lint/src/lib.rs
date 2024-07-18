@@ -41,6 +41,7 @@
 #![feature(trait_upcasting)]
 // tidy-alphabetical-end
 
+mod async_closures;
 mod async_fn_in_trait;
 pub mod builtin;
 mod context;
@@ -87,6 +88,7 @@ use rustc_hir::def_id::LocalModDefId;
 use rustc_middle::query::Providers;
 use rustc_middle::ty::TyCtxt;
 
+use async_closures::AsyncClosureUsage;
 use async_fn_in_trait::AsyncFnInTrait;
 use builtin::*;
 use deref_into_dyn_supertrait::*;
@@ -118,7 +120,6 @@ use types::*;
 use unit_bindings::*;
 use unused::*;
 
-/// Useful for other parts of the compiler / Clippy.
 pub use builtin::{MissingDoc, SoftLints};
 pub use context::{CheckLintNameResult, FindLintError, LintStore};
 pub use context::{EarlyContext, LateContext, LintContext};
@@ -223,12 +224,13 @@ late_lint_methods!(
             NoopMethodCall: NoopMethodCall,
             EnumIntrinsicsNonEnums: EnumIntrinsicsNonEnums,
             InvalidAtomicOrdering: InvalidAtomicOrdering,
-            NamedAsmLabels: NamedAsmLabels,
+            AsmLabels: AsmLabels,
             OpaqueHiddenInferredBound: OpaqueHiddenInferredBound,
             MultipleSupertraitUpcastable: MultipleSupertraitUpcastable,
             MapUnitFn: MapUnitFn,
             MissingDebugImplementations: MissingDebugImplementations,
             MissingDoc: MissingDoc,
+            AsyncClosureUsage: AsyncClosureUsage,
             AsyncFnInTrait: AsyncFnInTrait,
             NonLocalDefinitions: NonLocalDefinitions::default(),
             ImplTraitOvercaptures: ImplTraitOvercaptures,

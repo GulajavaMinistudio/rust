@@ -8,11 +8,10 @@ use std::hash::Hash;
 
 use rustc_ast_ir::Mutability;
 
-use crate::data_structures::HashSet;
 use crate::elaborate::Elaboratable;
 use crate::fold::{TypeFoldable, TypeSuperFoldable};
 use crate::relate::Relate;
-use crate::solve::{CacheData, CanonicalInput, QueryResult, Reveal};
+use crate::solve::Reveal;
 use crate::visit::{Flags, TypeSuperVisitable, TypeVisitable};
 use crate::{self as ty, CollectAndApply, Interner, UpcastFrom};
 
@@ -476,7 +475,7 @@ pub trait Clause<I: Interner<Clause = Self>>:
     /// poly-trait-ref to supertraits that must hold if that
     /// poly-trait-ref holds. This is slightly different from a normal
     /// instantiation in terms of what happens with bound regions.
-    fn instantiate_supertrait(self, tcx: I, trait_ref: ty::Binder<I, ty::TraitRef<I>>) -> Self;
+    fn instantiate_supertrait(self, cx: I, trait_ref: ty::Binder<I, ty::TraitRef<I>>) -> Self;
 }
 
 /// Common capabilities of placeholder kinds
@@ -537,33 +536,6 @@ pub trait Features<I: Interner>: Copy {
     fn coroutine_clone(self) -> bool;
 
     fn associated_const_equality(self) -> bool;
-}
-
-pub trait EvaluationCache<I: Interner> {
-    /// Insert a final result into the global cache.
-    fn insert(
-        &self,
-        tcx: I,
-        key: CanonicalInput<I>,
-        proof_tree: Option<I::CanonicalGoalEvaluationStepRef>,
-        additional_depth: usize,
-        encountered_overflow: bool,
-        cycle_participants: HashSet<CanonicalInput<I>>,
-        dep_node: I::DepNodeIndex,
-        result: QueryResult<I>,
-    );
-
-    /// Try to fetch a cached result, checking the recursion limit
-    /// and handling root goals of coinductive cycles.
-    ///
-    /// If this returns `Some` the cache result can be used.
-    fn get(
-        &self,
-        tcx: I,
-        key: CanonicalInput<I>,
-        stack_entries: impl IntoIterator<Item = CanonicalInput<I>>,
-        available_depth: usize,
-    ) -> Option<CacheData<I>>;
 }
 
 pub trait DefId<I: Interner>: Copy + Debug + Hash + Eq + TypeFoldable<I> {

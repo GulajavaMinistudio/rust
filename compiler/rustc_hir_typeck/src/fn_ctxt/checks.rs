@@ -29,7 +29,7 @@ use rustc_hir_analysis::check::intrinsicck::InlineAsmCtxt;
 use rustc_hir_analysis::check::potentially_plural_count;
 use rustc_hir_analysis::hir_ty_lowering::HirTyLowerer;
 use rustc_index::IndexVec;
-use rustc_infer::infer::error_reporting::{FailureCode, ObligationCauseExt};
+use rustc_infer::error_reporting::infer::{FailureCode, ObligationCauseExt};
 use rustc_infer::infer::TypeTrace;
 use rustc_infer::infer::{DefineOpaqueTypes, InferOk};
 use rustc_middle::ty::adjustment::AllowTwoPhase;
@@ -948,6 +948,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 &mut err,
             );
 
+            self.suggest_deref_unwrap_or(
+                &mut err,
+                error_span,
+                callee_ty,
+                call_ident,
+                expected_ty,
+                provided_ty,
+                provided_args[*provided_idx],
+                is_method,
+            );
+
             // Call out where the function is defined
             self.label_fn_like(
                 &mut err,
@@ -1094,7 +1105,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     } else {
                         "".to_string()
                     };
-                    labels.push((provided_span, format!("unexpected argument{provided_ty_name}")));
+                    let idx = if provided_arg_tys.len() == 1 {
+                        "".to_string()
+                    } else {
+                        format!(" #{}", arg_idx.as_usize() + 1)
+                    };
+                    labels.push((
+                        provided_span,
+                        format!("unexpected argument{idx}{provided_ty_name}"),
+                    ));
                     let mut span = provided_span;
                     if span.can_be_used_for_suggestions()
                         && error_span.can_be_used_for_suggestions()
@@ -1175,7 +1194,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             } else {
                                 "".to_string()
                             };
-                            labels.push((span, format!("an argument{rendered} is missing")));
+                            labels.push((
+                                span,
+                                format!(
+                                    "argument #{}{rendered} is missing",
+                                    expected_idx.as_usize() + 1
+                                ),
+                            ));
+
                             suggestion_text = match suggestion_text {
                                 SuggestionText::None => SuggestionText::Provide(false),
                                 SuggestionText::Provide(_) => SuggestionText::Provide(true),
@@ -2554,7 +2580,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         .and_then(|node| node.generics())
                         .into_iter()
                         .flat_map(|generics| generics.params)
-                        .find(|gen| &gen.def_id.to_def_id() == res_def_id)
+                        .find(|param| &param.def_id.to_def_id() == res_def_id)
                 } else {
                     None
                 }

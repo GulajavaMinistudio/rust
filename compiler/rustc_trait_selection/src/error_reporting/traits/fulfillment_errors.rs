@@ -4,7 +4,6 @@ use crate::error_reporting::traits::infer_ctxt_ext::InferCtxtExt;
 use crate::errors::{
     AsyncClosureNotFn, ClosureFnMutLabel, ClosureFnOnceLabel, ClosureKindMismatch,
 };
-use crate::infer::error_reporting::TyCategory;
 use crate::infer::InferCtxtExt as _;
 use crate::infer::{self, InferCtxt};
 use crate::traits::query::evaluate_obligation::InferCtxtExt as _;
@@ -25,7 +24,8 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::Node;
 use rustc_hir::{self as hir, LangItem};
-use rustc_infer::infer::error_reporting::TypeErrCtxt;
+use rustc_infer::error_reporting::infer::TyCategory;
+use rustc_infer::error_reporting::infer::TypeErrCtxt;
 use rustc_infer::infer::{InferOk, TypeTrace};
 use rustc_macros::extension;
 use rustc_middle::traits::select::OverflowError;
@@ -1776,6 +1776,19 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             true
         };
 
+        // we filter before checking if `impl_candidates` is empty
+        // to get the fallback solution if we filtered out any impls
+        let impl_candidates = impl_candidates
+            .into_iter()
+            .cloned()
+            .filter(|cand| {
+                !self.tcx.has_attrs_with_path(
+                    cand.impl_def_id,
+                    &[sym::diagnostic, sym::do_not_recommend],
+                )
+            })
+            .collect::<Vec<_>>();
+
         let def_id = trait_ref.def_id();
         if impl_candidates.is_empty() {
             if self.tcx.trait_is_auto(def_id)
@@ -1788,6 +1801,12 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             let mut impl_candidates: Vec<_> = self
                 .tcx
                 .all_impls(def_id)
+                // ignore `do_not_recommend` items
+                .filter(|def_id| {
+                    !self
+                        .tcx
+                        .has_attrs_with_path(*def_id, &[sym::diagnostic, sym::do_not_recommend])
+                })
                 // Ignore automatically derived impls and `!Trait` impls.
                 .filter_map(|def_id| self.tcx.impl_trait_header(def_id))
                 .filter_map(|header| {
