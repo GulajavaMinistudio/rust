@@ -430,7 +430,7 @@ impl<'a> Parser<'a> {
         &mut self,
         edible: &[TokenKind],
         inedible: &[TokenKind],
-    ) -> PResult<'a, Recovered> {
+    ) -> PResult<'a, ErrorGuaranteed> {
         debug!("expected_one_of_not_found(edible: {:?}, inedible: {:?})", edible, inedible);
         fn tokens_to_string(tokens: &[TokenType]) -> String {
             let mut i = tokens.iter();
@@ -533,7 +533,7 @@ impl<'a> Parser<'a> {
                     sugg: ExpectedSemiSugg::ChangeToSemi(self.token.span),
                 });
                 self.bump();
-                return Ok(Recovered::Yes(guar));
+                return Ok(guar);
             } else if self.look_ahead(0, |t| {
                 t == &token::CloseDelim(Delimiter::Brace)
                     || ((t.can_begin_expr() || t.can_begin_item())
@@ -557,7 +557,7 @@ impl<'a> Parser<'a> {
                     unexpected_token_label: Some(self.token.span),
                     sugg: ExpectedSemiSugg::AddSemi(span),
                 });
-                return Ok(Recovered::Yes(guar));
+                return Ok(guar);
             }
         }
 
@@ -566,10 +566,7 @@ impl<'a> Parser<'a> {
             && expected.iter().any(|tok| matches!(tok, TokenType::Token(TokenKind::Eq)))
         {
             // Likely typo: `=` → `==` in let expr or enum item
-            return Err(self.dcx().create_err(UseEqInstead {
-                span: self.token.span,
-                suggestion: self.token.span.with_lo(self.token.span.lo() + BytePos(1)),
-            }));
+            return Err(self.dcx().create_err(UseEqInstead { span: self.token.span }));
         }
 
         if self.token.is_keyword(kw::Move) && self.prev_token.is_keyword(kw::Async) {
@@ -715,7 +712,7 @@ impl<'a> Parser<'a> {
         if self.check_too_many_raw_str_terminators(&mut err) {
             if expected.contains(&TokenType::Token(token::Semi)) && self.eat(&token::Semi) {
                 let guar = err.emit();
-                return Ok(Recovered::Yes(guar));
+                return Ok(guar);
             } else {
                 return Err(err);
             }
