@@ -65,11 +65,12 @@ pub(crate) const WORKSPACES: &[(&str, ExceptionList, Option<(&[&str], &[&str])>)
     //("library/stdarch", EXCEPTIONS_STDARCH, None), // FIXME uncomment once rust-lang/stdarch#1462 has been synced back to the rust repo
     ("src/bootstrap", EXCEPTIONS_BOOTSTRAP, None),
     ("src/ci/docker/host-x86_64/test-various/uefi_qemu_test", EXCEPTIONS_UEFI_QEMU_TEST, None),
-    //("src/etc/test-float-parse", &[], None), // FIXME uncomment once all deps are vendored
+    ("src/etc/test-float-parse", EXCEPTIONS, None),
     ("src/tools/cargo", EXCEPTIONS_CARGO, None),
     //("src/tools/miri/test-cargo-miri", &[], None), // FIXME uncomment once all deps are vendored
     //("src/tools/miri/test_dependencies", &[], None), // FIXME uncomment once all deps are vendored
     ("src/tools/rust-analyzer", EXCEPTIONS_RUST_ANALYZER, None),
+    ("src/tools/rustbook", EXCEPTIONS_RUSTBOOK, None),
     ("src/tools/rustc-perf", EXCEPTIONS_RUSTC_PERF, None),
     ("src/tools/x", &[], None),
     // tidy-alphabetical-end
@@ -164,6 +165,13 @@ const EXCEPTIONS_RUSTC_PERF: ExceptionList = &[
     ("ryu", "Apache-2.0 OR BSL-1.0"),
     ("snap", "BSD-3-Clause"),
     ("subtle", "BSD-3-Clause"),
+    // tidy-alphabetical-end
+];
+
+const EXCEPTIONS_RUSTBOOK: ExceptionList = &[
+    // tidy-alphabetical-start
+    ("mdbook", "MPL-2.0"),
+    ("ryu", "Apache-2.0 OR BSL-1.0"),
     // tidy-alphabetical-end
 ];
 
