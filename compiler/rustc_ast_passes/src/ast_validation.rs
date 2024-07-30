@@ -16,6 +16,9 @@
 //! constructions produced by proc macros. This pass is only intended for simple checks that do not
 //! require name resolution or type checking, or other kinds of complex analysis.
 
+use std::mem;
+use std::ops::{Deref, DerefMut};
+
 use itertools::{Either, Itertools};
 use rustc_ast::ptr::P;
 use rustc_ast::visit::{walk_list, AssocCtxt, BoundKind, FnCtxt, FnKind, Visitor};
@@ -34,8 +37,6 @@ use rustc_session::Session;
 use rustc_span::symbol::{kw, sym, Ident};
 use rustc_span::Span;
 use rustc_target::spec::abi;
-use std::mem;
-use std::ops::{Deref, DerefMut};
 use thin_vec::thin_vec;
 
 use crate::errors::{self, TildeConstReason};
@@ -1345,14 +1346,28 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
         match bound {
             GenericBound::Trait(trait_ref, modifiers) => {
                 match (ctxt, modifiers.constness, modifiers.polarity) {
-                    (BoundKind::SuperTraits, BoundConstness::Never, BoundPolarity::Maybe(_)) => {
-                        self.dcx().emit_err(errors::OptionalTraitSupertrait {
-                            span: trait_ref.span,
-                            path_str: pprust::path_to_string(&trait_ref.trait_ref.path),
-                        });
+                    (BoundKind::SuperTraits, BoundConstness::Never, BoundPolarity::Maybe(_))
+                        if !self.features.more_maybe_bounds =>
+                    {
+                        self.session
+                            .create_feature_err(
+                                errors::OptionalTraitSupertrait {
+                                    span: trait_ref.span,
+                                    path_str: pprust::path_to_string(&trait_ref.trait_ref.path),
+                                },
+                                sym::more_maybe_bounds,
+                            )
+                            .emit();
                     }
-                    (BoundKind::TraitObject, BoundConstness::Never, BoundPolarity::Maybe(_)) => {
-                        self.dcx().emit_err(errors::OptionalTraitObject { span: trait_ref.span });
+                    (BoundKind::TraitObject, BoundConstness::Never, BoundPolarity::Maybe(_))
+                        if !self.features.more_maybe_bounds =>
+                    {
+                        self.session
+                            .create_feature_err(
+                                errors::OptionalTraitObject { span: trait_ref.span },
+                                sym::more_maybe_bounds,
+                            )
+                            .emit();
                     }
                     (
                         BoundKind::TraitObject,

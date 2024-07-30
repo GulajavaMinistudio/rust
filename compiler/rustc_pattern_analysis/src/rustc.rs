@@ -17,18 +17,22 @@ use rustc_session::lint;
 use rustc_span::{ErrorGuaranteed, Span, DUMMY_SP};
 use rustc_target::abi::{FieldIdx, Integer, VariantIdx, FIRST_VARIANT};
 
+use crate::constructor::Constructor::*;
 use crate::constructor::{
     IntRange, MaybeInfiniteInt, OpaqueId, RangeEnd, Slice, SliceKind, VariantVisibility,
 };
+use crate::lints::lint_nonexhaustive_missing_variants;
+use crate::pat_column::PatternColumn;
+use crate::usefulness::{compute_match_usefulness, PlaceValidity};
 use crate::{errors, Captures, PatCx, PrivateUninhabitedField};
-
-use crate::constructor::Constructor::*;
 
 // Re-export rustc-specific versions of all these types.
 pub type Constructor<'p, 'tcx> = crate::constructor::Constructor<RustcPatCtxt<'p, 'tcx>>;
 pub type ConstructorSet<'p, 'tcx> = crate::constructor::ConstructorSet<RustcPatCtxt<'p, 'tcx>>;
 pub type DeconstructedPat<'p, 'tcx> = crate::pat::DeconstructedPat<RustcPatCtxt<'p, 'tcx>>;
 pub type MatchArm<'p, 'tcx> = crate::MatchArm<'p, RustcPatCtxt<'p, 'tcx>>;
+pub type RedundancyExplanation<'p, 'tcx> =
+    crate::usefulness::RedundancyExplanation<'p, RustcPatCtxt<'p, 'tcx>>;
 pub type Usefulness<'p, 'tcx> = crate::usefulness::Usefulness<'p, RustcPatCtxt<'p, 'tcx>>;
 pub type UsefulnessReport<'p, 'tcx> =
     crate::usefulness::UsefulnessReport<'p, RustcPatCtxt<'p, 'tcx>>;
@@ -739,7 +743,7 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
     /// Note: it is possible to get `isize/usize::MAX+1` here, as explained in the doc for
     /// [`IntRange::split`]. This cannot be represented as a `Const`, so we represent it with
     /// `PosInfinity`.
-    pub(crate) fn hoist_pat_range_bdy(
+    fn hoist_pat_range_bdy(
         &self,
         miint: MaybeInfiniteInt,
         ty: RevealedTy<'tcx>,
@@ -770,7 +774,7 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
     }
 
     /// Convert back to a `thir::Pat` for diagnostic purposes.
-    pub(crate) fn hoist_pat_range(&self, range: &IntRange, ty: RevealedTy<'tcx>) -> Pat<'tcx> {
+    fn hoist_pat_range(&self, range: &IntRange, ty: RevealedTy<'tcx>) -> Pat<'tcx> {
         use MaybeInfiniteInt::*;
         let cx = self;
         let kind = if matches!((range.lo, range.hi), (NegInfinity, PosInfinity)) {
@@ -806,9 +810,17 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
 
         Pat { ty: ty.inner(), span: DUMMY_SP, kind }
     }
+
+    /// Prints a [`WitnessPat`] to an owned string, for diagnostic purposes.
+    pub fn print_witness_pat(&self, pat: &WitnessPat<'p, 'tcx>) -> String {
+        // This works by converting the witness pattern back to a `thir::Pat`
+        // and then printing that, but callers don't need to know that.
+        self.hoist_witness_pat(pat).to_string()
+    }
+
     /// Convert back to a `thir::Pat` for diagnostic purposes. This panics for patterns that don't
     /// appear in diagnostics, like float ranges.
-    pub fn hoist_witness_pat(&self, pat: &WitnessPat<'p, 'tcx>) -> Pat<'tcx> {
+    fn hoist_witness_pat(&self, pat: &WitnessPat<'p, 'tcx>) -> Pat<'tcx> {
         let cx = self;
         let is_wildcard = |pat: &Pat<'_>| matches!(pat.kind, PatKind::Wild);
         let mut subpatterns = pat.iter_fields().map(|p| Box::new(cx.hoist_witness_pat(p)));
@@ -961,7 +973,7 @@ impl<'p, 'tcx: 'p> PatCx for RustcPatCtxt<'p, 'tcx> {
         let overlaps: Vec<_> = overlaps_with
             .iter()
             .map(|pat| pat.data().span)
-            .map(|span| errors::Overlap { range: overlap_as_pat.clone(), span })
+            .map(|span| errors::Overlap { range: overlap_as_pat.to_string(), span })
             .collect();
         let pat_span = pat.data().span;
         self.tcx.emit_node_span_lint(
@@ -1009,7 +1021,7 @@ impl<'p, 'tcx: 'p> PatCx for RustcPatCtxt<'p, 'tcx> {
                     // Point at this range.
                     first_range: thir_pat.span,
                     // That's the gap that isn't covered.
-                    max: gap_as_pat.clone(),
+                    max: gap_as_pat.to_string(),
                     // Suggest `lo..=max` instead.
                     suggestion: suggested_range.to_string(),
                 },
@@ -1023,7 +1035,7 @@ impl<'p, 'tcx: 'p> PatCx for RustcPatCtxt<'p, 'tcx> {
                     // Point at this range.
                     first_range: thir_pat.span,
                     // That's the gap that isn't covered.
-                    gap: gap_as_pat.clone(),
+                    gap: gap_as_pat.to_string(),
                     // Suggest `lo..=gap` instead.
                     suggestion: suggested_range.to_string(),
                     // All these ranges skipped over `gap` which we think is probably a
@@ -1032,8 +1044,8 @@ impl<'p, 'tcx: 'p> PatCx for RustcPatCtxt<'p, 'tcx> {
                         .iter()
                         .map(|pat| errors::GappedRange {
                             span: pat.data().span,
-                            gap: gap_as_pat.clone(),
-                            first_range: thir_pat.clone(),
+                            gap: gap_as_pat.to_string(),
+                            first_range: thir_pat.to_string(),
                         })
                         .collect(),
                 },
@@ -1057,4 +1069,27 @@ fn expand_or_pat<'p, 'tcx>(pat: &'p Pat<'tcx>) -> Vec<&'p Pat<'tcx>> {
     let mut pats = Vec::new();
     expand(pat, &mut pats);
     pats
+}
+
+/// The entrypoint for this crate. Computes whether a match is exhaustive and which of its arms are
+/// useful, and runs some lints.
+pub fn analyze_match<'p, 'tcx>(
+    tycx: &RustcPatCtxt<'p, 'tcx>,
+    arms: &[MatchArm<'p, 'tcx>],
+    scrut_ty: Ty<'tcx>,
+    pattern_complexity_limit: Option<usize>,
+) -> Result<UsefulnessReport<'p, 'tcx>, ErrorGuaranteed> {
+    let scrut_ty = tycx.reveal_opaque_ty(scrut_ty);
+    let scrut_validity = PlaceValidity::from_bool(tycx.known_valid_scrutinee);
+    let report =
+        compute_match_usefulness(tycx, arms, scrut_ty, scrut_validity, pattern_complexity_limit)?;
+
+    // Run the non_exhaustive_omitted_patterns lint. Only run on refutable patterns to avoid hitting
+    // `if let`s. Only run if the match is exhaustive otherwise the error is redundant.
+    if tycx.refutable && report.non_exhaustiveness_witnesses.is_empty() {
+        let pat_column = PatternColumn::new(arms);
+        lint_nonexhaustive_missing_variants(tycx, arms, &pat_column, scrut_ty)?;
+    }
+
+    Ok(report)
 }

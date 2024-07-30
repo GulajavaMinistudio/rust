@@ -1,10 +1,9 @@
 use std::path::Path;
 
-use crate::command::Command;
-use crate::{env_var, is_msvc, is_windows, uname};
-
 // FIXME(jieyouxu): can we get rid of the `cygpath` external dependency?
 use super::cygpath::get_windows_path;
+use crate::command::Command;
+use crate::{env_var, is_msvc, is_windows, uname};
 
 /// Construct a new platform-specific C compiler invocation.
 ///
@@ -13,6 +12,13 @@ use super::cygpath::get_windows_path;
 #[track_caller]
 pub fn cc() -> Cc {
     Cc::new()
+}
+
+/// Construct a new platform-specific CXX compiler invocation.
+/// CXX_DEFAULT_FLAGS is passed from compiletest.
+#[track_caller]
+pub fn cxx() -> Cc {
+    Cc::new_cxx()
 }
 
 /// A platform-specific C compiler invocation builder. The specific C compiler used is
@@ -37,6 +43,22 @@ impl Cc {
         let mut cmd = Command::new(compiler);
 
         let default_cflags = env_var("CC_DEFAULT_FLAGS");
+        for flag in default_cflags.split(char::is_whitespace) {
+            cmd.arg(flag);
+        }
+
+        Self { cmd }
+    }
+
+    /// Construct a new platform-specific CXX compiler invocation.
+    /// CXX_DEFAULT_FLAGS is passed from compiletest.
+    #[track_caller]
+    pub fn new_cxx() -> Self {
+        let compiler = env_var("CXX");
+
+        let mut cmd = Command::new(compiler);
+
+        let default_cflags = env_var("CXX_DEFAULT_FLAGS");
         for flag in default_cflags.split(char::is_whitespace) {
             cmd.arg(flag);
         }

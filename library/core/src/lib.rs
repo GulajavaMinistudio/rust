@@ -103,9 +103,11 @@
 #![deny(ffi_unwind_calls)]
 // Do not check link redundancy on bootstraping phase
 #![allow(rustdoc::redundant_explicit_links)]
+#![warn(rustdoc::unescaped_backticks)]
 //
 // Library features:
 // tidy-alphabetical-start
+#![cfg_attr(bootstrap, feature(offset_of_nested))]
 #![feature(array_ptr_get)]
 #![feature(asm_experimental_arch)]
 #![feature(char_indices_offset)]
@@ -127,7 +129,6 @@
 #![feature(const_hash)]
 #![feature(const_heap)]
 #![feature(const_index_range_slice_index)]
-#![feature(const_int_from_str)]
 #![feature(const_intrinsic_copy)]
 #![feature(const_intrinsic_forget)]
 #![feature(const_ipv4)]
@@ -163,7 +164,6 @@
 #![feature(const_ub_checks)]
 #![feature(const_unicode_case_lookup)]
 #![feature(const_unsafecell_get_mut)]
-#![feature(const_waker)]
 #![feature(coverage_attribute)]
 #![feature(do_not_recommend)]
 #![feature(duration_consts_float)]
@@ -173,7 +173,6 @@
 #![feature(isqrt)]
 #![feature(link_cfg)]
 #![feature(offset_of_enum)]
-#![feature(offset_of_nested)]
 #![feature(panic_internals)]
 #![feature(ptr_alignment_type)]
 #![feature(ptr_metadata)]

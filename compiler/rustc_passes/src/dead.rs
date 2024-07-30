@@ -3,6 +3,8 @@
 // expectations such as `#[expect(unused)]` and `#[expect(dead_code)]` is live, and everything else
 // is dead.
 
+use std::mem;
+
 use hir::def_id::{LocalDefIdMap, LocalDefIdSet};
 use hir::ItemKind;
 use rustc_data_structures::unord::UnordSet;
@@ -21,7 +23,6 @@ use rustc_session::lint;
 use rustc_session::lint::builtin::DEAD_CODE;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_target::abi::FieldIdx;
-use std::mem;
 
 use crate::errors::{
     ChangeFields, IgnoredDerivedImpls, MultipleDeadCodes, ParentInfo, UselessAssignment,
@@ -54,35 +55,51 @@ impl Publicness {
     }
 }
 
-fn struct_all_fields_are_public(tcx: TyCtxt<'_>, id: DefId) -> bool {
-    // treat PhantomData and positional ZST as public,
-    // we don't want to lint types which only have them,
-    // cause it's a common way to use such types to check things like well-formedness
-    tcx.adt_def(id).all_fields().all(|field| {
+fn adt_of<'tcx>(ty: &hir::Ty<'tcx>) -> Option<(LocalDefId, DefKind)> {
+    match ty.kind {
+        TyKind::Path(hir::QPath::Resolved(_, path)) => {
+            if let Res::Def(def_kind, def_id) = path.res
+                && let Some(local_def_id) = def_id.as_local()
+            {
+                Some((local_def_id, def_kind))
+            } else {
+                None
+            }
+        }
+        TyKind::Slice(ty) | TyKind::Array(ty, _) => adt_of(ty),
+        TyKind::Ptr(ty) | TyKind::Ref(_, ty) => adt_of(ty.ty),
+        _ => None,
+    }
+}
+
+fn struct_all_fields_are_public(tcx: TyCtxt<'_>, id: LocalDefId) -> bool {
+    let adt_def = tcx.adt_def(id);
+
+    // skip types contain fields of unit and never type,
+    // it's usually intentional to make the type not constructible
+    let not_require_constructor = adt_def.all_fields().any(|field| {
         let field_type = tcx.type_of(field.did).instantiate_identity();
-        if field_type.is_phantom_data() {
-            return true;
-        }
-        let is_positional = field.name.as_str().starts_with(|c: char| c.is_ascii_digit());
-        if is_positional
-            && tcx
-                .layout_of(tcx.param_env(field.did).and(field_type))
-                .map_or(true, |layout| layout.is_zst())
-        {
-            return true;
-        }
-        field.vis.is_public()
-    })
+        field_type.is_unit() || field_type.is_never()
+    });
+
+    not_require_constructor
+        || adt_def.all_fields().all(|field| {
+            let field_type = tcx.type_of(field.did).instantiate_identity();
+            // skip fields of PhantomData,
+            // cause it's a common way to check things like well-formedness
+            if field_type.is_phantom_data() {
+                return true;
+            }
+
+            field.vis.is_public()
+        })
 }
 
 /// check struct and its fields are public or not,
 /// for enum and union, just check they are public,
 /// and doesn't solve types like &T for now, just skip them
 fn ty_ref_to_pub_struct(tcx: TyCtxt<'_>, ty: &hir::Ty<'_>) -> Publicness {
-    if let TyKind::Path(hir::QPath::Resolved(_, path)) = ty.kind
-        && let Res::Def(def_kind, def_id) = path.res
-        && def_id.is_local()
-    {
+    if let Some((def_id, def_kind)) = adt_of(ty) {
         return match def_kind {
             DefKind::Enum | DefKind::Union => {
                 let ty_is_public = tcx.visibility(def_id).is_public();
@@ -565,10 +582,8 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
     }
 
     fn impl_item_with_used_self(&mut self, impl_id: hir::ItemId, impl_item_id: LocalDefId) -> bool {
-        if let TyKind::Path(hir::QPath::Resolved(_, path)) =
-            self.tcx.hir().item(impl_id).expect_impl().self_ty.kind
-            && let Res::Def(def_kind, def_id) = path.res
-            && let Some(local_def_id) = def_id.as_local()
+        if let Some((local_def_id, def_kind)) =
+            adt_of(self.tcx.hir().item(impl_id).expect_impl().self_ty)
             && matches!(def_kind, DefKind::Struct | DefKind::Enum | DefKind::Union)
         {
             if let Some(trait_item_id) = self.tcx.associated_item(impl_item_id).trait_item_def_id
@@ -915,7 +930,7 @@ fn create_and_seed_worklist(
                     match tcx.def_kind(id) {
                         DefKind::Impl { .. } => false,
                         DefKind::AssocConst | DefKind::AssocTy | DefKind::AssocFn => !matches!(tcx.associated_item(id).container, AssocItemContainer::ImplContainer),
-                        DefKind::Struct => struct_all_fields_are_public(tcx, id.to_def_id()) || has_allow_dead_code_or_lang_attr(tcx, id).is_some(),
+                        DefKind::Struct => struct_all_fields_are_public(tcx, id) || has_allow_dead_code_or_lang_attr(tcx, id).is_some(),
                         _ => true
                     })
                 .map(|id| (id, ComesFromAllowExpect::No))

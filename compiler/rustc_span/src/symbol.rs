@@ -2,6 +2,9 @@
 //! allows bidirectional lookup; i.e., given a value, one can easily find the
 //! type, and vice versa.
 
+use std::hash::{Hash, Hasher};
+use std::{fmt, str};
+
 use rustc_arena::DroplessArena;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_data_structures::stable_hasher::{
@@ -9,10 +12,6 @@ use rustc_data_structures::stable_hasher::{
 };
 use rustc_data_structures::sync::Lock;
 use rustc_macros::{symbols, Decodable, Encodable, HashStable_Generic};
-
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::str;
 
 use crate::{with_session_globals, Edition, Span, DUMMY_SP};
 
@@ -557,6 +556,7 @@ symbols! {
         clobber_abi,
         clone,
         clone_closures,
+        clone_fn,
         clone_from,
         closure,
         closure_lifetime_binder,
@@ -1229,6 +1229,7 @@ symbols! {
         modifiers,
         module,
         module_path,
+        more_maybe_bounds,
         more_qualified_paths,
         more_struct_aliases,
         movbe_target_feature,
@@ -2444,13 +2445,11 @@ pub mod kw {
 /// Given that `sym` is imported, use them like `sym::symbol_name`.
 /// For example `sym::rustfmt` or `sym::u8`.
 pub mod sym {
-    use super::Symbol;
-
-    #[doc(inline)]
-    pub use super::sym_generated::*;
-
     // Used from a macro in `librustc_feature/accepted.rs`
     pub use super::kw::MacroRules as macro_rules;
+    #[doc(inline)]
+    pub use super::sym_generated::*;
+    use super::Symbol;
 
     /// Get the symbol for an integer.
     ///

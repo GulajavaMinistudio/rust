@@ -1,20 +1,37 @@
 //! Performs various peephole optimizations.
 
-use crate::simplify::simplify_duplicate_switch_targets;
-use crate::take_array;
 use rustc_ast::attr;
+use rustc_hir::LangItem;
 use rustc_middle::bug;
 use rustc_middle::mir::*;
-use rustc_middle::ty::layout;
 use rustc_middle::ty::layout::ValidityRequirement;
-use rustc_middle::ty::{self, GenericArgsRef, ParamEnv, Ty, TyCtxt};
+use rustc_middle::ty::{self, layout, GenericArgsRef, ParamEnv, Ty, TyCtxt};
 use rustc_span::sym;
 use rustc_span::symbol::Symbol;
 use rustc_target::spec::abi::Abi;
 
-pub struct InstSimplify;
+use crate::simplify::simplify_duplicate_switch_targets;
+use crate::take_array;
+
+pub enum InstSimplify {
+    BeforeInline,
+    AfterSimplifyCfg,
+}
+
+impl InstSimplify {
+    pub fn name(&self) -> &'static str {
+        match self {
+            InstSimplify::BeforeInline => "InstSimplify-before-inline",
+            InstSimplify::AfterSimplifyCfg => "InstSimplify-after-simplifycfg",
+        }
+    }
+}
 
 impl<'tcx> MirPass<'tcx> for InstSimplify {
+    fn name(&self) -> &'static str {
+        self.name()
+    }
+
     fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
         sess.mir_opt_level() > 0
     }
@@ -271,8 +288,7 @@ impl<'tcx> InstSimplifyContext<'tcx, '_> {
             return;
         }
 
-        let trait_def_id = self.tcx.trait_of_item(fn_def_id);
-        if trait_def_id.is_none() || trait_def_id != self.tcx.lang_items().clone_trait() {
+        if !self.tcx.is_lang_item(fn_def_id, LangItem::CloneFn) {
             return;
         }
 

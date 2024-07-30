@@ -1,10 +1,10 @@
 //! List of the unstable feature gates.
 
-use super::{to_nonzero, Feature};
-
 use rustc_data_structures::fx::FxHashSet;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::Span;
+
+use super::{to_nonzero, Feature};
 
 pub struct UnstableFeature {
     pub feature: Feature,
@@ -205,6 +205,8 @@ declare_features! (
     (unstable, lifetime_capture_rules_2024, "1.76.0", None),
     /// Allows `#[link(..., cfg(..))]`; perma-unstable per #37406
     (unstable, link_cfg, "1.14.0", None),
+    /// Allows using `?Trait` trait bounds in more contexts.
+    (internal, more_maybe_bounds, "CURRENT_RUSTC_VERSION", None),
     /// Allows the `multiple_supertrait_upcastable` lint.
     (unstable, multiple_supertrait_upcastable, "1.69.0", None),
     /// Allow negative trait bounds. This is an internal-only feature for testing the trait solver!
@@ -558,8 +560,6 @@ declare_features! (
     (unstable, object_safe_for_dispatch, "1.40.0", Some(43561)),
     /// Allows using enums in offset_of!
     (unstable, offset_of_enum, "1.75.0", Some(120141)),
-    /// Allows using multiple nested field accesses in offset_of!
-    (unstable, offset_of_nested, "1.77.0", Some(120140)),
     /// Allows using fields with slice type in offset_of!
     (unstable, offset_of_slice, "CURRENT_RUSTC_VERSION", Some(126151)),
     /// Allows using `#[optimize(X)]`.
