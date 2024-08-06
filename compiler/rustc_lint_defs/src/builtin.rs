@@ -26,7 +26,6 @@ declare_lint_pass! {
         BARE_TRAIT_OBJECTS,
         BINDINGS_WITH_VARIANT_NAME,
         BREAK_WITH_LABEL_AND_LOOP,
-        BYTE_SLICE_IN_PACKED_STRUCT_WITH_DERIVE,
         CENUM_IMPL_DROP_CAST,
         COHERENCE_LEAK_CHECK,
         CONFLICTING_REPR_HINTS,
@@ -1267,7 +1266,7 @@ declare_lint! {
     Deny,
     "type parameter default erroneously allowed in invalid location",
     @future_incompatible = FutureIncompatibleInfo {
-        reason: FutureIncompatibilityReason::FutureReleaseErrorDontReportInDeps,
+        reason: FutureIncompatibilityReason::FutureReleaseErrorReportInDeps,
         reference: "issue #36887 <https://github.com/rust-lang/rust/issues/36887>",
     };
 }
@@ -4316,39 +4315,6 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `byte_slice_in_packed_struct_with_derive` lint detects cases where a byte slice field
-    /// (`[u8]`) or string slice field (`str`) is used in a `packed` struct that derives one or
-    /// more built-in traits.
-    ///
-    /// ### Example
-    ///
-    /// ```rust
-    /// #[repr(packed)]
-    /// #[derive(Hash)]
-    /// struct FlexZeroSlice {
-    ///     width: u8,
-    ///     data: [u8],
-    /// }
-    /// ```
-    ///
-    /// {{produces}}
-    ///
-    /// ### Explanation
-    ///
-    /// This was previously accepted but is being phased out, because fields in packed structs are
-    /// now required to implement `Copy` for `derive` to work. Byte slices and string slices are a
-    /// temporary exception because certain crates depended on them.
-    pub BYTE_SLICE_IN_PACKED_STRUCT_WITH_DERIVE,
-    Warn,
-    "`[u8]` or `str` used in a packed struct with `derive`",
-    @future_incompatible = FutureIncompatibleInfo {
-        reason: FutureIncompatibilityReason::FutureReleaseErrorReportInDeps,
-        reference: "issue #107457 <https://github.com/rust-lang/rust/issues/107457>",
-    };
-    report_in_external_macro
-}
-
-declare_lint! {
     /// The `invalid_macro_export_arguments` lint detects cases where `#[macro_export]` is being used with invalid arguments.
     ///
     /// ### Example
@@ -4934,7 +4900,6 @@ declare_lint! {
     /// ### Example
     ///
     /// ```rust
-    /// #![feature(unsafe_extern_blocks)]
     /// #![warn(missing_unsafe_on_extern)]
     /// #![allow(dead_code)]
     ///

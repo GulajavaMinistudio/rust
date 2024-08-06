@@ -431,8 +431,6 @@ declare_features! (
     (unstable, custom_test_frameworks, "1.30.0", Some(50297)),
     /// Allows declarative macros 2.0 (`macro`).
     (unstable, decl_macro, "1.17.0", Some(39412)),
-    /// Allows default type parameters to influence type inference.
-    (unstable, default_type_parameter_fallback, "1.3.0", Some(27336)),
     /// Allows using `#[deprecated_safe]` to deprecate the safeness of a function or trait
     (unstable, deprecated_safe, "1.61.0", Some(94978)),
     /// Allows having using `suggestion` in the `#[deprecated]` attribute.
@@ -591,6 +589,8 @@ declare_features! (
     (incomplete, return_type_notation, "1.70.0", Some(109417)),
     /// Allows `extern "rust-cold"`.
     (unstable, rust_cold_cc, "1.63.0", Some(97544)),
+    /// Allows use of x86 SHA512, SM3 and SM4 target-features and intrinsics
+    (unstable, sha512_sm_x86, "CURRENT_RUSTC_VERSION", Some(126624)),
     /// Shortern the tail expression lifetime
     (unstable, shorter_tail_lifetimes, "1.79.0", Some(123739)),
     /// Allows the use of SIMD types in functions declared in `extern` blocks.
@@ -629,8 +629,6 @@ declare_features! (
     (incomplete, unnamed_fields, "1.74.0", Some(49804)),
     /// Allows unsafe attributes.
     (unstable, unsafe_attributes, "1.80.0", Some(123757)),
-    /// Allows unsafe on extern declarations and safety qualifiers over internal items.
-    (unstable, unsafe_extern_blocks, "1.80.0", Some(123743)),
     /// Allows const generic parameters to be defined with types that
     /// are not `Sized`, e.g. `fn foo<const N: [u8]>() {`.
     (incomplete, unsized_const_params, "CURRENT_RUSTC_VERSION", Some(95174)),
