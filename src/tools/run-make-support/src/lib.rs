@@ -45,7 +45,7 @@ pub use external_deps::{c_build, cc, clang, htmldocck, llvm, python, rustc, rust
 
 // These rely on external dependencies.
 pub use cc::{cc, cxx, extra_c_flags, extra_cxx_flags, Cc};
-pub use c_build::{build_native_dynamic_lib, build_native_static_lib, build_native_static_lib_cxx};
+pub use c_build::{build_native_dynamic_lib, build_native_static_lib, build_native_static_lib_optimized, build_native_static_lib_cxx};
 pub use clang::{clang, Clang};
 pub use htmldocck::htmldocck;
 pub use llvm::{
@@ -72,13 +72,14 @@ pub use targets::{is_darwin, is_msvc, is_windows, llvm_components_contain, targe
 
 /// Helpers for building names of output artifacts that are potentially target-specific.
 pub use artifact_names::{
-    bin_name, dynamic_lib_extension, dynamic_lib_name, rust_lib_name, static_lib_name,
+    bin_name, dynamic_lib_extension, dynamic_lib_name, msvc_import_dynamic_lib_name, rust_lib_name,
+    static_lib_name,
 };
 
 /// Path-related helpers.
 pub use path_helpers::{
-    cwd, filename_not_in_denylist, has_extension, has_prefix, has_suffix, not_contains, path,
-    shallow_find_files, source_root,
+    cwd, filename_contains, filename_not_in_denylist, has_extension, has_prefix, has_suffix,
+    not_contains, path, shallow_find_files, source_root,
 };
 
 /// Helpers for scoped test execution where certain properties are attempted to be maintained.

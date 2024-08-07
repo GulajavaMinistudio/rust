@@ -1346,10 +1346,11 @@ impl HumanEmitter {
                 buffer.append(0, ": ", header_style);
                 label_width += 2;
             }
-            for (text, _) in msgs.iter() {
+            let mut line = 0;
+            for (text, style) in msgs.iter() {
                 let text = self.translate_message(text, args).map_err(Report::new).unwrap();
                 // Account for newlines to align output to its label.
-                for (line, text) in normalize_whitespace(&text).lines().enumerate() {
+                for text in normalize_whitespace(&text).lines() {
                     buffer.append(
                         line,
                         &format!(
@@ -1357,8 +1358,38 @@ impl HumanEmitter {
                             if line == 0 { String::new() } else { " ".repeat(label_width) },
                             text
                         ),
-                        header_style,
+                        match style {
+                            Style::Highlight => *style,
+                            _ => header_style,
+                        },
                     );
+                    line += 1;
+                }
+                // We add lines above, but if the last line has no explicit newline (which would
+                // yield an empty line), then we revert one line up to continue with the next
+                // styled text chunk on the same line as the last one from the prior one. Otherwise
+                // every `text` would appear on their own line (because even though they didn't end
+                // in '\n', they advanced `line` by one).
+                if line > 0 {
+                    line -= 1;
+                }
+            }
+            if self.short_message {
+                let labels = msp
+                    .span_labels()
+                    .into_iter()
+                    .filter_map(|label| match label.label {
+                        Some(msg) if label.is_primary => {
+                            let text = self.translate_message(&msg, args).ok()?;
+                            if !text.trim().is_empty() { Some(text.to_string()) } else { None }
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if !labels.is_empty() {
+                    buffer.append(line, ": ", Style::NoStyle);
+                    buffer.append(line, &labels, Style::NoStyle);
                 }
             }
         }
