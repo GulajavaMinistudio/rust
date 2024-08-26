@@ -245,6 +245,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     self.check_coroutine(attr, target);
                 }
                 [sym::linkage, ..] => self.check_linkage(attr, span, target),
+                [sym::rustc_pub_transparent, ..] => self.check_rustc_pub_transparent( attr.span, span, attrs),
                 [
                     // ok
                     sym::allow
@@ -949,6 +950,16 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 let is_valid = matches!(&i.self_ty.kind, hir::TyKind::Tup([_]))
                     || if let hir::TyKind::BareFn(bare_fn_ty) = &i.self_ty.kind {
                         bare_fn_ty.decl.inputs.len() == 1
+                    } else {
+                        false
+                    }
+                    || if let Some(&[hir::GenericArg::Type(ty)]) = i
+                        .of_trait
+                        .as_ref()
+                        .and_then(|trait_ref| trait_ref.path.segments.last())
+                        .map(|last_segment| last_segment.args().args)
+                    {
+                        matches!(&ty.kind, hir::TyKind::Tup([_]))
                     } else {
                         false
                     };
@@ -2379,6 +2390,18 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             _ => {
                 self.dcx().emit_err(errors::Linkage { attr_span: attr.span, span });
             }
+        }
+    }
+
+    fn check_rustc_pub_transparent(&self, attr_span: Span, span: Span, attrs: &[Attribute]) {
+        if !attrs
+            .iter()
+            .filter(|attr| attr.has_name(sym::repr))
+            .filter_map(|attr| attr.meta_item_list())
+            .flatten()
+            .any(|nmi| nmi.has_name(sym::transparent))
+        {
+            self.dcx().emit_err(errors::RustcPubTransparent { span, attr_span });
         }
     }
 }

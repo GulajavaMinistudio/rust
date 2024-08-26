@@ -372,13 +372,6 @@ pub struct FfiConstInvalidTarget {
 }
 
 #[derive(LintDiagnostic)]
-#[diag(passes_must_use_async)]
-pub struct MustUseAsync {
-    #[label]
-    pub span: Span,
-}
-
-#[derive(LintDiagnostic)]
 #[diag(passes_must_use_no_effect)]
 pub struct MustUseNoEffect {
     pub article: &'static str,
@@ -616,6 +609,15 @@ pub struct RustcSafeIntrinsic {
 #[derive(Diagnostic)]
 #[diag(passes_rustc_std_internal_symbol)]
 pub struct RustcStdInternalSymbol {
+    #[primary_span]
+    pub attr_span: Span,
+    #[label]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(passes_rustc_pub_transparent)]
+pub struct RustcPubTransparent {
     #[primary_span]
     pub attr_span: Span,
     #[label]
