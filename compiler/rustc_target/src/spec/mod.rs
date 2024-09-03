@@ -1837,6 +1837,7 @@ supported_targets! {
 
     ("mips64-openwrt-linux-musl", mips64_openwrt_linux_musl),
 
+    ("aarch64-unknown-nto-qnx700", aarch64_unknown_nto_qnx700),
     ("aarch64-unknown-nto-qnx710", aarch64_unknown_nto_qnx710),
     ("x86_64-pc-nto-qnx710", x86_64_pc_nto_qnx710),
     ("i586-pc-nto-qnx700", i586_pc_nto_qnx700),
@@ -2148,7 +2149,7 @@ pub struct TargetOptions {
     pub is_like_aix: bool,
     /// Whether the target toolchain is like macOS's. Only useful for compiling against iOS/macOS,
     /// in particular running dsymutil and some other stuff like `-dead_strip`. Defaults to false.
-    /// Also indiates whether to use Apple-specific ABI changes, such as extending function
+    /// Also indicates whether to use Apple-specific ABI changes, such as extending function
     /// parameters to 32-bits.
     pub is_like_osx: bool,
     /// Whether the target toolchain is like Solaris's.

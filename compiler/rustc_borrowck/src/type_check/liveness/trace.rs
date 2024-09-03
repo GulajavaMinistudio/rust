@@ -15,6 +15,7 @@ use rustc_mir_dataflow::ResultsCursor;
 use rustc_span::DUMMY_SP;
 use rustc_trait_selection::traits::query::type_op::outlives::DropckOutlives;
 use rustc_trait_selection::traits::query::type_op::{TypeOp, TypeOpOutput};
+use tracing::debug;
 
 use crate::location::RichLocation;
 use crate::region_infer::values::{self, LiveLoans};
@@ -217,7 +218,7 @@ impl<'a, 'me, 'typeck, 'flow, 'tcx> LivenessResults<'a, 'me, 'typeck, 'flow, 'tc
         // This collect is more necessary than immediately apparent
         // because these facts go into `add_drop_live_facts_for()`,
         // which also writes to `all_facts`, and so this is genuinely
-        // a simulatneous overlapping mutable borrow.
+        // a simultaneous overlapping mutable borrow.
         // FIXME for future hackers: investigate whether this is
         // actually necessary; these facts come from Polonius
         // and probably maybe plausibly does not need to go back in.

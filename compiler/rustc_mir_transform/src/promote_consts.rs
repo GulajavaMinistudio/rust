@@ -27,6 +27,7 @@ use rustc_middle::ty::{self, GenericArgs, List, Ty, TyCtxt, TypeVisitableExt};
 use rustc_middle::{bug, mir, span_bug};
 use rustc_span::source_map::Spanned;
 use rustc_span::Span;
+use tracing::{debug, instrument};
 
 /// A `MirPass` for promotion.
 ///
@@ -497,7 +498,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                                 Some(x) if x != 0 => {}        // okay
                                 _ => return Err(Unpromotable), // value not known or 0 -- not okay
                             }
-                            // Furthermore, for signed divison, we also have to exclude `int::MIN / -1`.
+                            // Furthermore, for signed division, we also have to exclude `int::MIN / -1`.
                             if lhs_ty.is_signed() {
                                 match rhs_val.map(|x| x.to_int(sz)) {
                                     Some(-1) | None => {

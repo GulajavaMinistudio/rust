@@ -10,6 +10,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::impls::MaybeStorageDead;
 use rustc_mir_dataflow::storage::always_storage_live_locals;
 use rustc_mir_dataflow::Analysis;
+use tracing::{debug, instrument};
 
 use crate::ssa::{SsaLocals, StorageLiveLocals};
 
@@ -344,7 +345,7 @@ fn fully_replacable_locals(ssa: &SsaLocals) -> BitSet<Local> {
     replacable
 }
 
-/// Utility to help performing subtitution of `*pattern` by `target`.
+/// Utility to help performing substitution of `*pattern` by `target`.
 struct Replacer<'tcx> {
     tcx: TyCtxt<'tcx>,
     targets: IndexVec<Local, Value<'tcx>>,

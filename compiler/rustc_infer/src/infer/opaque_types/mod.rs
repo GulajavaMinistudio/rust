@@ -11,6 +11,7 @@ use rustc_middle::ty::{
     TypeSuperVisitable, TypeVisitable, TypeVisitableExt, TypeVisitor,
 };
 use rustc_span::Span;
+use tracing::{debug, instrument};
 
 use crate::errors::OpaqueHiddenTypeDiag;
 use crate::infer::{InferCtxt, InferOk};
@@ -212,7 +213,7 @@ impl<'tcx> InferCtxt<'tcx> {
     /// ```
     ///
     /// As indicating in the comments above, each of those references
-    /// is (in the compiler) basically generic paramters (`args`)
+    /// is (in the compiler) basically generic parameters (`args`)
     /// applied to the type of a suitable `def_id` (which identifies
     /// `Foo1` or `Foo2`).
     ///

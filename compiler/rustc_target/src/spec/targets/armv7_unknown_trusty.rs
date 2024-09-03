@@ -1,6 +1,6 @@
 use crate::spec::{LinkSelfContainedDefault, PanicStrategy, RelroLevel, Target, TargetOptions};
 
-pub fn target() -> Target {
+pub(crate) fn target() -> Target {
     Target {
         // It's important we use "gnueabi" and not "musleabi" here. LLVM uses it
         // to determine the calling convention and float ABI, and it doesn't
@@ -8,7 +8,7 @@ pub fn target() -> Target {
         llvm_target: "armv7-unknown-unknown-gnueabi".into(),
         metadata: crate::spec::TargetMetadata {
             description: Some("Armv7-A Trusty".into()),
-            tier: Some(2),
+            tier: Some(3),
             host_tools: Some(false),
             std: Some(false),
         },

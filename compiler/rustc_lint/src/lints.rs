@@ -919,6 +919,11 @@ pub(crate) struct TyQualified {
 }
 
 #[derive(LintDiagnostic)]
+#[diag(lint_type_ir_inherent_usage)]
+#[note]
+pub(crate) struct TypeIrInherentUsage;
+
+#[derive(LintDiagnostic)]
 #[diag(lint_non_glob_import_type_ir_inherent)]
 pub(crate) struct NonGlobImportTypeIrInherent {
     #[suggestion(code = "{snippet}", applicability = "maybe-incorrect")]
@@ -2609,6 +2614,16 @@ pub(crate) struct MacroExpandedMacroExportsAccessedByAbsolutePaths {
 pub(crate) struct ElidedLifetimesInPaths {
     #[subdiagnostic]
     pub subdiag: ElidedLifetimeInPathSubdiag,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(lint_elided_named_lifetime)]
+pub(crate) struct ElidedNamedLifetime {
+    #[label(lint_label_elided)]
+    pub elided: Span,
+    pub name: Symbol,
+    #[label(lint_label_named)]
+    pub named_declaration: Option<Span>,
 }
 
 #[derive(LintDiagnostic)]

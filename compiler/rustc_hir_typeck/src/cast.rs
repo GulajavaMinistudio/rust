@@ -44,6 +44,7 @@ use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::symbol::sym;
 use rustc_span::{Span, DUMMY_SP};
 use rustc_trait_selection::infer::InferCtxtExt;
+use tracing::{debug, instrument};
 
 use super::FnCtxt;
 use crate::{errors, type_error_struct};
@@ -649,7 +650,7 @@ impl<'a, 'tcx> CastCheck<'tcx> {
                         // cannot distinguish. This would cause us to erroneously discard a cast which will
                         // lead to a borrowck error like #113257.
                         // We still did a coercion above to unify inference variables for `ptr as _` casts.
-                        // This does cause us to miss some trivial casts in the trival cast lint.
+                        // This does cause us to miss some trivial casts in the trivial cast lint.
                         debug!(" -> PointerCast");
                     } else {
                         self.trivial_cast_lint(fcx);

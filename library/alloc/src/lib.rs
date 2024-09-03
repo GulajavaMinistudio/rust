@@ -93,7 +93,6 @@
 // tidy-alphabetical-start
 #![cfg_attr(not(no_global_oom_handling), feature(const_alloc_error))]
 #![cfg_attr(not(no_global_oom_handling), feature(const_btree_len))]
-#![cfg_attr(test, feature(new_uninit))]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
 #![feature(array_chunks)]
@@ -184,6 +183,7 @@
 #![feature(multiple_supertrait_upcastable)]
 #![feature(negative_impls)]
 #![feature(never_type)]
+#![feature(optimize_attribute)]
 #![feature(rustc_allow_const_fn_unstable)]
 #![feature(rustc_attrs)]
 #![feature(slice_internals)]

@@ -38,7 +38,7 @@
 //!   not contain any indirection through a pointer or any indexing projections.
 //!
 //! * `p` and `q` must have the **same type**. If we replace a local with a subtype or supertype,
-//!   we may end up with a differnet vtable for that local. See the `subtyping-impacts-selection`
+//!   we may end up with a different vtable for that local. See the `subtyping-impacts-selection`
 //!   tests for an example where that causes issues.
 //!
 //! * We need to make sure that the goal of "merging the memory" is actually structurally possible
@@ -144,6 +144,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::impls::MaybeLiveLocals;
 use rustc_mir_dataflow::points::{save_as_intervals, DenseLocationMap, PointIndex};
 use rustc_mir_dataflow::Analysis;
+use tracing::{debug, trace};
 
 use crate::MirPass;
 

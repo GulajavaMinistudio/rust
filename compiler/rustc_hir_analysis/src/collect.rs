@@ -42,6 +42,7 @@ use rustc_target::spec::abi;
 use rustc_trait_selection::error_reporting::traits::suggestions::NextTypeParamName;
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::ObligationCtxt;
+use tracing::{debug, instrument};
 
 use crate::check::intrinsic::intrinsic_operation_unsafety;
 use crate::errors;
@@ -420,7 +421,7 @@ impl<'tcx> HirTyLowerer<'tcx> for ItemCtxt<'tcx> {
         span: Span,
         def_id: LocalDefId,
         assoc_name: Ident,
-    ) -> ty::GenericPredicates<'tcx> {
+    ) -> ty::EarlyBinder<'tcx, &'tcx [(ty::Clause<'tcx>, Span)]> {
         self.tcx.at(span).type_param_predicates((self.item_def_id, def_id, assoc_name))
     }
 
@@ -1036,7 +1037,7 @@ impl<'tcx> FieldUniquenessCheckContext<'tcx> {
 
     /// Check the uniqueness of fields in a struct variant, and recursively
     /// check the nested fields if it is an unnamed field with type of an
-    /// annoymous adt.
+    /// anonymous adt.
     fn check_field(&mut self, field: &hir::FieldDef<'_>) {
         if field.ident.name != kw::Underscore {
             self.check_field_decl(field.ident, field.span.into());
@@ -1490,7 +1491,7 @@ fn infer_return_ty_for_fn_sig<'tcx>(
         Some(ty) => {
             let fn_sig = tcx.typeck(def_id).liberated_fn_sigs()[hir_id];
             // Typeck doesn't expect erased regions to be returned from `type_of`.
-            // This is a heuristic approach. If the scope has region paramters,
+            // This is a heuristic approach. If the scope has region parameters,
             // we should change fn_sig's lifetime from `ReErased` to `ReError`,
             // otherwise to `ReStatic`.
             let has_region_params = generics.params.iter().any(|param| match param.kind {

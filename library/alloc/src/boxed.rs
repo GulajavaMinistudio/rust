@@ -53,22 +53,20 @@
 //!
 //! # Memory layout
 //!
-//! For non-zero-sized values, a [`Box`] will use the [`Global`] allocator for
-//! its allocation. It is valid to convert both ways between a [`Box`] and a
-//! raw pointer allocated with the [`Global`] allocator, given that the
-//! [`Layout`] used with the allocator is correct for the type. More precisely,
-//! a `value: *mut T` that has been allocated with the [`Global`] allocator
-//! with `Layout::for_value(&*value)` may be converted into a box using
-//! [`Box::<T>::from_raw(value)`]. Conversely, the memory backing a `value: *mut
-//! T` obtained from [`Box::<T>::into_raw`] may be deallocated using the
-//! [`Global`] allocator with [`Layout::for_value(&*value)`].
+//! For non-zero-sized values, a [`Box`] will use the [`Global`] allocator for its allocation. It is
+//! valid to convert both ways between a [`Box`] and a raw pointer allocated with the [`Global`]
+//! allocator, given that the [`Layout`] used with the allocator is correct for the type and the raw
+//! pointer points to a valid value of the right type. More precisely, a `value: *mut T` that has
+//! been allocated with the [`Global`] allocator with `Layout::for_value(&*value)` may be converted
+//! into a box using [`Box::<T>::from_raw(value)`]. Conversely, the memory backing a `value: *mut T`
+//! obtained from [`Box::<T>::into_raw`] may be deallocated using the [`Global`] allocator with
+//! [`Layout::for_value(&*value)`].
 //!
-//! For zero-sized values, the `Box` pointer still has to be [valid] for reads
-//! and writes and sufficiently aligned. In particular, casting any aligned
-//! non-zero integer literal to a raw pointer produces a valid pointer, but a
-//! pointer pointing into previously allocated memory that since got freed is
-//! not valid. The recommended way to build a Box to a ZST if `Box::new` cannot
-//! be used is to use [`ptr::NonNull::dangling`].
+//! For zero-sized values, the `Box` pointer has to be non-null and sufficiently aligned. The
+//! recommended way to build a Box to a ZST if `Box::new` cannot be used is to use
+//! [`ptr::NonNull::dangling`].
+//!
+//! On top of these basic layout requirements, a `Box<T>` must point to a valid value of `T`.
 //!
 //! So long as `T: Sized`, a `Box<T>` is guaranteed to be represented
 //! as a single pointer and is also ABI-compatible with C pointers
@@ -262,8 +260,6 @@ impl<T> Box<T> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(new_uninit)]
-    ///
     /// let mut five = Box::<u32>::new_uninit();
     ///
     /// let five = unsafe {
@@ -276,7 +272,7 @@ impl<T> Box<T> {
     /// assert_eq!(*five, 5)
     /// ```
     #[cfg(not(no_global_oom_handling))]
-    #[unstable(feature = "new_uninit", issue = "63291")]
+    #[stable(feature = "new_uninit", since = "CURRENT_RUSTC_VERSION")]
     #[must_use]
     #[inline]
     pub fn new_uninit() -> Box<mem::MaybeUninit<T>> {
@@ -292,7 +288,6 @@ impl<T> Box<T> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(new_uninit)]
     /// #![feature(new_zeroed_alloc)]
     ///
     /// let zero = Box::<u32>::new_zeroed();
@@ -350,7 +345,7 @@ impl<T> Box<T> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// let mut five = Box::<u32>::try_new_uninit()?;
     ///
@@ -380,7 +375,7 @@ impl<T> Box<T> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// let zero = Box::<u32>::try_new_zeroed()?;
     /// let zero = unsafe { zero.assume_init() };
@@ -460,7 +455,7 @@ impl<T, A: Allocator> Box<T, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -498,7 +493,7 @@ impl<T, A: Allocator> Box<T, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -538,7 +533,7 @@ impl<T, A: Allocator> Box<T, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -576,7 +571,7 @@ impl<T, A: Allocator> Box<T, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -654,8 +649,6 @@ impl<T> Box<[T]> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(new_uninit)]
-    ///
     /// let mut values = Box::<[u32]>::new_uninit_slice(3);
     ///
     /// let values = unsafe {
@@ -670,7 +663,7 @@ impl<T> Box<[T]> {
     /// assert_eq!(*values, [1, 2, 3])
     /// ```
     #[cfg(not(no_global_oom_handling))]
-    #[unstable(feature = "new_uninit", issue = "63291")]
+    #[stable(feature = "new_uninit", since = "CURRENT_RUSTC_VERSION")]
     #[must_use]
     pub fn new_uninit_slice(len: usize) -> Box<[mem::MaybeUninit<T>]> {
         unsafe { RawVec::with_capacity(len).into_box(len) }
@@ -686,7 +679,6 @@ impl<T> Box<[T]> {
     ///
     /// ```
     /// #![feature(new_zeroed_alloc)]
-    /// #![feature(new_uninit)]
     ///
     /// let values = Box::<[u32]>::new_zeroed_slice(3);
     /// let values = unsafe { values.assume_init() };
@@ -708,7 +700,7 @@ impl<T> Box<[T]> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// let mut values = Box::<[u32]>::try_new_uninit_slice(3)?;
     /// let values = unsafe {
@@ -746,7 +738,7 @@ impl<T> Box<[T]> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// let values = Box::<[u32]>::try_new_zeroed_slice(3)?;
     /// let values = unsafe { values.assume_init() };
@@ -778,7 +770,7 @@ impl<T, A: Allocator> Box<[T], A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -812,7 +804,7 @@ impl<T, A: Allocator> Box<[T], A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -837,7 +829,7 @@ impl<T, A: Allocator> Box<[T], A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -880,7 +872,7 @@ impl<T, A: Allocator> Box<[T], A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(allocator_api, new_uninit)]
+    /// #![feature(allocator_api)]
     ///
     /// use std::alloc::System;
     ///
@@ -927,8 +919,6 @@ impl<T, A: Allocator> Box<mem::MaybeUninit<T>, A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(new_uninit)]
-    ///
     /// let mut five = Box::<u32>::new_uninit();
     ///
     /// let five: Box<u32> = unsafe {
@@ -940,7 +930,7 @@ impl<T, A: Allocator> Box<mem::MaybeUninit<T>, A> {
     ///
     /// assert_eq!(*five, 5)
     /// ```
-    #[unstable(feature = "new_uninit", issue = "63291")]
+    #[stable(feature = "new_uninit", since = "CURRENT_RUSTC_VERSION")]
     #[inline]
     pub unsafe fn assume_init(self) -> Box<T, A> {
         let (raw, alloc) = Box::into_raw_with_allocator(self);
@@ -958,7 +948,6 @@ impl<T, A: Allocator> Box<mem::MaybeUninit<T>, A> {
     ///
     /// ```
     /// #![feature(box_uninit_write)]
-    /// #![feature(new_uninit)]
     ///
     /// let big_box = Box::<[usize; 1024]>::new_uninit();
     ///
@@ -1001,8 +990,6 @@ impl<T, A: Allocator> Box<[mem::MaybeUninit<T>], A> {
     /// # Examples
     ///
     /// ```
-    /// #![feature(new_uninit)]
-    ///
     /// let mut values = Box::<[u32]>::new_uninit_slice(3);
     ///
     /// let values = unsafe {
@@ -1016,7 +1003,7 @@ impl<T, A: Allocator> Box<[mem::MaybeUninit<T>], A> {
     ///
     /// assert_eq!(*values, [1, 2, 3])
     /// ```
-    #[unstable(feature = "new_uninit", issue = "63291")]
+    #[stable(feature = "new_uninit", since = "CURRENT_RUSTC_VERSION")]
     #[inline]
     pub unsafe fn assume_init(self) -> Box<[T], A> {
         let (raw, alloc) = Box::into_raw_with_allocator(self);

@@ -38,6 +38,7 @@ use rustc_span::def_id::LocalDefId;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{BytePos, DesugaringKind, ExpnKind, MacroKind, Span, DUMMY_SP};
 use rustc_target::spec::abi;
+use tracing::{debug, instrument};
 
 use super::{
     DefIdOrName, FindExprBySpan, ImplCandidate, Obligation, ObligationCause, ObligationCauseCode,
@@ -4662,7 +4663,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         // because this suggest adding both return type in
         // the `FnSig` and a default return value in the body, so it
         // is not suitable for foreign function without a local body,
-        // and neighter for trait method which may be also implemented
+        // and neither for trait method which may be also implemented
         // in other place, so shouldn't change it's FnSig.
         fn choose_suggest_items<'tcx, 'hir>(
             tcx: TyCtxt<'tcx>,

@@ -36,6 +36,7 @@ use rustc_trait_selection::traits::{
 };
 use rustc_type_ir::solve::NoSolution;
 use rustc_type_ir::TypeFlags;
+use tracing::{debug, instrument};
 use {rustc_ast as ast, rustc_hir as hir};
 
 use crate::autoderef::Autoderef;
@@ -1015,7 +1016,7 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) -> Result<(), 
                             sym::adt_const_params,
                         )])
                     }
-                    // Implments `ConstParamTy`, suggest adding the feature to enable.
+                    // Implements `ConstParamTy`, suggest adding the feature to enable.
                     Ok(..) => Some(vec![(adt_const_params_feature_string, sym::adt_const_params)]),
                 };
                 if let Some(features) = may_suggest_feature {

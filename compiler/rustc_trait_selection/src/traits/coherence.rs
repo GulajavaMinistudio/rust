@@ -21,6 +21,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 pub use rustc_next_trait_solver::coherence::*;
 use rustc_span::symbol::sym;
 use rustc_span::{Span, DUMMY_SP};
+use tracing::{debug, instrument, warn};
 
 use super::ObligationCtxt;
 use crate::error_reporting::traits::suggest_new_overflow_limit;
@@ -53,7 +54,7 @@ pub fn add_placeholder_note<G: EmissionGuarantee>(err: &mut Diag<'_, G>) {
     );
 }
 
-pub fn suggest_increasing_recursion_limit<'tcx, G: EmissionGuarantee>(
+pub(crate) fn suggest_increasing_recursion_limit<'tcx, G: EmissionGuarantee>(
     tcx: TyCtxt<'tcx>,
     err: &mut Diag<'_, G>,
     overflowing_predicates: &[ty::Predicate<'tcx>],
@@ -722,7 +723,7 @@ impl<'a, 'tcx> ProofTreeVisitor<'tcx> for AmbiguityCausesVisitor<'a, 'tcx> {
                     // FIXME: While this matches the behavior of the
                     // old solver, it is not the only way in which the unknowable
                     // candidates *weaken* coherence, they can also force otherwise
-                    // sucessful normalization to be ambiguous.
+                    // successful normalization to be ambiguous.
                     Ok(Certainty::Maybe(_) | Certainty::Yes) => {
                         ambiguity_cause = None;
                         break;

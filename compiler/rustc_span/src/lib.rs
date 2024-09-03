@@ -26,11 +26,11 @@
 #![feature(let_chains)]
 #![feature(min_specialization)]
 #![feature(negative_impls)]
-#![feature(new_uninit)]
 #![feature(read_buf)]
 #![feature(round_char_boundary)]
 #![feature(rustc_attrs)]
 #![feature(rustdoc_internals)]
+#![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
 // The code produced by the `Encodable`/`Decodable` derive macros refer to
@@ -272,7 +272,7 @@ impl RealFileName {
         }
     }
 
-    /// Return the path remmapped or not depending on the [`FileNameDisplayPreference`].
+    /// Return the path remapped or not depending on the [`FileNameDisplayPreference`].
     ///
     /// For the purpose of this function, local and short preference are equal.
     pub fn to_path(&self, display_pref: FileNameDisplayPreference) -> &Path {
@@ -1684,7 +1684,7 @@ impl fmt::Debug for SourceFile {
 /// is because SourceFiles for the local crate are allocated very early in the
 /// compilation process when the `StableCrateId` is not yet known. If, due to
 /// some refactoring of the compiler, the `StableCrateId` of the local crate
-/// were to become available, it would be better to uniformely make this a
+/// were to become available, it would be better to uniformly make this a
 /// hash of `(filename, stable_crate_id)`.
 ///
 /// When `SourceFile`s are exported in crate metadata, the `StableSourceFileId`

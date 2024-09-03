@@ -40,6 +40,7 @@ use rustc_trait_selection::error_reporting::traits::FindExprBySpan;
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::{Obligation, ObligationCause, ObligationCtxt};
+use tracing::{debug, instrument};
 
 use super::explain_borrow::{BorrowExplanation, LaterUseKind};
 use super::{DescribePlaceOpt, RegionName, RegionNameSource, UseSpans};
@@ -1178,7 +1179,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, '_, 'infcx, 'tcx> {
         for field in &variant.fields {
             // In practice unless there are more than one field with the same type, we'll be
             // suggesting a single field at a type, because we don't aggregate multiple borrow
-            // checker errors involving the functional record update sytnax into a single one.
+            // checker errors involving the functional record update syntax into a single one.
             let field_ty = field.ty(self.infcx.tcx, args);
             let ident = field.ident(self.infcx.tcx);
             if field_ty == ty && fields.iter().all(|field| field.ident.name != ident.name) {
