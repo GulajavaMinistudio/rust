@@ -426,19 +426,11 @@ impl MissingDoc {
         article: &'static str,
         desc: &'static str,
     ) {
-        // If we're building a test harness, then warning about
-        // documentation is probably not really relevant right now.
-        if cx.sess().opts.test {
-            return;
-        }
-
         // Only check publicly-visible items, using the result from the privacy pass.
         // It's an option so the crate root can also use this function (it doesn't
         // have a `NodeId`).
-        if def_id != CRATE_DEF_ID {
-            if !cx.effective_visibilities.is_exported(def_id) {
-                return;
-            }
+        if def_id != CRATE_DEF_ID && !cx.effective_visibilities.is_exported(def_id) {
+            return;
         }
 
         let attrs = cx.tcx.hir().attrs(cx.tcx.local_def_id_to_hir_id(def_id));
@@ -1851,9 +1843,16 @@ impl KeywordIdents {
                 TokenTree::Token(token, _) => {
                     if let Some((ident, token::IdentIsRaw::No)) = token.ident() {
                         if !prev_dollar {
-                            self.check_ident_token(cx, UnderMacro(true), ident);
+                            self.check_ident_token(cx, UnderMacro(true), ident, "");
                         }
-                    } else if *token == TokenKind::Dollar {
+                    } else if let Some((ident, token::IdentIsRaw::No)) = token.lifetime() {
+                        self.check_ident_token(
+                            cx,
+                            UnderMacro(true),
+                            ident.without_first_quote(),
+                            "'",
+                        );
+                    } else if token.kind == TokenKind::Dollar {
                         prev_dollar = true;
                         continue;
                     }
@@ -1869,6 +1868,7 @@ impl KeywordIdents {
         cx: &EarlyContext<'_>,
         UnderMacro(under_macro): UnderMacro,
         ident: Ident,
+        prefix: &'static str,
     ) {
         let (lint, edition) = match ident.name {
             kw::Async | kw::Await | kw::Try => (KEYWORD_IDENTS_2018, Edition::Edition2018),
@@ -1902,7 +1902,7 @@ impl KeywordIdents {
         cx.emit_span_lint(
             lint,
             ident.span,
-            BuiltinKeywordIdents { kw: ident, next: edition, suggestion: ident.span },
+            BuiltinKeywordIdents { kw: ident, next: edition, suggestion: ident.span, prefix },
         );
     }
 }
@@ -1915,7 +1915,11 @@ impl EarlyLintPass for KeywordIdents {
         self.check_tokens(cx, &mac.args.tokens);
     }
     fn check_ident(&mut self, cx: &EarlyContext<'_>, ident: Ident) {
-        self.check_ident_token(cx, UnderMacro(false), ident);
+        if ident.name.as_str().starts_with('\'') {
+            self.check_ident_token(cx, UnderMacro(false), ident.without_first_quote(), "'");
+        } else {
+            self.check_ident_token(cx, UnderMacro(false), ident, "");
+        }
     }
 }
 

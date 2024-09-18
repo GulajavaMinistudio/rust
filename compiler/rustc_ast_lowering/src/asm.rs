@@ -220,9 +220,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                             let parent_def_id = self.current_def_id_parent;
                             let node_id = self.next_node_id();
                             // HACK(min_generic_const_args): see lower_anon_const
-                            if !self.tcx.features().const_arg_path
-                                || !expr.is_potential_trivial_const_arg()
-                            {
+                            if !expr.is_potential_trivial_const_arg() {
                                 self.create_def(
                                     parent_def_id,
                                     node_id,
@@ -474,8 +472,14 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         );
         let line_spans =
             self.arena.alloc_from_iter(asm.line_spans.iter().map(|span| self.lower_span(*span)));
-        let hir_asm =
-            hir::InlineAsm { template, template_strs, operands, options: asm.options, line_spans };
+        let hir_asm = hir::InlineAsm {
+            asm_macro: asm.asm_macro,
+            template,
+            template_strs,
+            operands,
+            options: asm.options,
+            line_spans,
+        };
         self.arena.alloc(hir_asm)
     }
 }

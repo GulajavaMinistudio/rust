@@ -13,6 +13,8 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::{env, fs};
 
+use build_helper::git::warn_old_master_branch;
+
 #[cfg(not(feature = "bootstrap-self-test"))]
 use crate::builder::Builder;
 use crate::builder::Kind;
@@ -34,6 +36,7 @@ pub struct Finder {
 // Targets can be removed from this list once they are present in the stage0 compiler (usually by updating the beta compiler of the bootstrap).
 const STAGE0_MISSING_TARGETS: &[&str] = &[
     // just a dummy comment so the list doesn't get onelined
+    "armv7-rtems-eabihf",
 ];
 
 /// Minimum version threshold for libstdc++ required when using prebuilt LLVM
@@ -230,7 +233,8 @@ than building it.
         }
 
         // Ignore fake targets that are only used for unit tests in bootstrap.
-        if cfg!(not(feature = "bootstrap-self-test")) && !skip_target_sanity {
+        if cfg!(not(feature = "bootstrap-self-test")) && !skip_target_sanity && !build.local_rebuild
+        {
             let mut has_target = false;
             let target_str = target.to_string();
 
@@ -374,4 +378,6 @@ $ pacman -R cmake && pacman -S mingw-w64-x86_64-cmake
     if let Some(ref s) = build.config.ccache {
         cmd_finder.must_have(s);
     }
+
+    warn_old_master_branch(&build.config.git_config(), &build.config.src);
 }

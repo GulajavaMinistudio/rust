@@ -13,6 +13,7 @@ use rustc_infer::traits::ObligationCauseCode;
 use rustc_middle::traits::select::OverflowError;
 pub use rustc_middle::traits::Reveal;
 use rustc_middle::traits::{BuiltinImplSource, ImplSource, ImplSourceUserDefinedData};
+use rustc_middle::ty::fast_reject::DeepRejectCtxt;
 use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::visit::{MaxUniverse, TypeVisitable, TypeVisitableExt};
 use rustc_middle::ty::{self, Term, Ty, TyCtxt, Upcast};
@@ -407,7 +408,7 @@ pub(super) fn opt_normalize_projection_term<'a, 'b, 'tcx>(
             debug!("opt_normalize_projection_type: found error");
             let result = normalize_to_error(selcx, param_env, projection_term, cause, depth);
             obligations.extend(result.obligations);
-            return Ok(Some(result.value.into()));
+            return Ok(Some(result.value));
         }
     }
 
@@ -477,7 +478,7 @@ pub(super) fn opt_normalize_projection_term<'a, 'b, 'tcx>(
             }
             let result = normalize_to_error(selcx, param_env, projection_term, cause, depth);
             obligations.extend(result.obligations);
-            Ok(Some(result.value.into()))
+            Ok(Some(result.value))
         }
     }
 }
@@ -886,11 +887,18 @@ fn assemble_candidates_from_predicates<'cx, 'tcx>(
     potentially_unnormalized_candidates: bool,
 ) {
     let infcx = selcx.infcx;
+    let drcx = DeepRejectCtxt::relate_rigid_rigid(selcx.tcx());
     for predicate in env_predicates {
         let bound_predicate = predicate.kind();
         if let ty::ClauseKind::Projection(data) = predicate.kind().skip_binder() {
             let data = bound_predicate.rebind(data);
             if data.projection_def_id() != obligation.predicate.def_id {
+                continue;
+            }
+
+            if !drcx
+                .args_may_unify(obligation.predicate.args, data.skip_binder().projection_term.args)
+            {
                 continue;
             }
 

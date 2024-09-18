@@ -1012,12 +1012,12 @@ pub(crate) struct FeatureStableTwice {
 
 #[derive(Diagnostic)]
 #[diag(passes_feature_previously_declared, code = E0711)]
-pub(crate) struct FeaturePreviouslyDeclared<'a, 'b> {
+pub(crate) struct FeaturePreviouslyDeclared<'a> {
     #[primary_span]
     pub span: Span,
     pub feature: Symbol,
     pub declared: &'a str,
-    pub prev_declared: &'b str,
+    pub prev_declared: &'a str,
 }
 
 pub(crate) struct BreakNonLoop<'a> {
@@ -1219,6 +1219,13 @@ pub(crate) struct NakedFunctionIncompatibleAttribute {
     #[label(passes_naked_attribute)]
     pub naked_span: Span,
     pub attr: Symbol,
+}
+
+#[derive(Diagnostic)]
+#[diag(passes_naked_asm_outside_naked_fn)]
+pub(crate) struct NakedAsmOutsideNakedFn {
+    #[primary_span]
+    pub span: Span,
 }
 
 #[derive(Diagnostic)]

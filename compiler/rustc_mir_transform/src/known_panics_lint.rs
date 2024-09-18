@@ -1,8 +1,6 @@
-//! A lint that checks for known panics like
-//! overflows, division by zero,
-//! out-of-bound access etc.
-//! Uses const propagation to determine the
-//! values of operands during checks.
+//! A lint that checks for known panics like overflows, division by zero,
+//! out-of-bound access etc. Uses const propagation to determine the values of
+//! operands during checks.
 
 use std::fmt::Debug;
 
@@ -26,7 +24,7 @@ use tracing::{debug, instrument, trace};
 
 use crate::errors::{AssertLint, AssertLintKind};
 
-pub struct KnownPanicsLint;
+pub(super) struct KnownPanicsLint;
 
 impl<'tcx> crate::MirLint<'tcx> for KnownPanicsLint {
     fn run_lint(&self, tcx: TyCtxt<'tcx>, body: &Body<'tcx>) {
@@ -380,19 +378,19 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
         if let (Some(l), Some(r)) = (l, r)
             && l.layout.ty.is_integral()
             && op.is_overflowing()
-        {
-            if self.use_ecx(|this| {
+            && self.use_ecx(|this| {
                 let (_res, overflow) = this.ecx.binary_op(op, &l, &r)?.to_scalar_pair();
                 overflow.to_bool()
-            })? {
-                self.report_assert_as_lint(
-                    location,
-                    AssertLintKind::ArithmeticOverflow,
-                    AssertKind::Overflow(op, l.to_const_int(), r.to_const_int()),
-                );
-                return None;
-            }
+            })?
+        {
+            self.report_assert_as_lint(
+                location,
+                AssertLintKind::ArithmeticOverflow,
+                AssertKind::Overflow(op, l.to_const_int(), r.to_const_int()),
+            );
+            return None;
         }
+
         Some(())
     }
 
@@ -562,7 +560,8 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
 
                 let val = self.use_ecx(|this| this.ecx.binary_op(bin_op, &left, &right))?;
                 if matches!(val.layout.abi, Abi::ScalarPair(..)) {
-                    // FIXME `Value` should properly support pairs in `Immediate`... but currently it does not.
+                    // FIXME `Value` should properly support pairs in `Immediate`... but currently
+                    // it does not.
                     let (val, overflow) = val.to_pair(&self.ecx);
                     Value::Aggregate {
                         variant: VariantIdx::ZERO,
@@ -852,7 +851,7 @@ const MAX_ALLOC_LIMIT: u64 = 1024;
 
 /// The mode that `ConstProp` is allowed to run in for a given `Local`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ConstPropMode {
+enum ConstPropMode {
     /// The `Local` can be propagated into and reads of this `Local` can also be propagated.
     FullConstProp,
     /// The `Local` can only be propagated into and from its own block.
@@ -864,7 +863,7 @@ pub enum ConstPropMode {
 
 /// A visitor that determines locals in a MIR body
 /// that can be const propagated
-pub struct CanConstProp {
+struct CanConstProp {
     can_const_prop: IndexVec<Local, ConstPropMode>,
     // False at the beginning. Once set, no more assignments are allowed to that local.
     found_assignment: BitSet<Local>,
@@ -872,7 +871,7 @@ pub struct CanConstProp {
 
 impl CanConstProp {
     /// Returns true if `local` can be propagated
-    pub fn check<'tcx>(
+    fn check<'tcx>(
         tcx: TyCtxt<'tcx>,
         param_env: ParamEnv<'tcx>,
         body: &Body<'tcx>,

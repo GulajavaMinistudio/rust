@@ -274,6 +274,9 @@ pub struct Config {
     /// Flags to pass to the compiler when building for the target
     pub target_rustcflags: Vec<String>,
 
+    /// Whether the compiler and stdlib has been built with randomized struct layouts
+    pub rust_randomized_layout: bool,
+
     /// Whether tests should be optimized by default. Individual test-suites and test files may
     /// override this setting.
     pub optimize_tests: bool,
@@ -381,6 +384,7 @@ pub struct Config {
     // Needed both to construct build_helper::git::GitConfig
     pub git_repository: String,
     pub nightly_branch: String,
+    pub git_merge_commit_email: String,
 
     /// True if the profiler runtime is enabled for this target.
     /// Used by the "needs-profiler-support" header in test files.
@@ -458,7 +462,11 @@ impl Config {
     }
 
     pub fn git_config(&self) -> GitConfig<'_> {
-        GitConfig { git_repository: &self.git_repository, nightly_branch: &self.nightly_branch }
+        GitConfig {
+            git_repository: &self.git_repository,
+            nightly_branch: &self.nightly_branch,
+            git_merge_commit_email: &self.git_merge_commit_email,
+        }
     }
 }
 

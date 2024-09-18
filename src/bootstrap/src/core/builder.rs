@@ -14,7 +14,7 @@ use clap::ValueEnum;
 
 use crate::core::build_steps::tool::{self, SourceType};
 use crate::core::build_steps::{
-    check, clean, clippy, compile, dist, doc, install, llvm, run, setup, test, vendor,
+    check, clean, clippy, compile, dist, doc, gcc, install, llvm, run, setup, test, vendor,
 };
 use crate::core::config::flags::{Color, Subcommand};
 use crate::core::config::{DryRun, SplitDebuginfo, TargetSelection};
@@ -793,11 +793,13 @@ impl<'a> Builder<'a> {
                 tool::Clippy,
                 tool::CargoClippy,
                 llvm::Llvm,
+                gcc::Gcc,
                 llvm::Sanitizers,
                 tool::Rustfmt,
                 tool::Miri,
                 tool::CargoMiri,
                 llvm::Lld,
+                llvm::Enzyme,
                 llvm::CrtBeginEnd,
                 tool::RustdocGUITest,
                 tool::OptimizedDist,
@@ -942,6 +944,7 @@ impl<'a> Builder<'a> {
                 doc::Bootstrap,
                 doc::Releases,
                 doc::RunMakeSupport,
+                doc::BuildHelper,
             ),
             Kind::Dist => describe!(
                 dist::Docs,
@@ -1588,6 +1591,12 @@ impl<'a> Builder<'a> {
             rustflags.arg(sysroot_str);
         }
 
+        // https://rust-lang.zulipchat.com/#narrow/stream/182449-t-compiler.2Fhelp/topic/.E2.9C.94.20link.20new.20library.20into.20stage1.2Frustc
+        if self.config.llvm_enzyme {
+            rustflags.arg("-l");
+            rustflags.arg("Enzyme-19");
+        }
+
         let use_new_symbol_mangling = match self.config.rust_new_symbol_mangling {
             Some(setting) => {
                 // If an explicit setting is given, use that
@@ -1616,6 +1625,15 @@ impl<'a> Builder<'a> {
             rustflags.arg("-Csymbol-mangling-version=v0");
         } else {
             rustflags.arg("-Csymbol-mangling-version=legacy");
+        }
+
+        // FIXME: the following components don't build with `-Zrandomize-layout` yet:
+        // - wasm-component-ld, due to the `wast`crate
+        // - rust-analyzer, due to the rowan crate
+        // so we exclude entire categories of steps here due to lack of fine-grained control over
+        // rustflags.
+        if self.config.rust_randomize_layout && mode != Mode::ToolStd && mode != Mode::ToolRustc {
+            rustflags.arg("-Zrandomize-layout");
         }
 
         // Enable compile-time checking of `cfg` names, values and Cargo `features`.
@@ -2193,6 +2211,9 @@ impl<'a> Builder<'a> {
                 rustflags.arg("-Zvalidate-mir");
                 rustflags.arg(&format!("-Zmir-opt-level={mir_opt_level}"));
             }
+            if self.config.rust_randomize_layout {
+                rustflags.arg("--cfg=randomized_layouts");
+            }
             // Always enable inlining MIR when building the standard library.
             // Without this flag, MIR inlining is disabled when incremental compilation is enabled.
             // That causes some mir-opt tests which inline functions from the standard library to
@@ -2444,7 +2465,16 @@ impl Cargo {
         cmd_kind: Kind,
     ) -> Cargo {
         let mut cargo = builder.cargo(compiler, mode, source_type, target, cmd_kind);
-        cargo.configure_linker(builder);
+
+        match cmd_kind {
+            // No need to configure the target linker for these command types,
+            // as they don't invoke rustc at all.
+            Kind::Clean | Kind::Suggest | Kind::Format | Kind::Setup => {}
+            _ => {
+                cargo.configure_linker(builder);
+            }
+        }
+
         cargo
     }
 

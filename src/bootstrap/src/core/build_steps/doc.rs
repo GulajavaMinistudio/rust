@@ -826,7 +826,7 @@ impl Step for Rustc {
         // see https://github.com/rust-lang/rust/pull/122066#issuecomment-1983049222
         // cargo.rustdocflag("--generate-link-to-definition");
 
-        compile::rustc_cargo(builder, &mut cargo, target, &compiler);
+        compile::rustc_cargo(builder, &mut cargo, target, &compiler, &self.crates);
         cargo.arg("-Zskip-rustdoc-fingerprint");
 
         // Only include compiler crates, no dependencies of those, such as `libc`.
@@ -1013,6 +1013,14 @@ macro_rules! tool_doc {
     }
 }
 
+// NOTE: make sure to register these in `Builder::get_step_description`.
+tool_doc!(
+    BuildHelper,
+    "src/tools/build_helper",
+    rustc_tool = false,
+    is_library = true,
+    crates = ["build_helper"]
+);
 tool_doc!(Rustdoc, "src/tools/rustdoc", crates = ["rustdoc", "rustdoc-json-types"]);
 tool_doc!(Rustfmt, "src/tools/rustfmt", crates = ["rustfmt-nightly", "rustfmt-config_proc_macro"]);
 tool_doc!(Clippy, "src/tools/clippy", crates = ["clippy_config", "clippy_utils"]);
@@ -1186,6 +1194,9 @@ impl Step for RustcBook {
         cmd.arg("--rustc");
         cmd.arg(&rustc);
         cmd.arg("--rustc-target").arg(self.target.rustc_target_arg());
+        if let Some(target_linker) = builder.linker(self.target) {
+            cmd.arg("--rustc-linker").arg(target_linker);
+        }
         if builder.is_verbose() {
             cmd.arg("--verbose");
         }

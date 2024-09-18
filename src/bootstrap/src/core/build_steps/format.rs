@@ -93,7 +93,6 @@ fn get_modified_rs_files(build: &Builder<'_>) -> Result<Option<Vec<String>>, Str
     if !verify_rustfmt_version(build) {
         return Ok(None);
     }
-
     get_git_modified_files(&build.config.git_config(), Some(&build.config.src), &["rs"])
 }
 
@@ -201,6 +200,11 @@ pub fn format(build: &Builder<'_>, check: bool, all: bool, paths: &[PathBuf]) {
                 adjective = Some("modified");
                 match get_modified_rs_files(build) {
                     Ok(Some(files)) => {
+                        if files.is_empty() {
+                            println!("fmt info: No modified files detected for formatting.");
+                            return;
+                        }
+
                         for file in files {
                             override_builder.add(&format!("/{file}")).expect(&file);
                         }

@@ -125,7 +125,9 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 [sym::inline, ..] => self.check_inline(hir_id, attr, span, target),
                 [sym::coverage, ..] => self.check_coverage(attr, span, target),
                 [sym::optimize, ..] => self.check_optimize(hir_id, attr, target),
-                [sym::no_sanitize, ..] => self.check_no_sanitize(hir_id, attr, span, target),
+                [sym::no_sanitize, ..] => {
+                    self.check_applied_to_fn_or_method(hir_id, attr, span, target)
+                }
                 [sym::non_exhaustive, ..] => self.check_non_exhaustive(hir_id, attr, span, target),
                 [sym::marker, ..] => self.check_marker(hir_id, attr, span, target),
                 [sym::target_feature, ..] => {
@@ -166,10 +168,13 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     self.check_rustc_legacy_const_generics(hir_id, attr, span, target, item)
                 }
                 [sym::rustc_lint_query_instability, ..] => {
-                    self.check_rustc_lint_query_instability(hir_id, attr, span, target)
+                    self.check_applied_to_fn_or_method(hir_id, attr, span, target)
+                }
+                [sym::rustc_lint_untracked_query_information, ..] => {
+                    self.check_applied_to_fn_or_method(hir_id, attr, span, target)
                 }
                 [sym::rustc_lint_diagnostics, ..] => {
-                    self.check_rustc_lint_diagnostics(hir_id, attr, span, target)
+                    self.check_applied_to_fn_or_method(hir_id, attr, span, target)
                 }
                 [sym::rustc_lint_opt_ty, ..] => self.check_rustc_lint_opt_ty(attr, span, target),
                 [sym::rustc_lint_opt_deny_field_access, ..] => {
@@ -450,11 +455,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 );
             }
         }
-    }
-
-    /// Checks that `#[no_sanitize(..)]` is applied to a function or method.
-    fn check_no_sanitize(&self, hir_id: HirId, attr: &Attribute, span: Span, target: Target) {
-        self.check_applied_to_fn_or_method(hir_id, attr, span, target)
     }
 
     fn check_generic_attr(
@@ -1635,30 +1635,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    /// Checks that the `#[rustc_lint_query_instability]` attribute is only applied to a function
-    /// or method.
-    fn check_rustc_lint_query_instability(
-        &self,
-        hir_id: HirId,
-        attr: &Attribute,
-        span: Span,
-        target: Target,
-    ) {
-        self.check_applied_to_fn_or_method(hir_id, attr, span, target)
-    }
-
-    /// Checks that the `#[rustc_lint_diagnostics]` attribute is only applied to a function or
-    /// method.
-    fn check_rustc_lint_diagnostics(
-        &self,
-        hir_id: HirId,
-        attr: &Attribute,
-        span: Span,
-        target: Target,
-    ) {
-        self.check_applied_to_fn_or_method(hir_id, attr, span, target)
-    }
-
     /// Checks that the `#[rustc_lint_opt_ty]` attribute is only applied to a struct.
     fn check_rustc_lint_opt_ty(&self, attr: &Attribute, span: Span, target: Target) {
         match target {
@@ -1929,10 +1905,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             || (int_reprs == 1
                 && is_c
                 && item.is_some_and(|item| {
-                    if let ItemLike::Item(item) = item {
-                        return is_c_like_enum(item);
-                    }
-                    return false;
+                    if let ItemLike::Item(item) = item { is_c_like_enum(item) } else { false }
                 }))
         {
             self.tcx.emit_node_span_lint(
@@ -2196,17 +2169,13 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     attr.span,
                     errors::MacroExport::TooManyItems,
                 );
-            } else {
-                if meta_item_list[0].name_or_empty() != sym::local_inner_macros {
-                    self.tcx.emit_node_span_lint(
-                        INVALID_MACRO_EXPORT_ARGUMENTS,
-                        hir_id,
-                        meta_item_list[0].span(),
-                        errors::MacroExport::UnknownItem {
-                            name: meta_item_list[0].name_or_empty(),
-                        },
-                    );
-                }
+            } else if meta_item_list[0].name_or_empty() != sym::local_inner_macros {
+                self.tcx.emit_node_span_lint(
+                    INVALID_MACRO_EXPORT_ARGUMENTS,
+                    hir_id,
+                    meta_item_list[0].span(),
+                    errors::MacroExport::UnknownItem { name: meta_item_list[0].name_or_empty() },
+                );
             }
         } else {
             // special case when `#[macro_export]` is applied to a macro 2.0

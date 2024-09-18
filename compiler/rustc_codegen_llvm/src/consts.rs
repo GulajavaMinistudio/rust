@@ -390,7 +390,7 @@ impl<'ll> CodegenCx<'ll, '_> {
             let val_llty = self.val_ty(v);
 
             let g = self.get_static_inner(def_id, val_llty);
-            let llty = self.val_ty(g);
+            let llty = llvm::LLVMGlobalGetValueType(g);
 
             let g = if val_llty == llty {
                 g
@@ -565,7 +565,7 @@ impl<'ll> CodegenCx<'ll, '_> {
     }
 }
 
-impl<'ll> StaticMethods for CodegenCx<'ll, '_> {
+impl<'ll> StaticCodegenMethods for CodegenCx<'ll, '_> {
     fn static_addr_of(&self, cv: &'ll Value, align: Align, kind: Option<&str>) -> &'ll Value {
         if let Some(&gv) = self.const_globals.borrow().get(&cv) {
             unsafe {

@@ -625,11 +625,19 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 if let ObligationCauseCode::WhereClause(_, span)
                 | ObligationCauseCode::WhereClauseInExpr(_, span, ..) =
                     &trace.cause.code().peel_derives()
-                    && !span.is_dummy()
                 {
                     let span = *span;
-                    self.report_concrete_failure(generic_param_scope, placeholder_origin, sub, sup)
-                        .with_span_note(span, "the lifetime requirement is introduced here")
+                    let mut err = self.report_concrete_failure(
+                        generic_param_scope,
+                        placeholder_origin,
+                        sub,
+                        sup,
+                    );
+                    if !span.is_dummy() {
+                        err =
+                            err.with_span_note(span, "the lifetime requirement is introduced here");
+                    }
+                    err
                 } else {
                     unreachable!(
                         "control flow ensures we have a `BindingObligation` or `WhereClauseInExpr` here..."
@@ -834,28 +842,17 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         lifetime: Region<'tcx>,
         add_lt_suggs: &mut Vec<(Span, String)>,
     ) -> String {
-        struct LifetimeReplaceVisitor<'tcx, 'a> {
+        struct LifetimeReplaceVisitor<'a, 'tcx> {
             tcx: TyCtxt<'tcx>,
             needle: hir::LifetimeName,
             new_lt: &'a str,
             add_lt_suggs: &'a mut Vec<(Span, String)>,
         }
 
-        impl<'hir, 'tcx> hir::intravisit::Visitor<'hir> for LifetimeReplaceVisitor<'tcx, '_> {
+        impl<'hir, 'tcx> hir::intravisit::Visitor<'hir> for LifetimeReplaceVisitor<'_, 'tcx> {
             fn visit_lifetime(&mut self, lt: &'hir hir::Lifetime) {
                 if lt.res == self.needle {
-                    let (pos, span) = lt.suggestion_position();
-                    let new_lt = &self.new_lt;
-                    let sugg = match pos {
-                        hir::LifetimeSuggestionPosition::Normal => format!("{new_lt}"),
-                        hir::LifetimeSuggestionPosition::Ampersand => format!("{new_lt} "),
-                        hir::LifetimeSuggestionPosition::ElidedPath => format!("<{new_lt}>"),
-                        hir::LifetimeSuggestionPosition::ElidedPathArgument => {
-                            format!("{new_lt}, ")
-                        }
-                        hir::LifetimeSuggestionPosition::ObjectDefault => format!("+ {new_lt}"),
-                    };
-                    self.add_lt_suggs.push((span, sugg));
+                    self.add_lt_suggs.push(lt.suggestion(self.new_lt));
                 }
             }
 
@@ -1018,7 +1015,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         let var_description = match var_origin {
             infer::MiscVariable(_) => String::new(),
             infer::PatternRegion(_) => " for pattern".to_string(),
-            infer::AddrOfRegion(_) => " for borrow expression".to_string(),
+            infer::BorrowRegion(_) => " for borrow expression".to_string(),
             infer::Autoref(_) => " for autoref".to_string(),
             infer::Coercion(_) => " for automatic coercion".to_string(),
             infer::BoundRegion(_, br, infer::FnCall) => {

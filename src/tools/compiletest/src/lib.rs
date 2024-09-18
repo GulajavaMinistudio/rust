@@ -99,6 +99,11 @@ pub fn parse_config(args: Vec<String>) -> Config {
         )
         .optmulti("", "host-rustcflags", "flags to pass to rustc for host", "FLAGS")
         .optmulti("", "target-rustcflags", "flags to pass to rustc for target", "FLAGS")
+        .optflag(
+            "",
+            "rust-randomized-layout",
+            "set this when rustc/stdlib were compiled with randomized layouts",
+        )
         .optflag("", "optimize-tests", "run tests with optimizations enabled")
         .optflag("", "verbose", "run tests verbosely, showing all output")
         .optflag(
@@ -158,7 +163,13 @@ pub fn parse_config(args: Vec<String>) -> Config {
         )
         .optopt("", "edition", "default Rust edition", "EDITION")
         .reqopt("", "git-repository", "name of the git repository", "ORG/REPO")
-        .reqopt("", "nightly-branch", "name of the git branch for nightly", "BRANCH");
+        .reqopt("", "nightly-branch", "name of the git branch for nightly", "BRANCH")
+        .reqopt(
+            "",
+            "git-merge-commit-email",
+            "email address used for finding merge commits",
+            "EMAIL",
+        );
 
     let (argv0, args_) = args.split_first().unwrap();
     if args.len() == 1 || args[1] == "-h" || args[1] == "--help" {
@@ -286,6 +297,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
         host_rustcflags: matches.opt_strs("host-rustcflags"),
         target_rustcflags: matches.opt_strs("target-rustcflags"),
         optimize_tests: matches.opt_present("optimize-tests"),
+        rust_randomized_layout: matches.opt_present("rust-randomized-layout"),
         target,
         host: opt_str2(matches.opt_str("host")),
         cdb,
@@ -340,6 +352,7 @@ pub fn parse_config(args: Vec<String>) -> Config {
 
         git_repository: matches.opt_str("git-repository").unwrap(),
         nightly_branch: matches.opt_str("nightly-branch").unwrap(),
+        git_merge_commit_email: matches.opt_str("git-merge-commit-email").unwrap(),
 
         profiler_support: matches.opt_present("profiler-support"),
     }
@@ -634,6 +647,12 @@ fn common_inputs_stamp(config: &Config) -> Stamp {
         stamp.add_path(&rust_src_dir.join("src/etc/htmldocck.py"));
     }
 
+    // Re-run coverage tests if the `coverage-dump` tool was modified,
+    // because its output format might have changed.
+    if let Some(coverage_dump_path) = &config.coverage_dump_path {
+        stamp.add_path(coverage_dump_path)
+    }
+
     stamp.add_dir(&rust_src_dir.join("src/tools/run-make-support"));
 
     // Compiletest itself.
@@ -802,8 +821,12 @@ fn make_test(
                 &config, cache, test_name, &test_path, src_file, revision, poisoned,
             );
             // Ignore tests that already run and are up to date with respect to inputs.
-            if !config.force_rerun {
-                desc.ignore |= is_up_to_date(&config, testpaths, &early_props, revision, inputs);
+            if !config.force_rerun
+                && is_up_to_date(&config, testpaths, &early_props, revision, inputs)
+            {
+                desc.ignore = true;
+                // Keep this in sync with the "up-to-date" message detected by bootstrap.
+                desc.ignore_message = Some("up-to-date");
             }
             test::TestDescAndFn {
                 desc,

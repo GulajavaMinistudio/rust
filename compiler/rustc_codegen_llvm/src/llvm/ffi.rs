@@ -974,6 +974,7 @@ unsafe extern "C" {
     pub fn LLVMGetAlignment(Global: &Value) -> c_uint;
     pub fn LLVMSetAlignment(Global: &Value, Bytes: c_uint);
     pub fn LLVMSetDLLStorageClass(V: &Value, C: DLLStorageClass);
+    pub fn LLVMGlobalGetValueType(Global: &Value) -> &Type;
 
     // Operations on global variables
     pub fn LLVMIsAGlobalVariable(GlobalVar: &Value) -> Option<&Value>;
@@ -1040,7 +1041,7 @@ unsafe extern "C" {
     pub fn LLVMDisposeBuilder<'a>(Builder: &'a mut Builder<'a>);
 
     // Metadata
-    pub fn LLVMSetCurrentDebugLocation2<'a>(Builder: &Builder<'a>, Loc: &'a Metadata);
+    pub fn LLVMSetCurrentDebugLocation2<'a>(Builder: &Builder<'a>, Loc: *const Metadata);
 
     // Terminators
     pub fn LLVMBuildRetVoid<'a>(B: &Builder<'a>) -> &'a Value;

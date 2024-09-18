@@ -191,7 +191,7 @@ const fn in_place_collectible<DEST, SRC>(
 
 const fn needs_realloc<SRC, DEST>(src_cap: usize, dst_cap: usize) -> bool {
     if const { mem::align_of::<SRC>() != mem::align_of::<DEST>() } {
-        // FIXME: use unreachable! once that works in const
+        // FIXME(const-hack): use unreachable! once that works in const
         panic!("in_place_collectible() prevents this");
     }
 
@@ -208,7 +208,7 @@ const fn needs_realloc<SRC, DEST>(src_cap: usize, dst_cap: usize) -> bool {
 
     // type layouts don't guarantee a fit, so do a runtime check to see if
     // the allocations happen to match
-    return src_cap > 0 && src_cap * mem::size_of::<SRC>() != dst_cap * mem::size_of::<DEST>();
+    src_cap > 0 && src_cap * mem::size_of::<SRC>() != dst_cap * mem::size_of::<DEST>()
 }
 
 /// This provides a shorthand for the source type since local type aliases aren't a thing.
@@ -328,7 +328,7 @@ where
 
     mem::forget(dst_guard);
 
-    let vec = unsafe { Vec::from_nonnull(dst_buf, len, dst_cap) };
+    let vec = unsafe { Vec::from_parts(dst_buf, len, dst_cap) };
 
     vec
 }

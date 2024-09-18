@@ -208,12 +208,10 @@ fn dump_path<'tcx>(
 
     let pass_num = if tcx.sess.opts.unstable_opts.dump_mir_exclude_pass_number {
         String::new()
+    } else if pass_num {
+        format!(".{:03}-{:03}", body.phase.phase_index(), body.pass_count)
     } else {
-        if pass_num {
-            format!(".{:03}-{:03}", body.phase.phase_index(), body.pass_count)
-        } else {
-            ".-------".to_string()
-        }
+        ".-------".to_string()
     };
 
     let crate_name = tcx.crate_name(source.def_id().krate);
@@ -612,7 +610,9 @@ fn write_mir_sig(tcx: TyCtxt<'_>, body: &Body<'_>, w: &mut dyn io::Write) -> io:
     let def_id = body.source.def_id();
     let kind = tcx.def_kind(def_id);
     let is_function = match kind {
-        DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(..) => true,
+        DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(..) | DefKind::SyntheticCoroutineBody => {
+            true
+        }
         _ => tcx.is_closure_like(def_id),
     };
     match (kind, body.source.promoted) {

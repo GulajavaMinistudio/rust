@@ -32,9 +32,11 @@ pub(crate) mod cycle;
 
 const TOP_DOWN_DEPTH_LIMIT: usize = 5;
 
+// Made public so that `mir_drops_elaborated_and_const_checked` can be overridden
+// by custom rustc drivers, running all the steps by themselves. See #114628.
 pub struct Inline;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct CallSite<'tcx> {
     callee: Instance<'tcx>,
     fn_sig: ty::PolyFnSig<'tcx>,
@@ -156,7 +158,6 @@ impl<'tcx> Inliner<'tcx> {
             match self.try_inlining(caller_body, &callsite) {
                 Err(reason) => {
                     debug!("not-inlined {} [{}]", callsite.callee, reason);
-                    continue;
                 }
                 Ok(new_blocks) => {
                     debug!("inlined {}", callsite.callee);
@@ -356,16 +357,6 @@ impl<'tcx> Inliner<'tcx> {
         }
 
         if callee_def_id.is_local() {
-            // Avoid a cycle here by only using `instance_mir` only if we have
-            // a lower `DefPathHash` than the callee. This ensures that the callee will
-            // not inline us. This trick even works with incremental compilation,
-            // since `DefPathHash` is stable.
-            if self.tcx.def_path_hash(caller_def_id).local_hash()
-                < self.tcx.def_path_hash(callee_def_id).local_hash()
-            {
-                return Ok(());
-            }
-
             // If we know for sure that the function we're calling will itself try to
             // call us, then we avoid inlining that function.
             if self.tcx.mir_callgraph_reachable((callee, caller_def_id.expect_local())) {
@@ -567,7 +558,8 @@ impl<'tcx> Inliner<'tcx> {
                 // if the no-attribute function ends up with the same instruction set anyway.
                 return Err("Cannot move inline-asm across instruction sets");
             } else if let TerminatorKind::TailCall { .. } = term.kind {
-                // FIXME(explicit_tail_calls): figure out how exactly functions containing tail calls can be inlined (and if they even should)
+                // FIXME(explicit_tail_calls): figure out how exactly functions containing tail
+                // calls can be inlined (and if they even should)
                 return Err("can't inline functions with tail calls");
             } else {
                 work_list.extend(term.successors())
@@ -638,7 +630,7 @@ impl<'tcx> Inliner<'tcx> {
             );
             let dest_ty = dest.ty(caller_body, self.tcx);
             let temp =
-                Place::from(self.new_call_temp(caller_body, &callsite, dest_ty, return_block));
+                Place::from(self.new_call_temp(caller_body, callsite, dest_ty, return_block));
             caller_body[callsite.block].statements.push(Statement {
                 source_info: callsite.source_info,
                 kind: StatementKind::Assign(Box::new((temp, dest))),
@@ -657,7 +649,7 @@ impl<'tcx> Inliner<'tcx> {
                 true,
                 self.new_call_temp(
                     caller_body,
-                    &callsite,
+                    callsite,
                     destination.ty(caller_body, self.tcx).ty,
                     return_block,
                 ),
@@ -665,7 +657,7 @@ impl<'tcx> Inliner<'tcx> {
         };
 
         // Copy the arguments if needed.
-        let args = self.make_call_args(args, &callsite, caller_body, &callee_body, return_block);
+        let args = self.make_call_args(args, callsite, caller_body, &callee_body, return_block);
 
         let mut integrator = Integrator {
             args: &args,

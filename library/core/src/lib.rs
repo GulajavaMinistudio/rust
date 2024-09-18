@@ -107,7 +107,6 @@
 //
 // Library features:
 // tidy-alphabetical-start
-#![cfg_attr(bootstrap, feature(offset_of_nested))]
 #![feature(array_ptr_get)]
 #![feature(asm_experimental_arch)]
 #![feature(const_align_of_val)]
@@ -122,7 +121,6 @@
 #![feature(const_cell_into_inner)]
 #![feature(const_eval_select)]
 #![feature(const_exact_div)]
-#![feature(const_float_bits_conv)]
 #![feature(const_float_classify)]
 #![feature(const_fmt_arguments_new)]
 #![feature(const_hash)]
@@ -151,7 +149,6 @@
 #![feature(const_size_of_val_raw)]
 #![feature(const_slice_from_raw_parts_mut)]
 #![feature(const_slice_from_ref)]
-#![feature(const_slice_index)]
 #![feature(const_slice_split_at_mut)]
 #![feature(const_str_from_utf8_unchecked_mut)]
 #![feature(const_strict_overflow_ops)]
@@ -166,6 +163,8 @@
 #![feature(coverage_attribute)]
 #![feature(do_not_recommend)]
 #![feature(duration_consts_float)]
+#![feature(f128_const)]
+#![feature(f16_const)]
 #![feature(internal_impls_macro)]
 #![feature(ip)]
 #![feature(is_ascii_octdigit)]
@@ -192,9 +191,8 @@
 //
 // Language features:
 // tidy-alphabetical-start
-#![cfg_attr(bootstrap, feature(asm_const))]
-#![cfg_attr(bootstrap, feature(const_fn_floating_point_arithmetic))]
-#![cfg_attr(bootstrap, feature(min_exhaustive_patterns))]
+#![cfg_attr(bootstrap, feature(const_mut_refs))]
+#![cfg_attr(bootstrap, feature(const_refs_to_cell))]
 #![feature(abi_unadjusted)]
 #![feature(adt_const_params)]
 #![feature(allow_internal_unsafe)]
@@ -205,9 +203,7 @@
 #![feature(cfg_target_has_atomic_equal_alignment)]
 #![feature(cfg_ub_checks)]
 #![feature(const_for)]
-#![feature(const_mut_refs)]
 #![feature(const_precise_live_drops)]
-#![feature(const_refs_to_cell)]
 #![feature(decl_macro)]
 #![feature(deprecated_suggestion)]
 #![feature(doc_cfg)]

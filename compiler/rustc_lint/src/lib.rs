@@ -30,6 +30,7 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
 #![doc(rust_logo)]
 #![feature(array_windows)]
+#![feature(assert_matches)]
 #![feature(box_patterns)]
 #![feature(control_flow_enum)]
 #![feature(extract_if)]
@@ -55,6 +56,7 @@ mod expect;
 mod for_loops_over_fallibles;
 mod foreign_modules;
 pub mod hidden_unicode_codepoints;
+mod if_let_rescope;
 mod impl_trait_overcaptures;
 mod internal;
 mod invalid_from_utf8;
@@ -93,6 +95,7 @@ use drop_forget_useless::*;
 use enum_intrinsics_non_enums::EnumIntrinsicsNonEnums;
 use for_loops_over_fallibles::*;
 use hidden_unicode_codepoints::*;
+use if_let_rescope::IfLetRescope;
 use impl_trait_overcaptures::ImplTraitOvercaptures;
 use internal::*;
 use invalid_from_utf8::*;
@@ -242,6 +245,7 @@ late_lint_methods!(
             NonLocalDefinitions: NonLocalDefinitions::default(),
             ImplTraitOvercaptures: ImplTraitOvercaptures,
             TailExprDropOrder: TailExprDropOrder,
+            IfLetRescope: IfLetRescope::default(),
         ]
     ]
 );
@@ -575,6 +579,15 @@ fn register_builtins(store: &mut LintStore) {
          <https://github.com/rust-lang/rust/issues/107457> for more information",
     );
     store.register_removed("writes_through_immutable_pointer", "converted into hard error");
+    store.register_removed(
+        "const_eval_mutable_ptr_in_final_value",
+        "partially allowed now, otherwise turned into a hard error",
+    );
+    store.register_removed(
+        "where_clauses_object_safety",
+        "converted into hard error, see PR #125380 \
+         <https://github.com/rust-lang/rust/pull/125380> for more information",
+    );
 }
 
 fn register_internals(store: &mut LintStore) {
@@ -609,6 +622,7 @@ fn register_internals(store: &mut LintStore) {
         vec![
             LintId::of(DEFAULT_HASH_TYPES),
             LintId::of(POTENTIAL_QUERY_INSTABILITY),
+            LintId::of(UNTRACKED_QUERY_INFORMATION),
             LintId::of(USAGE_OF_TY_TYKIND),
             LintId::of(PASS_BY_VALUE),
             LintId::of(LINT_PASS_IMPL_WITHOUT_MACRO),

@@ -64,7 +64,7 @@ impl<'a, P: std::fmt::Debug> LintDiagnostic<'a, ()> for AssertLint<P> {
 }
 
 impl AssertLintKind {
-    pub fn lint(&self) -> &'static Lint {
+    pub(crate) fn lint(&self) -> &'static Lint {
         match self {
             AssertLintKind::ArithmeticOverflow => lint::builtin::ARITHMETIC_OVERFLOW,
             AssertLintKind::UnconditionalPanic => lint::builtin::UNCONDITIONAL_PANIC,
@@ -89,7 +89,7 @@ pub(crate) struct FnItemRef {
     pub ident: String,
 }
 
-pub(crate) struct MustNotSupend<'tcx, 'a> {
+pub(crate) struct MustNotSupend<'a, 'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub yield_sp: Span,
     pub reason: Option<MustNotSuspendReason>,

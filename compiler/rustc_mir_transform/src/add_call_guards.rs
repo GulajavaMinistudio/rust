@@ -4,11 +4,11 @@ use rustc_middle::ty::TyCtxt;
 use tracing::debug;
 
 #[derive(PartialEq)]
-pub enum AddCallGuards {
+pub(super) enum AddCallGuards {
     AllCallEdges,
     CriticalCallEdges,
 }
-pub use self::AddCallGuards::*;
+pub(super) use self::AddCallGuards::*;
 
 /**
  * Breaks outgoing critical edges for call terminators in the MIR.
@@ -32,12 +32,6 @@ pub use self::AddCallGuards::*;
 
 impl<'tcx> crate::MirPass<'tcx> for AddCallGuards {
     fn run_pass(&self, _tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        self.add_call_guards(body);
-    }
-}
-
-impl AddCallGuards {
-    pub fn add_call_guards(&self, body: &mut Body<'_>) {
         let mut pred_count: IndexVec<_, _> =
             body.basic_blocks.predecessors().iter().map(|ps| ps.len()).collect();
         pred_count[START_BLOCK] += 1;

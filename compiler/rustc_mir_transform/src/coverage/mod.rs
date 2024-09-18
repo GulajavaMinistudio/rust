@@ -1,4 +1,4 @@
-pub mod query;
+pub(super) mod query;
 
 mod counters;
 mod graph;
@@ -32,7 +32,7 @@ use crate::coverage::mappings::ExtractedMappings;
 /// Inserts `StatementKind::Coverage` statements that either instrument the binary with injected
 /// counters, via intrinsic `llvm.instrprof.increment`, and/or inject metadata used during codegen
 /// to construct the coverage map.
-pub struct InstrumentCoverage;
+pub(super) struct InstrumentCoverage;
 
 impl<'tcx> crate::MirPass<'tcx> for InstrumentCoverage {
     fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
@@ -279,7 +279,8 @@ fn inject_mcdc_statements<'tcx>(
     basic_coverage_blocks: &CoverageGraph,
     extracted_mappings: &ExtractedMappings,
 ) {
-    // Inject test vector update first because `inject_statement` always insert new statement at head.
+    // Inject test vector update first because `inject_statement` always insert new statement at
+    // head.
     for &mappings::MCDCDecision {
         span: _,
         ref end_bcbs,

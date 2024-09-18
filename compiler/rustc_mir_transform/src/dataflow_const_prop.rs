@@ -26,7 +26,7 @@ use tracing::{debug, debug_span, instrument};
 const BLOCK_LIMIT: usize = 100;
 const PLACE_LIMIT: usize = 100;
 
-pub struct DataflowConstProp;
+pub(super) struct DataflowConstProp;
 
 impl<'tcx> crate::MirPass<'tcx> for DataflowConstProp {
     fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
@@ -332,7 +332,7 @@ impl<'tcx> ValueAnalysis<'tcx> for ConstAnalysis<'_, 'tcx> {
 }
 
 impl<'a, 'tcx> ConstAnalysis<'a, 'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, body: &'a Body<'tcx>, map: Map<'tcx>) -> Self {
+    fn new(tcx: TyCtxt<'tcx>, body: &'a Body<'tcx>, map: Map<'tcx>) -> Self {
         let param_env = tcx.param_env_reveal_all_normalized(body.source.def_id());
         Self {
             map,
@@ -554,13 +554,13 @@ impl<'tcx> Patch<'tcx> {
     }
 }
 
-struct Collector<'tcx, 'locals> {
+struct Collector<'a, 'tcx> {
     patch: Patch<'tcx>,
-    local_decls: &'locals LocalDecls<'tcx>,
+    local_decls: &'a LocalDecls<'tcx>,
 }
 
-impl<'tcx, 'locals> Collector<'tcx, 'locals> {
-    pub(crate) fn new(tcx: TyCtxt<'tcx>, local_decls: &'locals LocalDecls<'tcx>) -> Self {
+impl<'a, 'tcx> Collector<'a, 'tcx> {
+    pub(crate) fn new(tcx: TyCtxt<'tcx>, local_decls: &'a LocalDecls<'tcx>) -> Self {
         Self { patch: Patch::new(tcx), local_decls }
     }
 
@@ -647,7 +647,8 @@ fn try_write_constant<'tcx>(
         ty::FnDef(..) => {}
 
         // Those are scalars, must be handled above.
-        ty::Bool | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Char => throw_machine_stop_str!("primitive type with provenance"),
+        ty::Bool | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Char =>
+            throw_machine_stop_str!("primitive type with provenance"),
 
         ty::Tuple(elem_tys) => {
             for (i, elem) in elem_tys.iter().enumerate() {
@@ -721,15 +722,15 @@ fn try_write_constant<'tcx>(
 
 impl<'mir, 'tcx>
     ResultsVisitor<'mir, 'tcx, Results<'tcx, ValueAnalysisWrapper<ConstAnalysis<'_, 'tcx>>>>
-    for Collector<'tcx, '_>
+    for Collector<'_, 'tcx>
 {
-    type FlowState = State<FlatSet<Scalar>>;
+    type Domain = State<FlatSet<Scalar>>;
 
     #[instrument(level = "trace", skip(self, results, statement))]
     fn visit_statement_before_primary_effect(
         &mut self,
         results: &mut Results<'tcx, ValueAnalysisWrapper<ConstAnalysis<'_, 'tcx>>>,
-        state: &Self::FlowState,
+        state: &Self::Domain,
         statement: &'mir Statement<'tcx>,
         location: Location,
     ) {
@@ -751,7 +752,7 @@ impl<'mir, 'tcx>
     fn visit_statement_after_primary_effect(
         &mut self,
         results: &mut Results<'tcx, ValueAnalysisWrapper<ConstAnalysis<'_, 'tcx>>>,
-        state: &Self::FlowState,
+        state: &Self::Domain,
         statement: &'mir Statement<'tcx>,
         location: Location,
     ) {
@@ -776,7 +777,7 @@ impl<'mir, 'tcx>
     fn visit_terminator_before_primary_effect(
         &mut self,
         results: &mut Results<'tcx, ValueAnalysisWrapper<ConstAnalysis<'_, 'tcx>>>,
-        state: &Self::FlowState,
+        state: &Self::Domain,
         terminator: &'mir Terminator<'tcx>,
         location: Location,
     ) {
@@ -838,14 +839,14 @@ impl<'tcx> MutVisitor<'tcx> for Patch<'tcx> {
     }
 }
 
-struct OperandCollector<'tcx, 'map, 'locals, 'a> {
+struct OperandCollector<'a, 'b, 'tcx> {
     state: &'a State<FlatSet<Scalar>>,
-    visitor: &'a mut Collector<'tcx, 'locals>,
-    ecx: &'map mut InterpCx<'tcx, DummyMachine>,
-    map: &'map Map<'tcx>,
+    visitor: &'a mut Collector<'b, 'tcx>,
+    ecx: &'a mut InterpCx<'tcx, DummyMachine>,
+    map: &'a Map<'tcx>,
 }
 
-impl<'tcx> Visitor<'tcx> for OperandCollector<'tcx, '_, '_, '_> {
+impl<'tcx> Visitor<'tcx> for OperandCollector<'_, '_, 'tcx> {
     fn visit_projection_elem(
         &mut self,
         _: PlaceRef<'tcx>,

@@ -571,7 +571,10 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Returns `true` if `def_id` refers to a definition that does not have its own
     /// type-checking context, i.e. closure, coroutine or inline const.
     pub fn is_typeck_child(self, def_id: DefId) -> bool {
-        matches!(self.def_kind(def_id), DefKind::Closure | DefKind::InlineConst)
+        matches!(
+            self.def_kind(def_id),
+            DefKind::Closure | DefKind::InlineConst | DefKind::SyntheticCoroutineBody
+        )
     }
 
     /// Returns `true` if `def_id` refers to a trait (i.e., `trait Foo { ... }`).
@@ -1628,7 +1631,7 @@ impl<'tcx> ExplicitSelf<'tcx> {
             _ if is_self_ty(self_arg_ty) => ByValue,
             ty::Ref(region, ty, mutbl) if is_self_ty(ty) => ByReference(region, mutbl),
             ty::RawPtr(ty, mutbl) if is_self_ty(ty) => ByRawPointer(mutbl),
-            ty::Adt(def, _) if def.is_box() && is_self_ty(self_arg_ty.boxed_ty()) => ByBox,
+            _ if self_arg_ty.boxed_ty().is_some_and(is_self_ty) => ByBox,
             _ => Other,
         }
     }

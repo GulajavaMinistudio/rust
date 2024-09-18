@@ -14,7 +14,7 @@ use rustc_middle::bug;
 use rustc_session::config::{PrintKind, PrintRequest};
 use rustc_session::Session;
 use rustc_span::symbol::Symbol;
-use rustc_target::spec::{MergeFunctions, PanicStrategy};
+use rustc_target::spec::{MergeFunctions, PanicStrategy, SmallDataThresholdSupport};
 use rustc_target::target_features::{RUSTC_SPECIAL_FEATURES, RUSTC_SPECIFIC_FEATURES};
 
 use crate::back::write::create_informational_target_machine;
@@ -125,6 +125,18 @@ unsafe fn configure_llvm(sess: &Session) {
         for arg in sess_args {
             add(&(*arg), true);
         }
+
+        match (
+            sess.opts.unstable_opts.small_data_threshold,
+            sess.target.small_data_threshold_support(),
+        ) {
+            // Set up the small-data optimization limit for architectures that use
+            // an LLVM argument to control this.
+            (Some(threshold), SmallDataThresholdSupport::LlvmArg(arg)) => {
+                add(&format!("--{arg}={threshold}"), false)
+            }
+            _ => (),
+        };
     }
 
     if sess.opts.unstable_opts.llvm_time_trace {
@@ -290,7 +302,7 @@ pub(crate) fn check_tied_features(
             }
         }
     }
-    return None;
+    None
 }
 
 /// Used to generate cfg variables and apply features
@@ -353,9 +365,7 @@ pub fn target_features(sess: &Session, allow_unstable: bool) -> Vec<Symbol> {
                 None
             }
         })
-        .filter(|feature| {
-            RUSTC_SPECIAL_FEATURES.contains(feature) || features.contains(&Symbol::intern(feature))
-        })
+        .filter(|feature| features.contains(&Symbol::intern(feature)))
         .map(|feature| Symbol::intern(feature))
         .collect()
 }

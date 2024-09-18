@@ -348,8 +348,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     }
                 }
                 if let Some(ty::error::ExpectedFound { found, .. }) = exp_found
-                    && ty.is_box()
-                    && ty.boxed_ty() == found
+                    && ty.boxed_ty() == Some(found)
                     && let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span)
                 {
                     err.span_suggestion(
@@ -1324,23 +1323,21 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 label_or_note(span, terr.to_string(self.tcx));
                 label_or_note(sp, msg);
             }
-        } else {
-            if let Some(values) = values
-                && let Some((e, f)) = values.ty()
-                && let TypeError::ArgumentSorts(..) | TypeError::Sorts(_) = terr
-            {
-                let e = self.tcx.erase_regions(e);
-                let f = self.tcx.erase_regions(f);
-                let expected = with_forced_trimmed_paths!(e.sort_string(self.tcx));
-                let found = with_forced_trimmed_paths!(f.sort_string(self.tcx));
-                if expected == found {
-                    label_or_note(span, terr.to_string(self.tcx));
-                } else {
-                    label_or_note(span, Cow::from(format!("expected {expected}, found {found}")));
-                }
-            } else {
+        } else if let Some(values) = values
+            && let Some((e, f)) = values.ty()
+            && let TypeError::ArgumentSorts(..) | TypeError::Sorts(_) = terr
+        {
+            let e = self.tcx.erase_regions(e);
+            let f = self.tcx.erase_regions(f);
+            let expected = with_forced_trimmed_paths!(e.sort_string(self.tcx));
+            let found = with_forced_trimmed_paths!(f.sort_string(self.tcx));
+            if expected == found {
                 label_or_note(span, terr.to_string(self.tcx));
+            } else {
+                label_or_note(span, Cow::from(format!("expected {expected}, found {found}")));
             }
+        } else {
+            label_or_note(span, terr.to_string(self.tcx));
         }
 
         if let Some((expected, found, path)) = expected_found {

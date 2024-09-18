@@ -1810,6 +1810,9 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
         if builder.config.rust_optimize_tests {
             cmd.arg("--optimize-tests");
         }
+        if builder.config.rust_randomize_layout {
+            cmd.arg("--rust-randomized-layout");
+        }
         if builder.config.cmd.only_modified() {
             cmd.arg("--only-modified");
         }
@@ -2095,6 +2098,7 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
         let git_config = builder.config.git_config();
         cmd.arg("--git-repository").arg(git_config.git_repository);
         cmd.arg("--nightly-branch").arg(git_config.nightly_branch);
+        cmd.arg("--git-merge-commit-email").arg(git_config.git_merge_commit_email);
         cmd.force_coloring_in_ci();
 
         #[cfg(feature = "build-metrics")]
@@ -2687,7 +2691,7 @@ impl Step for Crate {
                 }
             }
             Mode::Rustc => {
-                compile::rustc_cargo(builder, &mut cargo, target, &compiler);
+                compile::rustc_cargo(builder, &mut cargo, target, &compiler, &self.crates);
             }
             _ => panic!("can only test libraries"),
         };
@@ -3526,11 +3530,13 @@ impl Step for TestFloatParse {
 
     fn run(self, builder: &Builder<'_>) {
         let bootstrap_host = builder.config.build;
-        let compiler = builder.compiler(0, bootstrap_host);
+        let compiler = builder.compiler(builder.top_stage, bootstrap_host);
         let path = self.path.to_str().unwrap();
         let crate_name = self.path.components().last().unwrap().as_os_str().to_str().unwrap();
 
-        builder.ensure(compile::Std::new(compiler, self.host));
+        if !builder.download_rustc() {
+            builder.ensure(compile::Std::new(compiler, self.host));
+        }
 
         // Run any unit tests in the crate
         let cargo_test = tool::prepare_tool_cargo(
