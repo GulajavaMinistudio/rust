@@ -4,17 +4,17 @@
 //! how the build runs.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::io::IsTerminal;
-use std::path::{absolute, Path, PathBuf};
+use std::path::{Path, PathBuf, absolute};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{cmp, env, fs};
 
 use build_helper::exit;
-use build_helper::git::{get_closest_merge_commit, output_result, GitConfig};
+use build_helper::git::{GitConfig, get_closest_merge_commit, output_result};
 use serde::{Deserialize, Deserializer};
 use serde_derive::Deserialize;
 
@@ -22,7 +22,7 @@ use crate::core::build_steps::compile::CODEGEN_BACKEND_PREFIX;
 use crate::core::build_steps::llvm;
 pub use crate::core::config::flags::Subcommand;
 use crate::core::config::flags::{Color, Flags, Warnings};
-use crate::utils::cache::{Interned, INTERNER};
+use crate::utils::cache::{INTERNER, Interned};
 use crate::utils::channel::{self, GitInfo};
 use crate::utils::helpers::{self, exe, output, t};
 
@@ -287,6 +287,7 @@ pub struct Config {
     pub rust_profile_generate: Option<String>,
     pub rust_lto: RustcLto,
     pub rust_validate_mir_opts: Option<u32>,
+    pub rust_std_features: BTreeSet<String>,
     pub llvm_profile_use: Option<String>,
     pub llvm_profile_generate: bool,
     pub llvm_libunwind_default: Option<LlvmLibunwind>,
@@ -342,6 +343,15 @@ pub struct Config {
     pub configure_args: Vec<String>,
     pub out: PathBuf,
     pub rust_info: channel::GitInfo,
+
+    pub cargo_info: channel::GitInfo,
+    pub rust_analyzer_info: channel::GitInfo,
+    pub clippy_info: channel::GitInfo,
+    pub miri_info: channel::GitInfo,
+    pub rustfmt_info: channel::GitInfo,
+    pub enzyme_info: channel::GitInfo,
+    pub in_tree_llvm_info: channel::GitInfo,
+    pub in_tree_gcc_info: channel::GitInfo,
 
     // These are either the stage0 downloaded binaries or the locally installed ones.
     pub initial_cargo: PathBuf,
@@ -1143,6 +1153,7 @@ define_config! {
         download_rustc: Option<StringOrBool> = "download-rustc",
         lto: Option<String> = "lto",
         validate_mir_opts: Option<u32> = "validate-mir-opts",
+        std_features: Option<BTreeSet<String>> = "std-features",
     }
 }
 
@@ -1636,6 +1647,7 @@ impl Config {
         let mut optimize = None;
         let mut omit_git_hash = None;
         let mut lld_enabled = None;
+        let mut std_features = None;
 
         let mut is_user_configured_rust_channel = false;
 
@@ -1694,6 +1706,7 @@ impl Config {
                 stack_protector,
                 strip,
                 lld_mode,
+                std_features: std_features_toml,
             } = rust;
 
             is_user_configured_rust_channel = channel.is_some();
@@ -1713,6 +1726,7 @@ impl Config {
             debuginfo_level_tools = debuginfo_level_tools_toml;
             debuginfo_level_tests = debuginfo_level_tests_toml;
             lld_enabled = lld_enabled_toml;
+            std_features = std_features_toml;
 
             optimize = optimize_toml;
             omit_git_hash = omit_git_hash_toml;
@@ -1745,14 +1759,11 @@ impl Config {
             config.rustc_default_linker = default_linker;
             config.musl_root = musl_root.map(PathBuf::from);
             config.save_toolstates = save_toolstates.map(PathBuf::from);
-            set(
-                &mut config.deny_warnings,
-                match flags.warnings {
-                    Warnings::Deny => Some(true),
-                    Warnings::Warn => Some(false),
-                    Warnings::Default => deny_warnings,
-                },
-            );
+            set(&mut config.deny_warnings, match flags.warnings {
+                Warnings::Deny => Some(true),
+                Warnings::Warn => Some(false),
+                Warnings::Default => deny_warnings,
+            });
             set(&mut config.backtrace_on_ice, backtrace_on_ice);
             set(&mut config.rust_verify_llvm_ir, verify_llvm_ir);
             config.rust_thin_lto_import_instr_limit = thin_lto_import_instr_limit;
@@ -1798,6 +1809,19 @@ impl Config {
         let default = config.channel == "dev";
         config.omit_git_hash = omit_git_hash.unwrap_or(default);
         config.rust_info = GitInfo::new(config.omit_git_hash, &config.src);
+
+        config.cargo_info = GitInfo::new(config.omit_git_hash, &config.src.join("src/tools/cargo"));
+        config.rust_analyzer_info =
+            GitInfo::new(config.omit_git_hash, &config.src.join("src/tools/rust-analyzer"));
+        config.clippy_info =
+            GitInfo::new(config.omit_git_hash, &config.src.join("src/tools/clippy"));
+        config.miri_info = GitInfo::new(config.omit_git_hash, &config.src.join("src/tools/miri"));
+        config.rustfmt_info =
+            GitInfo::new(config.omit_git_hash, &config.src.join("src/tools/rustfmt"));
+        config.enzyme_info =
+            GitInfo::new(config.omit_git_hash, &config.src.join("src/tools/enzyme"));
+        config.in_tree_llvm_info = GitInfo::new(false, &config.src.join("src/llvm-project"));
+        config.in_tree_gcc_info = GitInfo::new(false, &config.src.join("src/gcc"));
 
         // We need to override `rust.channel` if it's manually specified when using the CI rustc.
         // This is because if the compiler uses a different channel than the one specified in config.toml,
@@ -2098,6 +2122,9 @@ impl Config {
                 "Trying to use self-contained lld as a linker, but LLD is not being added to the sysroot. Enable it with rust.lld = true."
             );
         }
+
+        let default_std_features = BTreeSet::from([String::from("panic-unwind")]);
+        config.rust_std_features = std_features.unwrap_or(default_std_features);
 
         let default = debug == Some(true);
         config.rust_debug_assertions = debug_assertions.unwrap_or(default);
@@ -2431,7 +2458,7 @@ impl Config {
 
     /// Runs a function if verbosity is greater than 0
     pub fn verbose(&self, f: impl Fn()) {
-        if self.verbose > 0 {
+        if self.is_verbose() {
             f()
         }
     }
@@ -2716,7 +2743,7 @@ impl Config {
         .success();
         if has_changes {
             if if_unchanged {
-                if self.verbose > 0 {
+                if self.is_verbose() {
                     println!(
                         "WARNING: saw changes to compiler/ or library/ since {commit}; \
                             ignoring `download-rustc`"
@@ -2738,6 +2765,8 @@ impl Config {
         download_ci_llvm: Option<StringOrBool>,
         asserts: bool,
     ) -> bool {
+        let download_ci_llvm = download_ci_llvm.unwrap_or(StringOrBool::Bool(true));
+
         let if_unchanged = || {
             if self.rust_info.is_from_tarball() {
                 // Git is needed for running "if-unchanged" logic.
@@ -2761,10 +2790,7 @@ impl Config {
         };
 
         match download_ci_llvm {
-            None => {
-                (self.channel == "dev" || self.download_rustc_commit.is_some()) && if_unchanged()
-            }
-            Some(StringOrBool::Bool(b)) => {
+            StringOrBool::Bool(b) => {
                 if !b && self.download_rustc_commit.is_some() {
                     panic!(
                         "`llvm.download-ci-llvm` cannot be set to `false` if `rust.download-rustc` is set to `true` or `if-unchanged`."
@@ -2774,8 +2800,8 @@ impl Config {
                 // If download-ci-llvm=true we also want to check that CI llvm is available
                 b && llvm::is_ci_llvm_available(self, asserts)
             }
-            Some(StringOrBool::String(s)) if s == "if-unchanged" => if_unchanged(),
-            Some(StringOrBool::String(other)) => {
+            StringOrBool::String(s) if s == "if-unchanged" => if_unchanged(),
+            StringOrBool::String(other) => {
                 panic!("unrecognized option for download-ci-llvm: {:?}", other)
             }
         }
@@ -2814,7 +2840,7 @@ impl Config {
         let has_changes = !t!(git.as_command_mut().status()).success();
         if has_changes {
             if if_unchanged {
-                if self.verbose > 0 {
+                if self.is_verbose() {
                     println!(
                         "warning: saw changes to one of {modified_paths:?} since {commit}; \
                             ignoring `{option_name}`"
@@ -2998,6 +3024,7 @@ fn check_incompatible_options_for_ci_rustc(
         description,
         incremental,
         default_linker,
+        std_features,
 
         // Rest of the options can simply be ignored.
         debug: _,
@@ -3059,6 +3086,7 @@ fn check_incompatible_options_for_ci_rustc(
     err!(current_rust_config.default_linker, default_linker);
     err!(current_rust_config.stack_protector, stack_protector);
     err!(current_rust_config.lto, lto);
+    err!(current_rust_config.std_features, std_features);
 
     warn!(current_rust_config.channel, channel);
     warn!(current_rust_config.description, description);

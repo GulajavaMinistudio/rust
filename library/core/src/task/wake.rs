@@ -2,7 +2,7 @@
 
 use crate::any::Any;
 use crate::marker::PhantomData;
-use crate::mem::{transmute, ManuallyDrop};
+use crate::mem::{ManuallyDrop, transmute};
 use crate::panic::AssertUnwindSafe;
 use crate::{fmt, ptr};
 
@@ -414,6 +414,7 @@ impl<'a> ContextBuilder<'a> {
 /// [`Wake`]: ../../alloc/task/trait.Wake.html
 #[repr(transparent)]
 #[stable(feature = "futures_api", since = "1.36.0")]
+#[cfg_attr(not(test), rustc_diagnostic_item = "Waker")]
 pub struct Waker {
     waker: RawWaker,
 }
