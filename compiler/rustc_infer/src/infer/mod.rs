@@ -14,7 +14,6 @@ use region_constraints::{
     GenericKind, RegionConstraintCollector, RegionConstraintStorage, VarInfos, VerifyBound,
 };
 pub use relate::StructurallyRelateAliases;
-use relate::combine::CombineFields;
 pub use relate::combine::PredicateEmittingRelation;
 use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
@@ -749,7 +748,7 @@ impl<'tcx> InferCtxt<'tcx> {
         definition_span: Span,
         hidden_ty: Ty<'tcx>,
         region: ty::Region<'tcx>,
-        in_regions: &Lrc<Vec<ty::Region<'tcx>>>,
+        in_regions: Lrc<Vec<ty::Region<'tcx>>>,
     ) {
         self.inner.borrow_mut().unwrap_region_constraints().member_constraint(
             key,
