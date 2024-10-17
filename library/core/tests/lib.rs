@@ -1,5 +1,4 @@
 // tidy-alphabetical-start
-#![cfg_attr(bootstrap, feature(const_mut_refs))]
 #![cfg_attr(target_has_atomic = "128", feature(integer_atomics))]
 #![cfg_attr(test, feature(cfg_match))]
 #![feature(alloc_layout_extra)]
@@ -19,9 +18,6 @@
 #![feature(const_black_box)]
 #![feature(const_hash)]
 #![feature(const_heap)]
-#![feature(const_ip)]
-#![feature(const_ipv4)]
-#![feature(const_ipv6)]
 #![feature(const_likely)]
 #![feature(const_nonnull_new)]
 #![feature(const_option_ext)]
@@ -50,6 +46,7 @@
 #![feature(hashmap_internals)]
 #![feature(int_roundings)]
 #![feature(ip)]
+#![feature(ip_from)]
 #![feature(is_ascii_octdigit)]
 #![feature(isqrt)]
 #![feature(iter_advance_by)]
