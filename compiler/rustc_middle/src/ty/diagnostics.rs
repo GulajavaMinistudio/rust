@@ -193,7 +193,7 @@ fn suggest_changing_unsized_bound(
             .enumerate()
             .filter(|(_, bound)| {
                 if let hir::GenericBound::Trait(poly) = bound
-                    && poly.modifiers == hir::TraitBoundModifier::Maybe
+                    && let hir::BoundPolarity::Maybe(_) = poly.modifiers.polarity
                     && poly.trait_ref.trait_def_id() == def_id
                 {
                     true
@@ -591,9 +591,6 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for IsSuggestableVisitor<'tcx> {
     fn visit_const(&mut self, c: Const<'tcx>) -> Self::Result {
         match c.kind() {
             ConstKind::Infer(InferConst::Var(_)) if self.infer_suggestable => {}
-
-            // effect variables are always suggestable, because they are not visible
-            ConstKind::Infer(InferConst::EffectVar(_)) => {}
 
             ConstKind::Infer(..)
             | ConstKind::Bound(..)

@@ -918,12 +918,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         };
         match item_kind {
             Some(ItemKind::Impl(i)) => {
-                let is_valid = matches!(&i.self_ty.kind, hir::TyKind::Tup([_]))
-                    || if let hir::TyKind::BareFn(bare_fn_ty) = &i.self_ty.kind {
-                        bare_fn_ty.decl.inputs.len() == 1
-                    } else {
-                        false
-                    }
+                let is_valid = doc_fake_variadic_is_allowed_self_ty(i.self_ty)
                     || if let Some(&[hir::GenericArg::Type(ty)]) = i
                         .of_trait
                         .as_ref()
@@ -1183,19 +1178,11 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
 
                         sym::masked => self.check_doc_masked(attr, meta, hir_id, target),
 
-                        // no_default_passes: deprecated
-                        // passes: deprecated
-                        // plugins: removed, but rustdoc warns about it itself
-                        sym::cfg
-                        | sym::hidden
-                        | sym::no_default_passes
-                        | sym::notable_trait
-                        | sym::passes
-                        | sym::plugins => {}
+                        sym::cfg | sym::hidden | sym::notable_trait => {}
 
                         sym::rust_logo => {
                             if self.check_attr_crate_level(attr, meta, hir_id)
-                                && !self.tcx.features().rustdoc_internals
+                                && !self.tcx.features().rustdoc_internals()
                             {
                                 feature_err(
                                     &self.tcx.sess,
@@ -1239,6 +1226,22 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                                         },
                                         sugg: (attr.meta().unwrap().span, applicability),
                                     },
+                                );
+                            } else if i_meta.has_name(sym::passes)
+                                || i_meta.has_name(sym::no_default_passes)
+                            {
+                                self.tcx.emit_node_span_lint(
+                                    INVALID_DOC_ATTRIBUTES,
+                                    hir_id,
+                                    i_meta.span,
+                                    errors::DocTestUnknownPasses { path, span: i_meta.span },
+                                );
+                            } else if i_meta.has_name(sym::plugins) {
+                                self.tcx.emit_node_span_lint(
+                                    INVALID_DOC_ATTRIBUTES,
+                                    hir_id,
+                                    i_meta.span,
+                                    errors::DocTestUnknownPlugins { path, span: i_meta.span },
                                 );
                             } else {
                                 self.tcx.emit_node_span_lint(
@@ -1766,7 +1769,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 }
                 sym::align => {
                     if let (Target::Fn | Target::Method(MethodKind::Inherent), false) =
-                        (target, self.tcx.features().fn_align)
+                        (target, self.tcx.features().fn_align())
                     {
                         feature_err(
                             &self.tcx.sess,
@@ -2292,10 +2295,10 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 &mut diag,
                 &cause,
                 None,
-                Some(ValuePairs::PolySigs(ExpectedFound {
+                Some(param_env.and(ValuePairs::PolySigs(ExpectedFound {
                     expected: ty::Binder::dummy(expected_sig),
                     found: ty::Binder::dummy(sig),
-                })),
+                }))),
                 terr,
                 false,
             );
@@ -2621,4 +2624,21 @@ fn check_duplicates(
             }
         },
     }
+}
+
+fn doc_fake_variadic_is_allowed_self_ty(self_ty: &hir::Ty<'_>) -> bool {
+    matches!(&self_ty.kind, hir::TyKind::Tup([_]))
+        || if let hir::TyKind::BareFn(bare_fn_ty) = &self_ty.kind {
+            bare_fn_ty.decl.inputs.len() == 1
+        } else {
+            false
+        }
+        || (if let hir::TyKind::Path(hir::QPath::Resolved(_, path)) = &self_ty.kind
+            && let Some(&[hir::GenericArg::Type(ty)]) =
+                path.segments.last().map(|last| last.args().args)
+        {
+            doc_fake_variadic_is_allowed_self_ty(ty)
+        } else {
+            false
+        })
 }

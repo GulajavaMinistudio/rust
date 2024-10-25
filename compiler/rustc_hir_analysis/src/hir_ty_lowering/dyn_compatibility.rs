@@ -40,8 +40,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         let mut potential_assoc_types = Vec::new();
         let dummy_self = self.tcx().types.trait_object_dummy_self;
         for trait_bound in hir_trait_bounds.iter().rev() {
-            // FIXME: This doesn't handle `? const`.
-            if trait_bound.modifiers == hir::TraitBoundModifier::Maybe {
+            if let hir::BoundPolarity::Maybe(_) = trait_bound.modifiers.polarity {
                 continue;
             }
             if let GenericArgCountResult {
@@ -79,7 +78,8 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 ty::ClauseKind::RegionOutlives(_)
                 | ty::ClauseKind::ConstArgHasType(..)
                 | ty::ClauseKind::WellFormed(_)
-                | ty::ClauseKind::ConstEvaluatable(_) => {
+                | ty::ClauseKind::ConstEvaluatable(_)
+                | ty::ClauseKind::HostEffect(..) => {
                     span_bug!(span, "did not expect {pred} clause in object bounds");
                 }
             }
@@ -259,7 +259,6 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                         }
                     })
                     .collect();
-                let args = tcx.mk_args(&args);
 
                 let span = i.bottom().1;
                 let empty_generic_args = hir_trait_bounds.iter().any(|hir_bound| {
@@ -292,7 +291,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     .emit();
                 }
 
-                ty::ExistentialTraitRef { def_id: trait_ref.def_id, args }
+                ty::ExistentialTraitRef::new(tcx, trait_ref.def_id, args)
             })
         });
 

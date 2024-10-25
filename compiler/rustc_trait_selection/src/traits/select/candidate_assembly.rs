@@ -244,7 +244,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             .param_env
             .caller_bounds()
             .iter()
-            .filter(|p| !p.references_error())
             .filter_map(|p| p.as_trait_clause())
             // Micro-optimization: filter out predicates relating to different traits.
             .filter(|p| p.def_id() == stack.obligation.predicate.def_id())
@@ -547,7 +546,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 }
             }
             // Provide an impl for suitable functions, rejecting `#[target_feature]` functions (RFC 2396).
-            ty::FnDef(def_id, _args) => {
+            ty::FnDef(def_id, _) => {
                 let tcx = self.tcx();
                 if tcx.fn_sig(def_id).skip_binder().is_fn_trait_compatible()
                     && tcx.codegen_fn_attrs(def_id).target_features.is_empty()
@@ -876,7 +875,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                         }
 
                         if let Some(principal) = data.principal() {
-                            if !self.infcx.tcx.features().dyn_compatible_for_dispatch {
+                            if !self.infcx.tcx.features().dyn_compatible_for_dispatch() {
                                 principal.with_self_ty(self.tcx(), self_ty)
                             } else if self.tcx().is_dyn_compatible(principal.def_id()) {
                                 principal.with_self_ty(self.tcx(), self_ty)
@@ -936,7 +935,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
 
         let tcx = self.tcx();
-        if tcx.features().trait_upcasting {
+        if tcx.features().trait_upcasting() {
             return None;
         }
 
