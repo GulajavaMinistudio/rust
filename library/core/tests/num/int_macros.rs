@@ -113,7 +113,7 @@ macro_rules! int_module {
                 // Rotating these should make no difference
                 //
                 // We test using 124 bits because to ensure that overlong bit shifts do
-                // not cause undefined behaviour. See #10183.
+                // not cause undefined behavior. See #10183.
                 assert_eq_const_safe!(_0.rotate_left(124), _0);
                 assert_eq_const_safe!(_1.rotate_left(124), _1);
                 assert_eq_const_safe!(_0.rotate_right(124), _0);
@@ -369,8 +369,8 @@ macro_rules! int_module {
                 assert_eq_const_safe!(<$T>::midpoint(3, 4), 3);
                 assert_eq_const_safe!(<$T>::midpoint(4, 3), 3);
 
-                assert_eq_const_safe!(<$T>::midpoint(<$T>::MIN, <$T>::MAX), -1);
-                assert_eq_const_safe!(<$T>::midpoint(<$T>::MAX, <$T>::MIN), -1);
+                assert_eq_const_safe!(<$T>::midpoint(<$T>::MIN, <$T>::MAX), 0);
+                assert_eq_const_safe!(<$T>::midpoint(<$T>::MAX, <$T>::MIN), 0);
                 assert_eq_const_safe!(<$T>::midpoint(<$T>::MIN, <$T>::MIN), <$T>::MIN);
                 assert_eq_const_safe!(<$T>::midpoint(<$T>::MAX, <$T>::MAX), <$T>::MAX);
 
