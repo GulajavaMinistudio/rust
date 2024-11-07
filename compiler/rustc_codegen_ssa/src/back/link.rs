@@ -40,7 +40,7 @@ use rustc_target::spec::crt_objects::CrtObjects;
 use rustc_target::spec::{
     Cc, LinkOutputKind, LinkSelfContainedComponents, LinkSelfContainedDefault, LinkerFeatures,
     LinkerFlavor, LinkerFlavorCli, Lld, PanicStrategy, RelocModel, RelroLevel, SanitizerSet,
-    SplitDebuginfo, current_apple_deployment_target,
+    SplitDebuginfo,
 };
 use tempfile::Builder as TempFileBuilder;
 use tracing::{debug, info, warn};
@@ -50,6 +50,7 @@ use super::command::Command;
 use super::linker::{self, Linker};
 use super::metadata::{MetadataPosition, create_wrapper_file};
 use super::rpath::{self, RPathConfig};
+use super::{apple, versioned_llvm_target};
 use crate::{
     CodegenResults, CompiledModule, CrateInfo, NativeLib, common, errors,
     looks_like_rust_object_file,
@@ -84,11 +85,7 @@ pub fn link_binary(
         }
 
         if invalid_output_for_target(sess, crate_type) {
-            bug!(
-                "invalid output type `{:?}` for target os `{}`",
-                crate_type,
-                sess.opts.target_triple
-            );
+            bug!("invalid output type `{:?}` for target `{}`", crate_type, sess.opts.target_triple);
         }
 
         sess.time("link_binary_check_files_are_writeable", || {
@@ -995,8 +992,9 @@ fn link_natively(
                         && (code < 1000 || code > 9999)
                     {
                         let is_vs_installed = windows_registry::find_vs_version().is_ok();
+                        // FIXME(cc-rs#1265) pass only target arch to find_tool()
                         let has_linker = windows_registry::find_tool(
-                            sess.opts.target_triple.triple(),
+                            sess.opts.target_triple.tuple(),
                             "link.exe",
                         )
                         .is_some();
@@ -1087,9 +1085,7 @@ fn link_natively(
     let strip = sess.opts.cg.strip;
 
     if sess.target.is_like_osx {
-        // Use system `strip` when running on host macOS.
-        // <https://github.com/rust-lang/rust/pull/130781>
-        let stripcmd = if cfg!(target_os = "macos") { "/usr/bin/strip" } else { "strip" };
+        let stripcmd = "rust-objcopy";
         match (strip, crate_type) {
             (Strip::Debuginfo, _) => {
                 strip_symbols_with_external_utility(sess, stripcmd, out_filename, Some("-S"))
@@ -1105,11 +1101,14 @@ fn link_natively(
         }
     }
 
-    if sess.target.os == "illumos" {
+    if sess.target.is_like_solaris {
         // Many illumos systems will have both the native 'strip' utility and
         // the GNU one. Use the native version explicitly and do not rely on
         // what's in the path.
-        let stripcmd = "/usr/bin/strip";
+        //
+        // If cross-compiling and there is not a native version, then use
+        // `llvm-strip` and hope.
+        let stripcmd = if !sess.host.is_like_solaris { "rust-objcopy" } else { "/usr/bin/strip" };
         match strip {
             // Always preserve the symbol table (-x).
             Strip::Debuginfo => {
@@ -1122,6 +1121,10 @@ fn link_natively(
     }
 
     if sess.target.is_like_aix {
+        // `llvm-strip` doesn't work for AIX - their strip must be used.
+        if !sess.host.is_like_aix {
+            sess.dcx().emit_warn(errors::AixStripNotUsed);
+        }
         let stripcmd = "/usr/bin/strip";
         match strip {
             Strip::Debuginfo => {
@@ -1149,6 +1152,13 @@ fn strip_symbols_with_external_utility(
     if let Some(option) = option {
         cmd.arg(option);
     }
+
+    let mut new_path = sess.get_tools_search_paths(false);
+    if let Some(path) = env::var_os("PATH") {
+        new_path.extend(env::split_paths(&path));
+    }
+    cmd.env("PATH", env::join_paths(new_path).unwrap());
+
     let prog = cmd.arg(out_filename).output();
     match prog {
         Ok(prog) => {
@@ -1322,10 +1332,8 @@ fn link_sanitizer_runtime(
         } else {
             let default_sysroot =
                 filesearch::get_or_default_sysroot().expect("Failed finding sysroot");
-            let default_tlib = filesearch::make_target_lib_path(
-                &default_sysroot,
-                sess.opts.target_triple.triple(),
-            );
+            let default_tlib =
+                filesearch::make_target_lib_path(&default_sysroot, sess.opts.target_triple.tuple());
             default_tlib
         }
     }
@@ -2447,7 +2455,7 @@ fn add_order_independent_options(
     if flavor == LinkerFlavor::Llbc {
         cmd.link_args(&[
             "--target",
-            sess.target.llvm_target.as_ref(),
+            &versioned_llvm_target(sess),
             "--target-cpu",
             &codegen_results.crate_info.target_cpu,
         ]);
@@ -3039,7 +3047,7 @@ fn add_apple_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavo
             _ => bug!("invalid OS/ABI combination for Apple target: {target_os}, {target_abi}"),
         };
 
-        let (major, minor, patch) = current_apple_deployment_target(&sess.target);
+        let (major, minor, patch) = apple::deployment_target(sess);
         let min_version = format!("{major}.{minor}.{patch}");
 
         // The SDK version is used at runtime when compiling with a newer SDK / version of Xcode:
@@ -3109,7 +3117,7 @@ fn add_apple_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavo
 
             // The presence of `-mmacosx-version-min` makes CC default to
             // macOS, and it sets the deployment target.
-            let (major, minor, patch) = current_apple_deployment_target(&sess.target);
+            let (major, minor, patch) = apple::deployment_target(sess);
             // Intentionally pass this as a single argument, Clang doesn't
             // seem to like it otherwise.
             cmd.cc_arg(&format!("-mmacosx-version-min={major}.{minor}.{patch}"));
@@ -3119,7 +3127,7 @@ fn add_apple_link_args(cmd: &mut dyn Linker, sess: &Session, flavor: LinkerFlavo
             //
             // We avoid `-m32`/`-m64`, as this is already encoded by `-arch`.
         } else {
-            cmd.cc_args(&["-target", &sess.target.llvm_target]);
+            cmd.cc_args(&["-target", &versioned_llvm_target(sess)]);
         }
     }
 }
@@ -3345,7 +3353,7 @@ fn add_lld_args(
         // targeting a different linker flavor on macOS, and that's also always
         // the case when targeting WASM.
         if sess.target.linker_flavor != sess.host.linker_flavor {
-            cmd.cc_arg(format!("--target={}", sess.target.llvm_target));
+            cmd.cc_arg(format!("--target={}", versioned_llvm_target(sess)));
         }
     }
 }

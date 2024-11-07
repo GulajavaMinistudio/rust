@@ -1188,7 +1188,7 @@ fn should_encode_type(tcx: TyCtxt<'_>, def_id: LocalDefId, def_kind: DefKind) ->
         | DefKind::SyntheticCoroutineBody => true,
 
         DefKind::OpaqueTy => {
-            let origin = tcx.opaque_type_origin(def_id);
+            let origin = tcx.local_opaque_ty_origin(def_id);
             if let hir::OpaqueTyOrigin::FnReturn { parent, .. }
             | hir::OpaqueTyOrigin::AsyncFn { parent, .. } = origin
                 && let hir::Node::TraitItem(trait_item) = tcx.hir_node_by_def_id(parent)
@@ -1203,8 +1203,8 @@ fn should_encode_type(tcx: TyCtxt<'_>, def_id: LocalDefId, def_kind: DefKind) ->
         DefKind::AssocTy => {
             let assoc_item = tcx.associated_item(def_id);
             match assoc_item.container {
-                ty::AssocItemContainer::ImplContainer => true,
-                ty::AssocItemContainer::TraitContainer => assoc_item.defaultness(tcx).has_value(),
+                ty::AssocItemContainer::Impl => true,
+                ty::AssocItemContainer::Trait => assoc_item.defaultness(tcx).has_value(),
             }
         }
         DefKind::TyParam => {
@@ -1336,7 +1336,7 @@ fn should_encode_const(def_kind: DefKind) -> bool {
 
 fn should_encode_fn_impl_trait_in_trait<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
     if let Some(assoc_item) = tcx.opt_associated_item(def_id)
-        && assoc_item.container == ty::AssocItemContainer::TraitContainer
+        && assoc_item.container == ty::AssocItemContainer::Trait
         && assoc_item.kind == ty::AssocKind::Fn
     {
         true
@@ -1530,9 +1530,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             if let DefKind::OpaqueTy = def_kind {
                 self.encode_explicit_item_bounds(def_id);
                 self.encode_explicit_item_super_predicates(def_id);
-                self.tables
-                    .is_type_alias_impl_trait
-                    .set(def_id.index, self.tcx.is_type_alias_impl_trait(def_id));
+                record!(self.tables.opaque_ty_origin[def_id] <- self.tcx.opaque_ty_origin(def_id));
                 self.encode_precise_capturing_args(def_id);
             }
             if tcx.impl_method_has_trait_impl_trait_tys(def_id)
@@ -1651,7 +1649,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         self.tables.assoc_container.set_some(def_id.index, item.container);
 
         match item.container {
-            AssocItemContainer::TraitContainer => {
+            AssocItemContainer::Trait => {
                 if let ty::AssocKind::Type = item.kind {
                     self.encode_explicit_item_bounds(def_id);
                     self.encode_explicit_item_super_predicates(def_id);
@@ -1661,7 +1659,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     }
                 }
             }
-            AssocItemContainer::ImplContainer => {
+            AssocItemContainer::Impl => {
                 if let Some(trait_item_def_id) = item.trait_item_def_id {
                     self.tables.trait_item_def_id.set_some(def_id.index, trait_item_def_id.into());
                 }
@@ -1676,9 +1674,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 );
                 self.encode_precise_capturing_args(def_id);
             }
-        }
-        if item.is_effects_desugaring {
-            self.tables.is_effects_desugaring.set(def_id.index, true);
         }
     }
 

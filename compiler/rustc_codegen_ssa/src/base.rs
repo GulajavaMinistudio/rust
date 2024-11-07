@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use itertools::Itertools;
+use rustc_abi::FIRST_VARIANT;
 use rustc_ast::expand::allocator::{ALLOCATOR_METHODS, AllocatorKind, global_fn_name};
 use rustc_attr as attr;
 use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
@@ -21,12 +22,11 @@ use rustc_middle::mir::BinOp;
 use rustc_middle::mir::mono::{CodegenUnit, CodegenUnitNameBuilder, MonoItem};
 use rustc_middle::query::Providers;
 use rustc_middle::ty::layout::{HasTyCtxt, LayoutOf, TyAndLayout};
-use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
+use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TypingMode};
 use rustc_session::Session;
 use rustc_session::config::{self, CrateType, EntryFnType, OptLevel, OutputType};
 use rustc_span::symbol::sym;
 use rustc_span::{DUMMY_SP, Symbol};
-use rustc_target::abi::FIRST_VARIANT;
 use rustc_trait_selection::infer::at::ToTrace;
 use rustc_trait_selection::infer::{BoundRegionConversionTime, TyCtxtInferExt};
 use rustc_trait_selection::traits::{ObligationCause, ObligationCtxt};
@@ -119,7 +119,7 @@ pub fn validate_trivial_unsize<'tcx>(
 ) -> bool {
     match (source_data.principal(), target_data.principal()) {
         (Some(hr_source_principal), Some(hr_target_principal)) => {
-            let infcx = tcx.infer_ctxt().build();
+            let infcx = tcx.infer_ctxt().build(TypingMode::PostAnalysis);
             let universe = infcx.universe();
             let ocx = ObligationCtxt::new(&infcx);
             infcx.enter_forall(hr_target_principal, |target_principal| {

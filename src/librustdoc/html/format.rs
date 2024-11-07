@@ -13,6 +13,7 @@ use std::fmt::{self, Display, Write};
 use std::iter::{self, once};
 
 use itertools::Itertools;
+use rustc_abi::ExternAbi;
 use rustc_attr::{ConstStability, StabilityLevel, StableSince};
 use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::FxHashSet;
@@ -20,11 +21,9 @@ use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_metadata::creader::{CStore, LoadedMacro};
-use rustc_middle::ty;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self, TyCtxt, TypingMode};
 use rustc_span::symbol::kw;
 use rustc_span::{Symbol, sym};
-use rustc_target::spec::abi::Abi;
 use tracing::{debug, trace};
 
 use super::url_parts_builder::{UrlPartsBuilder, estimate_item_path_byte_length};
@@ -613,7 +612,7 @@ fn generate_item_def_id_path(
     // No need to try to infer the actual parent item if it's not an associated item from the `impl`
     // block.
     if def_id != original_def_id && matches!(tcx.def_kind(def_id), DefKind::Impl { .. }) {
-        let infcx = tcx.infer_ctxt().build();
+        let infcx = tcx.infer_ctxt().build(TypingMode::non_body_analysis());
         def_id = infcx
             .at(&ObligationCause::dummy(), tcx.param_env(def_id))
             .query_normalize(ty::Binder::dummy(tcx.type_of(def_id).instantiate_identity()))
@@ -1788,11 +1787,11 @@ impl clean::AssocItemConstraint {
     }
 }
 
-pub(crate) fn print_abi_with_space(abi: Abi) -> impl Display {
+pub(crate) fn print_abi_with_space(abi: ExternAbi) -> impl Display {
     display_fn(move |f| {
         let quot = if f.alternate() { "\"" } else { "&quot;" };
         match abi {
-            Abi::Rust => Ok(()),
+            ExternAbi::Rust => Ok(()),
             abi => write!(f, "extern {0}{1}{0} ", quot, abi.name()),
         }
     })

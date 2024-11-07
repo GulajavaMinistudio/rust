@@ -153,7 +153,6 @@ impl Step for Std {
             // NOTE: the beta compiler may generate different artifacts than the downloaded compiler, so
             // its artifacts can't be reused.
             && compiler.stage != 0
-            // This check is specific to testing std itself; see `test::Std` for more details.
             && !self.force_recompile
         {
             let sysroot = builder.ensure(Sysroot { compiler, force_recompile: false });
@@ -220,8 +219,7 @@ impl Step for Std {
                 .join(compiler.host)
                 .join("bin");
             if src_sysroot_bin.exists() {
-                let target_sysroot_bin =
-                    builder.sysroot_libdir(compiler, target).parent().unwrap().join("bin");
+                let target_sysroot_bin = builder.sysroot_target_bindir(compiler, target);
                 t!(fs::create_dir_all(&target_sysroot_bin));
                 builder.cp_link_r(&src_sysroot_bin, &target_sysroot_bin);
             }
@@ -335,7 +333,7 @@ fn copy_third_party_objects(
             && (target.contains("linux") || target.contains("fuchsia"))
     {
         let libunwind_path =
-            copy_llvm_libunwind(builder, target, &builder.sysroot_libdir(*compiler, target));
+            copy_llvm_libunwind(builder, target, &builder.sysroot_target_libdir(*compiler, target));
         target_deps.push((libunwind_path, DependencyType::Target));
     }
 
@@ -348,7 +346,8 @@ fn copy_self_contained_objects(
     compiler: &Compiler,
     target: TargetSelection,
 ) -> Vec<(PathBuf, DependencyType)> {
-    let libdir_self_contained = builder.sysroot_libdir(*compiler, target).join("self-contained");
+    let libdir_self_contained =
+        builder.sysroot_target_libdir(*compiler, target).join("self-contained");
     t!(fs::create_dir_all(&libdir_self_contained));
     let mut target_deps = vec![];
 
@@ -656,8 +655,8 @@ impl Step for StdLink {
             let hostdir = sysroot.join(lib).join("rustlib").join(compiler.host).join("lib");
             (libdir, hostdir)
         } else {
-            let libdir = builder.sysroot_libdir(target_compiler, target);
-            let hostdir = builder.sysroot_libdir(target_compiler, compiler.host);
+            let libdir = builder.sysroot_target_libdir(target_compiler, target);
+            let hostdir = builder.sysroot_target_libdir(target_compiler, compiler.host);
             (libdir, hostdir)
         };
 
@@ -724,7 +723,7 @@ fn copy_sanitizers(
     }
 
     let mut target_deps = Vec::new();
-    let libdir = builder.sysroot_libdir(*compiler, target);
+    let libdir = builder.sysroot_target_libdir(*compiler, target);
 
     for runtime in &runtimes {
         let dst = libdir.join(&runtime.name);
@@ -802,7 +801,7 @@ impl Step for StartupObjects {
 
         let src_dir = &builder.src.join("library").join("rtstartup");
         let dst_dir = &builder.native_dir(target).join("rtstartup");
-        let sysroot_dir = &builder.sysroot_libdir(for_compiler, target);
+        let sysroot_dir = &builder.sysroot_target_libdir(for_compiler, target);
         t!(fs::create_dir_all(dst_dir));
 
         for file in &["rsbegin", "rsend"] {
@@ -1057,6 +1056,14 @@ pub fn rustc_cargo(
         cargo.rustflag("-l").rustflag("Enzyme-19");
     }
 
+    // Building with protected visibility reduces the number of dynamic relocations needed, giving
+    // us a faster startup time. However GNU ld < 2.40 will error if we try to link a shared object
+    // with direct references to protected symbols, so for now we only use protected symbols if
+    // linking with LLD is enabled.
+    if builder.build.config.lld_mode.is_used() {
+        cargo.rustflag("-Zdefault-visibility=protected");
+    }
+
     // We currently don't support cross-crate LTO in stage0. This also isn't hugely necessary
     // and may just be a time sink.
     if compiler.stage != 0 {
@@ -1280,10 +1287,17 @@ fn rustc_llvm_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetSelect
     }
 }
 
+/// `RustcLink` copies all of the rlibs from the rustc build into the previous stage's sysroot.
+/// This is necessary for tools using `rustc_private`, where the previous compiler will build
+/// a tool against the next compiler.
+/// To build a tool against a compiler, the rlibs of that compiler that it links against
+/// must be in the sysroot of the compiler that's doing the compiling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RustcLink {
+    /// The compiler whose rlibs we are copying around.
     pub compiler: Compiler,
-    pub target_compiler: Compiler,
+    /// This is the compiler into whose sysroot we want to copy the rlibs into.
+    pub previous_stage_compiler: Compiler,
     pub target: TargetSelection,
     /// Not actually used; only present to make sure the cache invalidation is correct.
     crates: Vec<String>,
@@ -1293,7 +1307,7 @@ impl RustcLink {
     fn from_rustc(rustc: Rustc, host_compiler: Compiler) -> Self {
         Self {
             compiler: host_compiler,
-            target_compiler: rustc.compiler,
+            previous_stage_compiler: rustc.compiler,
             target: rustc.target,
             crates: rustc.crates,
         }
@@ -1310,12 +1324,12 @@ impl Step for RustcLink {
     /// Same as `std_link`, only for librustc
     fn run(self, builder: &Builder<'_>) {
         let compiler = self.compiler;
-        let target_compiler = self.target_compiler;
+        let previous_stage_compiler = self.previous_stage_compiler;
         let target = self.target;
         add_to_sysroot(
             builder,
-            &builder.sysroot_libdir(target_compiler, target),
-            &builder.sysroot_libdir(target_compiler, compiler.host),
+            &builder.sysroot_target_libdir(previous_stage_compiler, target),
+            &builder.sysroot_target_libdir(previous_stage_compiler, compiler.host),
             &librustc_stamp(builder, compiler, target),
         );
     }
@@ -1763,7 +1777,7 @@ impl Step for Assemble {
 
         // We prepend this bin directory to the user PATH when linking Rust binaries. To
         // avoid shadowing the system LLD we rename the LLD we provide to `rust-lld`.
-        let libdir = builder.sysroot_libdir(target_compiler, target_compiler.host);
+        let libdir = builder.sysroot_target_libdir(target_compiler, target_compiler.host);
         let libdir_bin = libdir.parent().unwrap().join("bin");
         t!(fs::create_dir_all(&libdir_bin));
 
@@ -1847,8 +1861,9 @@ impl Step for Assemble {
         if let Some(enzyme_install) = enzyme_install {
             let lib_ext = std::env::consts::DLL_EXTENSION;
             let src_lib = enzyme_install.join("build/Enzyme/libEnzyme-19").with_extension(lib_ext);
-            let libdir = builder.sysroot_libdir(build_compiler, build_compiler.host);
-            let target_libdir = builder.sysroot_libdir(target_compiler, target_compiler.host);
+            let libdir = builder.sysroot_target_libdir(build_compiler, build_compiler.host);
+            let target_libdir =
+                builder.sysroot_target_libdir(target_compiler, target_compiler.host);
             let dst_lib = libdir.join("libEnzyme-19").with_extension(lib_ext);
             let target_dst_lib = target_libdir.join("libEnzyme-19").with_extension(lib_ext);
             builder.copy_link(&src_lib, &dst_lib);
@@ -1916,7 +1931,7 @@ impl Step for Assemble {
         let sysroot = builder.sysroot(target_compiler);
         let rustc_libdir = builder.rustc_libdir(target_compiler);
         t!(fs::create_dir_all(&rustc_libdir));
-        let src_libdir = builder.sysroot_libdir(build_compiler, host);
+        let src_libdir = builder.sysroot_target_libdir(build_compiler, host);
         for f in builder.read_dir(&src_libdir) {
             let filename = f.file_name().into_string().unwrap();
 
@@ -1959,6 +1974,14 @@ impl Step for Assemble {
                     &self_contained_lld_dir.join(exe(name, target_compiler.host)),
                 );
             }
+        }
+
+        {
+            // `llvm-strip` is used by rustc, which is actually just a symlink to `llvm-objcopy`,
+            // so copy and rename `llvm-objcopy`.
+            let src_exe = exe("llvm-objcopy", target_compiler.host);
+            let dst_exe = exe("rust-objcopy", target_compiler.host);
+            builder.copy_link(&libdir_bin.join(src_exe), &libdir_bin.join(dst_exe));
         }
 
         // In addition to `rust-lld` also install `wasm-component-ld` when

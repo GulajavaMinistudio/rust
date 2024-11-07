@@ -26,7 +26,7 @@ use rustc_span::{
     FileName, FileNameDisplayPreference, RealFileName, SourceFileHashAlgorithm, Symbol, sym,
 };
 use rustc_target::spec::{
-    FramePointer, LinkSelfContainedComponents, LinkerFeatures, SplitDebuginfo, Target, TargetTriple,
+    FramePointer, LinkSelfContainedComponents, LinkerFeatures, SplitDebuginfo, Target, TargetTuple,
 };
 use tracing::debug;
 
@@ -813,6 +813,7 @@ pub struct PrintRequest {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum PrintKind {
     FileNames,
+    HostTuple,
     Sysroot,
     TargetLibdir,
     CrateName,
@@ -1116,7 +1117,7 @@ bitflags::bitflags! {
     }
 }
 
-pub fn host_triple() -> &'static str {
+pub fn host_tuple() -> &'static str {
     // Get the host triple out of the build environment. This ensures that our
     // idea of the host triple is the same as for the set of libraries we've
     // actually built. We can't just take LLVM's host triple because they
@@ -1158,7 +1159,7 @@ impl Default for Options {
             output_types: OutputTypes(BTreeMap::new()),
             search_paths: vec![],
             maybe_sysroot: None,
-            target_triple: TargetTriple::from_triple(host_triple()),
+            target_triple: TargetTuple::from_tuple(host_tuple()),
             test: false,
             incremental: None,
             untracked_state_hash: Default::default(),
@@ -1319,6 +1320,7 @@ pub enum PAuthKey {
 #[derive(Clone, Copy, Hash, Debug, PartialEq)]
 pub struct PacRet {
     pub leaf: bool,
+    pub pc: bool,
     pub key: PAuthKey,
 }
 
@@ -1349,19 +1351,6 @@ pub fn build_target_config(early_dcx: &EarlyDiagCtxt, opts: &Options, sysroot: &
                 early_dcx.early_warn(warning)
             }
 
-            // The `wasm32-wasi` target is being renamed to `wasm32-wasip1` as
-            // part of rust-lang/compiler-team#607 and
-            // rust-lang/compiler-team#695. Warn unconditionally on usage to
-            // raise awareness of the renaming. This code will be deleted in
-            // October 2024.
-            if opts.target_triple.triple() == "wasm32-wasi" {
-                early_dcx.early_warn(
-                    "the `wasm32-wasi` target is being renamed to \
-                    `wasm32-wasip1` and the `wasm32-wasi` target will be \
-                    removed from nightly in October 2024 and removed from \
-                    stable Rust in January 2025",
-                )
-            }
             if !matches!(target.pointer_width, 16 | 32 | 64) {
                 early_dcx.early_fatal(format!(
                     "target specification was invalid: unrecognized target-pointer-width {}",
@@ -1945,6 +1934,7 @@ fn collect_print_requests(
         ("crate-name", PrintKind::CrateName),
         ("deployment-target", PrintKind::DeploymentTarget),
         ("file-names", PrintKind::FileNames),
+        ("host-tuple", PrintKind::HostTuple),
         ("link-args", PrintKind::LinkArgs),
         ("native-static-libs", PrintKind::NativeStaticLibs),
         ("relocation-models", PrintKind::RelocationModels),
@@ -2030,16 +2020,16 @@ fn collect_print_requests(
     prints
 }
 
-pub fn parse_target_triple(early_dcx: &EarlyDiagCtxt, matches: &getopts::Matches) -> TargetTriple {
+pub fn parse_target_triple(early_dcx: &EarlyDiagCtxt, matches: &getopts::Matches) -> TargetTuple {
     match matches.opt_str("target") {
         Some(target) if target.ends_with(".json") => {
             let path = Path::new(&target);
-            TargetTriple::from_path(path).unwrap_or_else(|_| {
+            TargetTuple::from_path(path).unwrap_or_else(|_| {
                 early_dcx.early_fatal(format!("target file {path:?} does not exist"))
             })
         }
-        Some(target) => TargetTriple::TargetTriple(target),
-        _ => TargetTriple::from_triple(host_triple()),
+        Some(target) => TargetTuple::TargetTuple(target),
+        _ => TargetTuple::from_tuple(host_tuple()),
     }
 }
 
@@ -2453,7 +2443,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     let output_types = parse_output_types(early_dcx, &unstable_opts, matches);
 
     let mut cg = CodegenOptions::build(early_dcx, matches);
-    let (disable_local_thinlto, mut codegen_units) = should_override_cgus_and_disable_thinlto(
+    let (disable_local_thinlto, codegen_units) = should_override_cgus_and_disable_thinlto(
         early_dcx,
         &output_types,
         matches,
@@ -2462,6 +2452,10 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
 
     if unstable_opts.threads == 0 {
         early_dcx.early_fatal("value for threads must be a positive non-zero integer");
+    }
+
+    if unstable_opts.threads == parse::MAX_THREADS_CAP {
+        early_dcx.early_warn(format!("number of threads was capped at {}", parse::MAX_THREADS_CAP));
     }
 
     let fuel = unstable_opts.fuel.is_some() || unstable_opts.print_fuel.is_some();
@@ -2475,18 +2469,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     let incremental = cg.incremental.as_ref().map(PathBuf::from);
 
     let assert_incr_state = parse_assert_incr_state(early_dcx, &unstable_opts.assert_incr_state);
-
-    if unstable_opts.profile && incremental.is_some() {
-        early_dcx.early_fatal("can't instrument with gcov profiling when compiling incrementally");
-    }
-    if unstable_opts.profile {
-        match codegen_units {
-            Some(1) => {}
-            None => codegen_units = Some(1),
-            Some(_) => early_dcx
-                .early_fatal("can't instrument with gcov profiling with multiple codegen units"),
-        }
-    }
 
     if cg.profile_generate.enabled() && cg.profile_use.is_some() {
         early_dcx.early_fatal("options `-C profile-generate` and `-C profile-use` are exclusive");
@@ -3017,7 +2999,7 @@ pub(crate) mod dep_tracking {
     use rustc_span::edition::Edition;
     use rustc_target::spec::{
         CodeModel, FramePointer, MergeFunctions, OnBrokenPipe, PanicStrategy, RelocModel,
-        RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, SymbolVisibility, TargetTriple,
+        RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, SymbolVisibility, TargetTuple,
         TlsModel, WasmCAbi,
     };
 
@@ -3102,7 +3084,7 @@ pub(crate) mod dep_tracking {
         SanitizerSet,
         CFGuard,
         CFProtection,
-        TargetTriple,
+        TargetTuple,
         Edition,
         LinkerPluginLto,
         ResolveDocLinks,

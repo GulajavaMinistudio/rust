@@ -30,13 +30,14 @@ use rustc_trait_selection::traits;
 use rustc_trait_selection::traits::outlives_bounds::InferCtxtExt as _;
 use rustc_type_ir::fold::TypeFoldable;
 use tracing::{debug, instrument};
+use ty::TypingMode;
 use {rustc_attr as attr, rustc_hir as hir};
 
 use super::compare_impl_item::{check_type_bounds, compare_impl_method, compare_impl_ty};
 use super::*;
 use crate::check::intrinsicck::InlineAsmCtxt;
 
-pub fn check_abi(tcx: TyCtxt<'_>, span: Span, abi: Abi) {
+pub fn check_abi(tcx: TyCtxt<'_>, span: Span, abi: ExternAbi) {
     if !tcx.sess.target.is_abi_supported(abi) {
         struct_span_code_err!(
             tcx.dcx(),
@@ -48,7 +49,7 @@ pub fn check_abi(tcx: TyCtxt<'_>, span: Span, abi: Abi) {
     }
 }
 
-pub fn check_abi_fn_ptr(tcx: TyCtxt<'_>, hir_id: hir::HirId, span: Span, abi: Abi) {
+pub fn check_abi_fn_ptr(tcx: TyCtxt<'_>, hir_id: hir::HirId, span: Span, abi: ExternAbi) {
     if !tcx.sess.target.is_abi_supported(abi) {
         tcx.node_span_lint(UNSUPPORTED_FN_PTR_CALLING_CONVENTIONS, hir_id, span, |lint| {
             lint.primary_message(format!(
@@ -267,7 +268,7 @@ fn check_opaque_meets_bounds<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     span: Span,
-    origin: &hir::OpaqueTyOrigin,
+    origin: &hir::OpaqueTyOrigin<LocalDefId>,
 ) -> Result<(), ErrorGuaranteed> {
     let defining_use_anchor = match *origin {
         hir::OpaqueTyOrigin::FnReturn { parent, .. }
@@ -276,7 +277,8 @@ fn check_opaque_meets_bounds<'tcx>(
     };
     let param_env = tcx.param_env(defining_use_anchor);
 
-    let infcx = tcx.infer_ctxt().with_opaque_type_inference(defining_use_anchor).build();
+    // FIXME(#132279): This should eventually use the already defined hidden types.
+    let infcx = tcx.infer_ctxt().build(TypingMode::analysis_in_body(tcx, defining_use_anchor));
     let ocx = ObligationCtxt::new_with_diagnostics(&infcx);
 
     let args = match *origin {
@@ -626,7 +628,7 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
                     def_id,
                     tcx.def_ident_span(def_id).unwrap(),
                     i.name,
-                    Abi::Rust,
+                    ExternAbi::Rust,
                 )
             }
             // Everything else is checked entirely within check_item_body
@@ -675,7 +677,7 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
         DefKind::OpaqueTy => {
             check_opaque_precise_captures(tcx, def_id);
 
-            let origin = tcx.opaque_type_origin(def_id);
+            let origin = tcx.local_opaque_ty_origin(def_id);
             if let hir::OpaqueTyOrigin::FnReturn { parent: fn_def_id, .. }
             | hir::OpaqueTyOrigin::AsyncFn { parent: fn_def_id, .. } = origin
                 && let hir::Node::TraitItem(trait_item) = tcx.hir_node_by_def_id(fn_def_id)
@@ -697,7 +699,7 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) {
             check_abi(tcx, it.span, abi);
 
             match abi {
-                Abi::RustIntrinsic => {
+                ExternAbi::RustIntrinsic => {
                     for item in items {
                         intrinsic::check_intrinsic_type(
                             tcx,
@@ -819,8 +821,7 @@ pub(super) fn check_specialization_validity<'tcx>(
     let result = opt_result.unwrap_or(Ok(()));
 
     if let Err(parent_impl) = result {
-        // FIXME(effects) the associated type from effects could be specialized
-        if !tcx.is_impl_trait_in_trait(impl_item) && !tcx.is_effects_desugared_assoc_ty(impl_item) {
+        if !tcx.is_impl_trait_in_trait(impl_item) {
             report_forbidden_specialization(tcx, impl_item, parent_impl);
         } else {
             tcx.dcx().delayed_bug(format!("parent item: {parent_impl:?} not marked as default"));
@@ -1675,8 +1676,8 @@ pub(super) fn check_coroutine_obligations(
         // typeck writeback gives us predicates with their regions erased.
         // As borrowck already has checked lifetimes, we do not need to do it again.
         .ignoring_regions()
-        .with_opaque_type_inference(def_id)
-        .build();
+        // FIXME(#132279): This should eventually use the already defined hidden types.
+        .build(TypingMode::analysis_in_body(tcx, def_id));
 
     let ocx = ObligationCtxt::new_with_diagnostics(&infcx);
     for (predicate, cause) in &typeck_results.coroutine_stalled_predicates {
