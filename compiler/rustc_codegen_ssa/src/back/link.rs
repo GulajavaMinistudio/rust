@@ -69,7 +69,7 @@ pub fn ensure_removed(dcx: DiagCtxtHandle<'_>, path: &Path) {
 pub fn link_binary(
     sess: &Session,
     archive_builder_builder: &dyn ArchiveBuilderBuilder,
-    codegen_results: &CodegenResults,
+    codegen_results: CodegenResults,
     outputs: &OutputFilenames,
 ) -> Result<(), ErrorGuaranteed> {
     let _timer = sess.timer("link_binary");
@@ -116,7 +116,7 @@ pub fn link_binary(
                     link_rlib(
                         sess,
                         archive_builder_builder,
-                        codegen_results,
+                        &codegen_results,
                         RlibFlavor::Normal,
                         &path,
                     )?
@@ -126,7 +126,7 @@ pub fn link_binary(
                     link_staticlib(
                         sess,
                         archive_builder_builder,
-                        codegen_results,
+                        &codegen_results,
                         &out_filename,
                         &path,
                     )?;
@@ -137,7 +137,7 @@ pub fn link_binary(
                         archive_builder_builder,
                         crate_type,
                         &out_filename,
-                        codegen_results,
+                        &codegen_results,
                         path.as_ref(),
                     )?;
                 }
@@ -3304,23 +3304,6 @@ fn add_lld_args(
     // - and if the self-contained linker is not disabled on the CLI.
     let self_contained_cli = sess.opts.cg.link_self_contained.is_linker_enabled();
     let self_contained_target = self_contained_components.is_linker_enabled();
-
-    // FIXME: in the future, codegen backends may need to have more control over this process: they
-    // don't always support all the features the linker expects here, and vice versa. For example,
-    // at the time of writing this, lld expects a newer style of aarch64 TLS relocations that
-    // cranelift doesn't implement yet. That in turn can impact whether linking would succeed on
-    // such a target when using the `cg_clif` backend and lld.
-    //
-    // Until interactions between backends and linker features are expressible, we limit target
-    // specs to opt-in to lld only when we're on the llvm backend, where it's expected to work and
-    // tested on CI. As usual, the CLI still has precedence over this, so that users and developers
-    // can still override this default when needed (e.g. for tests).
-    let uses_llvm_backend =
-        matches!(sess.opts.unstable_opts.codegen_backend.as_deref(), None | Some("llvm"));
-    if !uses_llvm_backend && !self_contained_cli && sess.opts.cg.linker_flavor.is_none() {
-        // We bail if we're not using llvm and lld was not explicitly requested on the CLI.
-        return;
-    }
 
     let self_contained_linker = self_contained_cli || self_contained_target;
     if self_contained_linker && !sess.opts.cg.link_self_contained.is_linker_disabled() {

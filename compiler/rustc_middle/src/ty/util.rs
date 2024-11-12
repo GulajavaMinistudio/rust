@@ -1751,6 +1751,7 @@ pub fn reveal_opaque_types_in_bounds<'tcx>(
     tcx: TyCtxt<'tcx>,
     val: ty::Clauses<'tcx>,
 ) -> ty::Clauses<'tcx> {
+    assert!(!tcx.next_trait_solver_globally());
     let mut visitor = OpaqueTypeExpander {
         seen_opaque_tys: FxHashSet::default(),
         expanded_cache: FxHashMap::default(),
@@ -1785,9 +1786,9 @@ pub fn is_doc_notable_trait(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 /// the compiler to make some assumptions about its shape; if the user doesn't use a feature gate, they may
 /// cause an ICE that we otherwise may want to prevent.
 pub fn intrinsic_raw(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<ty::IntrinsicDef> {
-    if (matches!(tcx.fn_sig(def_id).skip_binder().abi(), ExternAbi::RustIntrinsic)
-        && tcx.features().intrinsics())
-        || (tcx.has_attr(def_id, sym::rustc_intrinsic) && tcx.features().rustc_attrs())
+    if tcx.features().intrinsics()
+        && (matches!(tcx.fn_sig(def_id).skip_binder().abi(), ExternAbi::RustIntrinsic)
+            || tcx.has_attr(def_id, sym::rustc_intrinsic))
     {
         Some(ty::IntrinsicDef {
             name: tcx.item_name(def_id.into()),

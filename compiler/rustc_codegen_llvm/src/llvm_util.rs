@@ -228,6 +228,8 @@ pub(crate) fn to_llvm_features<'a>(sess: &Session, s: &'a str) -> Option<LLVMFea
         "x86"
     } else if sess.target.arch == "arm64ec" {
         "aarch64"
+    } else if sess.target.arch == "sparc64" {
+        "sparc"
     } else {
         &*sess.target.arch
     };
@@ -280,6 +282,13 @@ pub(crate) fn to_llvm_features<'a>(sess: &Session, s: &'a str) -> Option<LLVMFea
         // Support for `wide-arithmetic` will first land in LLVM 20 as part of
         // llvm/llvm-project#111598
         ("wasm32" | "wasm64", "wide-arithmetic") if get_version() < (20, 0, 0) => None,
+        ("sparc", "leoncasa") => Some(LLVMFeature::new("hasleoncasa")),
+        // In LLVM 19, there is no `v8plus` feature and `v9` means "SPARC-V9 instruction available and SPARC-V8+ ABI used".
+        // https://github.com/llvm/llvm-project/blob/llvmorg-19.1.0/llvm/lib/Target/Sparc/MCTargetDesc/SparcELFObjectWriter.cpp#L27-L28
+        // Before LLVM 19, there is no `v8plus` feature and `v9` means "SPARC-V9 instruction available".
+        // https://github.com/llvm/llvm-project/blob/llvmorg-18.1.0/llvm/lib/Target/Sparc/MCTargetDesc/SparcELFObjectWriter.cpp#L26
+        ("sparc", "v8plus") if get_version().0 == 19 => Some(LLVMFeature::new("v9")),
+        ("sparc", "v8plus") if get_version().0 < 19 => None,
         (_, s) => Some(LLVMFeature::new(s)),
     }
 }
@@ -335,15 +344,23 @@ pub fn target_features(sess: &Session, allow_unstable: bool) -> Vec<Symbol> {
         })
     {
         if enabled {
+            // Also add all transitively implied features.
             features.extend(sess.target.implied_target_features(std::iter::once(feature)));
         } else {
+            // Remove transitively reverse-implied features.
+
             // We don't care about the order in `features` since the only thing we use it for is the
             // `features.contains` below.
             #[allow(rustc::potential_query_instability)]
             features.retain(|f| {
-                // Keep a feature if it does not imply `feature`. Or, equivalently,
-                // remove the reverse-dependencies of `feature`.
-                !sess.target.implied_target_features(std::iter::once(*f)).contains(&feature)
+                if sess.target.implied_target_features(std::iter::once(*f)).contains(&feature) {
+                    // If `f` if implies `feature`, then `!feature` implies `!f`, so we have to
+                    // remove `f`. (This is the standard logical contraposition principle.)
+                    false
+                } else {
+                    // We can keep `f`.
+                    true
+                }
             });
         }
     }
@@ -619,6 +636,8 @@ pub(crate) fn global_llvm_features(
             .features
             .split(',')
             .filter(|v| !v.is_empty() && backend_feature_name(sess, v).is_some())
+            // Drop +v8plus feature introduced in LLVM 20.
+            .filter(|v| *v != "+v8plus" || get_version() >= (20, 0, 0))
             .map(String::from),
     );
 
