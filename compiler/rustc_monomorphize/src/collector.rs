@@ -205,13 +205,9 @@
 //! this is not implemented however: a mono item will be produced
 //! regardless of whether it is actually needed or not.
 
-mod abi_check;
-mod move_check;
-
 use std::path::PathBuf;
 
-use move_check::MoveCheckState;
-use rustc_abi::Size;
+use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::sync::{LRef, MTLock, par_for_each_in};
 use rustc_data_structures::unord::{UnordMap, UnordSet};
 use rustc_hir as hir;
@@ -220,7 +216,7 @@ use rustc_hir::def_id::{DefId, DefIdMap, LocalDefId};
 use rustc_hir::lang_items::LangItem;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::{AllocId, ErrorHandled, GlobalAlloc, Scalar};
-use rustc_middle::mir::mono::{InstantiationMode, MonoItem};
+use rustc_middle::mir::mono::{CollectionMode, InstantiationMode, MonoItem};
 use rustc_middle::mir::visit::Visitor as MirVisitor;
 use rustc_middle::mir::{self, Location, MentionedItem, traversal};
 use rustc_middle::query::TyCtxtAt;
@@ -228,15 +224,15 @@ use rustc_middle::ty::adjustment::{CustomCoerceUnsized, PointerCoercion};
 use rustc_middle::ty::layout::ValidityRequirement;
 use rustc_middle::ty::print::{shrunk_instance_name, with_no_trimmed_paths};
 use rustc_middle::ty::{
-    self, AssocKind, GenericArgs, GenericParamDefKind, Instance, InstanceKind, Ty, TyCtxt,
-    TypeFoldable, TypeVisitableExt, VtblEntry,
+    self, GenericArgs, GenericParamDefKind, Instance, InstanceKind, Ty, TyCtxt, TypeFoldable,
+    TypeVisitableExt, VtblEntry,
 };
 use rustc_middle::util::Providers;
 use rustc_middle::{bug, span_bug};
 use rustc_session::Limit;
 use rustc_session::config::EntryFnType;
 use rustc_span::source_map::{Spanned, dummy_spanned, respan};
-use rustc_span::symbol::{Ident, sym};
+use rustc_span::symbol::sym;
 use rustc_span::{DUMMY_SP, Span};
 use tracing::{debug, instrument, trace};
 
@@ -247,16 +243,6 @@ pub(crate) enum MonoItemCollectionStrategy {
     Eager,
     Lazy,
 }
-
-pub(crate) struct UsageMap<'tcx> {
-    // Maps every mono item to the mono items used by it.
-    used_map: UnordMap<MonoItem<'tcx>, Vec<MonoItem<'tcx>>>,
-
-    // Maps every mono item to the mono items that use it.
-    user_map: UnordMap<MonoItem<'tcx>, Vec<MonoItem<'tcx>>>,
-}
-
-type MonoItems<'tcx> = Vec<Spanned<MonoItem<'tcx>>>;
 
 /// The state that is shared across the concurrent threads that are doing collection.
 struct SharedState<'tcx> {
@@ -269,22 +255,12 @@ struct SharedState<'tcx> {
     usage_map: MTLock<UsageMap<'tcx>>,
 }
 
-/// See module-level docs on some contect for "mentioned" items.
-#[derive(Copy, Clone, Debug, PartialEq)]
-enum CollectionMode {
-    /// Collect items that are used, i.e., actually needed for codegen.
-    ///
-    /// Which items are used can depend on optimization levels, as MIR optimizations can remove
-    /// uses.
-    UsedItems,
-    /// Collect items that are mentioned. The goal of this mode is that it is independent of
-    /// optimizations: the set of "mentioned" items is computed before optimizations are run.
-    ///
-    /// The exact contents of this set are *not* a stable guarantee. (For instance, it is currently
-    /// computed after drop-elaboration. If we ever do some optimizations even in debug builds, we
-    /// might decide to run them before computing mentioned items.) The key property of this set is
-    /// that it is optimization-independent.
-    MentionedItems,
+pub(crate) struct UsageMap<'tcx> {
+    // Maps every mono item to the mono items used by it.
+    used_map: UnordMap<MonoItem<'tcx>, Vec<MonoItem<'tcx>>>,
+
+    // Maps every mono item to the mono items that use it.
+    user_map: UnordMap<MonoItem<'tcx>, Vec<MonoItem<'tcx>>>,
 }
 
 impl<'tcx> UsageMap<'tcx> {
@@ -292,19 +268,15 @@ impl<'tcx> UsageMap<'tcx> {
         UsageMap { used_map: Default::default(), user_map: Default::default() }
     }
 
-    fn record_used<'a>(
-        &mut self,
-        user_item: MonoItem<'tcx>,
-        used_items: &'a [Spanned<MonoItem<'tcx>>],
-    ) where
+    fn record_used<'a>(&mut self, user_item: MonoItem<'tcx>, used_items: &'a MonoItems<'tcx>)
+    where
         'tcx: 'a,
     {
-        let used_items: Vec<_> = used_items.iter().map(|item| item.node).collect();
-        for &used_item in used_items.iter() {
+        for used_item in used_items.items() {
             self.user_map.entry(used_item).or_default().push(user_item);
         }
 
-        assert!(self.used_map.insert(user_item, used_items).is_none());
+        assert!(self.used_map.insert(user_item, used_items.items().collect()).is_none());
     }
 
     pub(crate) fn get_user_items(&self, item: MonoItem<'tcx>) -> &[MonoItem<'tcx>] {
@@ -326,6 +298,52 @@ impl<'tcx> UsageMap<'tcx> {
             if is_inlined {
                 f(*used_item);
             }
+        }
+    }
+}
+
+struct MonoItems<'tcx> {
+    // We want a set of MonoItem + Span where trying to re-insert a MonoItem with a different Span
+    // is ignored. Map does that, but it looks odd.
+    items: FxIndexMap<MonoItem<'tcx>, Span>,
+}
+
+impl<'tcx> MonoItems<'tcx> {
+    fn new() -> Self {
+        Self { items: FxIndexMap::default() }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn push(&mut self, item: Spanned<MonoItem<'tcx>>) {
+        // Insert only if the entry does not exist. A normal insert would stomp the first span that
+        // got inserted.
+        self.items.entry(item.node).or_insert(item.span);
+    }
+
+    fn items(&self) -> impl Iterator<Item = MonoItem<'tcx>> + '_ {
+        self.items.keys().cloned()
+    }
+}
+
+impl<'tcx> IntoIterator for MonoItems<'tcx> {
+    type Item = Spanned<MonoItem<'tcx>>;
+    type IntoIter = impl Iterator<Item = Spanned<MonoItem<'tcx>>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter().map(|(item, span)| respan(span, item))
+    }
+}
+
+impl<'tcx> Extend<Spanned<MonoItem<'tcx>>> for MonoItems<'tcx> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = Spanned<MonoItem<'tcx>>>,
+    {
+        for item in iter {
+            self.push(item)
         }
     }
 }
@@ -448,13 +466,9 @@ fn collect_items_rec<'tcx>(
             ));
 
             rustc_data_structures::stack::ensure_sufficient_stack(|| {
-                collect_items_of_instance(
-                    tcx,
-                    instance,
-                    &mut used_items,
-                    &mut mentioned_items,
-                    mode,
-                )
+                let (used, mentioned) = tcx.items_of_instance((instance, mode));
+                used_items.extend(used.into_iter().copied());
+                mentioned_items.extend(mentioned.into_iter().copied());
             });
         }
         MonoItem::GlobalAsm(item_id) => {
@@ -612,8 +626,6 @@ struct MirUsedCollector<'a, 'tcx> {
     /// Note that this contains *not-monomorphized* items!
     used_mentioned_items: &'a mut UnordSet<MentionedItem<'tcx>>,
     instance: Instance<'tcx>,
-    visiting_call_terminator: bool,
-    move_check: move_check::MoveCheckState,
 }
 
 impl<'a, 'tcx> MirUsedCollector<'a, 'tcx> {
@@ -760,13 +772,12 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirUsedCollector<'a, 'tcx> {
         };
 
         match terminator.kind {
-            mir::TerminatorKind::Call { ref func, ref args, ref fn_span, .. }
-            | mir::TerminatorKind::TailCall { ref func, ref args, ref fn_span } => {
+            mir::TerminatorKind::Call { ref func, .. }
+            | mir::TerminatorKind::TailCall { ref func, .. } => {
                 let callee_ty = func.ty(self.body, tcx);
                 // *Before* monomorphizing, record that we already handled this mention.
                 self.used_mentioned_items.insert(MentionedItem::Fn(callee_ty));
                 let callee_ty = self.monomorphize(callee_ty);
-                self.check_fn_args_move_size(callee_ty, args, *fn_span, location);
                 visit_fn_use(self.tcx, callee_ty, true, source, &mut self.used_items)
             }
             mir::TerminatorKind::Drop { ref place, .. } => {
@@ -826,14 +837,7 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirUsedCollector<'a, 'tcx> {
             push_mono_lang_item(self, reason.lang_item());
         }
 
-        self.visiting_call_terminator = matches!(terminator.kind, mir::TerminatorKind::Call { .. });
         self.super_terminator(terminator, location);
-        self.visiting_call_terminator = false;
-    }
-
-    fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, location: Location) {
-        self.super_operand(operand, location);
-        self.check_operand_move_size(operand, location);
     }
 }
 
@@ -1183,32 +1187,17 @@ fn collect_alloc<'tcx>(tcx: TyCtxt<'tcx>, alloc_id: AllocId, output: &mut MonoIt
     }
 }
 
-fn assoc_fn_of_type<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, fn_ident: Ident) -> Option<DefId> {
-    for impl_def_id in tcx.inherent_impls(def_id) {
-        if let Some(new) = tcx.associated_items(impl_def_id).find_by_name_and_kind(
-            tcx,
-            fn_ident,
-            AssocKind::Fn,
-            def_id,
-        ) {
-            return Some(new.def_id);
-        }
-    }
-    None
-}
-
 /// Scans the MIR in order to find function calls, closures, and drop-glue.
 ///
 /// Anything that's found is added to `output`. Furthermore the "mentioned items" of the MIR are returned.
-#[instrument(skip(tcx, used_items, mentioned_items), level = "debug")]
+#[instrument(skip(tcx), level = "debug")]
 fn collect_items_of_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
-    used_items: &mut MonoItems<'tcx>,
-    mentioned_items: &mut MonoItems<'tcx>,
     mode: CollectionMode,
-) {
-    tcx.ensure().check_feature_dependent_abi(instance);
+) -> (MonoItems<'tcx>, MonoItems<'tcx>) {
+    // This item is getting monomorphized, do mono-time checks.
+    tcx.ensure().check_mono_item(instance);
 
     let body = tcx.instance_mir(instance.def);
     // Naively, in "used" collection mode, all functions get added to *both* `used_items` and
@@ -1221,15 +1210,15 @@ fn collect_items_of_instance<'tcx>(
     // mentioned item. So instead we collect all pre-monomorphized `MentionedItem` that were already
     // added to `used_items` in a hash set, which can efficiently query in the
     // `body.mentioned_items` loop below without even having to monomorphize the item.
+    let mut used_items = MonoItems::new();
+    let mut mentioned_items = MonoItems::new();
     let mut used_mentioned_items = Default::default();
     let mut collector = MirUsedCollector {
         tcx,
         body,
-        used_items,
+        used_items: &mut used_items,
         used_mentioned_items: &mut used_mentioned_items,
         instance,
-        visiting_call_terminator: false,
-        move_check: MoveCheckState::new(),
     };
 
     if mode == CollectionMode::UsedItems {
@@ -1242,7 +1231,7 @@ fn collect_items_of_instance<'tcx>(
     // them errors.
     for const_op in body.required_consts() {
         if let Some(val) = collector.eval_constant(const_op) {
-            collect_const_value(tcx, val, mentioned_items);
+            collect_const_value(tcx, val, &mut mentioned_items);
         }
     }
 
@@ -1251,9 +1240,23 @@ fn collect_items_of_instance<'tcx>(
     for item in body.mentioned_items() {
         if !collector.used_mentioned_items.contains(&item.node) {
             let item_mono = collector.monomorphize(item.node);
-            visit_mentioned_item(tcx, &item_mono, item.span, mentioned_items);
+            visit_mentioned_item(tcx, &item_mono, item.span, &mut mentioned_items);
         }
     }
+
+    (used_items, mentioned_items)
+}
+
+fn items_of_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    (instance, mode): (Instance<'tcx>, CollectionMode),
+) -> (&'tcx [Spanned<MonoItem<'tcx>>], &'tcx [Spanned<MonoItem<'tcx>>]) {
+    let (used_items, mentioned_items) = collect_items_of_instance(tcx, instance, mode);
+
+    let used_items = tcx.arena.alloc_from_iter(used_items);
+    let mentioned_items = tcx.arena.alloc_from_iter(mentioned_items);
+
+    (used_items, mentioned_items)
 }
 
 /// `item` must be already monomorphized.
@@ -1334,7 +1337,7 @@ fn collect_const_value<'tcx>(
 #[instrument(skip(tcx, mode), level = "debug")]
 fn collect_roots(tcx: TyCtxt<'_>, mode: MonoItemCollectionStrategy) -> Vec<MonoItem<'_>> {
     debug!("collecting roots");
-    let mut roots = Vec::new();
+    let mut roots = MonoItems::new();
 
     {
         let entry_fn = tcx.entry_fn(());
@@ -1626,5 +1629,5 @@ pub(crate) fn collect_crate_mono_items<'tcx>(
 
 pub(crate) fn provide(providers: &mut Providers) {
     providers.hooks.should_codegen_locally = should_codegen_locally;
-    abi_check::provide(providers);
+    providers.items_of_instance = items_of_instance;
 }
