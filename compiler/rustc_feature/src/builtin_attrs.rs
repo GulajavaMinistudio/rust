@@ -6,7 +6,7 @@ use AttributeDuplicates::*;
 use AttributeGate::*;
 use AttributeType::*;
 use rustc_data_structures::fx::FxHashMap;
-use rustc_span::symbol::{Symbol, sym};
+use rustc_span::{Symbol, sym};
 
 use crate::{Features, Stability};
 
@@ -838,7 +838,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
         template!(Word), WarnFollowing, EncodeCrossCrate::No, IMPL_DETAIL,
     ),
     rustc_attr!(
-        rustc_const_stable_intrinsic, Normal,
+        rustc_intrinsic_const_stable_indirect, Normal,
         template!(Word), WarnFollowing, EncodeCrossCrate::No, IMPL_DETAIL,
     ),
     gated!(
@@ -880,6 +880,11 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
         "lang items are subject to change",
     ),
     rustc_attr!(
+        rustc_as_ptr, Normal, template!(Word), ErrorFollowing,
+        EncodeCrossCrate::Yes,
+        "#[rustc_as_ptr] is used to mark functions returning pointers to their inner allocations."
+    ),
+    rustc_attr!(
         rustc_pass_by_value, Normal, template!(Word), ErrorFollowing,
         EncodeCrossCrate::Yes,
         "#[rustc_pass_by_value] is used to mark types that must be passed by value instead of reference."
@@ -908,21 +913,25 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     rustc_attr!(
         rustc_deny_explicit_impl,
         AttributeType::Normal,
-        template!(List: "implement_via_object = (true|false)"),
+        template!(Word),
         ErrorFollowing,
         EncodeCrossCrate::No,
         "#[rustc_deny_explicit_impl] enforces that a trait can have no user-provided impls"
+    ),
+    rustc_attr!(
+        rustc_do_not_implement_via_object,
+        AttributeType::Normal,
+        template!(Word),
+        ErrorFollowing,
+        EncodeCrossCrate::No,
+        "#[rustc_do_not_implement_via_object] opts out of the automatic trait impl for trait objects \
+        (`impl Trait for dyn Trait`)"
     ),
     rustc_attr!(
         rustc_has_incoherent_inherent_impls, AttributeType::Normal, template!(Word),
         ErrorFollowing, EncodeCrossCrate::Yes,
         "#[rustc_has_incoherent_inherent_impls] allows the addition of incoherent inherent impls for \
          the given type by annotating all impl items with #[rustc_allow_incoherent_impl]."
-    ),
-    rustc_attr!(
-        rustc_box, AttributeType::Normal, template!(Word), ErrorFollowing, EncodeCrossCrate::No,
-        "#[rustc_box] allows creating boxes \
-        and it is only intended to be used in `alloc`."
     ),
 
     BuiltinAttribute {
@@ -999,7 +1008,7 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
     ),
     gated!(
         rustc_intrinsic, Normal, template!(Word), ErrorFollowing, EncodeCrossCrate::Yes, intrinsics,
-        "the `#[rustc_intrinsic]` attribute is used to declare intrinsics with function bodies",
+        "the `#[rustc_intrinsic]` attribute is used to declare intrinsics as function items",
     ),
     gated!(
         rustc_intrinsic_must_be_overridden, Normal, template!(Word), ErrorFollowing, EncodeCrossCrate::Yes, intrinsics,
@@ -1099,10 +1108,6 @@ pub const BUILTIN_ATTRIBUTES: &[BuiltinAttribute] = &[
         WarnFollowing, EncodeCrossCrate::No
     ),
     rustc_attr!(
-        TEST, rustc_polymorphize_error, Normal, template!(Word),
-        WarnFollowing, EncodeCrossCrate::Yes
-    ),
-    rustc_attr!(
         TEST, rustc_def_path, Normal, template!(Word),
         WarnFollowing, EncodeCrossCrate::No
     ),
@@ -1187,10 +1192,9 @@ pub static BUILTIN_ATTRIBUTE_MAP: LazyLock<FxHashMap<Symbol, &BuiltinAttribute>>
         map
     });
 
-pub fn is_stable_diagnostic_attribute(sym: Symbol, features: &Features) -> bool {
+pub fn is_stable_diagnostic_attribute(sym: Symbol, _features: &Features) -> bool {
     match sym {
-        sym::on_unimplemented => true,
-        sym::do_not_recommend => features.do_not_recommend(),
+        sym::on_unimplemented | sym::do_not_recommend => true,
         _ => false,
     }
 }

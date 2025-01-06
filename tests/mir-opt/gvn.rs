@@ -99,17 +99,18 @@ fn subexpression_elimination(x: u64, y: u64, mut z: u64) {
     opaque((x * y) - y);
     opaque((x * y) - y);
 
-    // We can substitute through an immutable reference too.
+    // We cannot substitute through an immutable reference.
+    // (Disabled due to <https://github.com/rust-lang/rust/issues/130853>)
     // CHECK: [[ref:_.*]] = &_3;
     // CHECK: [[deref:_.*]] = copy (*[[ref]]);
-    // CHECK: [[addref:_.*]] = Add(copy [[deref]], copy _1);
-    // CHECK: opaque::<u64>(copy [[addref]])
-    // CHECK: opaque::<u64>(copy [[addref]])
+    // COM: CHECK: [[addref:_.*]] = Add(copy [[deref]], copy _1);
+    // COM: CHECK: opaque::<u64>(copy [[addref]])
+    // COM: CHECK: opaque::<u64>(copy [[addref]])
     let a = &z;
     opaque(*a + x);
     opaque(*a + x);
 
-    // But not through a mutable reference or a pointer.
+    // And certainly not through a mutable reference or a pointer.
     // CHECK: [[mut:_.*]] = &mut _3;
     // CHECK: [[addmut:_.*]] = Add(
     // CHECK: opaque::<u64>(move [[addmut]])
@@ -137,13 +138,13 @@ fn subexpression_elimination(x: u64, y: u64, mut z: u64) {
         opaque(*d + x);
     }
 
-    // We can substitute again, but not with the earlier computations.
+    // We still cannot substitute again, and never with the earlier computations.
     // Important: `e` is not `a`!
     // CHECK: [[ref2:_.*]] = &_3;
     // CHECK: [[deref2:_.*]] = copy (*[[ref2]]);
-    // CHECK: [[addref2:_.*]] = Add(copy [[deref2]], copy _1);
-    // CHECK: opaque::<u64>(copy [[addref2]])
-    // CHECK: opaque::<u64>(copy [[addref2]])
+    // COM: CHECK: [[addref2:_.*]] = Add(copy [[deref2]], copy _1);
+    // COM: CHECK: opaque::<u64>(copy [[addref2]])
+    // COM: CHECK: opaque::<u64>(copy [[addref2]])
     let e = &z;
     opaque(*e + x);
     opaque(*e + x);
@@ -495,15 +496,15 @@ fn dereferences(t: &mut u32, u: &impl Copy, s: &S<u32>) {
     unsafe { opaque(*z) };
     unsafe { opaque(*z) };
 
-    // We can reuse dereferences of `&Freeze`.
+    // Do not reuse dereferences of `&Freeze`.
     // CHECK: [[ref:_.*]] = &(*_1);
     // CHECK: [[st7:_.*]] = copy (*[[ref]]);
-    // CHECK: opaque::<u32>(copy [[st7]])
-    // CHECK: opaque::<u32>(copy [[st7]])
+    // COM: CHECK: opaque::<u32>(copy [[st7]])
+    // COM: CHECK: opaque::<u32>(copy [[st7]])
     let z = &*t;
     opaque(*z);
     opaque(*z);
-    // But not in reborrows.
+    // Not in reborrows either.
     // CHECK: [[reborrow:_.*]] = &(*[[ref]]);
     // CHECK: opaque::<&u32>(move [[reborrow]])
     opaque(&*z);
@@ -516,10 +517,10 @@ fn dereferences(t: &mut u32, u: &impl Copy, s: &S<u32>) {
     opaque(*u);
     opaque(*u);
 
-    // `*s` is not Copy, but `(*s).0` is, so we can reuse.
+    // `*s` is not Copy, but `(*s).0` is, but we still cannot reuse.
     // CHECK: [[st10:_.*]] = copy ((*_3).0: u32);
-    // CHECK: opaque::<u32>(copy [[st10]])
-    // CHECK: opaque::<u32>(copy [[st10]])
+    // COM: CHECK: opaque::<u32>(copy [[st10]])
+    // COM: CHECK: opaque::<u32>(copy [[st10]])
     opaque(s.0);
     opaque(s.0);
 }
@@ -736,7 +737,7 @@ fn borrowed<T: Copy + Freeze>(x: T) {
     // CHECK: bb1: {
     // CHECK-NEXT: _0 = opaque::<T>(copy _1)
     // CHECK: bb2: {
-    // CHECK-NEXT: _0 = opaque::<T>(copy _1)
+    // COM: CHECK-NEXT: _0 = opaque::<T>(copy _1)
     mir! {
         {
             let a = x;
@@ -832,6 +833,25 @@ fn array_len(x: &mut [i32; 42]) -> usize {
     // CHECK: _0 = const 42_usize;
     let x: &[i32] = x;
     std::intrinsics::ptr_metadata(x)
+}
+
+// Check that we only load the length once, rather than all 3 times.
+fn dedup_multiple_bounds_checks_lengths(x: &[i32]) -> [i32; 3] {
+    // CHECK-LABEL: fn dedup_multiple_bounds_checks_lengths
+    // CHECK: [[LEN:_.+]] = PtrMetadata(copy _1);
+    // CHECK: Lt(const 42_usize, copy [[LEN]]);
+    // CHECK: assert{{.+}}copy [[LEN]]
+    // CHECK: [[A:_.+]] = copy (*_1)[42 of 43];
+    // CHECK-NOT: PtrMetadata
+    // CHECK: Lt(const 13_usize, copy [[LEN]]);
+    // CHECK: assert{{.+}}copy [[LEN]]
+    // CHECK: [[B:_.+]] = copy (*_1)[13 of 14];
+    // CHECK-NOT: PtrMetadata
+    // CHECK: Lt(const 7_usize, copy [[LEN]]);
+    // CHECK: assert{{.+}}copy [[LEN]]
+    // CHECK: [[C:_.+]] = copy (*_1)[7 of 8];
+    // CHECK: _0 = [move [[A]], move [[B]], move [[C]]]
+    [x[42], x[13], x[7]]
 }
 
 #[custom_mir(dialect = "runtime")]
@@ -1011,6 +1031,7 @@ fn identity<T>(x: T) -> T {
 // EMIT_MIR gvn.casts_before_aggregate_raw_ptr.GVN.diff
 // EMIT_MIR gvn.manual_slice_mut_len.GVN.diff
 // EMIT_MIR gvn.array_len.GVN.diff
+// EMIT_MIR gvn.dedup_multiple_bounds_checks_lengths.GVN.diff
 // EMIT_MIR gvn.generic_cast_metadata.GVN.diff
 // EMIT_MIR gvn.cast_pointer_eq.GVN.diff
 // EMIT_MIR gvn.cast_pointer_then_transmute.GVN.diff

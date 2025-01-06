@@ -6,7 +6,7 @@ use std::mem;
 use std::num::NonZero;
 use std::ops::Deref;
 
-use rustc_attr::{ConstStability, StabilityLevel};
+use rustc_attr_parsing::{ConstStability, StabilityLevel};
 use rustc_errors::{Diag, ErrorGuaranteed};
 use rustc_hir::def_id::DefId;
 use rustc_hir::{self as hir, LangItem};
@@ -18,13 +18,12 @@ use rustc_middle::span_bug;
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::{self, Ty, TypeVisitableExt};
 use rustc_mir_dataflow::Analysis;
-use rustc_mir_dataflow::impls::MaybeStorageLive;
-use rustc_mir_dataflow::storage::always_storage_live_locals;
+use rustc_mir_dataflow::impls::{MaybeStorageLive, always_storage_live_locals};
 use rustc_span::{Span, Symbol, sym};
 use rustc_trait_selection::traits::{
     Obligation, ObligationCause, ObligationCauseCode, ObligationCtxt,
 };
-use tracing::{debug, instrument, trace};
+use tracing::{instrument, trace};
 
 use super::ops::{self, NonConstOp, Status};
 use super::qualifs::{self, HasMutInterior, NeedsDrop, NeedsNonConstDrop};
@@ -47,7 +46,7 @@ impl<'mir, 'tcx> Qualifs<'mir, 'tcx> {
     /// Returns `true` if `local` is `NeedsDrop` at the given `Location`.
     ///
     /// Only updates the cursor if absolutely necessary
-    fn needs_drop(
+    pub(crate) fn needs_drop(
         &mut self,
         ccx: &'mir ConstCx<'mir, 'tcx>,
         local: Local,
@@ -388,7 +387,7 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
             return false;
         }
 
-        let infcx = tcx.infer_ctxt().build(self.body.typing_mode(tcx));
+        let (infcx, param_env) = tcx.infer_ctxt().build_with_typing_env(self.body.typing_env(tcx));
         let ocx = ObligationCtxt::new_with_diagnostics(&infcx);
 
         let body_id = self.body.source.def_id().expect_local();
@@ -398,11 +397,8 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
                 ty::BoundConstness::Const
             }
         };
-        let const_conditions = ocx.normalize(
-            &ObligationCause::misc(call_span, body_id),
-            self.param_env,
-            const_conditions,
-        );
+        let const_conditions =
+            ocx.normalize(&ObligationCause::misc(call_span, body_id), param_env, const_conditions);
         ocx.register_obligations(const_conditions.into_iter().map(|(trait_ref, span)| {
             Obligation::new(
                 tcx,
@@ -411,7 +407,7 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
                     body_id,
                     ObligationCauseCode::WhereClause(callee, span),
                 ),
-                self.param_env,
+                param_env,
                 trait_ref.to_host_effect_clause(tcx, host_polarity),
             )
         }));
@@ -423,6 +419,43 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
         }
 
         true
+    }
+
+    pub fn check_drop_terminator(
+        &mut self,
+        dropped_place: Place<'tcx>,
+        location: Location,
+        terminator_span: Span,
+    ) {
+        let ty_of_dropped_place = dropped_place.ty(self.body, self.tcx).ty;
+
+        let needs_drop = if let Some(local) = dropped_place.as_local() {
+            self.qualifs.needs_drop(self.ccx, local, location)
+        } else {
+            qualifs::NeedsDrop::in_any_value_of_ty(self.ccx, ty_of_dropped_place)
+        };
+        // If this type doesn't need a drop at all, then there's nothing to enforce.
+        if !needs_drop {
+            return;
+        }
+
+        let mut err_span = self.span;
+        let needs_non_const_drop = if let Some(local) = dropped_place.as_local() {
+            // Use the span where the local was declared as the span of the drop error.
+            err_span = self.body.local_decls[local].source_info.span;
+            self.qualifs.needs_non_const_drop(self.ccx, local, location)
+        } else {
+            qualifs::NeedsNonConstDrop::in_any_value_of_ty(self.ccx, ty_of_dropped_place)
+        };
+
+        self.check_op_spanned(
+            ops::LiveDrop {
+                dropped_at: terminator_span,
+                dropped_ty: ty_of_dropped_place,
+                needs_non_const_drop,
+            },
+            err_span,
+        );
     }
 }
 
@@ -455,8 +488,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
             Rvalue::Use(_)
             | Rvalue::CopyForDeref(..)
             | Rvalue::Repeat(..)
-            | Rvalue::Discriminant(..)
-            | Rvalue::Len(_) => {}
+            | Rvalue::Discriminant(..) => {}
 
             Rvalue::Aggregate(kind, ..) => {
                 if let AggregateKind::Coroutine(def_id, ..) = kind.as_ref()
@@ -540,12 +572,27 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
             ) => {}
             Rvalue::ShallowInitBox(_, _) => {}
 
-            Rvalue::UnaryOp(_, operand) => {
+            Rvalue::UnaryOp(op, operand) => {
                 let ty = operand.ty(self.body, self.tcx);
-                if is_int_bool_float_or_char(ty) {
-                    // Int, bool, float, and char operations are fine.
-                } else {
-                    span_bug!(self.span, "non-primitive type in `Rvalue::UnaryOp`: {:?}", ty);
+                match op {
+                    UnOp::Not | UnOp::Neg => {
+                        if is_int_bool_float_or_char(ty) {
+                            // Int, bool, float, and char operations are fine.
+                        } else {
+                            span_bug!(
+                                self.span,
+                                "non-primitive type in `Rvalue::UnaryOp{op:?}`: {ty:?}",
+                            );
+                        }
+                    }
+                    UnOp::PtrMetadata => {
+                        if !ty.is_ref() && !ty.is_unsafe_ptr() {
+                            span_bug!(
+                                self.span,
+                                "non-pointer type in `Rvalue::UnaryOp({op:?})`: {ty:?}",
+                            );
+                        }
+                    }
                 }
             }
 
@@ -612,6 +659,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
             | StatementKind::Coverage(..)
             | StatementKind::Intrinsic(..)
             | StatementKind::ConstEvalCounter
+            | StatementKind::BackwardIncompatibleDropHint { .. }
             | StatementKind::Nop => {}
         }
     }
@@ -760,7 +808,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                         Some(ConstStability { level: StabilityLevel::Stable { .. }, .. }) => {
                             // All good. Note that a `#[rustc_const_stable]` intrinsic (meaning it
                             // can be *directly* invoked from stable const code) does not always
-                            // have the `#[rustc_const_stable_intrinsic]` attribute (which controls
+                            // have the `#[rustc_intrinsic_const_stable_indirect]` attribute (which controls
                             // exposing an intrinsic indirectly); we accept this call anyway.
                         }
                     }
@@ -868,35 +916,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                     return;
                 }
 
-                let mut err_span = self.span;
-                let ty_of_dropped_place = dropped_place.ty(self.body, self.tcx).ty;
-
-                let ty_needs_non_const_drop =
-                    qualifs::NeedsNonConstDrop::in_any_value_of_ty(self.ccx, ty_of_dropped_place);
-
-                debug!(?ty_of_dropped_place, ?ty_needs_non_const_drop);
-
-                if !ty_needs_non_const_drop {
-                    return;
-                }
-
-                let needs_non_const_drop = if let Some(local) = dropped_place.as_local() {
-                    // Use the span where the local was declared as the span of the drop error.
-                    err_span = self.body.local_decls[local].source_info.span;
-                    self.qualifs.needs_non_const_drop(self.ccx, local, location)
-                } else {
-                    true
-                };
-
-                if needs_non_const_drop {
-                    self.check_op_spanned(
-                        ops::LiveDrop {
-                            dropped_at: Some(terminator.source_info.span),
-                            dropped_ty: ty_of_dropped_place,
-                        },
-                        err_span,
-                    );
-                }
+                self.check_drop_terminator(*dropped_place, location, terminator.source_info.span);
             }
 
             TerminatorKind::InlineAsm { .. } => self.check_op(ops::InlineAsm),

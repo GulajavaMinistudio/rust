@@ -17,7 +17,7 @@ use rustc_middle::ty::{
     self, EarlyBinder, FloatTy, GenericArg, GenericArgKind, Instance, IntTy, ReifyReason, Ty,
     TyCtxt, TypeVisitable, TypeVisitableExt, UintTy,
 };
-use rustc_span::symbol::kw;
+use rustc_span::kw;
 
 pub(super) fn mangle<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -26,7 +26,7 @@ pub(super) fn mangle<'tcx>(
 ) -> String {
     let def_id = instance.def_id();
     // FIXME(eddyb) this should ideally not be needed.
-    let args = tcx.normalize_erasing_regions(ty::ParamEnv::reveal_all(), instance.args);
+    let args = tcx.normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(), instance.args);
 
     let prefix = "_R";
     let mut cx: SymbolMangler<'_> = SymbolMangler {
@@ -233,19 +233,20 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
         let key = self.tcx.def_key(impl_def_id);
         let parent_def_id = DefId { index: key.parent.unwrap(), ..impl_def_id };
 
-        let mut param_env = self.tcx.param_env_reveal_all_normalized(impl_def_id);
+        let mut typing_env = ty::TypingEnv::post_analysis(self.tcx, impl_def_id);
         if !args.is_empty() {
-            param_env = EarlyBinder::bind(param_env).instantiate(self.tcx, args);
+            typing_env.param_env =
+                EarlyBinder::bind(typing_env.param_env).instantiate(self.tcx, args);
         }
 
         match &mut impl_trait_ref {
             Some(impl_trait_ref) => {
                 assert_eq!(impl_trait_ref.self_ty(), self_ty);
-                *impl_trait_ref = self.tcx.normalize_erasing_regions(param_env, *impl_trait_ref);
+                *impl_trait_ref = self.tcx.normalize_erasing_regions(typing_env, *impl_trait_ref);
                 self_ty = impl_trait_ref.self_ty();
             }
             None => {
-                self_ty = self.tcx.normalize_erasing_regions(param_env, self_ty);
+                self_ty = self.tcx.normalize_erasing_regions(typing_env, self_ty);
             }
         }
 
@@ -255,7 +256,7 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
         });
 
         // Encode impl generic params if the generic parameters contain non-region parameters
-        // (implying polymorphization is enabled) and this isn't an inherent impl.
+        // and this isn't an inherent impl.
         if impl_trait_ref.is_some() && args.iter().any(|a| a.has_non_region_param()) {
             self.path_generic_args(
                 |this| {
@@ -329,9 +330,8 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
             ty::Float(FloatTy::F128) => "C4f128",
             ty::Never => "z",
 
-            // Should only be encountered with polymorphization,
-            // or within the identity-substituted impl header of an
-            // item nested within an impl item.
+            // Should only be encountered within the identity-substituted
+            // impl header of an item nested within an impl item.
             ty::Param(_) => "p",
 
             ty::Bound(..) | ty::Placeholder(_) | ty::Infer(_) | ty::Error(_) => bug!(),
@@ -439,7 +439,7 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
                 let sig = sig_tys.with(hdr);
                 self.push("F");
                 self.in_binder(&sig, |cx, sig| {
-                    if sig.safety == hir::Safety::Unsafe {
+                    if sig.safety.is_unsafe() {
                         cx.push("U");
                     }
                     match sig.abi {
@@ -465,6 +465,9 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
                     sig.output().print(cx)
                 })?;
             }
+
+            // FIXME(unsafe_binder):
+            ty::UnsafeBinder(..) => todo!(),
 
             ty::Dynamic(predicates, r, kind) => {
                 self.push(match kind {
@@ -557,9 +560,8 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
         let (ct_ty, valtree) = match ct.kind() {
             ty::ConstKind::Value(ty, val) => (ty, val),
 
-            // Should only be encountered with polymorphization,
-            // or within the identity-substituted impl header of an
-            // item nested within an impl item.
+            // Should only be encountered within the identity-substituted
+            // impl header of an item nested within an impl item.
             ty::ConstKind::Param(_) => {
                 // Never cached (single-character).
                 self.push("p");
@@ -591,7 +593,7 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
                 ct_ty.print(self)?;
 
                 let mut bits = ct
-                    .try_to_bits(self.tcx, ty::ParamEnv::reveal_all())
+                    .try_to_bits(self.tcx, ty::TypingEnv::fully_monomorphized())
                     .expect("expected const to be monomorphic");
 
                 // Negative integer values are mangled using `n` as a "sign prefix".
@@ -773,8 +775,7 @@ impl<'tcx> Printer<'tcx> for SymbolMangler<'tcx> {
             | DefPathData::GlobalAsm
             | DefPathData::Impl
             | DefPathData::MacroNs(_)
-            | DefPathData::LifetimeNs(_)
-            | DefPathData::AnonAdt => {
+            | DefPathData::LifetimeNs(_) => {
                 bug!("symbol_names: unexpected DefPathData: {:?}", disambiguated_data.data)
             }
         };

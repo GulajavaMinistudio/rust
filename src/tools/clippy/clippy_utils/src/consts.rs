@@ -18,7 +18,7 @@ use rustc_lexer::tokenize;
 use rustc_lint::LateContext;
 use rustc_middle::mir::ConstValue;
 use rustc_middle::mir::interpret::{Scalar, alloc_range};
-use rustc_middle::ty::{self, FloatTy, IntTy, ParamEnv, ScalarInt, Ty, TyCtxt, TypeckResults, UintTy};
+use rustc_middle::ty::{self, FloatTy, IntTy, ScalarInt, Ty, TyCtxt, TypeckResults, UintTy};
 use rustc_middle::{bug, mir, span_bug};
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::Ident;
@@ -226,7 +226,7 @@ impl Constant<'_> {
                     .zip(r)
                     .zip(tys)
                     .map(|((li, ri), cmp_type)| Self::partial_cmp(tcx, cmp_type, li, ri))
-                    .find(|r| r.map_or(true, |o| o != Ordering::Equal))
+                    .find(|r| r.is_none_or(|o| o != Ordering::Equal))
                     .unwrap_or_else(|| Some(l.len().cmp(&r.len()))),
                 _ => None,
             },
@@ -236,7 +236,7 @@ impl Constant<'_> {
                 };
                 iter::zip(l, r)
                     .map(|(li, ri)| Self::partial_cmp(tcx, cmp_type, li, ri))
-                    .find(|r| r.map_or(true, |o| o != Ordering::Equal))
+                    .find(|r| r.is_none_or(|o| o != Ordering::Equal))
                     .unwrap_or_else(|| Some(l.len().cmp(&r.len())))
             },
             (Self::Repeat(lv, ls), Self::Repeat(rv, rs)) => {
@@ -387,7 +387,7 @@ impl Ord for FullInt {
 /// See the module level documentation for some context.
 pub struct ConstEvalCtxt<'tcx> {
     tcx: TyCtxt<'tcx>,
-    param_env: ParamEnv<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
     typeck: &'tcx TypeckResults<'tcx>,
     source: Cell<ConstantSource>,
 }
@@ -398,17 +398,17 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
     pub fn new(cx: &LateContext<'tcx>) -> Self {
         Self {
             tcx: cx.tcx,
-            param_env: cx.param_env,
+            typing_env: cx.typing_env(),
             typeck: cx.typeck_results(),
             source: Cell::new(ConstantSource::Local),
         }
     }
 
     /// Creates an evaluation context.
-    pub fn with_env(tcx: TyCtxt<'tcx>, param_env: ParamEnv<'tcx>, typeck: &'tcx TypeckResults<'tcx>) -> Self {
+    pub fn with_env(tcx: TyCtxt<'tcx>, typing_env: ty::TypingEnv<'tcx>, typeck: &'tcx TypeckResults<'tcx>) -> Self {
         Self {
             tcx,
-            param_env,
+            typing_env,
             typeck,
             source: Cell::new(ConstantSource::Local),
         }
@@ -643,7 +643,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                 let args = self.typeck.node_args(id);
                 let result = self
                     .tcx
-                    .const_eval_resolve(self.param_env, mir::UnevaluatedConst::new(def_id, args), qpath.span())
+                    .const_eval_resolve(self.typing_env, mir::UnevaluatedConst::new(def_id, args), qpath.span())
                     .ok()
                     .map(|val| mir::Const::from_value(val, ty))?;
                 f(self, result)

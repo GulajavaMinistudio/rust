@@ -99,6 +99,14 @@ impl LivenessValues {
         }
     }
 
+    /// Returns the liveness matrix of points where each region is live. Panics if the liveness
+    /// values have been created without any per-point data (that is, for promoteds).
+    pub(crate) fn points(&self) -> &SparseIntervalMatrix<RegionVid, PointIndex> {
+        self.points
+            .as_ref()
+            .expect("this `LivenessValues` wasn't created using `with_specific_points`")
+    }
+
     /// Iterate through each region that has a value in this set.
     pub(crate) fn regions(&self) -> impl Iterator<Item = RegionVid> + '_ {
         self.points.as_ref().expect("use with_specific_points").rows()
@@ -199,6 +207,11 @@ impl LivenessValues {
         self.elements.point_from_location(location)
     }
 
+    #[inline]
+    pub(crate) fn location_from_point(&self, point: PointIndex) -> Location {
+        self.elements.to_location(point)
+    }
+
     /// When using `-Zpolonius=next`, returns whether the `loan_idx` is live at the given `point`.
     pub(crate) fn is_loan_live_at(&self, loan_idx: BorrowIndex, point: PointIndex) -> bool {
         self.loans
@@ -258,10 +271,9 @@ impl PlaceholderIndices {
 /// Here, the variable `'0` would contain the free region `'a`,
 /// because (since it is returned) it must live for at least `'a`. But
 /// it would also contain various points from within the function.
-#[derive(Clone)]
 pub(crate) struct RegionValues<N: Idx> {
     elements: Rc<DenseLocationMap>,
-    placeholder_indices: Rc<PlaceholderIndices>,
+    placeholder_indices: PlaceholderIndices,
     points: SparseIntervalMatrix<N, PointIndex>,
     free_regions: SparseBitMatrix<N, RegionVid>,
 
@@ -277,7 +289,7 @@ impl<N: Idx> RegionValues<N> {
     pub(crate) fn new(
         elements: Rc<DenseLocationMap>,
         num_universal_regions: usize,
-        placeholder_indices: Rc<PlaceholderIndices>,
+        placeholder_indices: PlaceholderIndices,
     ) -> Self {
         let num_points = elements.num_points();
         let num_placeholders = placeholder_indices.len();

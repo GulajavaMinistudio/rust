@@ -29,14 +29,14 @@ use rustc_errors::codes::*;
 use rustc_errors::{
     Applicability, Diag, DiagCtxtHandle, ErrorGuaranteed, FatalError, struct_span_code_err,
 };
-use rustc_hir as hir;
-use rustc_hir::def::{CtorOf, DefKind, Namespace, Res};
+use rustc_hir::def::{CtorKind, CtorOf, DefKind, Namespace, Res};
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_hir::{GenericArg, GenericArgs, HirId};
+use rustc_hir::{self as hir, AnonConst, GenericArg, GenericArgs, HirId};
 use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};
 use rustc_infer::traits::ObligationCause;
 use rustc_middle::middle::stability::AllowUnstable;
 use rustc_middle::mir::interpret::{LitToConstError, LitToConstInput};
+use rustc_middle::ty::fold::fold_regions;
 use rustc_middle::ty::print::PrintPolyTraitRefExt as _;
 use rustc_middle::ty::{
     self, Const, GenericArgKind, GenericArgsRef, GenericParamDefKind, ParamEnv, Ty, TyCtxt,
@@ -45,12 +45,11 @@ use rustc_middle::ty::{
 use rustc_middle::{bug, span_bug};
 use rustc_session::lint::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;
 use rustc_span::edit_distance::find_best_match_for_name;
-use rustc_span::symbol::{Ident, Symbol, kw};
-use rustc_span::{DUMMY_SP, Span};
+use rustc_span::{DUMMY_SP, Ident, Span, Symbol, kw};
 use rustc_trait_selection::infer::InferCtxtExt;
 use rustc_trait_selection::traits::wf::object_region_bounds;
 use rustc_trait_selection::traits::{self, ObligationCtxt};
-use tracing::{debug, debug_span, instrument};
+use tracing::{debug, instrument};
 
 use crate::bounds::Bounds;
 use crate::check::check_abi_fn_ptr;
@@ -122,6 +121,13 @@ pub trait HirTyLowerer<'tcx> {
 
     /// Returns the const to use when a const is omitted.
     fn ct_infer(&self, param: Option<&ty::GenericParamDef>, span: Span) -> Const<'tcx>;
+
+    fn register_trait_ascription_bounds(
+        &self,
+        bounds: Vec<(ty::Clause<'tcx>, Span)>,
+        hir_id: HirId,
+        span: Span,
+    );
 
     /// Probe bounds in scope where the bounded type coincides with the given type parameter.
     ///
@@ -215,6 +221,23 @@ impl AssocItemQSelf {
             Self::SelfTyAlias => kw::SelfUpper.to_string(),
         }
     }
+}
+
+/// In some cases, [`hir::ConstArg`]s that are being used in the type system
+/// through const generics need to have their type "fed" to them
+/// using the query system.
+///
+/// Use this enum with `<dyn HirTyLowerer>::lower_const_arg` to instruct it with the
+/// desired behavior.
+#[derive(Debug, Clone, Copy)]
+pub enum FeedConstTy {
+    /// Feed the type.
+    ///
+    /// The `DefId` belongs to the const param that we are supplying
+    /// this (anon) const arg to.
+    Param(DefId),
+    /// Don't feed the type.
+    No,
 }
 
 /// New-typed boolean indicating whether explicit late-bound lifetimes
@@ -332,7 +355,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 ty::Region::new_late_param(
                     tcx,
                     scope.to_def_id(),
-                    ty::BoundRegionKind::Named(id.to_def_id(), name),
+                    ty::LateParamRegionKind::Named(id.to_def_id(), name),
                 )
 
                 // (*) -- not late-bound, won't change
@@ -500,8 +523,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                         handle_ty_args(has_default, &inf.to_ty())
                     }
                     (GenericParamDefKind::Const { .. }, GenericArg::Const(ct)) => {
-                        ty::Const::from_const_arg(tcx, ct, ty::FeedConstTy::Param(param.def_id))
-                            .into()
+                        self.lowerer.lower_const_arg(ct, FeedConstTy::Param(param.def_id)).into()
                     }
                     (&GenericParamDefKind::Const { .. }, GenericArg::Infer(inf)) => {
                         self.lowerer.ct_infer(Some(param), inf.span).into()
@@ -721,9 +743,26 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         if let hir::BoundConstness::Always(span) | hir::BoundConstness::Maybe(span) = constness
             && !self.tcx().is_const_trait(trait_def_id)
         {
+            let (def_span, suggestion, suggestion_pre) =
+                match (trait_def_id.is_local(), self.tcx().sess.is_nightly_build()) {
+                    (true, true) => (
+                        None,
+                        Some(tcx.def_span(trait_def_id).shrink_to_lo()),
+                        if self.tcx().features().const_trait_impl() {
+                            ""
+                        } else {
+                            "enable `#![feature(const_trait_impl)]` in your crate and "
+                        },
+                    ),
+                    (false, _) | (_, false) => (Some(tcx.def_span(trait_def_id)), None, ""),
+                };
             self.dcx().emit_err(crate::errors::ConstBoundForNonConstTrait {
                 span,
                 modifier: constness.as_str(),
+                def_span,
+                trait_name: self.tcx().def_path_str(trait_def_id),
+                suggestion_pre,
+                suggestion,
             });
         }
 
@@ -979,10 +1018,12 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                                 let term: ty::Term<'_> = match term {
                                     hir::Term::Ty(ty) => self.lower_ty(ty).into(),
                                     hir::Term::Const(ct) => {
-                                        ty::Const::from_const_arg(tcx, ct, ty::FeedConstTy::No)
-                                            .into()
+                                        self.lower_const_arg(ct, FeedConstTy::No).into()
                                     }
                                 };
+                                if term.references_error() {
+                                    continue;
+                                }
                                 // FIXME(#97583): This isn't syntactically well-formed!
                                 where_bounds.push(format!(
                                     "        T: {trait}::{assoc_name} = {term}",
@@ -1554,7 +1595,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                                     infcx.fresh_args_for_item(DUMMY_SP, impl_def_id),
                                 );
 
-                                let value = tcx.fold_regions(qself_ty, |_, _| tcx.lifetimes.re_erased);
+                                let value = fold_regions(tcx, qself_ty, |_, _| tcx.lifetimes.re_erased);
                                 // FIXME: Don't bother dealing with non-lifetime binders here...
                                 if value.has_escaping_bound_vars() {
                                     return false;
@@ -2025,24 +2066,221 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
     ///
     /// Early-bound const parameters get lowered to [`ty::ConstKind::Param`]
     /// and late-bound ones to [`ty::ConstKind::Bound`].
-    pub(crate) fn lower_const_param(&self, hir_id: HirId) -> Const<'tcx> {
+    pub(crate) fn lower_const_param(&self, param_def_id: DefId, path_hir_id: HirId) -> Const<'tcx> {
         let tcx = self.tcx();
-        match tcx.named_bound_var(hir_id) {
-            Some(rbv::ResolvedArg::EarlyBound(def_id)) => {
+
+        match tcx.named_bound_var(path_hir_id) {
+            Some(rbv::ResolvedArg::EarlyBound(_)) => {
                 // Find the name and index of the const parameter by indexing the generics of
                 // the parent item and construct a `ParamConst`.
-                let item_def_id = tcx.local_parent(def_id);
+                let item_def_id = tcx.parent(param_def_id);
                 let generics = tcx.generics_of(item_def_id);
-                let index = generics.param_def_id_to_index[&def_id.to_def_id()];
-                let name = tcx.item_name(def_id.to_def_id());
+                let index = generics.param_def_id_to_index[&param_def_id];
+                let name = tcx.item_name(param_def_id);
                 ty::Const::new_param(tcx, ty::ParamConst::new(index, name))
             }
             Some(rbv::ResolvedArg::LateBound(debruijn, index, _)) => {
                 ty::Const::new_bound(tcx, debruijn, ty::BoundVar::from_u32(index))
             }
             Some(rbv::ResolvedArg::Error(guar)) => ty::Const::new_error(tcx, guar),
-            arg => bug!("unexpected bound var resolution for {:?}: {arg:?}", hir_id),
+            arg => bug!("unexpected bound var resolution for {:?}: {arg:?}", path_hir_id),
         }
+    }
+
+    /// Convert a [`hir::ConstArg`] to a [`ty::Const`](Const).
+    #[instrument(skip(self), level = "debug")]
+    pub fn lower_const_arg(
+        &self,
+        const_arg: &hir::ConstArg<'tcx>,
+        feed: FeedConstTy,
+    ) -> Const<'tcx> {
+        let tcx = self.tcx();
+
+        if let FeedConstTy::Param(param_def_id) = feed
+            && let hir::ConstArgKind::Anon(anon) = &const_arg.kind
+        {
+            tcx.feed_anon_const_type(anon.def_id, tcx.type_of(param_def_id));
+        }
+
+        let hir_id = const_arg.hir_id;
+        match const_arg.kind {
+            hir::ConstArgKind::Path(hir::QPath::Resolved(maybe_qself, path)) => {
+                debug!(?maybe_qself, ?path);
+                let opt_self_ty = maybe_qself.as_ref().map(|qself| self.lower_ty(qself));
+                self.lower_const_path_resolved(opt_self_ty, path, hir_id)
+            }
+            hir::ConstArgKind::Path(qpath) => ty::Const::new_error_with_message(
+                tcx,
+                qpath.span(),
+                format!("Const::lower_const_arg: invalid qpath {qpath:?}"),
+            ),
+            hir::ConstArgKind::Anon(anon) => self.lower_anon_const(anon),
+            hir::ConstArgKind::Infer(span) => self.ct_infer(None, span),
+        }
+    }
+
+    fn lower_const_path_resolved(
+        &self,
+        opt_self_ty: Option<Ty<'tcx>>,
+        path: &hir::Path<'tcx>,
+        hir_id: HirId,
+    ) -> Const<'tcx> {
+        let tcx = self.tcx();
+        let span = path.span;
+        match path.res {
+            Res::Def(DefKind::ConstParam, def_id) => {
+                assert_eq!(opt_self_ty, None);
+                let _ = self.prohibit_generic_args(
+                    path.segments.iter(),
+                    GenericsArgsErrExtend::Param(def_id),
+                );
+                self.lower_const_param(def_id, hir_id)
+            }
+            Res::Def(DefKind::Const | DefKind::Ctor(_, CtorKind::Const), did) => {
+                assert_eq!(opt_self_ty, None);
+                let _ = self.prohibit_generic_args(
+                    path.segments.split_last().unwrap().1.iter(),
+                    GenericsArgsErrExtend::None,
+                );
+                let args = self.lower_generic_args_of_path_segment(
+                    span,
+                    did,
+                    path.segments.last().unwrap(),
+                );
+                ty::Const::new_unevaluated(tcx, ty::UnevaluatedConst::new(did, args))
+            }
+            Res::Def(DefKind::Static { .. }, _) => {
+                span_bug!(span, "use of bare `static` ConstArgKind::Path's not yet supported")
+            }
+            // FIXME(const_generics): create real const to allow fn items as const paths
+            Res::Def(DefKind::Fn | DefKind::AssocFn, _) => ty::Const::new_error_with_message(
+                tcx,
+                span,
+                "fn items cannot be used as const args",
+            ),
+
+            // Exhaustive match to be clear about what exactly we're considering to be
+            // an invalid Res for a const path.
+            Res::Def(
+                DefKind::Mod
+                | DefKind::Enum
+                | DefKind::Variant
+                | DefKind::Ctor(CtorOf::Variant, CtorKind::Fn)
+                | DefKind::Struct
+                | DefKind::Ctor(CtorOf::Struct, CtorKind::Fn)
+                | DefKind::OpaqueTy
+                | DefKind::TyAlias
+                | DefKind::TraitAlias
+                | DefKind::AssocTy
+                | DefKind::Union
+                | DefKind::Trait
+                | DefKind::ForeignTy
+                | DefKind::AssocConst
+                | DefKind::TyParam
+                | DefKind::Macro(_)
+                | DefKind::LifetimeParam
+                | DefKind::Use
+                | DefKind::ForeignMod
+                | DefKind::AnonConst
+                | DefKind::InlineConst
+                | DefKind::Field
+                | DefKind::Impl { .. }
+                | DefKind::Closure
+                | DefKind::ExternCrate
+                | DefKind::GlobalAsm
+                | DefKind::SyntheticCoroutineBody,
+                _,
+            )
+            | Res::PrimTy(_)
+            | Res::SelfTyParam { .. }
+            | Res::SelfTyAlias { .. }
+            | Res::SelfCtor(_)
+            | Res::Local(_)
+            | Res::ToolMod
+            | Res::NonMacroAttr(_)
+            | Res::Err => Const::new_error_with_message(tcx, span, "invalid Res for const path"),
+        }
+    }
+
+    /// Literals and const generic parameters are eagerly converted to a constant, everything else
+    /// becomes `Unevaluated`.
+    #[instrument(skip(self), level = "debug")]
+    fn lower_anon_const(&self, anon: &AnonConst) -> Const<'tcx> {
+        let tcx = self.tcx();
+
+        let expr = &tcx.hir().body(anon.body).value;
+        debug!(?expr);
+
+        let ty = tcx
+            .type_of(anon.def_id)
+            .no_bound_vars()
+            .expect("const parameter types cannot be generic");
+
+        match self.try_lower_anon_const_lit(ty, expr) {
+            Some(v) => v,
+            None => ty::Const::new_unevaluated(tcx, ty::UnevaluatedConst {
+                def: anon.def_id.to_def_id(),
+                args: ty::GenericArgs::identity_for_item(tcx, anon.def_id.to_def_id()),
+            }),
+        }
+    }
+
+    #[instrument(skip(self), level = "debug")]
+    fn try_lower_anon_const_lit(
+        &self,
+        ty: Ty<'tcx>,
+        expr: &'tcx hir::Expr<'tcx>,
+    ) -> Option<Const<'tcx>> {
+        let tcx = self.tcx();
+
+        // Unwrap a block, so that e.g. `{ P }` is recognised as a parameter. Const arguments
+        // currently have to be wrapped in curly brackets, so it's necessary to special-case.
+        let expr = match &expr.kind {
+            hir::ExprKind::Block(block, _) if block.stmts.is_empty() && block.expr.is_some() => {
+                block.expr.as_ref().unwrap()
+            }
+            _ => expr,
+        };
+
+        if let hir::ExprKind::Path(hir::QPath::Resolved(
+            _,
+            &hir::Path { res: Res::Def(DefKind::ConstParam, _), .. },
+        )) = expr.kind
+        {
+            span_bug!(
+                expr.span,
+                "try_lower_anon_const_lit: received const param which shouldn't be possible"
+            );
+        };
+
+        let lit_input = match expr.kind {
+            hir::ExprKind::Lit(lit) => Some(LitToConstInput { lit: &lit.node, ty, neg: false }),
+            hir::ExprKind::Unary(hir::UnOp::Neg, expr) => match expr.kind {
+                hir::ExprKind::Lit(lit) => Some(LitToConstInput { lit: &lit.node, ty, neg: true }),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        if let Some(lit_input) = lit_input {
+            // If an error occurred, ignore that it's a literal and leave reporting the error up to
+            // mir.
+            match tcx.at(expr.span).lit_to_const(lit_input) {
+                Ok(c) => return Some(c),
+                Err(_) if lit_input.ty.has_aliases() => {
+                    // allow the `ty` to be an alias type, though we cannot handle it here
+                    return None;
+                }
+                Err(e) => {
+                    tcx.dcx().span_delayed_bug(
+                        expr.span,
+                        format!("try_lower_anon_const_lit: couldn't lit_to_const {e:?}"),
+                    );
+                }
+            }
+        }
+
+        None
     }
 
     fn lower_delegation_ty(&self, idx: hir::InferDelegationKind) -> Ty<'tcx> {
@@ -2053,14 +2291,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
         }
     }
 
-    /// Lower a type from the HIR to our internal notion of a type given some extra data for diagnostics.
-    ///
-    /// Extra diagnostic data:
-    ///
-    /// 1. `borrowed`: Whether trait object types are borrowed like in `&dyn Trait`.
-    ///    Used to avoid emitting redundant errors.
-    /// 2. `in_path`: Whether the type appears inside of a path.
-    ///    Used to provide correct diagnostics for bare trait object types.
+    /// Lower a type from the HIR to our internal notion of a type.
     #[instrument(level = "debug", skip(self), ret)]
     pub fn lower_ty(&self, hir_ty: &hir::Ty<'tcx>) -> Ty<'tcx> {
         let tcx = self.tcx();
@@ -2079,19 +2310,6 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
             hir::TyKind::Tup(fields) => {
                 Ty::new_tup_from_iter(tcx, fields.iter().map(|t| self.lower_ty(t)))
             }
-            hir::TyKind::AnonAdt(item_id) => {
-                let _guard = debug_span!("AnonAdt");
-
-                let did = item_id.owner_id.def_id;
-                let adt_def = tcx.adt_def(did);
-
-                let args = ty::GenericArgs::for_item(tcx, did.to_def_id(), |param, _| {
-                    tcx.mk_param_from_def(param)
-                });
-                debug!(?args);
-
-                Ty::new_adt(tcx, adt_def, tcx.mk_args(args))
-            }
             hir::TyKind::BareFn(bf) => {
                 require_c_abi_if_c_variadic(tcx, bf.decl, bf.abi, hir_ty.span);
 
@@ -2100,6 +2318,13 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                     self.lower_fn_ty(hir_ty.hir_id, bf.safety, bf.abi, bf.decl, None, Some(hir_ty)),
                 )
             }
+            hir::TyKind::UnsafeBinder(binder) => Ty::new_unsafe_binder(
+                tcx,
+                ty::Binder::bind_with_vars(
+                    self.lower_ty(binder.inner_ty),
+                    tcx.late_bound_vars(hir_ty.hir_id),
+                ),
+            ),
             hir::TyKind::TraitObject(bounds, lifetime, repr) => {
                 if let Some(guar) = self.prohibit_or_lint_bare_trait_object_ty(hir_ty) {
                     // Don't continue with type analysis if the `dyn` keyword is missing
@@ -2156,6 +2381,25 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
 
                 self.lower_opaque_ty(opaque_ty.def_id, in_trait)
             }
+            hir::TyKind::TraitAscription(hir_bounds) => {
+                // Impl trait in bindings lower as an infer var with additional
+                // set of type bounds.
+                let self_ty = self.ty_infer(None, hir_ty.span);
+                let mut bounds = Bounds::default();
+                self.lower_bounds(
+                    self_ty,
+                    hir_bounds.iter(),
+                    &mut bounds,
+                    ty::List::empty(),
+                    PredicateFilter::All,
+                );
+                self.register_trait_ascription_bounds(
+                    bounds.clauses().collect(),
+                    hir_ty.hir_id,
+                    hir_ty.span,
+                );
+                self_ty
+            }
             // If we encounter a type relative path with RTN generics, then it must have
             // *not* gone through `lower_ty_maybe_return_type_notation`, and therefore
             // it's certainly in an illegal position.
@@ -2186,13 +2430,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                 tcx.at(span).type_of(def_id).instantiate(tcx, args)
             }
             hir::TyKind::Array(ty, length) => {
-                let length = match length {
-                    hir::ArrayLen::Infer(inf) => self.ct_infer(None, inf.span),
-                    hir::ArrayLen::Body(constant) => {
-                        ty::Const::from_const_arg(tcx, constant, ty::FeedConstTy::No)
-                    }
-                };
-
+                let length = self.lower_const_arg(length, FeedConstTy::No);
                 Ty::new_array_with_const_len(tcx, self.lower_ty(ty), length)
             }
             hir::TyKind::Typeof(e) => tcx.type_of(e.def_id).instantiate_identity(),
@@ -2247,7 +2485,7 @@ impl<'tcx> dyn HirTyLowerer<'tcx> + '_ {
                                         .type_of(def_id)
                                         .no_bound_vars()
                                         .expect("const parameter types cannot be generic");
-                                    let ct = self.lower_const_param(expr.hir_id);
+                                    let ct = self.lower_const_param(def_id, expr.hir_id);
                                     (ct, ty)
                                 }
 

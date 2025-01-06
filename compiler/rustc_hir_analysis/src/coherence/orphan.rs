@@ -172,7 +172,7 @@ pub(crate) fn orphan_check_impl(
             // impl<T> AutoTrait for T {}
             // impl<T: ?Sized> AutoTrait for T {}
             ty::Param(..) => (
-                if self_ty.is_sized(tcx, tcx.param_env(impl_def_id)) {
+                if self_ty.is_sized(tcx, ty::TypingEnv::non_body_analysis(tcx, impl_def_id)) {
                     LocalImpl::Allow
                 } else {
                     LocalImpl::Disallow { problematic_kind: "generic type" }
@@ -225,7 +225,8 @@ pub(crate) fn orphan_check_impl(
             | ty::FnDef(..)
             | ty::FnPtr(..)
             | ty::Never
-            | ty::Tuple(..) => (LocalImpl::Allow, NonlocalImpl::DisallowOther),
+            | ty::Tuple(..)
+            | ty::UnsafeBinder(_) => (LocalImpl::Allow, NonlocalImpl::DisallowOther),
 
             ty::Closure(..)
             | ty::CoroutineClosure(..)

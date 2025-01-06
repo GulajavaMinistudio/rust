@@ -50,6 +50,7 @@ mod deduce_param_attrs;
 mod errors;
 mod ffi_unwind_calls;
 mod lint;
+mod lint_tail_expr_drop_order;
 mod shim;
 mod ssa;
 
@@ -162,7 +163,7 @@ declare_passes! {
     mod remove_unneeded_drops : RemoveUnneededDrops;
     mod remove_zsts : RemoveZsts;
     mod required_consts : RequiredConstsVisitor;
-    mod reveal_all : RevealAll;
+    mod post_analysis_normalize : PostAnalysisNormalize;
     mod sanity_check : SanityCheck;
     // This pass is public to allow external drivers to perform MIR cleanup
     pub mod simplify :
@@ -188,6 +189,7 @@ declare_passes! {
     mod simplify_comparison_integral : SimplifyComparisonIntegral;
     mod single_use_consts : SingleUseConsts;
     mod sroa : ScalarReplacementOfAggregates;
+    mod strip_debuginfo : StripDebugInfo;
     mod unreachable_enum_branching : UnreachableEnumBranching;
     mod unreachable_prop : UnreachablePropagation;
     mod validate : Validator;
@@ -333,10 +335,14 @@ fn mir_keys(tcx: TyCtxt<'_>, (): ()) -> FxIndexSet<LocalDefId> {
 }
 
 fn mir_const_qualif(tcx: TyCtxt<'_>, def: LocalDefId) -> ConstQualifs {
-    let const_kind = tcx.hir().body_const_context(def);
-
+    // N.B., this `borrow()` is guaranteed to be valid (i.e., the value
+    // cannot yet be stolen), because `mir_promoted()`, which steals
+    // from `mir_built()`, forces this query to execute before
+    // performing the steal.
+    let body = &tcx.mir_built(def).borrow();
+    let ccx = check_consts::ConstCx::new(tcx, body);
     // No need to const-check a non-const `fn`.
-    match const_kind {
+    match ccx.const_kind {
         Some(ConstContext::Const { .. } | ConstContext::Static(_) | ConstContext::ConstFn) => {}
         None => span_bug!(
             tcx.def_span(def),
@@ -344,19 +350,11 @@ fn mir_const_qualif(tcx: TyCtxt<'_>, def: LocalDefId) -> ConstQualifs {
         ),
     }
 
-    // N.B., this `borrow()` is guaranteed to be valid (i.e., the value
-    // cannot yet be stolen), because `mir_promoted()`, which steals
-    // from `mir_built()`, forces this query to execute before
-    // performing the steal.
-    let body = &tcx.mir_built(def).borrow();
-
     if body.return_ty().references_error() {
         // It's possible to reach here without an error being emitted (#121103).
         tcx.dcx().span_delayed_bug(body.span, "mir_const_qualif: MIR had errors");
         return Default::default();
     }
-
-    let ccx = check_consts::ConstCx { body, tcx, const_kind, param_env: tcx.param_env(def) };
 
     let mut validator = check_consts::check::Checker::new(&ccx);
     validator.check_body();
@@ -438,6 +436,8 @@ fn mir_promoted(
         &[&promote_pass, &simplify::SimplifyCfg::PromoteConsts, &coverage::InstrumentCoverage],
         Some(MirPhase::Analysis(AnalysisPhase::Initial)),
     );
+
+    lint_tail_expr_drop_order::run_lint(tcx, def, &body);
 
     let promoted = promote_pass.promoted_fragments.into_inner();
     (tcx.alloc_steal_mir(body), tcx.alloc_steal_promoted(promoted))
@@ -606,8 +606,8 @@ fn run_runtime_lowering_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         // These next passes must be executed together.
         &add_call_guards::CriticalCallEdges,
         // Must be done before drop elaboration because we need to drop opaque types, too.
-        &reveal_all::RevealAll,
-        // Calling this after reveal_all ensures that we don't deal with opaque types.
+        &post_analysis_normalize::PostAnalysisNormalize,
+        // Calling this after `PostAnalysisNormalize` ensures that we don't deal with opaque types.
         &add_subtyping_projections::Subtyper,
         &elaborate_drops::ElaborateDrops,
         // This will remove extraneous landing pads which are no longer
@@ -701,6 +701,8 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             &o1(simplify_branches::SimplifyConstCondition::Final),
             &o1(remove_noop_landing_pads::RemoveNoopLandingPads),
             &o1(simplify::SimplifyCfg::Final),
+            // After the last SimplifyCfg, because this wants one-block functions.
+            &strip_debuginfo::StripDebugInfo,
             &copy_prop::CopyProp,
             &dead_store_elimination::DeadStoreElimination::Final,
             &nrvo::RenameReturnPlace,

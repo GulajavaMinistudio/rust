@@ -17,6 +17,7 @@ use rustc_data_structures::sync::{self, FreezeReadGuard, FreezeWriteGuard};
 use rustc_errors::DiagCtxtHandle;
 use rustc_expand::base::SyntaxExtension;
 use rustc_fs_util::try_canonicalize;
+use rustc_hir as hir;
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE, LocalDefId, StableCrateId};
 use rustc_hir::definitions::Definitions;
 use rustc_index::IndexVec;
@@ -28,8 +29,7 @@ use rustc_session::lint::{self, BuiltinLintDiag};
 use rustc_session::output::validate_crate_name;
 use rustc_session::search_paths::PathKind;
 use rustc_span::edition::Edition;
-use rustc_span::symbol::{Ident, Symbol, sym};
-use rustc_span::{DUMMY_SP, Span};
+use rustc_span::{DUMMY_SP, Ident, Span, Symbol, sym};
 use rustc_target::spec::{PanicStrategy, Target, TargetTuple};
 use tracing::{debug, info, trace};
 
@@ -97,7 +97,13 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
 }
 
 pub enum LoadedMacro {
-    MacroDef { def: MacroDef, ident: Ident, attrs: AttrVec, span: Span, edition: Edition },
+    MacroDef {
+        def: MacroDef,
+        ident: Ident,
+        attrs: Vec<hir::Attribute>,
+        span: Span,
+        edition: Edition,
+    },
     ProcMacro(SyntaxExtension),
 }
 
@@ -540,6 +546,7 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
                 Some(cnum)
             }
             Err(err) => {
+                debug!("failed to resolve crate {} {:?}", name, dep_kind);
                 let missing_core =
                     self.maybe_resolve_crate(sym::core, CrateDepKind::Explicit, None).is_err();
                 err.report(self.sess, span, missing_core);
@@ -588,6 +595,7 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
             match self.load(&mut locator)? {
                 Some(res) => (res, None),
                 None => {
+                    info!("falling back to loading proc_macro");
                     dep_kind = CrateDepKind::MacrosOnly;
                     match self.load_proc_macro(&mut locator, path_kind, host_hash)? {
                         Some(res) => res,
@@ -599,6 +607,7 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
 
         match result {
             (LoadResult::Previous(cnum), None) => {
+                info!("library for `{}` was loaded previously", name);
                 // When `private_dep` is none, it indicates the directly dependent crate. If it is
                 // not specified by `--extern` on command line parameters, it may be
                 // `private-dependency` when `register_crate` is called for the first time. Then it must be updated to
@@ -613,6 +622,7 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
                 Ok(cnum)
             }
             (LoadResult::Loaded(library), host_library) => {
+                info!("register newly loaded library for `{}`", name);
                 self.register_crate(host_library, root, library, dep_kind, name, private_dep)
             }
             _ => panic!(),
@@ -696,14 +706,32 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
         stable_crate_id: StableCrateId,
     ) -> Result<&'static [ProcMacro], CrateError> {
         let sym_name = self.sess.generate_proc_macro_decls_symbol(stable_crate_id);
-        Ok(unsafe { *load_symbol_from_dylib::<*const &[ProcMacro]>(path, &sym_name)? })
+        debug!("trying to dlsym proc_macros {} for symbol `{}`", path.display(), sym_name);
+
+        unsafe {
+            let result = load_symbol_from_dylib::<*const &[ProcMacro]>(path, &sym_name);
+            match result {
+                Ok(result) => {
+                    debug!("loaded dlsym proc_macros {} for symbol `{}`", path.display(), sym_name);
+                    Ok(*result)
+                }
+                Err(err) => {
+                    debug!(
+                        "failed to dlsym proc_macros {} for symbol `{}`",
+                        path.display(),
+                        sym_name
+                    );
+                    Err(err.into())
+                }
+            }
+        }
     }
 
     fn inject_panic_runtime(&mut self, krate: &ast::Crate) {
         // If we're only compiling an rlib, then there's no need to select a
         // panic runtime, so we just skip this section entirely.
-        let any_non_rlib = self.tcx.crate_types().iter().any(|ct| *ct != CrateType::Rlib);
-        if !any_non_rlib {
+        let only_rlib = self.tcx.crate_types().iter().all(|ct| *ct == CrateType::Rlib);
+        if only_rlib {
             info!("panic runtime injection skipped, only generating rlib");
             return;
         }
@@ -777,20 +805,16 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
         self.inject_dependency_if(cnum, "a panic runtime", &|data| data.needs_panic_runtime());
     }
 
-    fn inject_profiler_runtime(&mut self, krate: &ast::Crate) {
-        if self.sess.opts.unstable_opts.no_profiler_runtime
-            || !(self.sess.instrument_coverage() || self.sess.opts.cg.profile_generate.enabled())
-        {
+    fn inject_profiler_runtime(&mut self) {
+        let needs_profiler_runtime =
+            self.sess.instrument_coverage() || self.sess.opts.cg.profile_generate.enabled();
+        if !needs_profiler_runtime || self.sess.opts.unstable_opts.no_profiler_runtime {
             return;
         }
 
         info!("loading profiler");
 
         let name = Symbol::intern(&self.sess.opts.unstable_opts.profiler_runtime);
-        if name == sym::profiler_builtins && attr::contains_name(&krate.attrs, sym::no_core) {
-            self.dcx().emit_err(errors::ProfilerBuiltinsNeedsCore);
-        }
-
         let Some(cnum) = self.resolve_crate(name, DUMMY_SP, CrateDepKind::Implicit) else {
             return;
         };
@@ -843,8 +867,10 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
         // First up we check for global allocators. Look at the crate graph here
         // and see what's a global allocator, including if we ourselves are a
         // global allocator.
-        let mut global_allocator =
-            self.cstore.has_global_allocator.then(|| Symbol::intern("this crate"));
+        #[cfg_attr(not(bootstrap), allow(rustc::symbol_intern_string_literal))]
+        let this_crate = Symbol::intern("this crate");
+
+        let mut global_allocator = self.cstore.has_global_allocator.then_some(this_crate);
         for (_, data) in self.cstore.iter_crate_data() {
             if data.has_global_allocator() {
                 match global_allocator {
@@ -858,8 +884,7 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
                 }
             }
         }
-        let mut alloc_error_handler =
-            self.cstore.has_alloc_error_handler.then(|| Symbol::intern("this crate"));
+        let mut alloc_error_handler = self.cstore.has_alloc_error_handler.then_some(this_crate);
         for (_, data) in self.cstore.iter_crate_data() {
             if data.has_alloc_error_handler() {
                 match alloc_error_handler {
@@ -1024,7 +1049,7 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
 
     pub fn postprocess(&mut self, krate: &ast::Crate) {
         self.inject_forced_externs();
-        self.inject_profiler_runtime(krate);
+        self.inject_profiler_runtime();
         self.inject_allocator_crate(krate);
         self.inject_panic_runtime(krate);
 
@@ -1141,6 +1166,29 @@ fn format_dlopen_err(e: &(dyn std::error::Error + 'static)) -> String {
     e.sources().map(|e| format!(": {e}")).collect()
 }
 
+fn attempt_load_dylib(path: &Path) -> Result<libloading::Library, libloading::Error> {
+    #[cfg(target_os = "aix")]
+    if let Some(ext) = path.extension()
+        && ext.eq("a")
+    {
+        // On AIX, we ship all libraries as .a big_af archive
+        // the expected format is lib<name>.a(libname.so) for the actual
+        // dynamic library
+        let library_name = path.file_stem().expect("expect a library name");
+        let mut archive_member = std::ffi::OsString::from("a(");
+        archive_member.push(library_name);
+        archive_member.push(".so)");
+        let new_path = path.with_extension(archive_member);
+
+        // On AIX, we need RTLD_MEMBER to dlopen an archived shared
+        let flags = libc::RTLD_LAZY | libc::RTLD_LOCAL | libc::RTLD_MEMBER;
+        return unsafe { libloading::os::unix::Library::open(Some(&new_path), flags) }
+            .map(|lib| lib.into());
+    }
+
+    unsafe { libloading::Library::new(&path) }
+}
+
 // On Windows the compiler would sometimes intermittently fail to open the
 // proc-macro DLL with `Error::LoadLibraryExW`. It is suspected that something in the
 // system still holds a lock on the file, so we retry a few times before calling it
@@ -1151,7 +1199,8 @@ fn load_dylib(path: &Path, max_attempts: usize) -> Result<libloading::Library, S
     let mut last_error = None;
 
     for attempt in 0..max_attempts {
-        match unsafe { libloading::Library::new(&path) } {
+        debug!("Attempt to load proc-macro `{}`.", path.display());
+        match attempt_load_dylib(path) {
             Ok(lib) => {
                 if attempt > 0 {
                     debug!(
@@ -1165,6 +1214,7 @@ fn load_dylib(path: &Path, max_attempts: usize) -> Result<libloading::Library, S
             Err(err) => {
                 // Only try to recover from this specific error.
                 if !matches!(err, libloading::Error::LoadLibraryExW { .. }) {
+                    debug!("Failed to load proc-macro `{}`. Not retrying", path.display());
                     let err = format_dlopen_err(&err);
                     // We include the path of the dylib in the error ourselves, so
                     // if it's in the error, we strip it.

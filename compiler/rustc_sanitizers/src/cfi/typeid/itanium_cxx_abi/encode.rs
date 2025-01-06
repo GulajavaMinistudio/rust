@@ -133,7 +133,7 @@ fn encode_const<'tcx>(
             match ct_ty.kind() {
                 ty::Int(ity) => {
                     let bits = c
-                        .try_to_bits(tcx, ty::ParamEnv::reveal_all())
+                        .try_to_bits(tcx, ty::TypingEnv::fully_monomorphized())
                         .expect("expected monomorphic const in cfi");
                     let val = Integer::from_int_ty(&tcx, *ity).size().sign_extend(bits) as i128;
                     if val < 0 {
@@ -143,7 +143,7 @@ fn encode_const<'tcx>(
                 }
                 ty::Uint(_) => {
                     let val = c
-                        .try_to_bits(tcx, ty::ParamEnv::reveal_all())
+                        .try_to_bits(tcx, ty::TypingEnv::fully_monomorphized())
                         .expect("expected monomorphic const in cfi");
                     let _ = write!(s, "{val}");
                 }
@@ -621,6 +621,11 @@ pub(crate) fn encode_ty<'tcx>(
             typeid.push_str(&s);
         }
 
+        // FIXME(unsafe_binders): Implement this.
+        ty::UnsafeBinder(_) => {
+            todo!()
+        }
+
         // Trait types
         ty::Dynamic(predicates, region, kind) => {
             // u3dynI<element-type1[..element-typeN]>E, where <element-type> is <predicate>, as
@@ -716,8 +721,7 @@ fn encode_ty_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
             | hir::definitions::DefPathData::Use
             | hir::definitions::DefPathData::GlobalAsm
             | hir::definitions::DefPathData::MacroNs(..)
-            | hir::definitions::DefPathData::LifetimeNs(..)
-            | hir::definitions::DefPathData::AnonAdt => {
+            | hir::definitions::DefPathData::LifetimeNs(..) => {
                 bug!("encode_ty_name: unexpected `{:?}`", disambiguated_data.data);
             }
         });

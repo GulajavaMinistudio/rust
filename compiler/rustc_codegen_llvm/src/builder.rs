@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::ops::Deref;
 use std::{iter, ptr};
 
+pub(crate) mod autodiff;
+
 use libc::{c_char, c_uint};
 use rustc_abi as abi;
 use rustc_abi::{Align, Size, WrappingRange};
@@ -14,7 +16,7 @@ use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_hir::def_id::DefId;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
 use rustc_middle::ty::layout::{
-    FnAbiError, FnAbiOfHelpers, FnAbiRequest, HasParamEnv, LayoutError, LayoutOfHelpers,
+    FnAbiError, FnAbiOfHelpers, FnAbiRequest, HasTypingEnv, LayoutError, LayoutOfHelpers,
     TyAndLayout,
 };
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
@@ -81,9 +83,9 @@ impl<'tcx> ty::layout::HasTyCtxt<'tcx> for Builder<'_, '_, 'tcx> {
     }
 }
 
-impl<'tcx> ty::layout::HasParamEnv<'tcx> for Builder<'_, '_, 'tcx> {
-    fn param_env(&self) -> ty::ParamEnv<'tcx> {
-        self.cx.param_env()
+impl<'tcx> ty::layout::HasTypingEnv<'tcx> for Builder<'_, '_, 'tcx> {
+    fn typing_env(&self) -> ty::TypingEnv<'tcx> {
+        self.cx.typing_env()
     }
 }
 
@@ -472,7 +474,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
     #[instrument(level = "trace", skip(self))]
     fn load_operand(&mut self, place: PlaceRef<'tcx, &'ll Value>) -> OperandRef<'tcx, &'ll Value> {
         if place.layout.is_unsized() {
-            let tail = self.tcx.struct_tail_for_codegen(place.layout.ty, self.param_env());
+            let tail = self.tcx.struct_tail_for_codegen(place.layout.ty, self.typing_env());
             if matches!(tail.kind(), ty::Foreign(..)) {
                 // Unsized locals and, at least conceptually, even unsized arguments must be copied
                 // around, which requires dynamically determining their size. Therefore, we cannot
@@ -608,14 +610,6 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
     }
 
     fn range_metadata(&mut self, load: &'ll Value, range: WrappingRange) {
-        if self.sess().target.arch == "amdgpu" {
-            // amdgpu/LLVM does something weird and thinks an i64 value is
-            // split into a v2i32, halving the bitwidth LLVM expects,
-            // tripping an assertion. So, for now, just disable this
-            // optimization.
-            return;
-        }
-
         if self.cx.sess().opts.optimize == OptLevel::No {
             // Don't emit metadata we're not going to use
             return;

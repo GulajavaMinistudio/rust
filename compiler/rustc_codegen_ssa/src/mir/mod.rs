@@ -4,7 +4,7 @@ use rustc_index::IndexVec;
 use rustc_index::bit_set::BitSet;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::{UnwindTerminateReason, traversal};
-use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, TyAndLayout};
+use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, HasTypingEnv, TyAndLayout};
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TypeFoldable, TypeVisitableExt};
 use rustc_middle::{bug, mir, span_bug};
 use rustc_target::callconv::{FnAbi, PassMode};
@@ -20,6 +20,7 @@ mod coverageinfo;
 pub mod debuginfo;
 mod intrinsic;
 mod locals;
+mod naked_asm;
 pub mod operand;
 pub mod place;
 mod rvalue;
@@ -128,7 +129,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         debug!("monomorphize: self.instance={:?}", self.instance);
         self.instance.instantiate_mir_and_normalize_erasing_regions(
             self.cx.tcx(),
-            ty::ParamEnv::reveal_all(),
+            self.cx.typing_env(),
             ty::EarlyBinder::bind(value),
         )
     }
@@ -175,6 +176,11 @@ pub fn codegen_mir<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>>(
 
     let fn_abi = cx.fn_abi_of_instance(instance, ty::List::empty());
     debug!("fn_abi: {:?}", fn_abi);
+
+    if cx.tcx().codegen_fn_attrs(instance.def_id()).flags.contains(CodegenFnAttrFlags::NAKED) {
+        crate::mir::naked_asm::codegen_naked_asm::<Bx>(cx, &mir, instance);
+        return;
+    }
 
     let debug_context = cx.create_function_debug_context(instance, fn_abi, llfn, mir);
 

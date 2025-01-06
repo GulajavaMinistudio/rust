@@ -4,16 +4,17 @@
 
 use rustc_hir::def_id::DefId;
 use rustc_hir::{LangItem, lang_items};
-use rustc_span::symbol::Ident;
-use rustc_span::{DesugaringKind, Span, sym};
+use rustc_span::{DesugaringKind, Ident, Span, sym};
 use tracing::debug;
 
-use crate::ty::{AssocItemContainer, GenericArgsRef, Instance, ParamEnv, Ty, TyCtxt};
+use crate::ty::{AssocItemContainer, GenericArgsRef, Instance, Ty, TyCtxt, TypingEnv};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CallDesugaringKind {
     /// for _ in x {} calls x.into_iter()
     ForLoopIntoIter,
+    /// for _ in x {} calls iter.next()
+    ForLoopNext,
     /// x? calls x.branch()
     QuestionBranch,
     /// x? calls type_of(x)::from_residual()
@@ -28,6 +29,7 @@ impl CallDesugaringKind {
     pub fn trait_def_id(self, tcx: TyCtxt<'_>) -> DefId {
         match self {
             Self::ForLoopIntoIter => tcx.get_diagnostic_item(sym::IntoIterator).unwrap(),
+            Self::ForLoopNext => tcx.require_lang_item(LangItem::Iterator, None),
             Self::QuestionBranch | Self::TryBlockFromOutput => {
                 tcx.require_lang_item(LangItem::Try, None)
             }
@@ -62,7 +64,7 @@ pub enum CallKind<'tcx> {
 
 pub fn call_kind<'tcx>(
     tcx: TyCtxt<'tcx>,
-    param_env: ParamEnv<'tcx>,
+    typing_env: TypingEnv<'tcx>,
     method_did: DefId,
     method_args: GenericArgsRef<'tcx>,
     fn_call_span: Span,
@@ -98,10 +100,10 @@ pub fn call_kind<'tcx>(
         Some(CallKind::Operator { self_arg, trait_id, self_ty: method_args.type_at(0) })
     } else if is_deref {
         let deref_target = tcx.get_diagnostic_item(sym::deref_target).and_then(|deref_target| {
-            Instance::try_resolve(tcx, param_env, deref_target, method_args).transpose()
+            Instance::try_resolve(tcx, typing_env, deref_target, method_args).transpose()
         });
         if let Some(Ok(instance)) = deref_target {
-            let deref_target_ty = instance.ty(tcx, param_env);
+            let deref_target_ty = instance.ty(tcx, typing_env);
             Some(CallKind::DerefCoercion {
                 deref_target: tcx.def_span(instance.def_id()),
                 deref_target_ty,
@@ -121,6 +123,10 @@ pub fn call_kind<'tcx>(
             && fn_call_span.desugaring_kind() == Some(DesugaringKind::ForLoop)
         {
             Some((CallDesugaringKind::ForLoopIntoIter, method_args.type_at(0)))
+        } else if tcx.is_lang_item(method_did, LangItem::IteratorNext)
+            && fn_call_span.desugaring_kind() == Some(DesugaringKind::ForLoop)
+        {
+            Some((CallDesugaringKind::ForLoopNext, method_args.type_at(0)))
         } else if fn_call_span.desugaring_kind() == Some(DesugaringKind::QuestionMark) {
             if tcx.is_lang_item(method_did, LangItem::TryTraitBranch) {
                 Some((CallDesugaringKind::QuestionBranch, method_args.type_at(0)))

@@ -332,9 +332,9 @@ impl<'tcx> Operand<'tcx> {
         span: Span,
     ) -> Operand<'tcx> {
         debug_assert!({
-            let param_env_and_ty = ty::ParamEnv::empty().and(ty);
+            let typing_env = ty::TypingEnv::fully_monomorphized();
             let type_size = tcx
-                .layout_of(param_env_and_ty)
+                .layout_of(typing_env.as_query_input(ty))
                 .unwrap_or_else(|e| panic!("could not compute layout for {ty:?}: {e:?}"))
                 .size;
             let scalar_size = match val {
@@ -424,7 +424,6 @@ impl<'tcx> Rvalue<'tcx> {
             | Rvalue::Ref(_, _, _)
             | Rvalue::ThreadLocalRef(_)
             | Rvalue::RawPtr(_, _)
-            | Rvalue::Len(_)
             | Rvalue::Cast(
                 CastKind::IntToInt
                 | CastKind::FloatToInt

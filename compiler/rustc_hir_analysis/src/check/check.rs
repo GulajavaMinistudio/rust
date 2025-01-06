@@ -17,12 +17,11 @@ use rustc_middle::middle::resolve_bound_vars::ResolvedArg;
 use rustc_middle::middle::stability::EvalResult;
 use rustc_middle::span_bug;
 use rustc_middle::ty::error::TypeErrorToStringExt;
-use rustc_middle::ty::fold::BottomUpFolder;
+use rustc_middle::ty::fold::{BottomUpFolder, fold_regions};
 use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::util::{Discr, InspectCoroutineFields, IntTypeExt};
 use rustc_middle::ty::{
-    AdtDef, GenericArgKind, ParamEnv, RegionKind, TypeSuperVisitable, TypeVisitable,
-    TypeVisitableExt,
+    AdtDef, GenericArgKind, RegionKind, TypeSuperVisitable, TypeVisitable, TypeVisitableExt,
 };
 use rustc_session::lint::builtin::UNINHABITED_STATIC;
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
@@ -32,9 +31,9 @@ use rustc_trait_selection::traits::outlives_bounds::InferCtxtExt as _;
 use rustc_type_ir::fold::TypeFoldable;
 use tracing::{debug, instrument};
 use ty::TypingMode;
-use {rustc_attr as attr, rustc_hir as hir};
+use {rustc_attr_parsing as attr, rustc_hir as hir};
 
-use super::compare_impl_item::{check_type_bounds, compare_impl_method, compare_impl_ty};
+use super::compare_impl_item::check_type_bounds;
 use super::*;
 use crate::check::intrinsicck::InlineAsmCtxt;
 
@@ -71,6 +70,7 @@ fn check_struct(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 
     check_transparent(tcx, def);
     check_packed(tcx, span, def);
+    check_unsafe_fields(tcx, def_id);
 }
 
 fn check_union(tcx: TyCtxt<'_>, def_id: LocalDefId) {
@@ -82,47 +82,54 @@ fn check_union(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     check_packed(tcx, span, def);
 }
 
+fn allowed_union_or_unsafe_field<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
+    span: Span,
+) -> bool {
+    // We don't just accept all !needs_drop fields, due to semver concerns.
+    let allowed = match ty.kind() {
+        ty::Ref(..) => true, // references never drop (even mutable refs, which are non-Copy and hence fail the later check)
+        ty::Tuple(tys) => {
+            // allow tuples of allowed types
+            tys.iter().all(|ty| allowed_union_or_unsafe_field(tcx, ty, typing_env, span))
+        }
+        ty::Array(elem, _len) => {
+            // Like `Copy`, we do *not* special-case length 0.
+            allowed_union_or_unsafe_field(tcx, *elem, typing_env, span)
+        }
+        _ => {
+            // Fallback case: allow `ManuallyDrop` and things that are `Copy`,
+            // also no need to report an error if the type is unresolved.
+            ty.ty_adt_def().is_some_and(|adt_def| adt_def.is_manually_drop())
+                || tcx.type_is_copy_modulo_regions(typing_env, ty)
+                || ty.references_error()
+        }
+    };
+    if allowed && ty.needs_drop(tcx, typing_env) {
+        // This should never happen. But we can get here e.g. in case of name resolution errors.
+        tcx.dcx()
+            .span_delayed_bug(span, "we should never accept maybe-dropping union or unsafe fields");
+    }
+    allowed
+}
+
 /// Check that the fields of the `union` do not need dropping.
 fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> bool {
     let item_type = tcx.type_of(item_def_id).instantiate_identity();
     if let ty::Adt(def, args) = item_type.kind() {
         assert!(def.is_union());
 
-        fn allowed_union_field<'tcx>(
-            ty: Ty<'tcx>,
-            tcx: TyCtxt<'tcx>,
-            param_env: ty::ParamEnv<'tcx>,
-        ) -> bool {
-            // We don't just accept all !needs_drop fields, due to semver concerns.
-            match ty.kind() {
-                ty::Ref(..) => true, // references never drop (even mutable refs, which are non-Copy and hence fail the later check)
-                ty::Tuple(tys) => {
-                    // allow tuples of allowed types
-                    tys.iter().all(|ty| allowed_union_field(ty, tcx, param_env))
-                }
-                ty::Array(elem, _len) => {
-                    // Like `Copy`, we do *not* special-case length 0.
-                    allowed_union_field(*elem, tcx, param_env)
-                }
-                _ => {
-                    // Fallback case: allow `ManuallyDrop` and things that are `Copy`,
-                    // also no need to report an error if the type is unresolved.
-                    ty.ty_adt_def().is_some_and(|adt_def| adt_def.is_manually_drop())
-                        || ty.is_copy_modulo_regions(tcx, param_env)
-                        || ty.references_error()
-                }
-            }
-        }
-
-        let param_env = tcx.param_env(item_def_id);
+        let typing_env = ty::TypingEnv::non_body_analysis(tcx, item_def_id);
         for field in &def.non_enum_variant().fields {
-            let Ok(field_ty) = tcx.try_normalize_erasing_regions(param_env, field.ty(tcx, args))
+            let Ok(field_ty) = tcx.try_normalize_erasing_regions(typing_env, field.ty(tcx, args))
             else {
                 tcx.dcx().span_delayed_bug(span, "could not normalize field type");
                 continue;
             };
 
-            if !allowed_union_field(field_ty, tcx, param_env) {
+            if !allowed_union_or_unsafe_field(tcx, field_ty, typing_env, span) {
                 let (field_span, ty_span) = match tcx.hir().get_if_local(field.did) {
                     // We are currently checking the type this field came from, so it must be local.
                     Some(Node::Field(field)) => (field.span, field.ty.span),
@@ -137,16 +144,47 @@ fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> b
                     note: (),
                 });
                 return false;
-            } else if field_ty.needs_drop(tcx, param_env) {
-                // This should never happen. But we can get here e.g. in case of name resolution errors.
-                tcx.dcx()
-                    .span_delayed_bug(span, "we should never accept maybe-dropping union fields");
             }
         }
     } else {
         span_bug!(span, "unions must be ty::Adt, but got {:?}", item_type.kind());
     }
     true
+}
+
+/// Check that the unsafe fields do not need dropping.
+fn check_unsafe_fields(tcx: TyCtxt<'_>, item_def_id: LocalDefId) {
+    let span = tcx.def_span(item_def_id);
+    let item_type = tcx.type_of(item_def_id).instantiate_identity();
+    let ty::Adt(def, args) = item_type.kind() else {
+        span_bug!(span, "structs/enums must be ty::Adt, but got {:?}", item_type.kind());
+    };
+    let typing_env = ty::TypingEnv::non_body_analysis(tcx, item_def_id);
+    for field in def.all_fields() {
+        if !field.safety.is_unsafe() {
+            continue;
+        }
+        let Ok(field_ty) = tcx.try_normalize_erasing_regions(typing_env, field.ty(tcx, args))
+        else {
+            tcx.dcx().span_delayed_bug(span, "could not normalize field type");
+            continue;
+        };
+
+        if !allowed_union_or_unsafe_field(tcx, field_ty, typing_env, span) {
+            let hir::Node::Field(field) = tcx.hir_node_by_def_id(field.did.expect_local()) else {
+                unreachable!("field has to correspond to hir field")
+            };
+            let ty_span = field.ty.span;
+            tcx.dcx().emit_err(errors::InvalidUnsafeField {
+                field_span: field.span,
+                sugg: errors::InvalidUnsafeFieldSuggestion {
+                    lo: ty_span.shrink_to_lo(),
+                    hi: ty_span.shrink_to_hi(),
+                },
+                note: (),
+            });
+        }
+    }
 }
 
 /// Check that a `static` is inhabited.
@@ -158,7 +196,7 @@ fn check_static_inhabited(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     // reason to allow any statics to be uninhabited.
     let ty = tcx.type_of(def_id).instantiate_identity();
     let span = tcx.def_span(def_id);
-    let layout = match tcx.layout_of(ParamEnv::reveal_all().and(ty)) {
+    let layout = match tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty)) {
         Ok(l) => l,
         // Foreign statics that overflow their allowed size should emit an error
         Err(LayoutError::SizeOverflow(_))
@@ -237,7 +275,10 @@ pub(super) fn check_opaque_for_cycles<'tcx>(
 
         // And also look for cycle errors in the layout of coroutines.
         if let Err(&LayoutError::Cycle(guar)) =
-            tcx.layout_of(tcx.param_env(def_id).and(Ty::new_opaque(tcx, def_id.to_def_id(), args)))
+            tcx.layout_of(
+                ty::TypingEnv::post_analysis(tcx, def_id.to_def_id())
+                    .as_query_input(Ty::new_opaque(tcx, def_id.to_def_id(), args)),
+            )
         {
             return Err(guar);
         }
@@ -281,8 +322,12 @@ fn check_opaque_meets_bounds<'tcx>(
     };
     let param_env = tcx.param_env(defining_use_anchor);
 
-    // FIXME(#132279): This should eventually use the already defined hidden types.
-    let infcx = tcx.infer_ctxt().build(TypingMode::analysis_in_body(tcx, defining_use_anchor));
+    // FIXME(#132279): Once `PostBorrowckAnalysis` is supported in the old solver, this branch should be removed.
+    let infcx = tcx.infer_ctxt().build(if tcx.next_trait_solver_globally() {
+        TypingMode::post_borrowck_analysis(tcx, defining_use_anchor)
+    } else {
+        TypingMode::analysis_in_body(tcx, defining_use_anchor)
+    });
     let ocx = ObligationCtxt::new_with_diagnostics(&infcx);
 
     let args = match origin {
@@ -305,7 +350,7 @@ fn check_opaque_meets_bounds<'tcx>(
     // FIXME: Consider wrapping the hidden type in an existential `Binder` and instantiating it
     // here rather than using ReErased.
     let hidden_ty = tcx.type_of(def_id.to_def_id()).instantiate(tcx, args);
-    let hidden_ty = tcx.fold_regions(hidden_ty, |re, _dbi| match re.kind() {
+    let hidden_ty = fold_regions(tcx, hidden_ty, |re, _dbi| match re.kind() {
         ty::ReErased => infcx.next_region_var(RegionVariableOrigin::MiscVariable(span)),
         _ => re,
     });
@@ -337,6 +382,8 @@ fn check_opaque_meets_bounds<'tcx>(
 
     let misc_cause = ObligationCause::misc(span, def_id);
     // FIXME: We should just register the item bounds here, rather than equating.
+    // FIXME(const_trait_impl): When we do that, please make sure to also register
+    // the `~const` bounds.
     match ocx.eq(&misc_cause, param_env, opaque_ty, hidden_ty) {
         Ok(()) => {}
         Err(ty_err) => {
@@ -374,7 +421,11 @@ fn check_opaque_meets_bounds<'tcx>(
     let outlives_env = OutlivesEnvironment::with_bounds(param_env, implied_bounds);
     ocx.resolve_regions_and_report_errors(defining_use_anchor, &outlives_env)?;
 
-    if let hir::OpaqueTyOrigin::FnReturn { .. } | hir::OpaqueTyOrigin::AsyncFn { .. } = origin {
+    if infcx.next_trait_solver() {
+        Ok(())
+    } else if let hir::OpaqueTyOrigin::FnReturn { .. } | hir::OpaqueTyOrigin::AsyncFn { .. } =
+        origin
+    {
         // HACK: this should also fall through to the hidden type check below, but the original
         // implementation had a bug where equivalent lifetimes are not identical. This caused us
         // to reject existing stable code that is otherwise completely fine. The real fix is to
@@ -993,18 +1044,23 @@ fn check_impl_items_against_trait<'tcx>(
             tcx.dcx().span_delayed_bug(tcx.def_span(impl_item), "missing associated item in trait");
             continue;
         };
-        match ty_impl_item.kind {
-            ty::AssocKind::Const => {
-                tcx.ensure().compare_impl_const((
-                    impl_item.expect_local(),
-                    ty_impl_item.trait_item_def_id.unwrap(),
-                ));
-            }
-            ty::AssocKind::Fn => {
-                compare_impl_method(tcx, ty_impl_item, ty_trait_item, trait_ref);
-            }
-            ty::AssocKind::Type => {
-                compare_impl_ty(tcx, ty_impl_item, ty_trait_item, trait_ref);
+
+        let res = tcx.ensure().compare_impl_item(impl_item.expect_local());
+
+        if res.is_ok() {
+            match ty_impl_item.kind {
+                ty::AssocKind::Fn => {
+                    compare_impl_item::refine::check_refining_return_position_impl_trait_in_trait(
+                        tcx,
+                        ty_impl_item,
+                        ty_trait_item,
+                        tcx.impl_trait_ref(ty_impl_item.container_id(tcx))
+                            .unwrap()
+                            .instantiate_identity(),
+                    );
+                }
+                ty::AssocKind::Const => {}
+                ty::AssocKind::Type => {}
             }
         }
 
@@ -1307,8 +1363,8 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, adt: ty::AdtDef<'tcx>) 
     // "known" respecting #[non_exhaustive] attributes.
     let field_infos = adt.all_fields().map(|field| {
         let ty = field.ty(tcx, GenericArgs::identity_for_item(tcx, field.did));
-        let param_env = tcx.param_env(field.did);
-        let layout = tcx.layout_of(param_env.and(ty));
+        let typing_env = ty::TypingEnv::non_body_analysis(tcx, field.did);
+        let layout = tcx.layout_of(typing_env.as_query_input(ty));
         // We are currently checking the type this field came from, so it must be local
         let span = tcx.hir().span_if_local(field.did).unwrap();
         let trivial = layout.is_ok_and(|layout| layout.is_1zst());
@@ -1460,6 +1516,7 @@ fn check_enum(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 
     detect_discriminant_duplicate(tcx, def);
     check_transparent(tcx, def);
+    check_unsafe_fields(tcx, def_id);
 }
 
 /// Part of enum check. Given the discriminants of an enum, errors if two or more discriminants are equal

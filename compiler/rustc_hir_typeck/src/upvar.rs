@@ -14,7 +14,7 @@
 //! to everything owned by `x`, so the result is the same for something
 //! like `x.f = 5` and so on (presuming `x` is not a borrowed pointer to a
 //! struct). These adjustments are performed in
-//! `adjust_upvar_borrow_kind()` (you can trace backwards through the code
+//! `adjust_for_non_move_closure` (you can trace backwards through the code
 //! from there).
 //!
 //! The fact that we are inferring borrow kinds as we go results in a
@@ -1257,7 +1257,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) -> Option<FxIndexSet<UpvarMigrationInfo>> {
         let ty = self.resolve_vars_if_possible(self.node_ty(var_hir_id));
 
-        if !ty.has_significant_drop(self.tcx, self.tcx.param_env(closure_def_id)) {
+        // FIXME(#132279): Using `non_body_analysis` here feels wrong.
+        if !ty.has_significant_drop(
+            self.tcx,
+            ty::TypingEnv::non_body_analysis(self.tcx, closure_def_id),
+        ) {
             debug!("does not have significant drop");
             return None;
         }
@@ -1535,8 +1539,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         base_path_ty: Ty<'tcx>,
         captured_by_move_projs: Vec<&[Projection<'tcx>]>,
     ) -> bool {
-        let needs_drop =
-            |ty: Ty<'tcx>| ty.has_significant_drop(self.tcx, self.tcx.param_env(closure_def_id));
+        // FIXME(#132279): Using `non_body_analysis` here feels wrong.
+        let needs_drop = |ty: Ty<'tcx>| {
+            ty.has_significant_drop(
+                self.tcx,
+                ty::TypingEnv::non_body_analysis(self.tcx, closure_def_id),
+            )
+        };
 
         let is_drop_defined_for_ty = |ty: Ty<'tcx>| {
             let drop_trait = self.tcx.require_lang_item(hir::LangItem::Drop, Some(closure_span));
@@ -1675,8 +1684,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // want to capture by ref to allow precise capture using reborrows.
             //
             // If the data will be moved out of this place, then the place will be truncated
-            // at the first Deref in `adjust_upvar_borrow_kind_for_consume` and then moved into
-            // the closure.
+            // at the first Deref in `adjust_for_move_closure` and then moved into the closure.
             hir::CaptureBy::Value { .. } if !place.deref_tys().any(Ty::is_ref) => {
                 ty::UpvarCapture::ByValue
             }
@@ -1793,7 +1801,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut is_mutbl = bm.1;
 
         for pointer_ty in place.deref_tys() {
-            match pointer_ty.kind() {
+            match self.structurally_resolve_type(self.tcx.hir().span(var_hir_id), pointer_ty).kind()
+            {
                 // We don't capture derefs of raw ptrs
                 ty::RawPtr(_, _) => unreachable!(),
 
@@ -1807,7 +1816,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // Dereferencing a box doesn't change mutability
                 ty::Adt(def, ..) if def.is_box() => {}
 
-                unexpected_ty => bug!("deref of unexpected pointer type {:?}", unexpected_ty),
+                unexpected_ty => span_bug!(
+                    self.tcx.hir().span(var_hir_id),
+                    "deref of unexpected pointer type {:?}",
+                    unexpected_ty
+                ),
             }
         }
 
@@ -1826,7 +1839,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 /// captured by move.
 ///
 /// ```rust
-/// #![feature(async_closure)]
 /// let x = &1i32; // Let's call this lifetime `'1`.
 /// let c = async move || {
 ///     println!("{:?}", *x);
@@ -1841,7 +1853,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 /// child capture with the lifetime of the parent coroutine-closure's env.
 ///
 /// ```rust
-/// #![feature(async_closure)]
 /// let mut x = 1i32;
 /// let c = async || {
 ///     x = 1;
@@ -1924,7 +1935,7 @@ fn drop_location_span(tcx: TyCtxt<'_>, hir_id: HirId) -> Span {
     let owner_node = tcx.hir_node(owner_id);
     let owner_span = match owner_node {
         hir::Node::Item(item) => match item.kind {
-            hir::ItemKind::Fn(_, _, owner_id) => tcx.hir().span(owner_id.hir_id),
+            hir::ItemKind::Fn { body: owner_id, .. } => tcx.hir().span(owner_id.hir_id),
             _ => {
                 bug!("Drop location span error: need to handle more ItemKind '{:?}'", item.kind);
             }

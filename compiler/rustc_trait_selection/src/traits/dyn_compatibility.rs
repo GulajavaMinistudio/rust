@@ -11,6 +11,7 @@ use rustc_abi::BackendRepr;
 use rustc_errors::FatalError;
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
+use rustc_middle::bug;
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{
     self, EarlyBinder, ExistentialPredicateStableCmpExt as _, GenericArgs, Ty, TyCtxt,
@@ -18,7 +19,6 @@ use rustc_middle::ty::{
     TypeVisitableExt, TypeVisitor, TypingMode, Upcast,
 };
 use rustc_span::Span;
-use rustc_span::symbol::Symbol;
 use smallvec::SmallVec;
 use tracing::{debug, instrument};
 
@@ -150,8 +150,8 @@ fn get_sized_bounds(tcx: TyCtxt<'_>, trait_def_id: DefId) -> SmallVec<[Span; 1]>
                     .predicates
                     .iter()
                     .filter_map(|pred| {
-                        match pred {
-                            hir::WherePredicate::BoundPredicate(pred)
+                        match pred.kind {
+                            hir::WherePredicateKind::BoundPredicate(pred)
                                 if pred.bounded_ty.hir_id.owner.to_def_id() == trait_def_id =>
                             {
                                 // Fetch spans for trait bounds that are Sized:
@@ -329,10 +329,7 @@ pub fn dyn_compatibility_violations_for_assoc_item(
             .collect(),
         // Associated types can only be dyn-compatible if they have `Self: Sized` bounds.
         ty::AssocKind::Type => {
-            if !tcx.features().generic_associated_types_extended()
-                && !tcx.generics_of(item.def_id).is_own_empty()
-                && !item.is_impl_trait_in_trait()
-            {
+            if !tcx.generics_of(item.def_id).is_own_empty() && !item.is_impl_trait_in_trait() {
                 vec![DynCompatibilityViolation::GAT(item.name, item.ident(tcx).span)]
             } else {
                 // We will permit associated types if they are explicitly mentioned in the trait object.
@@ -513,7 +510,7 @@ fn check_receiver_correct<'tcx>(tcx: TyCtxt<'tcx>, trait_def_id: DefId, method: 
 
     let method_def_id = method.def_id;
     let sig = tcx.fn_sig(method_def_id).instantiate_identity();
-    let param_env = tcx.param_env(method_def_id);
+    let typing_env = ty::TypingEnv::non_body_analysis(tcx, method_def_id);
     let receiver_ty = tcx.liberate_late_bound_regions(method_def_id, sig.input(0));
 
     if receiver_ty == tcx.types.self_param {
@@ -523,7 +520,7 @@ fn check_receiver_correct<'tcx>(tcx: TyCtxt<'tcx>, trait_def_id: DefId, method: 
 
     // e.g., `Rc<()>`
     let unit_receiver_ty = receiver_for_self_ty(tcx, receiver_ty, tcx.types.unit, method_def_id);
-    match tcx.layout_of(param_env.and(unit_receiver_ty)).map(|l| l.backend_repr) {
+    match tcx.layout_of(typing_env.as_query_input(unit_receiver_ty)).map(|l| l.backend_repr) {
         Ok(BackendRepr::Scalar(..)) => (),
         abi => {
             tcx.dcx().span_delayed_bug(
@@ -538,7 +535,7 @@ fn check_receiver_correct<'tcx>(tcx: TyCtxt<'tcx>, trait_def_id: DefId, method: 
     // e.g., `Rc<dyn Trait>`
     let trait_object_receiver =
         receiver_for_self_ty(tcx, receiver_ty, trait_object_ty, method_def_id);
-    match tcx.layout_of(param_env.and(trait_object_receiver)).map(|l| l.backend_repr) {
+    match tcx.layout_of(typing_env.as_query_input(trait_object_receiver)).map(|l| l.backend_repr) {
         Ok(BackendRepr::ScalarPair(..)) => (),
         abi => {
             tcx.dcx().span_delayed_bug(
@@ -679,7 +676,7 @@ fn receiver_is_dispatchable<'tcx>(
     // FIXME(mikeyhew) this is a total hack. Once dyn_compatible_for_dispatch is stabilized, we can
     // replace this with `dyn Trait`
     let unsized_self_ty: Ty<'tcx> =
-        Ty::new_param(tcx, u32::MAX, Symbol::intern("RustaceansAreAwesome"));
+        Ty::new_param(tcx, u32::MAX, rustc_span::sym::RustaceansAreAwesome);
 
     // `Receiver[Self => U]`
     let unsized_receiver_ty =
@@ -707,7 +704,7 @@ fn receiver_is_dispatchable<'tcx>(
         let caller_bounds =
             param_env.caller_bounds().iter().chain([unsize_predicate, trait_predicate]);
 
-        ty::ParamEnv::new(tcx.mk_clauses_from_iter(caller_bounds), param_env.reveal())
+        ty::ParamEnv::new(tcx.mk_clauses_from_iter(caller_bounds))
     };
 
     // Receiver: DispatchFromDyn<Receiver[Self => U]>
@@ -905,23 +902,59 @@ fn contains_illegal_impl_trait_in_trait<'tcx>(
     fn_def_id: DefId,
     ty: ty::Binder<'tcx, Ty<'tcx>>,
 ) -> Option<MethodViolationCode> {
-    // This would be caught below, but rendering the error as a separate
-    // `async-specific` message is better.
-    if tcx.asyncness(fn_def_id).is_async() {
-        return Some(MethodViolationCode::AsyncFn);
-    }
+    let ty = tcx.liberate_late_bound_regions(fn_def_id, ty);
 
-    // FIXME(RPITIT): Perhaps we should use a visitor here?
-    ty.skip_binder().walk().find_map(|arg| {
-        if let ty::GenericArgKind::Type(ty) = arg.unpack()
-            && let ty::Alias(ty::Projection, proj) = ty.kind()
-            && tcx.is_impl_trait_in_trait(proj.def_id)
-        {
-            Some(MethodViolationCode::ReferencesImplTraitInTrait(tcx.def_span(proj.def_id)))
-        } else {
+    if tcx.asyncness(fn_def_id).is_async() {
+        // FIXME(async_fn_in_dyn_trait): Think of a better way to unify these code paths
+        // to issue an appropriate feature suggestion when users try to use AFIDT.
+        // Obviously we must only do this once AFIDT is finished enough to actually be usable.
+        if tcx.features().async_fn_in_dyn_trait() {
+            let ty::Alias(ty::Projection, proj) = *ty.kind() else {
+                bug!("expected async fn in trait to return an RPITIT");
+            };
+            assert!(tcx.is_impl_trait_in_trait(proj.def_id));
+
+            // FIXME(async_fn_in_dyn_trait): We should check that this bound is legal too,
+            // and stop relying on `async fn` in the definition.
+            for bound in tcx.item_bounds(proj.def_id).instantiate(tcx, proj.args) {
+                if let Some(violation) = bound
+                    .visit_with(&mut IllegalRpititVisitor { tcx, allowed: Some(proj) })
+                    .break_value()
+                {
+                    return Some(violation);
+                }
+            }
+
             None
+        } else {
+            // Rendering the error as a separate `async-specific` message is better.
+            Some(MethodViolationCode::AsyncFn)
         }
-    })
+    } else {
+        ty.visit_with(&mut IllegalRpititVisitor { tcx, allowed: None }).break_value()
+    }
+}
+
+struct IllegalRpititVisitor<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    allowed: Option<ty::AliasTy<'tcx>>,
+}
+
+impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for IllegalRpititVisitor<'tcx> {
+    type Result = ControlFlow<MethodViolationCode>;
+
+    fn visit_ty(&mut self, ty: Ty<'tcx>) -> Self::Result {
+        if let ty::Alias(ty::Projection, proj) = *ty.kind()
+            && Some(proj) != self.allowed
+            && self.tcx.is_impl_trait_in_trait(proj.def_id)
+        {
+            ControlFlow::Break(MethodViolationCode::ReferencesImplTraitInTrait(
+                self.tcx.def_span(proj.def_id),
+            ))
+        } else {
+            ty.super_visit_with(self)
+        }
+    }
 }
 
 pub(crate) fn provide(providers: &mut Providers) {

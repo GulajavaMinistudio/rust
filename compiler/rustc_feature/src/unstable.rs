@@ -1,8 +1,9 @@
 //! List of the unstable feature gates.
 
+use std::path::PathBuf;
+
 use rustc_data_structures::fx::FxHashSet;
-use rustc_span::Span;
-use rustc_span::symbol::{Symbol, sym};
+use rustc_span::{Span, Symbol, sym};
 
 use super::{Feature, to_nonzero};
 
@@ -330,16 +331,18 @@ declare_features! (
     (unstable, hexagon_target_feature, "1.27.0", Some(44839)),
     (unstable, lahfsahf_target_feature, "1.78.0", Some(44839)),
     (unstable, loongarch_target_feature, "1.73.0", Some(44839)),
+    (unstable, m68k_target_feature, "CURRENT_RUSTC_VERSION", Some(134328)),
     (unstable, mips_target_feature, "1.27.0", Some(44839)),
     (unstable, powerpc_target_feature, "1.27.0", Some(44839)),
     (unstable, prfchw_target_feature, "1.78.0", Some(44839)),
     (unstable, riscv_target_feature, "1.45.0", Some(44839)),
     (unstable, rtm_target_feature, "1.35.0", Some(44839)),
     (unstable, s390x_target_feature, "1.82.0", Some(44839)),
-    (unstable, sparc_target_feature, "CURRENT_RUSTC_VERSION", Some(132783)),
+    (unstable, sparc_target_feature, "1.84.0", Some(132783)),
     (unstable, sse4a_target_feature, "1.27.0", Some(44839)),
     (unstable, tbm_target_feature, "1.27.0", Some(44839)),
     (unstable, wasm_target_feature, "1.30.0", Some(44839)),
+    (unstable, x87_target_feature, "CURRENT_RUSTC_VERSION", Some(44839)),
     // !!!!    !!!!    !!!!    !!!!   !!!!    !!!!    !!!!    !!!!    !!!!    !!!!    !!!!
     // Features are listed in alphabetical order. Tidy will fail if you don't keep it this way.
     // !!!!    !!!!    !!!!    !!!!   !!!!    !!!!    !!!!    !!!!    !!!!    !!!!    !!!!
@@ -374,20 +377,26 @@ declare_features! (
     (unstable, arbitrary_self_types_pointers, "1.83.0", Some(44874)),
     /// Enables experimental inline assembly support for additional architectures.
     (unstable, asm_experimental_arch, "1.58.0", Some(93335)),
+    /// Enables experimental register support in inline assembly.
+    (unstable, asm_experimental_reg, "CURRENT_RUSTC_VERSION", Some(133416)),
     /// Allows using `label` operands in inline assembly.
     (unstable, asm_goto, "1.78.0", Some(119364)),
+    /// Allows using `label` operands in inline assembly together with output operands.
+    (unstable, asm_goto_with_outputs, "CURRENT_RUSTC_VERSION", Some(119364)),
     /// Allows the `may_unwind` option in inline assembly.
     (unstable, asm_unwind, "1.58.0", Some(93334)),
     /// Allows users to enforce equality of associated constants `TraitImpl<AssocConst=3>`.
     (unstable, associated_const_equality, "1.58.0", Some(92827)),
     /// Allows associated type defaults.
     (unstable, associated_type_defaults, "1.2.0", Some(29661)),
-    /// Allows `async || body` closures.
-    (unstable, async_closure, "1.37.0", Some(62290)),
+    /// Allows async functions to be called from `dyn Trait`.
+    (incomplete, async_fn_in_dyn_trait, "CURRENT_RUSTC_VERSION", Some(133119)),
     /// Allows `#[track_caller]` on async functions.
     (unstable, async_fn_track_caller, "1.73.0", Some(110011)),
     /// Allows `for await` loops.
     (unstable, async_for_loop, "1.77.0", Some(118898)),
+    /// Allows `async` trait bound modifier.
+    (unstable, async_trait_bounds, "CURRENT_RUSTC_VERSION", Some(62290)),
     /// Allows using C-variadics.
     (unstable, c_variadic, "1.34.0", Some(44930)),
     /// Allows the use of `#[cfg(<true/false>)]`.
@@ -424,6 +433,8 @@ declare_features! (
     (unstable, const_async_blocks, "1.53.0", Some(85368)),
     /// Allows `const || {}` closures in const contexts.
     (incomplete, const_closures, "1.68.0", Some(106003)),
+    /// Allows using `~const Destruct` bounds and calling drop impls in const contexts.
+    (unstable, const_destruct, "CURRENT_RUSTC_VERSION", Some(133214)),
     /// Allows `for _ in _` loops in const contexts.
     (unstable, const_for, "1.56.0", Some(87575)),
     /// Be more precise when looking for live drops in a const context.
@@ -445,14 +456,15 @@ declare_features! (
     (unstable, custom_test_frameworks, "1.30.0", Some(50297)),
     /// Allows declarative macros 2.0 (`macro`).
     (unstable, decl_macro, "1.17.0", Some(39412)),
+    /// Allows the use of default values on struct definitions and the construction of struct
+    /// literals with the functional update syntax without a base.
+    (unstable, default_field_values, "CURRENT_RUSTC_VERSION", Some(132162)),
     /// Allows using `#[deprecated_safe]` to deprecate the safeness of a function or trait
     (unstable, deprecated_safe, "1.61.0", Some(94978)),
     /// Allows having using `suggestion` in the `#[deprecated]` attribute.
     (unstable, deprecated_suggestion, "1.61.0", Some(94785)),
     /// Allows deref patterns.
     (incomplete, deref_patterns, "1.79.0", Some(87121)),
-    /// Controls errors in trait implementations.
-    (unstable, do_not_recommend, "1.67.0", Some(51992)),
     /// Tells rustdoc to automatically generate `#[doc(cfg(...))]`.
     (unstable, doc_auto_cfg, "1.58.0", Some(43781)),
     /// Allows `#[doc(cfg(...))]`.
@@ -467,9 +479,6 @@ declare_features! (
     (unstable, exhaustive_patterns, "1.13.0", Some(51085)),
     /// Allows explicit tail calls via `become` expression.
     (incomplete, explicit_tail_calls, "1.72.0", Some(112788)),
-    /// Allows using `efiapi`, `sysv64` and `win64` as calling convention
-    /// for functions with varargs.
-    (unstable, extended_varargs_abi_support, "1.65.0", Some(100189)),
     /// Allows defining `extern type`s.
     (unstable, extern_types, "1.23.0", Some(43467)),
     /// Allow using 128-bit (quad precision) floating point numbers.
@@ -492,20 +501,22 @@ declare_features! (
     (unstable, gen_blocks, "1.75.0", Some(117078)),
     /// Infer generic args for both consts and types.
     (unstable, generic_arg_infer, "1.55.0", Some(85077)),
-    /// An extension to the `generic_associated_types` feature, allowing incomplete features.
-    (incomplete, generic_associated_types_extended, "1.61.0", Some(95451)),
     /// Allows non-trivial generic constants which have to have wfness manually propagated to callers
     (incomplete, generic_const_exprs, "1.56.0", Some(76560)),
     /// Allows generic parameters and where-clauses on free & associated const items.
     (incomplete, generic_const_items, "1.73.0", Some(113521)),
     /// Allows registering static items globally, possibly across crates, to iterate over at runtime.
     (unstable, global_registration, "1.80.0", Some(125119)),
+    /// Allows using guards in patterns.
+    (incomplete, guard_patterns, "CURRENT_RUSTC_VERSION", Some(129967)),
     /// Allows using `..=X` as a patterns in slices.
     (unstable, half_open_range_patterns_in_slices, "1.66.0", Some(67264)),
     /// Allows `if let` guard in match arms.
     (unstable, if_let_guard, "1.47.0", Some(51114)),
     /// Allows `impl Trait` to be used inside associated types (RFC 2515).
     (unstable, impl_trait_in_assoc_type, "1.70.0", Some(63063)),
+    /// Allows `impl Trait` in bindings (`let`).
+    (unstable, impl_trait_in_bindings, "1.64.0", Some(63065)),
     /// Allows `impl Trait` as output type in `Fn` traits in return position of functions.
     (unstable, impl_trait_in_fn_trait_return, "1.64.0", Some(99697)),
     /// Allows associated types in inherent impls.
@@ -529,6 +540,8 @@ declare_features! (
     (unstable, macro_metavar_expr_concat, "1.81.0", Some(124225)),
     /// Allows `#[marker]` on certain traits allowing overlapping implementations.
     (unstable, marker_trait_attr, "1.30.0", Some(29864)),
+    /// Enables the generic const args MVP (only bare paths, not arbitrary computation).
+    (incomplete, min_generic_const_args, "1.84.0", Some(132980)),
     /// A minimal, sound subset of specialization intended to be used by the
     /// standard library until the soundness issues with specialization
     /// are fixed.
@@ -623,6 +636,10 @@ declare_features! (
     /// Allows creation of instances of a struct by moving fields that have
     /// not changed from prior instances of the same struct (RFC #2528)
     (unstable, type_changing_struct_update, "1.58.0", Some(86555)),
+    /// Allows using `unsafe<'a> &'a T` unsafe binder types.
+    (incomplete, unsafe_binders, "CURRENT_RUSTC_VERSION", Some(130516)),
+    /// Allows declaring fields `unsafe`.
+    (incomplete, unsafe_fields, "CURRENT_RUSTC_VERSION", Some(132922)),
     /// Allows const generic parameters to be defined with types that
     /// are not `Sized`, e.g. `fn foo<const N: [u8]>() {`.
     (incomplete, unsized_const_params, "1.82.0", Some(95174)),
@@ -648,6 +665,54 @@ declare_features! (
     // feature-group-end: actual feature gates
     // -------------------------------------------------------------------------
 );
+
+impl Features {
+    pub fn dump_feature_usage_metrics(
+        &self,
+        metrics_path: PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(serde::Serialize)]
+        struct LibFeature {
+            symbol: String,
+        }
+
+        #[derive(serde::Serialize)]
+        struct LangFeature {
+            symbol: String,
+            since: Option<String>,
+        }
+
+        #[derive(serde::Serialize)]
+        struct FeatureUsage {
+            lib_features: Vec<LibFeature>,
+            lang_features: Vec<LangFeature>,
+        }
+
+        let metrics_file = std::fs::File::create(metrics_path)?;
+        let metrics_file = std::io::BufWriter::new(metrics_file);
+
+        let lib_features = self
+            .enabled_lib_features
+            .iter()
+            .map(|EnabledLibFeature { gate_name, .. }| LibFeature { symbol: gate_name.to_string() })
+            .collect();
+
+        let lang_features = self
+            .enabled_lang_features
+            .iter()
+            .map(|EnabledLangFeature { gate_name, stable_since, .. }| LangFeature {
+                symbol: gate_name.to_string(),
+                since: stable_since.map(|since| since.to_string()),
+            })
+            .collect();
+
+        let feature_usage = FeatureUsage { lib_features, lang_features };
+
+        serde_json::to_writer(metrics_file, &feature_usage)?;
+
+        Ok(())
+    }
+}
 
 /// Some features are not allowed to be used together at the same time, if
 /// the two are present, produce an error.

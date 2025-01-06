@@ -249,6 +249,13 @@ impl<'tcx> MainThreadState<'tcx> {
                 // Figure out exit code.
                 let ret_place = this.machine.main_fn_ret_place.clone().unwrap();
                 let exit_code = this.read_target_isize(&ret_place)?;
+                // Rust uses `isize` but the underlying type of an exit code is `i32`.
+                // Do a saturating cast.
+                let exit_code = i32::try_from(exit_code).unwrap_or(if exit_code >= 0 {
+                    i32::MAX
+                } else {
+                    i32::MIN
+                });
                 // Deal with our thread-local memory. We do *not* want to actually free it, instead we consider TLS
                 // to be like a global `static`, so that all memory reached by it is considered to "not leak".
                 this.terminate_active_thread(TlsAllocAction::Leak)?;
@@ -268,10 +275,10 @@ pub fn create_ecx<'tcx>(
     entry_type: EntryFnType,
     config: &MiriConfig,
 ) -> InterpResult<'tcx, InterpCx<'tcx, MiriMachine<'tcx>>> {
-    let param_env = ty::ParamEnv::reveal_all();
-    let layout_cx = LayoutCx::new(tcx, param_env);
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    let layout_cx = LayoutCx::new(tcx, typing_env);
     let mut ecx =
-        InterpCx::new(tcx, rustc_span::DUMMY_SP, param_env, MiriMachine::new(config, layout_cx));
+        InterpCx::new(tcx, rustc_span::DUMMY_SP, typing_env, MiriMachine::new(config, layout_cx));
 
     // Some parts of initialization require a full `InterpCx`.
     MiriMachine::late_init(&mut ecx, config, {
@@ -376,7 +383,7 @@ pub fn create_ecx<'tcx>(
             let main_ret_ty = main_ret_ty.no_bound_vars().unwrap();
             let start_instance = ty::Instance::try_resolve(
                 tcx,
-                ty::ParamEnv::reveal_all(),
+                typing_env,
                 start_id,
                 tcx.mk_args(&[ty::GenericArg::from(main_ret_ty)]),
             )
@@ -421,7 +428,7 @@ pub fn create_ecx<'tcx>(
 }
 
 /// Evaluates the entry function specified by `entry_id`.
-/// Returns `Some(return_code)` if program executed completed.
+/// Returns `Some(return_code)` if program execution completed.
 /// Returns `None` if an evaluation error occurred.
 #[expect(clippy::needless_lifetimes)]
 pub fn eval_entry<'tcx>(
@@ -429,7 +436,7 @@ pub fn eval_entry<'tcx>(
     entry_id: DefId,
     entry_type: EntryFnType,
     config: MiriConfig,
-) -> Option<i64> {
+) -> Option<i32> {
     // Copy setting before we move `config`.
     let ignore_leaks = config.ignore_leaks;
 

@@ -1,14 +1,13 @@
 use std::borrow::Cow;
 
-use rustc_ast::token::{self, Token, TokenKind};
+use rustc_ast::token::{self, Delimiter, Token, TokenKind};
 use rustc_ast::tokenstream::TokenStream;
 use rustc_errors::{Applicability, Diag, DiagCtxtHandle, DiagMessage};
 use rustc_macros::Subdiagnostic;
 use rustc_parse::parser::{Parser, Recovery, token_descr};
 use rustc_session::parse::ParseSess;
 use rustc_span::source_map::SourceMap;
-use rustc_span::symbol::Ident;
-use rustc_span::{ErrorGuaranteed, Span};
+use rustc_span::{ErrorGuaranteed, Ident, Span};
 use tracing::debug;
 
 use super::macro_rules::{NoopTracker, parser_from_cx};
@@ -68,7 +67,9 @@ pub(super) fn failed_to_match_macro(
 
     if let MatcherLoc::Token { token: expected_token } = &remaining_matcher
         && (matches!(expected_token.kind, TokenKind::Interpolated(_))
-            || matches!(token.kind, TokenKind::Interpolated(_)))
+            || matches!(token.kind, TokenKind::Interpolated(_))
+            || matches!(expected_token.kind, TokenKind::OpenDelim(Delimiter::Invisible(_)))
+            || matches!(token.kind, TokenKind::OpenDelim(Delimiter::Invisible(_))))
     {
         err.note("captured metavariables except for `:tt`, `:ident` and `:lifetime` cannot be compared to other tokens");
         err.note("see <https://doc.rust-lang.org/nightly/reference/macros-by-example.html#forwarding-a-matched-fragment> for more information");

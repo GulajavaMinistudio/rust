@@ -23,6 +23,7 @@ pub(crate) const ALIGN: usize = 40;
 
 /// An indication of where we are in the control flow graph. Used for printing
 /// extra information in `dump_mir`
+#[derive(Clone)]
 pub enum PassWhere {
     /// We have not started dumping the control flow graph, but we are about to.
     BeforeCFG,
@@ -603,8 +604,8 @@ fn write_function_coverage_info(
     for (id, expression) in expressions.iter_enumerated() {
         writeln!(w, "{INDENT}coverage {id:?} => {expression:?};")?;
     }
-    for coverage::Mapping { kind, source_region } in mappings {
-        writeln!(w, "{INDENT}coverage {kind:?} => {source_region:?};")?;
+    for coverage::Mapping { kind, span } in mappings {
+        writeln!(w, "{INDENT}coverage {kind:?} => {span:?};")?;
     }
     writeln!(w)?;
 
@@ -834,6 +835,11 @@ impl Debug for Statement<'_> {
             Intrinsic(box ref intrinsic) => write!(fmt, "{intrinsic}"),
             ConstEvalCounter => write!(fmt, "ConstEvalCounter"),
             Nop => write!(fmt, "nop"),
+            BackwardIncompatibleDropHint { ref place, reason: _ } => {
+                // For now, we don't record the reason because there is only one use case,
+                // which is to report breaking change in drop order by Edition 2024
+                write!(fmt, "backward incompatible drop({place:?})")
+            }
         }
     }
 }
@@ -1062,7 +1068,6 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                 pretty_print_const(b, fmt, false)?;
                 write!(fmt, "]")
             }
-            Len(ref a) => write!(fmt, "Len({a:?})"),
             Cast(ref kind, ref place, ref ty) => {
                 with_no_trimmed_paths!(write!(fmt, "{place:?} as {ty} ({kind:?})"))
             }

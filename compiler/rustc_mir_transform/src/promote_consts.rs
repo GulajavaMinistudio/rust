@@ -325,7 +325,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                 if let TempState::Defined { location: loc, .. } = self.temps[local]
                     && let Left(statement) =  self.body.stmt_at(loc)
                     && let Some((_, Rvalue::Use(Operand::Constant(c)))) = statement.kind.as_assign()
-                    && let Some(idx) = c.const_.try_eval_target_usize(self.tcx, self.param_env)
+                    && let Some(idx) = c.const_.try_eval_target_usize(self.tcx, self.typing_env)
                     // Determine the type of the thing we are indexing.
                     && let ty::Array(_, len) = place_base.ty(self.body, self.tcx).ty.kind()
                     // It's an array; determine its length.
@@ -430,9 +430,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                 self.validate_operand(op)?
             }
 
-            Rvalue::Discriminant(place) | Rvalue::Len(place) => {
-                self.validate_place(place.as_ref())?
-            }
+            Rvalue::Discriminant(place) => self.validate_place(place.as_ref())?,
 
             Rvalue::ThreadLocalRef(_) => return Err(Unpromotable),
 
@@ -490,7 +488,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                             // Integer division: the RHS must be a non-zero const.
                             let rhs_val = match rhs {
                                 Operand::Constant(c) => {
-                                    c.const_.try_eval_scalar_int(self.tcx, self.param_env)
+                                    c.const_.try_eval_scalar_int(self.tcx, self.typing_env)
                                 }
                                 _ => None,
                             };
@@ -509,7 +507,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                                         let lhs_val = match lhs {
                                             Operand::Constant(c) => c
                                                 .const_
-                                                .try_eval_scalar_int(self.tcx, self.param_env),
+                                                .try_eval_scalar_int(self.tcx, self.typing_env),
                                             _ => None,
                                         };
                                         let lhs_min = sz.signed_int_min();

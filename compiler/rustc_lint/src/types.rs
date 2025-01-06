@@ -4,7 +4,7 @@ use std::ops::ControlFlow;
 use rustc_abi::{BackendRepr, ExternAbi, TagEncoding, Variants, WrappingRange};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::DiagMessage;
-use rustc_hir::{Expr, ExprKind};
+use rustc_hir::{Expr, ExprKind, LangItem};
 use rustc_middle::bug;
 use rustc_middle::ty::layout::{LayoutOf, SizeSkeleton};
 use rustc_middle::ty::{
@@ -12,8 +12,7 @@ use rustc_middle::ty::{
 };
 use rustc_session::{declare_lint, declare_lint_pass, impl_lint_pass};
 use rustc_span::def_id::LocalDefId;
-use rustc_span::symbol::sym;
-use rustc_span::{Span, Symbol, source_map};
+use rustc_span::{Span, Symbol, source_map, sym};
 use tracing::debug;
 use {rustc_ast as ast, rustc_hir as hir};
 
@@ -23,7 +22,9 @@ use crate::lints::{
     AmbiguousWidePointerComparisons, AmbiguousWidePointerComparisonsAddrMetadataSuggestion,
     AmbiguousWidePointerComparisonsAddrSuggestion, AtomicOrderingFence, AtomicOrderingLoad,
     AtomicOrderingStore, ImproperCTypes, InvalidAtomicOrderingDiag, InvalidNanComparisons,
-    InvalidNanComparisonsSuggestion, UnusedComparisons, VariantSizeDifferencesDiag,
+    InvalidNanComparisonsSuggestion, UnpredictableFunctionPointerComparisons,
+    UnpredictableFunctionPointerComparisonsSuggestion, UnusedComparisons,
+    VariantSizeDifferencesDiag,
 };
 use crate::{LateContext, LateLintPass, LintContext, fluent_generated as fluent};
 
@@ -166,6 +167,35 @@ declare_lint! {
     "detects ambiguous wide pointer comparisons"
 }
 
+declare_lint! {
+    /// The `unpredictable_function_pointer_comparisons` lint checks comparison
+    /// of function pointer as the operands.
+    ///
+    /// ### Example
+    ///
+    /// ```rust
+    /// fn a() {}
+    /// fn b() {}
+    ///
+    /// let f: fn() = a;
+    /// let g: fn() = b;
+    ///
+    /// let _ = f == g;
+    /// ```
+    ///
+    /// {{produces}}
+    ///
+    /// ### Explanation
+    ///
+    /// Function pointers comparisons do not produce meaningful result since
+    /// they are never guaranteed to be unique and could vary between different
+    /// code generation units. Furthermore, different functions could have the
+    /// same address after being merged together.
+    UNPREDICTABLE_FUNCTION_POINTER_COMPARISONS,
+    Warn,
+    "detects unpredictable function pointer comparisons"
+}
+
 #[derive(Copy, Clone, Default)]
 pub(crate) struct TypeLimits {
     /// Id of the last visited negated expression
@@ -178,7 +208,8 @@ impl_lint_pass!(TypeLimits => [
     UNUSED_COMPARISONS,
     OVERFLOWING_LITERALS,
     INVALID_NAN_COMPARISONS,
-    AMBIGUOUS_WIDE_POINTER_COMPARISONS
+    AMBIGUOUS_WIDE_POINTER_COMPARISONS,
+    UNPREDICTABLE_FUNCTION_POINTER_COMPARISONS
 ]);
 
 impl TypeLimits {
@@ -255,7 +286,7 @@ fn lint_nan<'tcx>(
     cx.emit_span_lint(INVALID_NAN_COMPARISONS, e.span, lint);
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum ComparisonOp {
     BinOp(hir::BinOpKind),
     Other,
@@ -292,7 +323,7 @@ fn lint_wide_pointer<'tcx>(
             _ => return None,
         };
 
-        (!ty.is_sized(cx.tcx, cx.param_env))
+        (!ty.is_sized(cx.tcx, cx.typing_env()))
             .then(|| (refs, modifiers, matches!(ty.kind(), ty::Dynamic(_, _, ty::Dyn))))
     };
 
@@ -383,6 +414,125 @@ fn lint_wide_pointer<'tcx>(
     );
 }
 
+fn lint_fn_pointer<'tcx>(
+    cx: &LateContext<'tcx>,
+    e: &'tcx hir::Expr<'tcx>,
+    cmpop: ComparisonOp,
+    l: &'tcx hir::Expr<'tcx>,
+    r: &'tcx hir::Expr<'tcx>,
+) {
+    let peel_refs = |mut ty: Ty<'tcx>| -> (Ty<'tcx>, usize) {
+        let mut refs = 0;
+
+        while let ty::Ref(_, inner_ty, _) = ty.kind() {
+            ty = *inner_ty;
+            refs += 1;
+        }
+
+        (ty, refs)
+    };
+
+    // Left and right operands can have borrows, remove them
+    let l = l.peel_borrows();
+    let r = r.peel_borrows();
+
+    let Some(l_ty) = cx.typeck_results().expr_ty_opt(l) else { return };
+    let Some(r_ty) = cx.typeck_results().expr_ty_opt(r) else { return };
+
+    // Remove any references as `==` will deref through them (and count the
+    // number of references removed, for latter).
+    let (l_ty, l_ty_refs) = peel_refs(l_ty);
+    let (r_ty, r_ty_refs) = peel_refs(r_ty);
+
+    if l_ty.is_fn() && r_ty.is_fn() {
+        // both operands are function pointers, fallthrough
+    } else if let ty::Adt(l_def, l_args) = l_ty.kind()
+        && let ty::Adt(r_def, r_args) = r_ty.kind()
+        && cx.tcx.is_lang_item(l_def.did(), LangItem::Option)
+        && cx.tcx.is_lang_item(r_def.did(), LangItem::Option)
+        && let Some(l_some_arg) = l_args.get(0)
+        && let Some(r_some_arg) = r_args.get(0)
+        && l_some_arg.expect_ty().is_fn()
+        && r_some_arg.expect_ty().is_fn()
+    {
+        // both operands are `Option<{function ptr}>`
+        return cx.emit_span_lint(
+            UNPREDICTABLE_FUNCTION_POINTER_COMPARISONS,
+            e.span,
+            UnpredictableFunctionPointerComparisons::Warn,
+        );
+    } else {
+        // types are not function pointers, nothing to do
+        return;
+    }
+
+    // Let's try to suggest `ptr::fn_addr_eq` if/when possible.
+
+    let is_eq_ne = matches!(cmpop, ComparisonOp::BinOp(hir::BinOpKind::Eq | hir::BinOpKind::Ne));
+
+    if !is_eq_ne {
+        // Neither `==` nor `!=`, we can't suggest `ptr::fn_addr_eq`, just show the warning.
+        return cx.emit_span_lint(
+            UNPREDICTABLE_FUNCTION_POINTER_COMPARISONS,
+            e.span,
+            UnpredictableFunctionPointerComparisons::Warn,
+        );
+    }
+
+    let (Some(l_span), Some(r_span)) =
+        (l.span.find_ancestor_inside(e.span), r.span.find_ancestor_inside(e.span))
+    else {
+        // No appropriate spans for the left and right operands, just show the warning.
+        return cx.emit_span_lint(
+            UNPREDICTABLE_FUNCTION_POINTER_COMPARISONS,
+            e.span,
+            UnpredictableFunctionPointerComparisons::Warn,
+        );
+    };
+
+    let ne = if cmpop == ComparisonOp::BinOp(hir::BinOpKind::Ne) { "!" } else { "" };
+
+    // `ptr::fn_addr_eq` only works with raw pointer, deref any references.
+    let deref_left = &*"*".repeat(l_ty_refs);
+    let deref_right = &*"*".repeat(r_ty_refs);
+
+    let left = e.span.shrink_to_lo().until(l_span.shrink_to_lo());
+    let middle = l_span.shrink_to_hi().until(r_span.shrink_to_lo());
+    let right = r_span.shrink_to_hi().until(e.span.shrink_to_hi());
+
+    let sugg =
+        // We only check for a right cast as `FnDef` == `FnPtr` is not possible,
+        // only `FnPtr == FnDef` is possible.
+        if !r_ty.is_fn_ptr() {
+            let fn_sig = r_ty.fn_sig(cx.tcx);
+
+            UnpredictableFunctionPointerComparisonsSuggestion::FnAddrEqWithCast {
+                ne,
+                fn_sig,
+                deref_left,
+                deref_right,
+                left,
+                middle,
+                right,
+            }
+        } else {
+            UnpredictableFunctionPointerComparisonsSuggestion::FnAddrEq {
+                ne,
+                deref_left,
+                deref_right,
+                left,
+                middle,
+                right,
+            }
+        };
+
+    cx.emit_span_lint(
+        UNPREDICTABLE_FUNCTION_POINTER_COMPARISONS,
+        e.span,
+        UnpredictableFunctionPointerComparisons::Suggestion { sugg },
+    );
+}
+
 impl<'tcx> LateLintPass<'tcx> for TypeLimits {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, e: &'tcx hir::Expr<'tcx>) {
         match e.kind {
@@ -399,7 +549,9 @@ impl<'tcx> LateLintPass<'tcx> for TypeLimits {
                         cx.emit_span_lint(UNUSED_COMPARISONS, e.span, UnusedComparisons);
                     } else {
                         lint_nan(cx, e, binop, l, r);
-                        lint_wide_pointer(cx, e, ComparisonOp::BinOp(binop.node), l, r);
+                        let cmpop = ComparisonOp::BinOp(binop.node);
+                        lint_wide_pointer(cx, e, cmpop, l, r);
+                        lint_fn_pointer(cx, e, cmpop, l, r);
                     }
                 }
             }
@@ -411,6 +563,7 @@ impl<'tcx> LateLintPass<'tcx> for TypeLimits {
                     && let Some(cmpop) = diag_item_cmpop(diag_item) =>
             {
                 lint_wide_pointer(cx, e, cmpop, l, r);
+                lint_fn_pointer(cx, e, cmpop, l, r);
             }
             hir::ExprKind::MethodCall(_, l, [r], _)
                 if let Some(def_id) = cx.typeck_results().type_dependent_def_id(e.hir_id)
@@ -418,6 +571,7 @@ impl<'tcx> LateLintPass<'tcx> for TypeLimits {
                     && let Some(cmpop) = diag_item_cmpop(diag_item) =>
             {
                 lint_wide_pointer(cx, e, cmpop, l, r);
+                lint_fn_pointer(cx, e, cmpop, l, r);
             }
             _ => {}
         };
@@ -613,10 +767,11 @@ pub(crate) fn transparent_newtype_field<'a, 'tcx>(
     tcx: TyCtxt<'tcx>,
     variant: &'a ty::VariantDef,
 ) -> Option<&'a ty::FieldDef> {
-    let param_env = tcx.param_env(variant.def_id);
+    let typing_env = ty::TypingEnv::non_body_analysis(tcx, variant.def_id);
     variant.fields.iter().find(|field| {
         let field_ty = tcx.type_of(field.did).instantiate_identity();
-        let is_1zst = tcx.layout_of(param_env.and(field_ty)).is_ok_and(|layout| layout.is_1zst());
+        let is_1zst =
+            tcx.layout_of(typing_env.as_query_input(field_ty)).is_ok_and(|layout| layout.is_1zst());
         !is_1zst
     })
 }
@@ -624,11 +779,11 @@ pub(crate) fn transparent_newtype_field<'a, 'tcx>(
 /// Is type known to be non-null?
 fn ty_is_known_nonnull<'tcx>(
     tcx: TyCtxt<'tcx>,
-    param_env: ty::ParamEnv<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
     ty: Ty<'tcx>,
     mode: CItemKind,
 ) -> bool {
-    let ty = tcx.try_normalize_erasing_regions(param_env, ty).unwrap_or(ty);
+    let ty = tcx.try_normalize_erasing_regions(typing_env, ty).unwrap_or(ty);
 
     match ty.kind() {
         ty::FnPtr(..) => true,
@@ -649,7 +804,7 @@ fn ty_is_known_nonnull<'tcx>(
             def.variants()
                 .iter()
                 .filter_map(|variant| transparent_newtype_field(tcx, variant))
-                .any(|field| ty_is_known_nonnull(tcx, param_env, field.ty(tcx, args), mode))
+                .any(|field| ty_is_known_nonnull(tcx, typing_env, field.ty(tcx, args), mode))
         }
         _ => false,
     }
@@ -659,10 +814,10 @@ fn ty_is_known_nonnull<'tcx>(
 /// If the type passed in was not scalar, returns None.
 fn get_nullable_type<'tcx>(
     tcx: TyCtxt<'tcx>,
-    param_env: ty::ParamEnv<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
     ty: Ty<'tcx>,
 ) -> Option<Ty<'tcx>> {
-    let ty = tcx.try_normalize_erasing_regions(param_env, ty).unwrap_or(ty);
+    let ty = tcx.try_normalize_erasing_regions(typing_env, ty).unwrap_or(ty);
 
     Some(match *ty.kind() {
         ty::Adt(field_def, field_args) => {
@@ -679,7 +834,7 @@ fn get_nullable_type<'tcx>(
                     .expect("No non-zst fields in transparent type.")
                     .ty(tcx, field_args)
             };
-            return get_nullable_type(tcx, param_env, inner_field_ty);
+            return get_nullable_type(tcx, typing_env, inner_field_ty);
         }
         ty::Int(ty) => Ty::new_int(tcx, ty),
         ty::Uint(ty) => Ty::new_uint(tcx, ty),
@@ -708,10 +863,10 @@ fn get_nullable_type<'tcx>(
 /// - Does not have the `#[non_exhaustive]` attribute.
 fn is_niche_optimization_candidate<'tcx>(
     tcx: TyCtxt<'tcx>,
-    param_env: ty::ParamEnv<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
     ty: Ty<'tcx>,
 ) -> bool {
-    if tcx.layout_of(param_env.and(ty)).is_ok_and(|layout| !layout.is_1zst()) {
+    if tcx.layout_of(typing_env.as_query_input(ty)).is_ok_and(|layout| !layout.is_1zst()) {
         return false;
     }
 
@@ -734,7 +889,7 @@ fn is_niche_optimization_candidate<'tcx>(
 /// `core::ptr::NonNull`, and `#[repr(transparent)]` newtypes.
 pub(crate) fn repr_nullable_ptr<'tcx>(
     tcx: TyCtxt<'tcx>,
-    param_env: ty::ParamEnv<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
     ty: Ty<'tcx>,
     ckind: CItemKind,
 ) -> Option<Ty<'tcx>> {
@@ -747,9 +902,9 @@ pub(crate) fn repr_nullable_ptr<'tcx>(
                     let ty1 = field1.ty(tcx, args);
                     let ty2 = field2.ty(tcx, args);
 
-                    if is_niche_optimization_candidate(tcx, param_env, ty1) {
+                    if is_niche_optimization_candidate(tcx, typing_env, ty1) {
                         ty2
-                    } else if is_niche_optimization_candidate(tcx, param_env, ty2) {
+                    } else if is_niche_optimization_candidate(tcx, typing_env, ty2) {
                         ty1
                     } else {
                         return None;
@@ -760,20 +915,20 @@ pub(crate) fn repr_nullable_ptr<'tcx>(
             _ => return None,
         };
 
-        if !ty_is_known_nonnull(tcx, param_env, field_ty, ckind) {
+        if !ty_is_known_nonnull(tcx, typing_env, field_ty, ckind) {
             return None;
         }
 
         // At this point, the field's type is known to be nonnull and the parent enum is Option-like.
         // If the computed size for the field and the enum are different, the nonnull optimization isn't
         // being applied (and we've got a problem somewhere).
-        let compute_size_skeleton = |t| SizeSkeleton::compute(t, tcx, param_env).ok();
+        let compute_size_skeleton = |t| SizeSkeleton::compute(t, tcx, typing_env).ok();
         if !compute_size_skeleton(ty)?.same_size(compute_size_skeleton(field_ty)?) {
             bug!("improper_ctypes: Option nonnull optimization not applied?");
         }
 
         // Return the nullable type this Option-like enum can be safely represented with.
-        let field_ty_layout = tcx.layout_of(param_env.and(field_ty));
+        let field_ty_layout = tcx.layout_of(typing_env.as_query_input(field_ty));
         if field_ty_layout.is_err() && !field_ty.has_non_region_param() {
             bug!("should be able to compute the layout of non-polymorphic type");
         }
@@ -784,10 +939,10 @@ pub(crate) fn repr_nullable_ptr<'tcx>(
                 WrappingRange { start: 0, end }
                     if end == field_ty_scalar.size(&tcx).unsigned_int_max() - 1 =>
                 {
-                    return Some(get_nullable_type(tcx, param_env, field_ty).unwrap());
+                    return Some(get_nullable_type(tcx, typing_env, field_ty).unwrap());
                 }
                 WrappingRange { start: 1, .. } => {
-                    return Some(get_nullable_type(tcx, param_env, field_ty).unwrap());
+                    return Some(get_nullable_type(tcx, typing_env, field_ty).unwrap());
                 }
                 WrappingRange { start, end } => {
                     unreachable!("Unhandled start and end range: ({}, {})", start, end)
@@ -825,7 +980,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
         let field_ty = self
             .cx
             .tcx
-            .try_normalize_erasing_regions(self.cx.param_env, field_ty)
+            .try_normalize_erasing_regions(self.cx.typing_env(), field_ty)
             .unwrap_or(field_ty);
         self.check_type_for_ffi(acc, field_ty)
     }
@@ -903,7 +1058,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                 if let Some(boxed) = ty.boxed_ty()
                     && matches!(self.mode, CItemKind::Definition)
                 {
-                    if boxed.is_sized(tcx, self.cx.param_env) {
+                    if boxed.is_sized(tcx, self.cx.typing_env()) {
                         return FfiSafe;
                     } else {
                         return FfiUnsafe {
@@ -988,7 +1143,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                         {
                             // Special-case types like `Option<extern fn()>` and `Result<extern fn(), ()>`
                             if let Some(ty) =
-                                repr_nullable_ptr(self.cx.tcx, self.cx.param_env, ty, self.mode)
+                                repr_nullable_ptr(self.cx.tcx, self.cx.typing_env(), ty, self.mode)
                             {
                                 return self.check_type_for_ffi(acc, ty);
                             }
@@ -1068,7 +1223,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
             ty::RawPtr(ty, _) | ty::Ref(_, ty, _)
                 if {
                     matches!(self.mode, CItemKind::Definition)
-                        && ty.is_sized(self.cx.tcx, self.cx.param_env)
+                        && ty.is_sized(self.cx.tcx, self.cx.typing_env())
                 } =>
             {
                 FfiSafe
@@ -1128,6 +1283,8 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
             {
                 FfiSafe
             }
+
+            ty::UnsafeBinder(_) => todo!("FIXME(unsafe_binder)"),
 
             ty::Param(..)
             | ty::Alias(ty::Projection | ty::Inherent | ty::Weak, ..)
@@ -1196,7 +1353,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
         if let Some(ty) = self
             .cx
             .tcx
-            .try_normalize_erasing_regions(self.cx.param_env, ty)
+            .try_normalize_erasing_regions(self.cx.typing_env(), ty)
             .unwrap_or(ty)
             .visit_with(&mut ProhibitOpaqueTypes)
             .break_value()
@@ -1220,7 +1377,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
             return;
         }
 
-        let ty = self.cx.tcx.try_normalize_erasing_regions(self.cx.param_env, ty).unwrap_or(ty);
+        let ty = self.cx.tcx.try_normalize_erasing_regions(self.cx.typing_env(), ty).unwrap_or(ty);
 
         // C doesn't really support passing arrays by value - the only way to pass an array by value
         // is through a struct. So, first test that the top level isn't an array, and then
@@ -1404,7 +1561,7 @@ impl<'tcx> LateLintPass<'tcx> for ImproperCTypesDefinitions {
                 );
             }
             // See `check_fn`..
-            hir::ItemKind::Fn(..) => {}
+            hir::ItemKind::Fn { .. } => {}
             // See `check_field_def`..
             hir::ItemKind::Union(..) | hir::ItemKind::Struct(..) | hir::ItemKind::Enum(..) => {}
             // Doesn't define something that can contain a external type to be checked.

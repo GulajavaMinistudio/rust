@@ -215,7 +215,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 // Even if `ty` is normalized, the search for the unsized tail will project
                 // to fields, which can yield non-normalized types. So we need to provide a
                 // normalization function.
-                let normalize = |ty| self.tcx.normalize_erasing_regions(self.param_env, ty);
+                let normalize = |ty| self.tcx.normalize_erasing_regions(self.typing_env, ty);
                 ty.ptr_metadata_ty(*self.tcx, normalize)
             };
             return interp_ok(meta_ty(caller) == meta_ty(callee));
@@ -519,7 +519,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 return M::call_extra_fn(
                     self,
                     extra,
-                    caller_abi,
+                    caller_fn_abi,
                     args,
                     destination,
                     target,
@@ -566,11 +566,12 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
             | ty::InstanceKind::ThreadLocalShim(..)
             | ty::InstanceKind::AsyncDropGlueCtorShim(..)
             | ty::InstanceKind::Item(_) => {
-                // We need MIR for this fn
+                // We need MIR for this fn.
+                // Note that this can be an intrinsic, if we are executing its fallback body.
                 let Some((body, instance)) = M::find_mir_or_eval_fn(
                     self,
                     instance,
-                    caller_abi,
+                    caller_fn_abi,
                     args,
                     destination,
                     target,
@@ -662,7 +663,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                     // Doesn't have to be a `dyn Trait`, but the unsized tail must be `dyn Trait`.
                     // (For that reason we also cannot use `unpack_dyn_trait`.)
                     let receiver_tail =
-                        self.tcx.struct_tail_for_codegen(receiver_place.layout.ty, self.param_env);
+                        self.tcx.struct_tail_for_codegen(receiver_place.layout.ty, self.typing_env);
                     let ty::Dynamic(receiver_trait, _, ty::Dyn) = receiver_tail.kind() else {
                         span_bug!(
                             self.cur_span(),
@@ -704,7 +705,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
 
                     let concrete_method = Instance::expect_resolve_for_vtable(
                         tcx,
-                        self.param_env,
+                        self.typing_env,
                         def_id,
                         instance.args.rebase_onto(tcx, trait_def_id, concrete_trait_ref.args),
                         self.cur_span(),
@@ -883,19 +884,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 .local_to_op(mir::RETURN_PLACE, None)
                 .expect("return place should always be live");
             let dest = self.frame().return_place.clone();
-            let res = if self.stack().len() == 1 {
-                // The initializer of constants and statics will get validated separately
-                // after the constant has been fully evaluated. While we could fall back to the default
-                // code path, that will cause -Zenforce-validity to cycle on static initializers.
-                // Reading from a static's memory is not allowed during its evaluation, and will always
-                // trigger a cycle error. Validation must read from the memory of the current item.
-                // For Miri this means we do not validate the root frame return value,
-                // but Miri anyway calls `read_target_isize` on that so separate validation
-                // is not needed.
-                self.copy_op_no_dest_validation(&op, &dest)
-            } else {
-                self.copy_op_allow_transmute(&op, &dest)
-            };
+            let res = self.copy_op_allow_transmute(&op, &dest);
             trace!("return value: {:?}", self.dump_place(&dest.into()));
             // We delay actually short-circuiting on this error until *after* the stack frame is
             // popped, since we want this error to be attributed to the caller, whose type defines

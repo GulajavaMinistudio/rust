@@ -15,13 +15,12 @@ use rustc_data_structures::unord::UnordMap;
 use rustc_hir::def_id::{DefId, DefIdMap};
 use rustc_index::IndexVec;
 use rustc_middle::mir;
-use rustc_middle::ty::layout::LayoutOf;
-use rustc_middle::ty::{self, GenericArgsRef, Instance, ParamEnv, Ty, TypeVisitableExt};
+use rustc_middle::ty::layout::{HasTypingEnv, LayoutOf};
+use rustc_middle::ty::{self, GenericArgsRef, Instance, Ty, TypeVisitableExt};
 use rustc_session::Session;
 use rustc_session::config::{self, DebugInfo};
-use rustc_span::symbol::Symbol;
 use rustc_span::{
-    BytePos, Pos, SourceFile, SourceFileAndLine, SourceFileHash, Span, StableSourceFileId,
+    BytePos, Pos, SourceFile, SourceFileAndLine, SourceFileHash, Span, StableSourceFileId, Symbol,
 };
 use smallvec::SmallVec;
 use tracing::debug;
@@ -294,12 +293,12 @@ impl<'ll, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         }
 
         // Initialize fn debug context (including scopes).
-        let empty_scope = DebugScope {
+        let empty_scope = Some(DebugScope {
             dbg_scope: self.dbg_scope_fn(instance, fn_abi, Some(llfn)),
             inlined_at: None,
             file_start_pos: BytePos(0),
             file_end_pos: BytePos(0),
-        };
+        });
         let mut fn_debug_context = FunctionDebugContext {
             scopes: IndexVec::from_elem(empty_scope, &mir.source_scopes),
             inlined_function_scopes: Default::default(),
@@ -344,7 +343,7 @@ impl<'ll, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'ll, 'tcx> {
 
         type_names::push_generic_params(
             tcx,
-            tcx.normalize_erasing_regions(ty::ParamEnv::reveal_all(), args),
+            tcx.normalize_erasing_regions(self.typing_env(), args),
             &mut name,
         );
 
@@ -481,8 +480,7 @@ impl<'ll, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 iter::zip(args, names)
                     .filter_map(|(kind, name)| {
                         kind.as_type().map(|ty| {
-                            let actual_type =
-                                cx.tcx.normalize_erasing_regions(ParamEnv::reveal_all(), ty);
+                            let actual_type = cx.tcx.normalize_erasing_regions(cx.typing_env(), ty);
                             let actual_type_metadata = type_di_node(cx, actual_type);
                             let name = name.as_str();
                             unsafe {
@@ -526,7 +524,7 @@ impl<'ll, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 if cx.tcx.trait_id_of_impl(impl_def_id).is_none() {
                     let impl_self_ty = cx.tcx.instantiate_and_normalize_erasing_regions(
                         instance.args,
-                        ty::ParamEnv::reveal_all(),
+                        cx.typing_env(),
                         cx.tcx.type_of(impl_def_id),
                     );
 

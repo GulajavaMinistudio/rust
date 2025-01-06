@@ -2,10 +2,10 @@ use rustc_ast as ast;
 use rustc_hir::LangItem;
 use rustc_middle::bug;
 use rustc_middle::mir::interpret::{LitToConstError, LitToConstInput};
-use rustc_middle::ty::{self, ParamEnv, ScalarInt, TyCtxt};
+use rustc_middle::ty::{self, ScalarInt, TyCtxt, TypeVisitableExt as _};
 use tracing::trace;
 
-use crate::build::parse_float_into_scalar;
+use crate::builder::parse_float_into_scalar;
 
 pub(crate) fn lit_to_const<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -13,9 +13,12 @@ pub(crate) fn lit_to_const<'tcx>(
 ) -> Result<ty::Const<'tcx>, LitToConstError> {
     let LitToConstInput { lit, ty, neg } = lit_input;
 
+    if let Err(guar) = ty.error_reported() {
+        return Ok(ty::Const::new_error(tcx, guar));
+    }
+
     let trunc = |n| {
-        let param_ty = ParamEnv::reveal_all().and(ty);
-        let width = match tcx.layout_of(param_ty) {
+        let width = match tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty)) {
             Ok(layout) => layout.size,
             Err(_) => {
                 tcx.dcx().bug(format!("couldn't compute width of literal: {:?}", lit_input.lit))

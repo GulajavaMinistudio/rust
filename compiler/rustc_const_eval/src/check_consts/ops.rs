@@ -15,8 +15,7 @@ use rustc_middle::ty::{
     suggest_constraining_type_param,
 };
 use rustc_middle::util::{CallDesugaringKind, CallKind, call_kind};
-use rustc_span::symbol::sym;
-use rustc_span::{BytePos, Pos, Span, Symbol};
+use rustc_span::{BytePos, Pos, Span, Symbol, sym};
 use rustc_trait_selection::traits::SelectionContext;
 use tracing::debug;
 
@@ -120,7 +119,7 @@ impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
     #[allow(rustc::untranslatable_diagnostic)]
     fn build_error(&self, ccx: &ConstCx<'_, 'tcx>, _: Span) -> Diag<'tcx> {
         let FnCallNonConst { callee, args, span, call_source } = *self;
-        let ConstCx { tcx, param_env, .. } = *ccx;
+        let ConstCx { tcx, typing_env, .. } = *ccx;
         let caller = ccx.def_id();
 
         let diag_trait = |err, self_ty: Ty<'_>, trait_id| {
@@ -140,19 +139,17 @@ impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
                             err,
                             param_ty.name.as_str(),
                             &constraint,
-                            None,
+                            Some(trait_ref.def_id),
                             None,
                         );
                     }
                 }
                 ty::Adt(..) => {
+                    let (infcx, param_env) = tcx.infer_ctxt().build_with_typing_env(typing_env);
                     let obligation =
                         Obligation::new(tcx, ObligationCause::dummy(), param_env, trait_ref);
-
-                    let infcx = tcx.infer_ctxt().build(ccx.body.typing_mode(tcx));
                     let mut selcx = SelectionContext::new(&infcx);
                     let implsrc = selcx.select(&obligation);
-
                     if let Ok(Some(ImplSource::UserDefined(data))) = implsrc {
                         // FIXME(const_trait_impl) revisit this
                         if !tcx.is_const_trait_impl(data.impl_def_id) {
@@ -166,7 +163,7 @@ impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
         };
 
         let call_kind =
-            call_kind(tcx, ccx.param_env, callee, args, span, call_source.from_hir_call(), None);
+            call_kind(tcx, ccx.typing_env, callee, args, span, call_source.from_hir_call(), None);
 
         debug!(?call_kind);
 
@@ -182,8 +179,10 @@ impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
                     };
                 }
 
-                let mut err = match kind {
-                    CallDesugaringKind::ForLoopIntoIter => {
+                // Don't point at the trait if this is a desugaring...
+                // FIXME(const_trait_impl): we could perhaps do this for `Iterator`.
+                match kind {
+                    CallDesugaringKind::ForLoopIntoIter | CallDesugaringKind::ForLoopNext => {
                         error!(NonConstForLoopIntoIter)
                     }
                     CallDesugaringKind::QuestionBranch => {
@@ -198,10 +197,7 @@ impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
                     CallDesugaringKind::Await => {
                         error!(NonConstAwait)
                     }
-                };
-
-                diag_trait(&mut err, self_ty, kind.trait_def_id(tcx));
-                err
+                }
             }
             CallKind::FnCall { fn_trait_id, self_ty } => {
                 let note = match self_ty.kind() {
@@ -308,6 +304,7 @@ impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
             }
             _ => ccx.dcx().create_err(errors::NonConstFnCall {
                 span,
+                def_descr: ccx.tcx.def_descr(callee),
                 def_path_str: ccx.tcx.def_path_str_with_args(callee, args),
                 kind: ccx.const_kind(),
             }),
@@ -461,17 +458,43 @@ impl<'tcx> NonConstOp<'tcx> for InlineAsm {
 
 #[derive(Debug)]
 pub(crate) struct LiveDrop<'tcx> {
-    pub dropped_at: Option<Span>,
+    pub dropped_at: Span,
     pub dropped_ty: Ty<'tcx>,
+    pub needs_non_const_drop: bool,
 }
 impl<'tcx> NonConstOp<'tcx> for LiveDrop<'tcx> {
+    fn status_in_item(&self, _ccx: &ConstCx<'_, 'tcx>) -> Status {
+        if self.needs_non_const_drop {
+            Status::Forbidden
+        } else {
+            Status::Unstable {
+                gate: sym::const_destruct,
+                gate_already_checked: false,
+                safe_to_expose_on_stable: false,
+                is_function_call: false,
+            }
+        }
+    }
+
     fn build_error(&self, ccx: &ConstCx<'_, 'tcx>, span: Span) -> Diag<'tcx> {
-        ccx.dcx().create_err(errors::LiveDrop {
-            span,
-            dropped_ty: self.dropped_ty,
-            kind: ccx.const_kind(),
-            dropped_at: self.dropped_at,
-        })
+        if self.needs_non_const_drop {
+            ccx.dcx().create_err(errors::LiveDrop {
+                span,
+                dropped_ty: self.dropped_ty,
+                kind: ccx.const_kind(),
+                dropped_at: self.dropped_at,
+            })
+        } else {
+            ccx.tcx.sess.create_feature_err(
+                errors::LiveDrop {
+                    span,
+                    dropped_ty: self.dropped_ty,
+                    kind: ccx.const_kind(),
+                    dropped_at: self.dropped_at,
+                },
+                sym::const_destruct,
+            )
+        }
     }
 }
 

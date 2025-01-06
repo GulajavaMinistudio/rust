@@ -100,7 +100,7 @@ use rustc_middle::bug;
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
-use rustc_middle::ty::layout::{HasParamEnv, LayoutOf};
+use rustc_middle::ty::layout::{HasTypingEnv, LayoutOf};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::DUMMY_SP;
 use rustc_span::def_id::DefId;
@@ -120,12 +120,12 @@ impl<'tcx> crate::MirPass<'tcx> for GVN {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         debug!(def_id = ?body.source.def_id());
 
-        let param_env = tcx.param_env_reveal_all_normalized(body.source.def_id());
-        let ssa = SsaLocals::new(tcx, body, param_env);
+        let typing_env = body.typing_env(tcx);
+        let ssa = SsaLocals::new(tcx, body, typing_env);
         // Clone dominators because we need them while mutating the body.
         let dominators = body.basic_blocks.dominators().clone();
 
-        let mut state = VnState::new(tcx, body, param_env, &ssa, dominators, &body.local_decls);
+        let mut state = VnState::new(tcx, body, typing_env, &ssa, dominators, &body.local_decls);
         ssa.for_each_assignment_mut(
             body.basic_blocks.as_mut_preserves_cfg(),
             |local, value, location| {
@@ -223,8 +223,6 @@ enum Value<'tcx> {
     Projection(VnIndex, ProjectionElem<VnIndex, Ty<'tcx>>),
     /// Discriminant of the given value.
     Discriminant(VnIndex),
-    /// Length of an array or slice.
-    Len(VnIndex),
 
     // Operations.
     NullaryOp(NullOp<'tcx>, Ty<'tcx>),
@@ -241,7 +239,6 @@ enum Value<'tcx> {
 struct VnState<'body, 'tcx> {
     tcx: TyCtxt<'tcx>,
     ecx: InterpCx<'tcx, DummyMachine>,
-    param_env: ty::ParamEnv<'tcx>,
     local_decls: &'body LocalDecls<'tcx>,
     /// Value stored in each local.
     locals: IndexVec<Local, Option<VnIndex>>,
@@ -266,7 +263,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
     fn new(
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
-        param_env: ty::ParamEnv<'tcx>,
+        typing_env: ty::TypingEnv<'tcx>,
         ssa: &'body SsaLocals,
         dominators: Dominators<BasicBlock>,
         local_decls: &'body LocalDecls<'tcx>,
@@ -280,8 +277,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
                 + 4 * body.basic_blocks.len();
         VnState {
             tcx,
-            ecx: InterpCx::new(tcx, DUMMY_SP, param_env, DummyMachine),
-            param_env,
+            ecx: InterpCx::new(tcx, DUMMY_SP, typing_env, DummyMachine),
             local_decls,
             locals: IndexVec::from_elem(None, local_decls),
             rev_locals: IndexVec::with_capacity(num_values),
@@ -293,6 +289,10 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
             dominators,
             reused_locals: BitSet::new_empty(local_decls.len()),
         }
+    }
+
+    fn typing_env(&self) -> ty::TypingEnv<'tcx> {
+        self.ecx.typing_env()
     }
 
     #[instrument(level = "trace", skip(self), ret)]
@@ -343,7 +343,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
 
         // Only register the value if its type is `Sized`, as we will emit copies of it.
         let is_sized = !self.feature_unsized_locals
-            || self.local_decls[local].ty.is_sized(self.tcx, self.param_env);
+            || self.local_decls[local].ty.is_sized(self.tcx, self.typing_env());
         if is_sized {
             self.rev_locals[value].push(local);
         }
@@ -511,13 +511,6 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
                     self.ecx.discriminant_for_variant(base.layout.ty, variant).discard_err()?;
                 discr_value.into()
             }
-            Len(slice) => {
-                let slice = self.evaluated[slice].as_ref()?;
-                let usize_layout = self.ecx.layout_of(self.tcx.types.usize).unwrap();
-                let len = slice.len(&self.ecx).discard_err()?;
-                let imm = ImmTy::from_uint(len, usize_layout);
-                imm.into()
-            }
             NullaryOp(null_op, ty) => {
                 let layout = self.ecx.layout_of(ty).ok()?;
                 if let NullOp::SizeOf | NullOp::AlignOf = null_op
@@ -531,7 +524,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
                     NullOp::OffsetOf(fields) => self
                         .ecx
                         .tcx
-                        .offset_of_subfield(self.ecx.param_env(), layout, fields.iter())
+                        .offset_of_subfield(self.typing_env(), layout, fields.iter())
                         .bytes(),
                     NullOp::UbChecks => return None,
                 };
@@ -636,9 +629,11 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
         let proj = match proj {
             ProjectionElem::Deref => {
                 let ty = place.ty(self.local_decls, self.tcx).ty;
-                if let Some(Mutability::Not) = ty.ref_mutability()
+                // unsound: https://github.com/rust-lang/rust/issues/130853
+                if self.tcx.sess.opts.unstable_opts.unsound_mir_opts
+                    && let Some(Mutability::Not) = ty.ref_mutability()
                     && let Some(pointee_ty) = ty.builtin_deref(true)
-                    && pointee_ty.is_freeze(self.tcx, self.param_env)
+                    && pointee_ty.is_freeze(self.tcx, self.typing_env())
                 {
                     // An immutable borrow `_x` always points to the same value for the
                     // lifetime of the borrow, so we can merge all instances of `*_x`.
@@ -859,7 +854,6 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
             }
 
             // Operations.
-            Rvalue::Len(ref mut place) => return self.simplify_len(place, location),
             Rvalue::Cast(ref mut kind, ref mut value, to) => {
                 return self.simplify_cast(kind, value, to, location);
             }
@@ -1057,7 +1051,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
                 && let ty::RawPtr(from_pointee_ty, from_mtbl) = cast_from.kind()
                 && let ty::RawPtr(_, output_mtbl) = output_pointer_ty.kind()
                 && from_mtbl == output_mtbl
-                && from_pointee_ty.is_sized(self.tcx, self.param_env)
+                && from_pointee_ty.is_sized(self.tcx, self.typing_env())
             {
                 fields[0] = *cast_value;
                 *data_pointer_ty = *cast_from;
@@ -1379,7 +1373,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
             && let Value::Aggregate(AggregateTy::RawPtr { data_pointer_ty, .. }, _, fields) =
                 self.get(value)
             && let ty::RawPtr(to_pointee, _) = to.kind()
-            && to_pointee.is_sized(self.tcx, self.param_env)
+            && to_pointee.is_sized(self.tcx, self.typing_env())
         {
             from = *data_pointer_ty;
             value = fields[0];
@@ -1429,55 +1423,15 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
         Some(self.insert(Value::Cast { kind: *kind, value, from, to }))
     }
 
-    fn simplify_len(&mut self, place: &mut Place<'tcx>, location: Location) -> Option<VnIndex> {
-        // Trivial case: we are fetching a statically known length.
-        let place_ty = place.ty(self.local_decls, self.tcx).ty;
-        if let ty::Array(_, len) = place_ty.kind() {
-            return self.insert_constant(Const::from_ty_const(
-                *len,
-                self.tcx.types.usize,
-                self.tcx,
-            ));
-        }
-
-        let mut inner = self.simplify_place_value(place, location)?;
-
-        // The length information is stored in the wide pointer.
-        // Reborrowing copies length information from one pointer to the other.
-        while let Value::Address { place: borrowed, .. } = self.get(inner)
-            && let [PlaceElem::Deref] = borrowed.projection[..]
-            && let Some(borrowed) = self.locals[borrowed.local]
-        {
-            inner = borrowed;
-        }
-
-        // We have an unsizing cast, which assigns the length to wide pointer metadata.
-        if let Value::Cast { kind, from, to, .. } = self.get(inner)
-            && let CastKind::PointerCoercion(ty::adjustment::PointerCoercion::Unsize, _) = kind
-            && let Some(from) = from.builtin_deref(true)
-            && let ty::Array(_, len) = from.kind()
-            && let Some(to) = to.builtin_deref(true)
-            && let ty::Slice(..) = to.kind()
-        {
-            return self.insert_constant(Const::from_ty_const(
-                *len,
-                self.tcx.types.usize,
-                self.tcx,
-            ));
-        }
-
-        // Fallback: a symbolic `Len`.
-        Some(self.insert(Value::Len(inner)))
-    }
-
     fn pointers_have_same_metadata(&self, left_ptr_ty: Ty<'tcx>, right_ptr_ty: Ty<'tcx>) -> bool {
         let left_meta_ty = left_ptr_ty.pointee_metadata_ty_or_projection(self.tcx);
         let right_meta_ty = right_ptr_ty.pointee_metadata_ty_or_projection(self.tcx);
         if left_meta_ty == right_meta_ty {
             true
         } else if let Ok(left) =
-            self.tcx.try_normalize_erasing_regions(self.param_env, left_meta_ty)
-            && let Ok(right) = self.tcx.try_normalize_erasing_regions(self.param_env, right_meta_ty)
+            self.tcx.try_normalize_erasing_regions(self.typing_env(), left_meta_ty)
+            && let Ok(right) =
+                self.tcx.try_normalize_erasing_regions(self.typing_env(), right_meta_ty)
         {
             left == right
         } else {

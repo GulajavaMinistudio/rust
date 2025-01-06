@@ -96,8 +96,7 @@ use rustc_middle::query::Providers;
 use rustc_middle::span_bug;
 use rustc_middle::ty::{self, RootVariableMinCaptureList, Ty, TyCtxt};
 use rustc_session::lint;
-use rustc_span::symbol::{Symbol, kw, sym};
-use rustc_span::{BytePos, Span};
+use rustc_span::{BytePos, Span, Symbol, kw, sym};
 use tracing::{debug, instrument};
 
 use self::LiveNodeKind::*;
@@ -447,6 +446,7 @@ impl<'tcx> Visitor<'tcx> for IrMaps<'tcx> {
             | hir::ExprKind::InlineAsm(..)
             | hir::ExprKind::OffsetOf(..)
             | hir::ExprKind::Type(..)
+            | hir::ExprKind::UnsafeBinderCast(..)
             | hir::ExprKind::Err(_)
             | hir::ExprKind::Path(hir::QPath::TypeRelative(..))
             | hir::ExprKind::Path(hir::QPath::LangItem(..)) => {}
@@ -468,7 +468,7 @@ const ACC_USE: u32 = 4;
 struct Liveness<'a, 'tcx> {
     ir: &'a mut IrMaps<'tcx>,
     typeck_results: &'a ty::TypeckResults<'tcx>,
-    param_env: ty::ParamEnv<'tcx>,
+    typing_env: ty::TypingEnv<'tcx>,
     closure_min_captures: Option<&'tcx RootVariableMinCaptureList<'tcx>>,
     successors: IndexVec<LiveNode, Option<LiveNode>>,
     rwu_table: rwu_table::RWUTable,
@@ -491,7 +491,8 @@ struct Liveness<'a, 'tcx> {
 impl<'a, 'tcx> Liveness<'a, 'tcx> {
     fn new(ir: &'a mut IrMaps<'tcx>, body_owner: LocalDefId) -> Liveness<'a, 'tcx> {
         let typeck_results = ir.tcx.typeck(body_owner);
-        let param_env = ir.tcx.param_env(body_owner);
+        // FIXME(#132279): we're in a body here.
+        let typing_env = ty::TypingEnv::non_body_analysis(ir.tcx, body_owner);
         let closure_min_captures = typeck_results.closure_min_captures.get(&body_owner);
         let closure_ln = ir.add_live_node(ClosureNode);
         let exit_ln = ir.add_live_node(ExitNode);
@@ -502,7 +503,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
         Liveness {
             ir,
             typeck_results,
-            param_env,
+            typing_env,
             closure_min_captures,
             successors: IndexVec::from_elem_n(None, num_live_nodes),
             rwu_table: rwu_table::RWUTable::new(num_live_nodes, num_vars),
@@ -1006,7 +1007,12 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
             hir::ExprKind::Array(exprs) => self.propagate_through_exprs(exprs, succ),
 
             hir::ExprKind::Struct(_, fields, ref with_expr) => {
-                let succ = self.propagate_through_opt_expr(with_expr.as_deref(), succ);
+                let succ = match with_expr {
+                    hir::StructTailExpr::Base(base) => {
+                        self.propagate_through_opt_expr(Some(base), succ)
+                    }
+                    hir::StructTailExpr::None | hir::StructTailExpr::DefaultFields(_) => succ,
+                };
                 fields
                     .iter()
                     .rev()
@@ -1045,6 +1051,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
             hir::ExprKind::AddrOf(_, _, ref e)
             | hir::ExprKind::Cast(ref e, _)
             | hir::ExprKind::Type(ref e, _)
+            | hir::ExprKind::UnsafeBinderCast(_, ref e, _)
             | hir::ExprKind::DropTemps(ref e)
             | hir::ExprKind::Unary(_, ref e)
             | hir::ExprKind::Repeat(ref e, _) => self.propagate_through_expr(e, succ),
@@ -1297,7 +1304,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
     fn check_is_ty_uninhabited(&mut self, expr: &Expr<'_>, succ: LiveNode) -> LiveNode {
         let ty = self.typeck_results.expr_ty(expr);
         let m = self.ir.tcx.parent_module(expr.hir_id).to_def_id();
-        if ty.is_inhabited_from(self.ir.tcx, m, self.param_env) {
+        if ty.is_inhabited_from(self.ir.tcx, m, self.typing_env) {
             return succ;
         }
         match self.ir.lnks[succ] {
@@ -1437,6 +1444,7 @@ fn check_expr<'tcx>(this: &mut Liveness<'_, 'tcx>, expr: &'tcx Expr<'tcx>) {
         | hir::ExprKind::Path(_)
         | hir::ExprKind::Yield(..)
         | hir::ExprKind::Type(..)
+        | hir::ExprKind::UnsafeBinderCast(..)
         | hir::ExprKind::Err(_) => {}
     }
 }

@@ -70,12 +70,11 @@ use rustc_middle::ty::{
 use rustc_middle::{bug, span_bug};
 use rustc_mir_dataflow::impls::{
     MaybeBorrowedLocals, MaybeLiveLocals, MaybeRequiresStorage, MaybeStorageLive,
+    always_storage_live_locals,
 };
-use rustc_mir_dataflow::storage::always_storage_live_locals;
 use rustc_mir_dataflow::{Analysis, Results, ResultsVisitor};
-use rustc_span::Span;
 use rustc_span::def_id::{DefId, LocalDefId};
-use rustc_span::symbol::sym;
+use rustc_span::{Span, sym};
 use rustc_target::spec::PanicStrategy;
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
 use rustc_trait_selection::infer::TyCtxtInferExt as _;
@@ -676,12 +675,11 @@ fn locals_live_across_suspend_points<'tcx>(
 
     let mut borrowed_locals_cursor = borrowed_locals_results.clone().into_results_cursor(body);
 
-    // Calculate the MIR locals that we actually need to keep storage around
-    // for.
-    let mut requires_storage_cursor =
+    // Calculate the MIR locals that we need to keep storage around for.
+    let mut requires_storage_results =
         MaybeRequiresStorage::new(borrowed_locals_results.into_results_cursor(body))
-            .iterate_to_fixpoint(tcx, body, None)
-            .into_results_cursor(body);
+            .iterate_to_fixpoint(tcx, body, None);
+    let mut requires_storage_cursor = requires_storage_results.as_results_cursor(body);
 
     // Calculate the liveness of MIR locals ignoring borrows.
     let mut liveness =
@@ -697,8 +695,7 @@ fn locals_live_across_suspend_points<'tcx>(
             let loc = Location { block, statement_index: data.statements.len() };
 
             liveness.seek_to_block_end(block);
-            let mut live_locals: BitSet<_> = BitSet::new_empty(body.local_decls.len());
-            live_locals.union(liveness.get());
+            let mut live_locals = liveness.get().clone();
 
             if !movable {
                 // The `liveness` variable contains the liveness of MIR locals ignoring borrows.
@@ -754,7 +751,7 @@ fn locals_live_across_suspend_points<'tcx>(
         body,
         &saved_locals,
         always_live_locals.clone(),
-        requires_storage_cursor.into_results(),
+        requires_storage_results,
     );
 
     LivenessInfo {
@@ -880,7 +877,7 @@ struct StorageConflictVisitor<'a, 'tcx> {
 impl<'a, 'tcx> ResultsVisitor<'a, 'tcx, MaybeRequiresStorage<'a, 'tcx>>
     for StorageConflictVisitor<'a, 'tcx>
 {
-    fn visit_statement_before_primary_effect(
+    fn visit_after_early_statement_effect(
         &mut self,
         _results: &mut Results<'tcx, MaybeRequiresStorage<'a, 'tcx>>,
         state: &BitSet<Local>,
@@ -890,7 +887,7 @@ impl<'a, 'tcx> ResultsVisitor<'a, 'tcx, MaybeRequiresStorage<'a, 'tcx>>
         self.apply_state(state, loc);
     }
 
-    fn visit_terminator_before_primary_effect(
+    fn visit_after_early_terminator_effect(
         &mut self,
         _results: &mut Results<'tcx, MaybeRequiresStorage<'a, 'tcx>>,
         state: &BitSet<Local>,
@@ -1069,11 +1066,9 @@ fn elaborate_coroutine_drops<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     // Note that `elaborate_drops` only drops the upvars of a coroutine, and
     // this is ok because `open_drop` can only be reached within that own
     // coroutine's resume function.
+    let typing_env = body.typing_env(tcx);
 
-    let def_id = body.source.def_id();
-    let param_env = tcx.param_env(def_id);
-
-    let mut elaborator = DropShimElaborator { body, patch: MirPatch::new(body), tcx, param_env };
+    let mut elaborator = DropShimElaborator { body, patch: MirPatch::new(body), tcx, typing_env };
 
     for (block, block_data) in body.basic_blocks.iter_enumerated() {
         let (target, unwind, source_info) = match block_data.terminator() {
@@ -1204,9 +1199,9 @@ fn insert_panic_block<'tcx>(
     insert_term_block(body, kind)
 }
 
-fn can_return<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, param_env: ty::ParamEnv<'tcx>) -> bool {
+fn can_return<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, typing_env: ty::TypingEnv<'tcx>) -> bool {
     // Returning from a function with an uninhabited return type is undefined behavior.
-    if body.return_ty().is_privately_uninhabited(tcx, param_env) {
+    if body.return_ty().is_privately_uninhabited(tcx, typing_env) {
         return false;
     }
 
@@ -1627,7 +1622,7 @@ impl<'tcx> crate::MirPass<'tcx> for StateTransform {
         // `storage_liveness` tells us which locals have live storage at suspension points
         let (remap, layout, storage_liveness) = compute_layout(liveness_info, body);
 
-        let can_return = can_return(tcx, body, tcx.param_env(body.source.def_id()));
+        let can_return = can_return(tcx, body, body.typing_env(tcx));
 
         // Run the transformation which converts Places from Local to coroutine struct
         // accesses for locals in `remap`.
@@ -1774,6 +1769,7 @@ impl<'tcx> Visitor<'tcx> for EnsureCoroutineFieldAssignmentsNeverAlias<'_> {
             | StatementKind::Coverage(..)
             | StatementKind::Intrinsic(..)
             | StatementKind::ConstEvalCounter
+            | StatementKind::BackwardIncompatibleDropHint { .. }
             | StatementKind::Nop => {}
         }
     }
@@ -1826,9 +1822,6 @@ impl<'tcx> Visitor<'tcx> for EnsureCoroutineFieldAssignmentsNeverAlias<'_> {
 fn check_suspend_tys<'tcx>(tcx: TyCtxt<'tcx>, layout: &CoroutineLayout<'tcx>, body: &Body<'tcx>) {
     let mut linted_tys = FxHashSet::default();
 
-    // We want a user-facing param-env.
-    let param_env = tcx.param_env(body.source.def_id());
-
     for (variant, yield_source_info) in
         layout.variant_fields.iter().zip(&layout.variant_source_info)
     {
@@ -1842,7 +1835,7 @@ fn check_suspend_tys<'tcx>(tcx: TyCtxt<'tcx>, layout: &CoroutineLayout<'tcx>, bo
                     continue;
                 };
 
-                check_must_not_suspend_ty(tcx, decl.ty, hir_id, param_env, SuspendCheckData {
+                check_must_not_suspend_ty(tcx, decl.ty, hir_id, SuspendCheckData {
                     source_span: decl.source_info.span,
                     yield_span: yield_source_info.span,
                     plural_len: 1,
@@ -1872,7 +1865,6 @@ fn check_must_not_suspend_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
     hir_id: hir::HirId,
-    param_env: ty::ParamEnv<'tcx>,
     data: SuspendCheckData<'_>,
 ) -> bool {
     if ty.is_unit() {
@@ -1887,16 +1879,13 @@ fn check_must_not_suspend_ty<'tcx>(
         ty::Adt(_, args) if ty.is_box() => {
             let boxed_ty = args.type_at(0);
             let allocator_ty = args.type_at(1);
-            check_must_not_suspend_ty(tcx, boxed_ty, hir_id, param_env, SuspendCheckData {
+            check_must_not_suspend_ty(tcx, boxed_ty, hir_id, SuspendCheckData {
                 descr_pre: &format!("{}boxed ", data.descr_pre),
                 ..data
-            }) || check_must_not_suspend_ty(
-                tcx,
-                allocator_ty,
-                hir_id,
-                param_env,
-                SuspendCheckData { descr_pre: &format!("{}allocator ", data.descr_pre), ..data },
-            )
+            }) || check_must_not_suspend_ty(tcx, allocator_ty, hir_id, SuspendCheckData {
+                descr_pre: &format!("{}allocator ", data.descr_pre),
+                ..data
+            })
         }
         ty::Adt(def, _) => check_must_not_suspend_def(tcx, def.did(), hir_id, data),
         // FIXME: support adding the attribute to TAITs
@@ -1941,7 +1930,7 @@ fn check_must_not_suspend_ty<'tcx>(
             let mut has_emitted = false;
             for (i, ty) in fields.iter().enumerate() {
                 let descr_post = &format!(" in tuple element {i}");
-                if check_must_not_suspend_ty(tcx, ty, hir_id, param_env, SuspendCheckData {
+                if check_must_not_suspend_ty(tcx, ty, hir_id, SuspendCheckData {
                     descr_post,
                     ..data
                 }) {
@@ -1952,7 +1941,7 @@ fn check_must_not_suspend_ty<'tcx>(
         }
         ty::Array(ty, len) => {
             let descr_pre = &format!("{}array{} of ", data.descr_pre, plural_suffix);
-            check_must_not_suspend_ty(tcx, ty, hir_id, param_env, SuspendCheckData {
+            check_must_not_suspend_ty(tcx, ty, hir_id, SuspendCheckData {
                 descr_pre,
                 // FIXME(must_not_suspend): This is wrong. We should handle printing unevaluated consts.
                 plural_len: len.try_to_target_usize(tcx).unwrap_or(0) as usize + 1,
@@ -1963,10 +1952,7 @@ fn check_must_not_suspend_ty<'tcx>(
         // may not be considered live across the await point.
         ty::Ref(_region, ty, _mutability) => {
             let descr_pre = &format!("{}reference{} to ", data.descr_pre, plural_suffix);
-            check_must_not_suspend_ty(tcx, ty, hir_id, param_env, SuspendCheckData {
-                descr_pre,
-                ..data
-            })
+            check_must_not_suspend_ty(tcx, ty, hir_id, SuspendCheckData { descr_pre, ..data })
         }
         _ => false,
     }

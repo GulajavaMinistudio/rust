@@ -9,7 +9,7 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::{self, PolyFnSig, TyCtxt};
 use rustc_middle::{bug, mir};
 use rustc_span::Symbol;
-use {rustc_attr as attr, rustc_hir as hir};
+use {rustc_attr_parsing as attr, rustc_hir as hir};
 
 pub use self::qualifs::Qualif;
 
@@ -24,17 +24,15 @@ mod resolver;
 pub struct ConstCx<'mir, 'tcx> {
     pub body: &'mir mir::Body<'tcx>,
     pub tcx: TyCtxt<'tcx>,
-    pub param_env: ty::ParamEnv<'tcx>,
+    pub typing_env: ty::TypingEnv<'tcx>,
     pub const_kind: Option<hir::ConstContext>,
 }
 
 impl<'mir, 'tcx> ConstCx<'mir, 'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, body: &'mir mir::Body<'tcx>) -> Self {
-        let def_id = body.source.def_id().expect_local();
-        let param_env = tcx.param_env(def_id);
-
+        let typing_env = body.typing_env(tcx);
         let const_kind = tcx.hir().body_const_context(body.source.def_id().expect_local());
-        ConstCx { body, tcx, param_env, const_kind }
+        ConstCx { body, tcx, typing_env, const_kind }
     }
 
     pub(crate) fn dcx(&self) -> DiagCtxtHandle<'tcx> {

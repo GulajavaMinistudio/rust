@@ -282,7 +282,7 @@ fn exported_symbols_provider_local(
         }));
     }
 
-    if tcx.sess.opts.share_generics() && tcx.local_crate_exports_generics() {
+    if tcx.local_crate_exports_generics() {
         use rustc_middle::mir::mono::{Linkage, MonoItem, Visibility};
         use rustc_middle::ty::InstanceKind;
 
@@ -308,6 +308,17 @@ fn exported_symbols_provider_local(
                 // If we potentially share things from Rust dylibs, they must
                 // not be hidden
                 continue;
+            }
+
+            if !tcx.sess.opts.share_generics() {
+                if tcx.codegen_fn_attrs(mono_item.def_id()).inline
+                    == rustc_attr_parsing::InlineAttr::Never
+                {
+                    // this is OK, we explicitly allow sharing inline(never) across crates even
+                    // without share-generics.
+                } else {
+                    continue;
+                }
             }
 
             match *mono_item {
@@ -595,8 +606,10 @@ pub(crate) fn linking_symbol_name_for_instance_in_crate<'tcx>(
 
     let (conv, args) = instance
         .map(|i| {
-            tcx.fn_abi_of_instance(ty::ParamEnv::reveal_all().and((i, ty::List::empty())))
-                .unwrap_or_else(|_| bug!("fn_abi_of_instance({i:?}) failed"))
+            tcx.fn_abi_of_instance(
+                ty::TypingEnv::fully_monomorphized().as_query_input((i, ty::List::empty())),
+            )
+            .unwrap_or_else(|_| bug!("fn_abi_of_instance({i:?}) failed"))
         })
         .map(|fnabi| (fnabi.conv, &fnabi.args[..]))
         .unwrap_or((Conv::Rust, &[]));

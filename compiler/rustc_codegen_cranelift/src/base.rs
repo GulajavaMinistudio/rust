@@ -6,16 +6,18 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::ModuleError;
 use rustc_ast::InlineAsmOptions;
 use rustc_codegen_ssa::base::is_call_from_compiler_builtins_to_upstream_monomorphization;
+use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_index::IndexVec;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::InlineAsmMacro;
 use rustc_middle::ty::TypeVisitableExt;
 use rustc_middle::ty::adjustment::PointerCoercion;
-use rustc_middle::ty::layout::FnAbiOf;
+use rustc_middle::ty::layout::{FnAbiOf, HasTypingEnv};
 use rustc_middle::ty::print::with_no_trimmed_paths;
 
 use crate::constant::ConstantCx;
 use crate::debuginfo::{FunctionDebugContext, TypeDebugContext};
+use crate::enable_verifier;
 use crate::inline_asm::codegen_naked_asm;
 use crate::prelude::*;
 use crate::pretty_clif::CommentWriter;
@@ -103,7 +105,7 @@ pub(crate) fn codegen_fn<'tcx>(
     let block_map: IndexVec<BasicBlock, Block> =
         (0..mir.basic_blocks.len()).map(|_| bcx.create_block()).collect();
 
-    let fn_abi = RevealAllLayoutCx(tcx).fn_abi_of_instance(instance, ty::List::empty());
+    let fn_abi = FullyMonomorphizedLayoutCx(tcx).fn_abi_of_instance(instance, ty::List::empty());
 
     // Make FunctionCx
     let target_config = module.target_config();
@@ -169,12 +171,13 @@ pub(crate) fn codegen_fn<'tcx>(
 
 pub(crate) fn compile_fn(
     cx: &mut crate::CodegenCx,
+    profiler: &SelfProfilerRef,
     cached_context: &mut Context,
     module: &mut dyn Module,
     codegened_func: CodegenedFunction,
 ) {
     let _timer =
-        cx.profiler.generic_activity_with_arg("compile function", &*codegened_func.symbol_name);
+        profiler.generic_activity_with_arg("compile function", &*codegened_func.symbol_name);
 
     let clif_comments = codegened_func.clif_comments;
 
@@ -212,7 +215,7 @@ pub(crate) fn compile_fn(
     };
 
     // Define function
-    cx.profiler.generic_activity("define function").run(|| {
+    profiler.generic_activity("define function").run(|| {
         context.want_disasm = cx.should_write_ir;
         match module.define_function(codegened_func.func_id, context) {
             Ok(()) => {}
@@ -253,7 +256,7 @@ pub(crate) fn compile_fn(
 
     // Define debuginfo for function
     let debug_context = &mut cx.debug_context;
-    cx.profiler.generic_activity("generate debug info").run(|| {
+    profiler.generic_activity("generate debug info").run(|| {
         if let Some(debug_context) = debug_context {
             codegened_func.func_debug_cx.unwrap().finalize(
                 debug_context,
@@ -264,11 +267,11 @@ pub(crate) fn compile_fn(
     });
 }
 
-pub(crate) fn verify_func(
-    tcx: TyCtxt<'_>,
-    writer: &crate::pretty_clif::CommentWriter,
-    func: &Function,
-) {
+fn verify_func(tcx: TyCtxt<'_>, writer: &crate::pretty_clif::CommentWriter, func: &Function) {
+    if !enable_verifier(tcx.sess) {
+        return;
+    }
+
     tcx.prof.generic_activity("verify clif ir").run(|| {
         let flags = cranelift_codegen::settings::Flags::new(cranelift_codegen::settings::builder());
         match cranelift_codegen::verify_function(&func, &flags) {
@@ -666,12 +669,11 @@ fn codegen_stmt<'tcx>(
                             let func_ref = fx.get_function_ref(
                                 Instance::resolve_for_fn_ptr(
                                     fx.tcx,
-                                    ParamEnv::reveal_all(),
+                                    ty::TypingEnv::fully_monomorphized(),
                                     def_id,
                                     args,
                                 )
-                                .unwrap()
-                                .polymorphize(fx.tcx),
+                                .unwrap(),
                             );
                             let func_addr = fx.bcx.ins().func_addr(fx.pointer_type, func_ref);
                             lval.write_cvalue(fx, CValue::by_val(func_addr, to_layout));
@@ -757,8 +759,7 @@ fn codegen_stmt<'tcx>(
                                 def_id,
                                 args,
                                 ty::ClosureKind::FnOnce,
-                            )
-                            .polymorphize(fx.tcx);
+                            );
                             let func_ref = fx.get_function_ref(instance);
                             let func_addr = fx.bcx.ins().func_addr(fx.pointer_type, func_ref);
                             lval.write_cvalue(fx, CValue::by_val(func_addr, lval.layout()));
@@ -827,12 +828,6 @@ fn codegen_stmt<'tcx>(
                         fx.bcx.ins().nop();
                     }
                 }
-                Rvalue::Len(place) => {
-                    let place = codegen_place(fx, place);
-                    let usize_layout = fx.layout_of(fx.tcx.types.usize);
-                    let len = codegen_array_len(fx, place);
-                    lval.write_cvalue(fx, CValue::by_val(len, usize_layout));
-                }
                 Rvalue::ShallowInitBox(ref operand, content_ty) => {
                     let content_ty = fx.monomorphize(content_ty);
                     let box_layout = fx.layout_of(Ty::new_box(fx.tcx, content_ty));
@@ -841,14 +836,18 @@ fn codegen_stmt<'tcx>(
                     lval.write_cvalue(fx, CValue::by_val(operand, box_layout));
                 }
                 Rvalue::NullaryOp(ref null_op, ty) => {
-                    assert!(lval.layout().ty.is_sized(fx.tcx, ParamEnv::reveal_all()));
+                    assert!(lval.layout().ty.is_sized(fx.tcx, fx.typing_env()));
                     let layout = fx.layout_of(fx.monomorphize(ty));
                     let val = match null_op {
                         NullOp::SizeOf => layout.size.bytes(),
                         NullOp::AlignOf => layout.align.abi.bytes(),
                         NullOp::OffsetOf(fields) => fx
                             .tcx
-                            .offset_of_subfield(ParamEnv::reveal_all(), layout, fields.iter())
+                            .offset_of_subfield(
+                                ty::TypingEnv::fully_monomorphized(),
+                                layout,
+                                fields.iter(),
+                            )
                             .bytes(),
                         NullOp::UbChecks => {
                             let val = fx.tcx.sess.ub_checks();
@@ -920,6 +919,7 @@ fn codegen_stmt<'tcx>(
         | StatementKind::FakeRead(..)
         | StatementKind::Retag { .. }
         | StatementKind::PlaceMention(..)
+        | StatementKind::BackwardIncompatibleDropHint { .. }
         | StatementKind::AscribeUserType(..) => {}
 
         StatementKind::Coverage { .. } => unreachable!(),
@@ -1079,7 +1079,7 @@ fn codegen_panic_inner<'tcx>(
 
     let def_id = fx.tcx.require_lang_item(lang_item, span);
 
-    let instance = Instance::mono(fx.tcx, def_id).polymorphize(fx.tcx);
+    let instance = Instance::mono(fx.tcx, def_id);
 
     if is_call_from_compiler_builtins_to_upstream_monomorphization(fx.tcx, instance) {
         fx.bcx.ins().trap(TrapCode::user(2).unwrap());

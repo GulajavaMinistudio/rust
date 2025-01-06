@@ -54,6 +54,10 @@ fn variant_discriminants<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> FxHashSet<u128> {
     match &layout.variants {
+        Variants::Empty => {
+            // Uninhabited, no valid discriminant.
+            FxHashSet::default()
+        }
         Variants::Single { index } => {
             let mut res = FxHashSet::default();
             res.insert(
@@ -92,9 +96,7 @@ impl<'tcx> crate::MirPass<'tcx> for UnreachableEnumBranching {
 
             let Some(discriminant_ty) = get_switched_on_type(bb_data, tcx, body) else { continue };
 
-            let layout = tcx.layout_of(
-                tcx.param_env_reveal_all_normalized(body.source.def_id()).and(discriminant_ty),
-            );
+            let layout = tcx.layout_of(body.typing_env(tcx).as_query_input(discriminant_ty));
 
             let mut allowed_variants = if let Ok(layout) = layout {
                 // Find allowed variants based on uninhabited.

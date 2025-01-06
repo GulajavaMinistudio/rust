@@ -232,7 +232,6 @@ use rustc_middle::{bug, span_bug};
 use rustc_session::Limit;
 use rustc_session::config::EntryFnType;
 use rustc_span::source_map::{Spanned, dummy_spanned, respan};
-use rustc_span::symbol::sym;
 use rustc_span::{DUMMY_SP, Span};
 use tracing::{debug, instrument, trace};
 
@@ -427,7 +426,7 @@ fn collect_items_rec<'tcx>(
                 let DefKind::Static { nested, .. } = tcx.def_kind(def_id) else { bug!() };
                 // Nested statics have no type.
                 if !nested {
-                    let ty = instance.ty(tcx, ty::ParamEnv::reveal_all());
+                    let ty = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
                     visit_drop_use(tcx, ty, true, starting_item.span, &mut used_items);
                 }
 
@@ -636,7 +635,7 @@ impl<'a, 'tcx> MirUsedCollector<'a, 'tcx> {
         trace!("monomorphize: self.instance={:?}", self.instance);
         self.instance.instantiate_mir_and_normalize_erasing_regions(
             self.tcx,
-            ty::ParamEnv::reveal_all(),
+            ty::TypingEnv::fully_monomorphized(),
             ty::EarlyBinder::bind(value),
         )
     }
@@ -647,12 +646,11 @@ impl<'a, 'tcx> MirUsedCollector<'a, 'tcx> {
         constant: &mir::ConstOperand<'tcx>,
     ) -> Option<mir::ConstValue<'tcx>> {
         let const_ = self.monomorphize(constant.const_);
-        let param_env = ty::ParamEnv::reveal_all();
         // Evaluate the constant. This makes const eval failure a collection-time error (rather than
         // a codegen-time error). rustc stops after collection if there was an error, so this
         // ensures codegen never has to worry about failing consts.
         // (codegen relies on this and ICEs will happen if this is violated.)
-        match const_.eval(self.tcx, param_env, constant.span) {
+        match const_.eval(self.tcx, ty::TypingEnv::fully_monomorphized(), constant.span) {
             Ok(v) => Some(v),
             Err(ErrorHandled::TooGeneric(..)) => span_bug!(
                 constant.span,
@@ -863,9 +861,20 @@ fn visit_fn_use<'tcx>(
 ) {
     if let ty::FnDef(def_id, args) = *ty.kind() {
         let instance = if is_direct_call {
-            ty::Instance::expect_resolve(tcx, ty::ParamEnv::reveal_all(), def_id, args, source)
+            ty::Instance::expect_resolve(
+                tcx,
+                ty::TypingEnv::fully_monomorphized(),
+                def_id,
+                args,
+                source,
+            )
         } else {
-            match ty::Instance::resolve_for_fn_ptr(tcx, ty::ParamEnv::reveal_all(), def_id, args) {
+            match ty::Instance::resolve_for_fn_ptr(
+                tcx,
+                ty::TypingEnv::fully_monomorphized(),
+                def_id,
+                args,
+            ) {
                 Some(instance) => instance,
                 _ => bug!("failed to resolve instance for {ty}"),
             }
@@ -885,9 +894,8 @@ fn visit_instance_use<'tcx>(
     if !tcx.should_codegen_locally(instance) {
         return;
     }
-    if let ty::InstanceKind::Intrinsic(def_id) = instance.def {
-        let name = tcx.item_name(def_id);
-        if let Some(_requirement) = ValidityRequirement::from_intrinsic(name) {
+    if let Some(intrinsic) = tcx.intrinsic(instance.def_id()) {
+        if let Some(_requirement) = ValidityRequirement::from_intrinsic(intrinsic.name) {
             // The intrinsics assert_inhabited, assert_zero_valid, and assert_mem_uninitialized_valid will
             // be lowered in codegen to nothing or a call to panic_nounwind. So if we encounter any
             // of those intrinsics, we need to include a mono item for panic_nounwind, else we may try to
@@ -897,11 +905,12 @@ fn visit_instance_use<'tcx>(
             if tcx.should_codegen_locally(panic_instance) {
                 output.push(create_fn_mono_item(tcx, panic_instance, source));
             }
-        } else if tcx.has_attr(def_id, sym::rustc_intrinsic)
-            && !tcx.has_attr(def_id, sym::rustc_intrinsic_must_be_overridden)
-        {
-            // Codegen the fallback body of intrinsics with fallback bodies
-            let instance = ty::Instance::new(def_id, instance.args);
+        } else if !intrinsic.must_be_overridden {
+            // Codegen the fallback body of intrinsics with fallback bodies.
+            // We explicitly skip this otherwise to ensure we get a linker error
+            // if anyone tries to call this intrinsic and the codegen backend did not
+            // override the implementation.
+            let instance = ty::Instance::new(instance.def_id(), instance.args);
             if tcx.should_codegen_locally(instance) {
                 output.push(create_fn_mono_item(tcx, instance, source));
             }
@@ -955,9 +964,7 @@ fn should_codegen_locally<'tcx>(tcx: TyCtxtAt<'tcx>, instance: Instance<'tcx>) -
         return true;
     }
 
-    if tcx.is_reachable_non_generic(def_id)
-        || instance.polymorphize(*tcx).upstream_monomorphization(*tcx).is_some()
-    {
+    if tcx.is_reachable_non_generic(def_id) || instance.upstream_monomorphization(*tcx).is_some() {
         // We can link to the item in question, no instance needed in this crate.
         return false;
     }
@@ -1024,12 +1031,12 @@ fn find_vtable_types_for_unsizing<'tcx>(
     target_ty: Ty<'tcx>,
 ) -> (Ty<'tcx>, Ty<'tcx>) {
     let ptr_vtable = |inner_source: Ty<'tcx>, inner_target: Ty<'tcx>| {
-        let param_env = ty::ParamEnv::reveal_all();
+        let typing_env = ty::TypingEnv::fully_monomorphized();
         let type_has_metadata = |ty: Ty<'tcx>| -> bool {
-            if ty.is_sized(tcx.tcx, param_env) {
+            if ty.is_sized(tcx.tcx, typing_env) {
                 return false;
             }
-            let tail = tcx.struct_tail_for_codegen(ty, param_env);
+            let tail = tcx.struct_tail_for_codegen(ty, typing_env);
             match tail.kind() {
                 ty::Foreign(..) => false,
                 ty::Str | ty::Slice(..) | ty::Dynamic(..) => true,
@@ -1039,7 +1046,7 @@ fn find_vtable_types_for_unsizing<'tcx>(
         if type_has_metadata(inner_source) {
             (inner_source, inner_target)
         } else {
-            tcx.struct_lockstep_tails_for_codegen(inner_source, inner_target, param_env)
+            tcx.struct_lockstep_tails_for_codegen(inner_source, inner_target, typing_env)
         }
     };
 
@@ -1104,7 +1111,7 @@ fn create_fn_mono_item<'tcx>(
         crate::util::dump_closure_profile(tcx, instance);
     }
 
-    respan(source, MonoItem::Fn(instance.polymorphize(tcx)))
+    respan(source, MonoItem::Fn(instance))
 }
 
 /// Creates a `MonoItem` for each method that is referenced by the vtable for
@@ -1270,8 +1277,13 @@ fn visit_mentioned_item<'tcx>(
     match *item {
         MentionedItem::Fn(ty) => {
             if let ty::FnDef(def_id, args) = *ty.kind() {
-                let instance =
-                    Instance::expect_resolve(tcx, ty::ParamEnv::reveal_all(), def_id, args, span);
+                let instance = Instance::expect_resolve(
+                    tcx,
+                    ty::TypingEnv::fully_monomorphized(),
+                    def_id,
+                    args,
+                    span,
+                );
                 // `visit_instance_use` was written for "used" item collection but works just as well
                 // for "mentioned" item collection.
                 // We can set `is_direct_call`; that just means we'll skip a bunch of shims that anyway
@@ -1487,13 +1499,13 @@ impl<'v> RootCollector<'_, 'v> {
         // regions must appear in the argument
         // listing.
         let main_ret_ty = self.tcx.normalize_erasing_regions(
-            ty::ParamEnv::reveal_all(),
+            ty::TypingEnv::fully_monomorphized(),
             main_ret_ty.no_bound_vars().unwrap(),
         );
 
         let start_instance = Instance::expect_resolve(
             self.tcx,
-            ty::ParamEnv::reveal_all(),
+            ty::TypingEnv::fully_monomorphized(),
             start_def_id,
             self.tcx.mk_args(&[main_ret_ty.into()]),
             DUMMY_SP,
@@ -1541,7 +1553,7 @@ fn create_mono_items_for_default_impls<'tcx>(
     // Unlike 'lazy' monomorphization that begins by collecting items transitively
     // called by `main` or other global items, when eagerly monomorphizing impl
     // items, we never actually check that the predicates of this impl are satisfied
-    // in a empty reveal-all param env (i.e. with no assumptions).
+    // in a empty param env (i.e. with no assumptions).
     //
     // Even though this impl has no type or const generic parameters, because we don't
     // consider higher-ranked predicates such as `for<'a> &'a mut [u8]: Copy` to
@@ -1551,8 +1563,8 @@ fn create_mono_items_for_default_impls<'tcx>(
         return;
     }
 
-    let param_env = ty::ParamEnv::reveal_all();
-    let trait_ref = tcx.normalize_erasing_regions(param_env, trait_ref);
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    let trait_ref = tcx.normalize_erasing_regions(typing_env, trait_ref);
     let overridden_methods = tcx.impl_item_implementor_ids(item.owner_id);
     for method in tcx.provided_trait_methods(trait_ref.def_id) {
         if overridden_methods.contains_key(&method.def_id) {
@@ -1567,7 +1579,7 @@ fn create_mono_items_for_default_impls<'tcx>(
         // only has lifetime generic parameters. This is validated by calling
         // `own_requires_monomorphization` on both the impl and method.
         let args = trait_ref.args.extend_to(tcx, method.def_id, only_region_params);
-        let instance = ty::Instance::expect_resolve(tcx, param_env, method.def_id, args, DUMMY_SP);
+        let instance = ty::Instance::expect_resolve(tcx, typing_env, method.def_id, args, DUMMY_SP);
 
         let mono_item = create_fn_mono_item(tcx, instance, DUMMY_SP);
         if mono_item.node.is_instantiable(tcx) && tcx.should_codegen_locally(instance) {

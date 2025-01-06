@@ -20,7 +20,6 @@ cfg_if::cfg_if! {
         target_os = "l4re",
         target_os = "none",
         target_os = "espidf",
-        target_os = "rtems",
         target_os = "nuttx",
     ))] {
         // These "unix" family members do not have unwinder.
@@ -177,4 +176,9 @@ cfg_if::cfg_if! {
 
 #[cfg(target_os = "hurd")]
 #[link(name = "gcc_s")]
+extern "C" {}
+
+#[cfg(all(target_os = "windows", target_env = "gnu", target_abi = "llvm"))]
+#[link(name = "unwind", kind = "static", modifiers = "-bundle", cfg(target_feature = "crt-static"))]
+#[link(name = "unwind", cfg(not(target_feature = "crt-static")))]
 extern "C" {}

@@ -27,8 +27,7 @@ use rustc_middle::ty::{
     self, ToPolyTraitRef, TraitRef, Ty, TyCtxt, TypeFoldable, TypeVisitableExt, Upcast,
 };
 use rustc_middle::{bug, span_bug};
-use rustc_span::symbol::sym;
-use rustc_span::{BytePos, DUMMY_SP, Span, Symbol};
+use rustc_span::{BytePos, DUMMY_SP, Span, Symbol, sym};
 use tracing::{debug, instrument};
 
 use super::on_unimplemented::{AppendConstMessage, OnUnimplementedNote};
@@ -725,7 +724,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     &obligation.cause,
                     None,
                     None,
-                    TypeError::Sorts(ty::error::ExpectedFound::new(true, expected_ty, ct_ty)),
+                    TypeError::Sorts(ty::error::ExpectedFound::new(expected_ty, ct_ty)),
                     false,
                 );
                 diag
@@ -794,7 +793,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     closure_def_id,
                     found_kind,
                     expected_kind,
-                    "async ",
+                    "Async",
                 );
                 self.note_obligation_cause(&mut err, &obligation);
                 self.point_at_returns_when_relevant(&mut err, &obligation);
@@ -914,7 +913,9 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         }
         let hir_id = self.tcx.local_def_id_to_hir_id(obligation.cause.body_id);
         let body_id = match self.tcx.hir_node(hir_id) {
-            hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(_, _, body_id), .. }) => body_id,
+            hir::Node::Item(hir::Item {
+                kind: hir::ItemKind::Fn { body: body_id, .. }, ..
+            }) => body_id,
             _ => return false,
         };
         let ControlFlow::Break(expr) = (FindMethodSubexprOfTry { search_span: span })
@@ -1449,7 +1450,6 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 secondary_span,
                 values.map(|(_, normalized_ty, expected_ty)| {
                     obligation.param_env.and(infer::ValuePairs::Terms(ExpectedFound::new(
-                        true,
                         expected_ty,
                         normalized_ty,
                     )))
@@ -1534,6 +1534,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 ty::CoroutineWitness(..) => Some(20),
                 ty::CoroutineClosure(..) => Some(21),
                 ty::Pat(..) => Some(22),
+                ty::UnsafeBinder(..) => Some(23),
                 ty::Placeholder(..) | ty::Bound(..) | ty::Infer(..) | ty::Error(_) => None,
             }
         }
@@ -1732,6 +1733,10 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             span.push_span_label(self.tcx.def_span(trait_def_id), "this is the required trait");
             for (sp, label) in [trait_def_id, other_trait_def_id]
                 .iter()
+                // The current crate-version might depend on another version of the same crate
+                // (Think "semver-trick"). Do not call `extern_crate` in that case for the local
+                // crate as that doesn't make sense and ICEs (#133563).
+                .filter(|def_id| !def_id.is_local())
                 .filter_map(|def_id| self.tcx.extern_crate(def_id.krate))
                 .map(|data| {
                     let dependency = if data.dependency_of == LOCAL_CRATE {
@@ -1742,9 +1747,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     };
                     (
                         data.span,
-                        format!(
-                            "one version of crate `{crate_name}` is used here, as a {dependency}"
-                        ),
+                        format!("one version of crate `{crate_name}` used here, as a {dependency}"),
                     )
                 })
             {
@@ -1804,24 +1807,6 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 StringPart::highlighted("cargo tree".to_string()),
                 StringPart::normal("` to explore your dependency tree".to_string()),
             ]);
-
-            // FIXME: this is a giant hack for the benefit of this specific diagnostic. Because
-            // we're so nested in method calls before the error gets emitted, bubbling a single bit
-            // flag informing the top level caller to stop adding extra detail to the diagnostic,
-            // would actually be harder to follow. So we do something naughty here: we consume the
-            // diagnostic, emit it and leave in its place a "delayed bug" that will continue being
-            // modified but won't actually be printed to end users. This *is not ideal*, but allows
-            // us to reduce the verbosity of an error that is already quite verbose and increase its
-            // specificity. Below we modify the main message as well, in a way that *could* break if
-            // the implementation of Diagnostics change significantly, but that would be caught with
-            // a make test failure when this diagnostic is tested.
-            err.primary_message(format!(
-                "{} because the trait comes from a different crate version",
-                err.messages[0].0.as_str().unwrap(),
-            ));
-            let diag = err.clone();
-            err.downgrade_to_delayed_bug();
-            self.tcx.dcx().emit_diagnostic(diag);
             return true;
         }
 
@@ -2079,7 +2064,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                 cand.trait_ref = self
                     .tcx
                     .try_normalize_erasing_regions(
-                        self.tcx.param_env(cand.impl_def_id),
+                        ty::TypingEnv::non_body_analysis(self.tcx, cand.impl_def_id),
                         cand.trait_ref,
                     )
                     .unwrap_or(cand.trait_ref);
@@ -2755,7 +2740,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             (obligation.cause.clone(), terr)
         };
         self.report_and_explain_type_error(
-            TypeTrace::trait_refs(&cause, true, expected_trait_ref, found_trait_ref),
+            TypeTrace::trait_refs(&cause, expected_trait_ref, found_trait_ref),
             obligation.param_env,
             terr,
         )
@@ -2846,7 +2831,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         if Some(expected_trait_ref.def_id) != self.tcx.lang_items().coroutine_trait() && not_tupled
         {
             return Ok(self.report_and_explain_type_error(
-                TypeTrace::trait_refs(&obligation.cause, true, expected_trait_ref, found_trait_ref),
+                TypeTrace::trait_refs(&obligation.cause, expected_trait_ref, found_trait_ref),
                 obligation.param_env,
                 ty::error::TypeError::Mismatch,
             ));
@@ -2927,7 +2912,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     })
                     .collect::<Option<Vec<ArgKind>>>()?,
             ),
-            Node::Item(&hir::Item { kind: hir::ItemKind::Fn(ref sig, ..), .. })
+            Node::Item(&hir::Item { kind: hir::ItemKind::Fn { ref sig, .. }, .. })
             | Node::ImplItem(&hir::ImplItem { kind: hir::ImplItemKind::Fn(ref sig, _), .. })
             | Node::TraitItem(&hir::TraitItem {
                 kind: hir::TraitItemKind::Fn(ref sig, _), ..

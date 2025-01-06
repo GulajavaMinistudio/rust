@@ -30,16 +30,17 @@ use rustc_target::spec::{
 };
 use tracing::debug;
 
+pub use crate::config::cfg::{Cfg, CheckCfg, ExpectedValues};
+use crate::config::native_libs::parse_native_libs;
 use crate::errors::FileWriteFail;
 pub use crate::options::*;
 use crate::search_paths::SearchPath;
-use crate::utils::{CanonicalizedPath, NativeLib, NativeLibKind};
+use crate::utils::CanonicalizedPath;
 use crate::{EarlyDiagCtxt, HashStableContext, Session, filesearch, lint};
 
 mod cfg;
+mod native_libs;
 pub mod sigpipe;
-
-pub use cfg::{Cfg, CheckCfg, ExpectedValues};
 
 /// The different settings that the `-C strip` flag can have.
 #[derive(Clone, Copy, PartialEq, Hash, Debug)]
@@ -146,24 +147,31 @@ pub enum InstrumentCoverage {
     Yes,
 }
 
-/// Individual flag values controlled by `-Z coverage-options`.
+/// Individual flag values controlled by `-Zcoverage-options`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct CoverageOptions {
     pub level: CoverageLevel,
 
-    /// `-Z coverage-options=no-mir-spans`: Don't extract block coverage spans
+    /// `-Zcoverage-options=no-mir-spans`: Don't extract block coverage spans
     /// from MIR statements/terminators, making it easier to inspect/debug
     /// branch and MC/DC coverage mappings.
     ///
     /// For internal debugging only. If other code changes would make it hard
     /// to keep supporting this flag, remove it.
     pub no_mir_spans: bool,
+
+    /// `-Zcoverage-options=discard-all-spans-in-codegen`: During codgen,
+    /// discard all coverage spans as though they were invalid. Needed by
+    /// regression tests for #133606, because we don't have an easy way to
+    /// reproduce it from actual source code.
+    pub discard_all_spans_in_codegen: bool,
 }
 
 /// Controls whether branch coverage or MC/DC coverage is enabled.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub enum CoverageLevel {
     /// Instrument for coverage at the MIR block level.
+    #[default]
     Block,
     /// Also instrument branch points (includes block coverage).
     Branch,
@@ -186,12 +194,6 @@ pub enum CoverageLevel {
     /// Instrument for MC/DC. Mostly a superset of condition coverage, but might
     /// differ in some corner cases.
     Mcdc,
-}
-
-impl Default for CoverageLevel {
-    fn default() -> Self {
-        Self::Block
-    }
 }
 
 /// Settings for `-Z instrument-xray` flag.
@@ -469,6 +471,13 @@ impl ToString for DebugInfoCompression {
         }
         .to_owned()
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+pub enum MirStripDebugInfo {
+    None,
+    LocalsInTinyFunctions,
+    AllLocals,
 }
 
 /// Split debug-information is enabled by `-C split-debuginfo`, this enum is only used if split
@@ -1068,7 +1077,7 @@ impl OutputFilenames {
         self.with_directory_and_extension(&self.out_directory, extension)
     }
 
-    fn with_directory_and_extension(&self, directory: &PathBuf, extension: &str) -> PathBuf {
+    pub fn with_directory_and_extension(&self, directory: &Path, extension: &str) -> PathBuf {
         let mut path = directory.join(&self.filestem);
         path.set_extension(extension);
         path
@@ -1207,7 +1216,7 @@ impl Options {
 
     /// Returns `true` if there will be an output file generated.
     pub fn will_create_output_file(&self) -> bool {
-        !self.unstable_opts.parse_only && // The file is just being parsed
+        !self.unstable_opts.parse_crate_root_only && // The file is just being parsed
             self.unstable_opts.ls.is_empty() // The file is just being queried
     }
 
@@ -1863,7 +1872,7 @@ fn parse_output_types(
     matches: &getopts::Matches,
 ) -> OutputTypes {
     let mut output_types = BTreeMap::new();
-    if !unstable_opts.parse_only {
+    if !unstable_opts.parse_crate_root_only {
         for list in matches.opt_strs("emit") {
             for output_type in list.split(',') {
                 let (shorthand, path) = split_out_file_name(output_type);
@@ -2134,143 +2143,6 @@ fn parse_assert_incr_state(
     }
 }
 
-fn parse_native_lib_kind(
-    early_dcx: &EarlyDiagCtxt,
-    matches: &getopts::Matches,
-    kind: &str,
-) -> (NativeLibKind, Option<bool>) {
-    let (kind, modifiers) = match kind.split_once(':') {
-        None => (kind, None),
-        Some((kind, modifiers)) => (kind, Some(modifiers)),
-    };
-
-    let kind = match kind {
-        "static" => NativeLibKind::Static { bundle: None, whole_archive: None },
-        "dylib" => NativeLibKind::Dylib { as_needed: None },
-        "framework" => NativeLibKind::Framework { as_needed: None },
-        "link-arg" => {
-            if !nightly_options::is_unstable_enabled(matches) {
-                let why = if nightly_options::match_is_nightly_build(matches) {
-                    " and only accepted on the nightly compiler"
-                } else {
-                    ", the `-Z unstable-options` flag must also be passed to use it"
-                };
-                early_dcx.early_fatal(format!("library kind `link-arg` is unstable{why}"))
-            }
-            NativeLibKind::LinkArg
-        }
-        _ => early_dcx.early_fatal(format!(
-            "unknown library kind `{kind}`, expected one of: static, dylib, framework, link-arg"
-        )),
-    };
-    match modifiers {
-        None => (kind, None),
-        Some(modifiers) => parse_native_lib_modifiers(early_dcx, kind, modifiers, matches),
-    }
-}
-
-fn parse_native_lib_modifiers(
-    early_dcx: &EarlyDiagCtxt,
-    mut kind: NativeLibKind,
-    modifiers: &str,
-    matches: &getopts::Matches,
-) -> (NativeLibKind, Option<bool>) {
-    let mut verbatim = None;
-    for modifier in modifiers.split(',') {
-        let (modifier, value) = match modifier.strip_prefix(['+', '-']) {
-            Some(m) => (m, modifier.starts_with('+')),
-            None => early_dcx.early_fatal(
-                "invalid linking modifier syntax, expected '+' or '-' prefix \
-                 before one of: bundle, verbatim, whole-archive, as-needed",
-            ),
-        };
-
-        let report_unstable_modifier = || {
-            if !nightly_options::is_unstable_enabled(matches) {
-                let why = if nightly_options::match_is_nightly_build(matches) {
-                    " and only accepted on the nightly compiler"
-                } else {
-                    ", the `-Z unstable-options` flag must also be passed to use it"
-                };
-                early_dcx.early_fatal(format!("linking modifier `{modifier}` is unstable{why}"))
-            }
-        };
-        let assign_modifier = |dst: &mut Option<bool>| {
-            if dst.is_some() {
-                let msg = format!("multiple `{modifier}` modifiers in a single `-l` option");
-                early_dcx.early_fatal(msg)
-            } else {
-                *dst = Some(value);
-            }
-        };
-        match (modifier, &mut kind) {
-            ("bundle", NativeLibKind::Static { bundle, .. }) => assign_modifier(bundle),
-            ("bundle", _) => early_dcx.early_fatal(
-                "linking modifier `bundle` is only compatible with `static` linking kind",
-            ),
-
-            ("verbatim", _) => assign_modifier(&mut verbatim),
-
-            ("whole-archive", NativeLibKind::Static { whole_archive, .. }) => {
-                assign_modifier(whole_archive)
-            }
-            ("whole-archive", _) => early_dcx.early_fatal(
-                "linking modifier `whole-archive` is only compatible with `static` linking kind",
-            ),
-
-            ("as-needed", NativeLibKind::Dylib { as_needed })
-            | ("as-needed", NativeLibKind::Framework { as_needed }) => {
-                report_unstable_modifier();
-                assign_modifier(as_needed)
-            }
-            ("as-needed", _) => early_dcx.early_fatal(
-                "linking modifier `as-needed` is only compatible with \
-                 `dylib` and `framework` linking kinds",
-            ),
-
-            // Note: this error also excludes the case with empty modifier
-            // string, like `modifiers = ""`.
-            _ => early_dcx.early_fatal(format!(
-                "unknown linking modifier `{modifier}`, expected one \
-                     of: bundle, verbatim, whole-archive, as-needed"
-            )),
-        }
-    }
-
-    (kind, verbatim)
-}
-
-fn parse_libs(early_dcx: &EarlyDiagCtxt, matches: &getopts::Matches) -> Vec<NativeLib> {
-    matches
-        .opt_strs("l")
-        .into_iter()
-        .map(|s| {
-            // Parse string of the form "[KIND[:MODIFIERS]=]lib[:new_name]",
-            // where KIND is one of "dylib", "framework", "static", "link-arg" and
-            // where MODIFIERS are a comma separated list of supported modifiers
-            // (bundle, verbatim, whole-archive, as-needed). Each modifier is prefixed
-            // with either + or - to indicate whether it is enabled or disabled.
-            // The last value specified for a given modifier wins.
-            let (name, kind, verbatim) = match s.split_once('=') {
-                None => (s, NativeLibKind::Unspecified, None),
-                Some((kind, name)) => {
-                    let (kind, verbatim) = parse_native_lib_kind(early_dcx, matches, kind);
-                    (name.to_string(), kind, verbatim)
-                }
-            };
-
-            let (name, new_name) = match name.split_once(':') {
-                None => (name, None),
-                Some((name, new_name)) => (name.to_string(), Some(new_name.to_owned())),
-            };
-            if name.is_empty() {
-                early_dcx.early_fatal("library name must not be empty");
-            }
-            NativeLib { name, new_name, kind, verbatim }
-        })
-        .collect()
-}
-
 pub fn parse_externs(
     early_dcx: &EarlyDiagCtxt,
     matches: &getopts::Matches,
@@ -2492,14 +2364,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         early_dcx.early_warn(format!("number of threads was capped at {}", parse::MAX_THREADS_CAP));
     }
 
-    let fuel = unstable_opts.fuel.is_some() || unstable_opts.print_fuel.is_some();
-    if fuel && unstable_opts.threads > 1 {
-        early_dcx.early_fatal("optimization fuel is incompatible with multiple threads");
-    }
-    if fuel && cg.incremental.is_some() {
-        early_dcx.early_fatal("optimization fuel is incompatible with incremental compilation");
-    }
-
     let incremental = cg.incremental.as_ref().map(PathBuf::from);
 
     let assert_incr_state = parse_assert_incr_state(early_dcx, &unstable_opts.assert_incr_state);
@@ -2644,7 +2508,10 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     let debuginfo = select_debuginfo(matches, &cg);
     let debuginfo_compression = unstable_opts.debuginfo_compression;
 
-    let libs = parse_libs(early_dcx, matches);
+    let crate_name = matches.opt_str("crate-name");
+    let unstable_features = UnstableFeatures::from_environment(crate_name.as_deref());
+    // Parse any `-l` flags, which link to native libraries.
+    let libs = parse_native_libs(early_dcx, &unstable_opts, unstable_features, matches);
 
     let test = matches.opt_present("test");
 
@@ -2658,8 +2525,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     }
 
     let externs = parse_externs(early_dcx, matches, &unstable_opts);
-
-    let crate_name = matches.opt_str("crate-name");
 
     let remap_path_prefix = parse_remap_path_prefix(early_dcx, matches, &unstable_opts);
 
@@ -2734,7 +2599,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         error_format,
         diagnostic_width,
         externs,
-        unstable_features: UnstableFeatures::from_environment(crate_name.as_deref()),
+        unstable_features,
         crate_name,
         libs,
         debug_assertions,
@@ -3043,10 +2908,10 @@ pub(crate) mod dep_tracking {
         BranchProtection, CFGuard, CFProtection, CollapseMacroDebuginfo, CoverageOptions,
         CrateType, DebugInfo, DebugInfoCompression, ErrorOutputType, FmtDebug, FunctionReturn,
         InliningThreshold, InstrumentCoverage, InstrumentXRay, LinkerPluginLto, LocationDetail,
-        LtoCli, NextSolverConfig, OomStrategy, OptLevel, OutFileName, OutputType, OutputTypes,
-        PatchableFunctionEntry, Polonius, RemapPathScopeComponents, ResolveDocLinks,
-        SourceFileHashAlgorithm, SplitDwarfKind, SwitchWithOptPath, SymbolManglingVersion,
-        WasiExecModel,
+        LtoCli, MirStripDebugInfo, NextSolverConfig, OomStrategy, OptLevel, OutFileName,
+        OutputType, OutputTypes, PatchableFunctionEntry, Polonius, RemapPathScopeComponents,
+        ResolveDocLinks, SourceFileHashAlgorithm, SplitDwarfKind, SwitchWithOptPath,
+        SymbolManglingVersion, WasiExecModel,
     };
     use crate::lint;
     use crate::utils::NativeLib;
@@ -3114,6 +2979,7 @@ pub(crate) mod dep_tracking {
         LtoCli,
         DebugInfo,
         DebugInfoCompression,
+        MirStripDebugInfo,
         CollapseMacroDebuginfo,
         UnstableFeatures,
         NativeLib,

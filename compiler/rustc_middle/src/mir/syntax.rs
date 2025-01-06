@@ -10,17 +10,16 @@ use rustc_hir::CoroutineKind;
 use rustc_hir::def_id::DefId;
 use rustc_index::IndexVec;
 use rustc_macros::{HashStable, TyDecodable, TyEncodable, TypeFoldable, TypeVisitable};
-use rustc_span::Span;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::source_map::Spanned;
-use rustc_span::symbol::Symbol;
+use rustc_span::{Span, Symbol};
 use rustc_target::asm::InlineAsmRegOrRegClass;
 use smallvec::SmallVec;
 
 use super::{BasicBlock, Const, Local, UserTypeProjection};
 use crate::mir::coverage::CoverageKind;
 use crate::ty::adjustment::PointerCoercion;
-use crate::ty::{self, GenericArgsRef, List, Region, Ty, TyCtxt, UserTypeAnnotationIndex};
+use crate::ty::{self, GenericArgsRef, List, Region, Ty, UserTypeAnnotationIndex};
 
 /// Represents the "flavors" of MIR.
 ///
@@ -98,13 +97,6 @@ impl MirPhase {
             MirPhase::Runtime(RuntimePhase::Initial) => "runtime",
             MirPhase::Runtime(RuntimePhase::PostCleanup) => "runtime-post-cleanup",
             MirPhase::Runtime(RuntimePhase::Optimized) => "runtime-optimized",
-        }
-    }
-
-    pub fn param_env<'tcx>(&self, tcx: TyCtxt<'tcx>, body_def_id: DefId) -> ty::ParamEnv<'tcx> {
-        match self {
-            MirPhase::Built | MirPhase::Analysis(_) => tcx.param_env(body_def_id),
-            MirPhase::Runtime(_) => tcx.param_env_reveal_all_normalized(body_def_id),
         }
     }
 }
@@ -439,6 +431,18 @@ pub enum StatementKind<'tcx> {
 
     /// No-op. Useful for deleting instructions without affecting statement indices.
     Nop,
+
+    /// Marker statement indicating where `place` would be dropped.
+    /// This is semantically equivalent to `Nop`, so codegen and MIRI should interpret this
+    /// statement as such.
+    /// The only use case of this statement is for linting in MIR to detect temporary lifetime
+    /// changes.
+    BackwardIncompatibleDropHint {
+        /// Place to drop
+        place: Box<Place<'tcx>>,
+        /// Reason for backward incompatibility
+        reason: BackwardIncompatibleDropReason,
+    },
 }
 
 impl StatementKind<'_> {
@@ -459,6 +463,7 @@ impl StatementKind<'_> {
             StatementKind::Intrinsic(..) => "Intrinsic",
             StatementKind::ConstEvalCounter => "ConstEvalCounter",
             StatementKind::Nop => "Nop",
+            StatementKind::BackwardIncompatibleDropHint { .. } => "BackwardIncompatibleDropHint",
         }
     }
 }
@@ -816,6 +821,11 @@ pub enum TerminatorKind<'tcx> {
     /// continues at the `resume` basic block, with the second argument written to the `resume_arg`
     /// place. If the coroutine is dropped before then, the `drop` basic block is invoked.
     ///
+    /// Note that coroutines can be (unstably) cloned under certain conditions, which means that
+    /// this terminator can **return multiple times**! MIR optimizations that reorder code into
+    /// different basic blocks needs to be aware of that.
+    /// See <https://github.com/rust-lang/rust/issues/95360>.
+    ///
     /// Not permitted in bodies that are not coroutine bodies, or after coroutine lowering.
     ///
     /// **Needs clarification**: What about the evaluation order of the `resume_arg` and `value`?
@@ -902,6 +912,21 @@ pub enum TerminatorKind<'tcx> {
         /// if and only if InlineAsmOptions::MAY_UNWIND is set.
         unwind: UnwindAction,
     },
+}
+
+#[derive(
+    Clone,
+    Debug,
+    TyEncodable,
+    TyDecodable,
+    Hash,
+    HashStable,
+    PartialEq,
+    TypeFoldable,
+    TypeVisitable
+)]
+pub enum BackwardIncompatibleDropReason {
+    Edition2024,
 }
 
 impl TerminatorKind<'_> {
@@ -1325,16 +1350,6 @@ pub enum Rvalue<'tcx> {
     /// Like with references, the semantics of this operation are heavily dependent on the aliasing
     /// model.
     RawPtr(Mutability, Place<'tcx>),
-
-    /// Yields the length of the place, as a `usize`.
-    ///
-    /// If the type of the place is an array, this is the array length. For slices (`[T]`, not
-    /// `&[T]`) this accesses the place's metadata to determine the length. This rvalue is
-    /// ill-formed for places of other types.
-    ///
-    /// This cannot be a `UnOp(PtrMetadata, _)` because that expects a value, and we only
-    /// have a place, and `UnOp(PtrMetadata, RawPtr(place))` is not a thing.
-    Len(Place<'tcx>),
 
     /// Performs essentially all of the casts that can be performed via `as`.
     ///

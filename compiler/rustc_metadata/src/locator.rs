@@ -229,8 +229,7 @@ use rustc_session::cstore::CrateSource;
 use rustc_session::filesearch::FileSearch;
 use rustc_session::search_paths::PathKind;
 use rustc_session::utils::CanonicalizedPath;
-use rustc_span::Span;
-use rustc_span::symbol::Symbol;
+use rustc_span::{Span, Symbol};
 use rustc_target::spec::{Target, TargetTuple};
 use tracing::{debug, info};
 
@@ -847,7 +846,10 @@ fn get_metadata_section<'p>(
         )));
     };
     match blob.check_compatibility(cfg_version) {
-        Ok(()) => Ok(blob),
+        Ok(()) => {
+            debug!("metadata blob read okay");
+            Ok(blob)
+        }
         Err(None) => Err(MetadataError::LoadFailure(format!(
             "invalid metadata version found: {}",
             filename.display()

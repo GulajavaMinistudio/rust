@@ -6,7 +6,7 @@
 //! [`core::error`] module is marked as stable since 1.81.0, so we want to show
 //! [`core::error::Error`] as stable since 1.81.0 as well.
 
-use rustc_attr::{Stability, StabilityLevel};
+use rustc_attr_parsing::{Stability, StabilityLevel};
 use rustc_hir::def_id::CRATE_DEF_ID;
 
 use crate::clean::{Crate, Item, ItemId, ItemKind};
@@ -30,7 +30,7 @@ struct StabilityPropagator<'a, 'tcx> {
     cx: &'a mut DocContext<'tcx>,
 }
 
-impl<'a, 'tcx> DocFolder for StabilityPropagator<'a, 'tcx> {
+impl DocFolder for StabilityPropagator<'_, '_> {
     fn fold_item(&mut self, mut item: Item) -> Option<Item> {
         let parent_stability = self.parent_stability;
 
@@ -67,11 +67,12 @@ impl<'a, 'tcx> DocFolder for StabilityPropagator<'a, 'tcx> {
                     // Don't inherit the parent's stability for these items, because they
                     // are potentially accessible even if the parent is more unstable.
                     ItemKind::ImplItem(..)
-                    | ItemKind::TyMethodItem(..)
+                    | ItemKind::RequiredMethodItem(..)
                     | ItemKind::MethodItem(..)
-                    | ItemKind::TyAssocConstItem(..)
-                    | ItemKind::AssocConstItem(..)
-                    | ItemKind::TyAssocTypeItem(..)
+                    | ItemKind::RequiredAssocConstItem(..)
+                    | ItemKind::ProvidedAssocConstItem(..)
+                    | ItemKind::ImplAssocConstItem(..)
+                    | ItemKind::RequiredAssocTypeItem(..)
                     | ItemKind::AssocTypeItem(..)
                     | ItemKind::PrimitiveItem(..)
                     | ItemKind::KeywordItem => own_stability,
@@ -106,6 +107,14 @@ fn merge_stability(
             || parent_stab.stable_since().is_some_and(|parent_since| parent_since > own_since))
     {
         parent_stability
+    } else if let Some(mut own_stab) = own_stability
+        && let StabilityLevel::Stable { since, allowed_through_unstable_modules: true } =
+            own_stab.level
+        && parent_stability.is_some_and(|stab| stab.is_stable())
+    {
+        // this property does not apply transitively through re-exports
+        own_stab.level = StabilityLevel::Stable { since, allowed_through_unstable_modules: false };
+        Some(own_stab)
     } else {
         own_stability
     }

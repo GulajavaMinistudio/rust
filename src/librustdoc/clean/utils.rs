@@ -419,7 +419,10 @@ fn print_const_with_custom_print_scalar<'tcx>(
         }
         (mir::Const::Val(mir::ConstValue::Scalar(int), _), ty::Int(i)) => {
             let ty = ct.ty();
-            let size = tcx.layout_of(ty::ParamEnv::empty().and(ty)).unwrap().size;
+            let size = tcx
+                .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty))
+                .unwrap()
+                .size;
             let sign_extended_data = int.assert_scalar_int().to_int(size);
             let mut output = if with_underscores {
                 format_integer_with_underscore_sep(&sign_extended_data.to_string())
@@ -575,11 +578,10 @@ pub(crate) fn has_doc_flag(tcx: TyCtxt<'_>, did: DefId, flag: Symbol) -> bool {
 }
 
 pub(crate) fn attrs_have_doc_flag<'a>(
-    mut attrs: impl Iterator<Item = &'a ast::Attribute>,
+    mut attrs: impl Iterator<Item = &'a hir::Attribute>,
     flag: Symbol,
 ) -> bool {
-    attrs
-        .any(|attr| attr.meta_item_list().is_some_and(|l| rustc_attr::list_contains_name(&l, flag)))
+    attrs.any(|attr| attr.meta_item_list().is_some_and(|l| ast::attr::list_contains_name(&l, flag)))
 }
 
 /// A link to `doc.rust-lang.org` that includes the channel name. Use this instead of manual links

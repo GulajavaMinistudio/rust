@@ -12,8 +12,7 @@ use rustc_expand::configure;
 use rustc_feature::Features;
 use rustc_parse::parser::{ForceCollect, Parser};
 use rustc_session::Session;
-use rustc_span::Span;
-use rustc_span::symbol::sym;
+use rustc_span::{Span, sym};
 use smallvec::SmallVec;
 use tracing::instrument;
 
@@ -215,7 +214,7 @@ impl MutVisitor for CfgEval<'_> {
         foreign_item: P<ast::ForeignItem>,
     ) -> SmallVec<[P<ast::ForeignItem>; 1]> {
         let foreign_item = configure!(self, foreign_item);
-        mut_visit::walk_flat_map_item(self, foreign_item)
+        mut_visit::walk_flat_map_foreign_item(self, foreign_item)
     }
 
     fn flat_map_arm(&mut self, arm: ast::Arm) -> SmallVec<[ast::Arm; 1]> {

@@ -11,6 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io, str};
 
 use build_helper::util::fail;
+use object::read::archive::ArchiveFile;
 
 use crate::LldMode;
 use crate::core::builder::Builder;
@@ -53,8 +54,35 @@ pub fn exe(name: &str, target: TargetSelection) -> String {
 }
 
 /// Returns `true` if the file name given looks like a dynamic library.
-pub fn is_dylib(name: &str) -> bool {
-    name.ends_with(".dylib") || name.ends_with(".so") || name.ends_with(".dll")
+pub fn is_dylib(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
+        ext == "dylib" || ext == "so" || ext == "dll" || (ext == "a" && is_aix_shared_archive(path))
+    })
+}
+
+/// Return the path to the containing submodule if available.
+pub fn submodule_path_of(builder: &Builder<'_>, path: &str) -> Option<String> {
+    let submodule_paths = build_helper::util::parse_gitmodules(&builder.src);
+    submodule_paths.iter().find_map(|submodule_path| {
+        if path.starts_with(submodule_path) { Some(submodule_path.to_string()) } else { None }
+    })
+}
+
+fn is_aix_shared_archive(path: &Path) -> bool {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let reader = object::ReadCache::new(file);
+    let archive = match ArchiveFile::parse(&reader) {
+        Ok(result) => result,
+        Err(_) => return false,
+    };
+
+    archive
+        .members()
+        .filter_map(Result::ok)
+        .any(|entry| String::from_utf8_lossy(entry.name()).contains(".so"))
 }
 
 /// Returns `true` if the file name given looks like a debug info file
@@ -412,7 +440,7 @@ fn lld_flag_no_threads(builder: &Builder<'_>, lld_mode: LldMode, is_windows: boo
 }
 
 pub fn dir_is_empty(dir: &Path) -> bool {
-    t!(std::fs::read_dir(dir)).next().is_none()
+    t!(std::fs::read_dir(dir), dir).next().is_none()
 }
 
 /// Extract the beta revision from the full version string.
@@ -455,7 +483,20 @@ pub fn linker_flags(
 ) -> Vec<String> {
     let mut args = vec![];
     if !builder.is_lld_direct_linker(target) && builder.config.lld_mode.is_used() {
-        args.push(String::from("-Clink-arg=-fuse-ld=lld"));
+        match builder.config.lld_mode {
+            LldMode::External => {
+                args.push("-Clinker-flavor=gnu-lld-cc".to_string());
+                // FIXME(kobzol): remove this flag once MCP510 gets stabilized
+                args.push("-Zunstable-options".to_string());
+            }
+            LldMode::SelfContained => {
+                args.push("-Clinker-flavor=gnu-lld-cc".to_string());
+                args.push("-Clink-self-contained=+linker".to_string());
+                // FIXME(kobzol): remove this flag once MCP510 gets stabilized
+                args.push("-Zunstable-options".to_string());
+            }
+            LldMode::Unused => unreachable!(),
+        };
 
         if matches!(lld_threads, LldThreads::No) {
             args.push(format!(

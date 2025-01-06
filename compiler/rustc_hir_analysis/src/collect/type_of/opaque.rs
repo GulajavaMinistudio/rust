@@ -187,7 +187,7 @@ impl TaitConstraintLocator<'_> {
             "foreign items cannot constrain opaque types",
         );
         if let Some(hir_sig) = hir_node.fn_sig()
-            && hir_sig.decl.output.get_infer_ret_ty().is_some()
+            && hir_sig.decl.output.is_suggestable_infer_ty().is_some()
         {
             let guar = self.tcx.dcx().span_delayed_bug(
                 hir_sig.decl.output.span(),
@@ -226,12 +226,17 @@ impl TaitConstraintLocator<'_> {
             constrained = true;
 
             if !opaque_types_defined_by.contains(&self.def_id) {
-                self.tcx.dcx().emit_err(TaitForwardCompat {
+                let guar = self.tcx.dcx().emit_err(TaitForwardCompat {
                     span: hidden_type.span,
                     item_span: self
                         .tcx
                         .def_ident_span(item_def_id)
                         .unwrap_or_else(|| self.tcx.def_span(item_def_id)),
+                });
+                // Avoid "opaque type not constrained" errors on the opaque itself.
+                self.found = Some(ty::OpaqueHiddenType {
+                    span: DUMMY_SP,
+                    ty: Ty::new_error(self.tcx, guar),
                 });
             }
             let concrete_type =
@@ -248,13 +253,18 @@ impl TaitConstraintLocator<'_> {
         if !constrained {
             debug!("no constraints in typeck results");
             if opaque_types_defined_by.contains(&self.def_id) {
-                self.tcx.dcx().emit_err(TaitForwardCompat2 {
+                let guar = self.tcx.dcx().emit_err(TaitForwardCompat2 {
                     span: self
                         .tcx
                         .def_ident_span(item_def_id)
                         .unwrap_or_else(|| self.tcx.def_span(item_def_id)),
                     opaque_type_span: self.tcx.def_span(self.def_id),
                     opaque_type: self.tcx.def_path_str(self.def_id),
+                });
+                // Avoid "opaque type not constrained" errors on the opaque itself.
+                self.found = Some(ty::OpaqueHiddenType {
+                    span: DUMMY_SP,
+                    ty: Ty::new_error(self.tcx, guar),
                 });
             }
             return;
