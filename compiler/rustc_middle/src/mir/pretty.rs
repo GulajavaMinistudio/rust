@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Write as _};
-use std::fs;
-use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use rustc_abi::Size;
 use rustc_ast::InlineAsmTemplatePiece;
@@ -149,37 +148,59 @@ pub fn dump_enabled(tcx: TyCtxt<'_>, pass_name: &str, def_id: DefId) -> bool {
 // `def_path_str()` would otherwise trigger `type_of`, and this can
 // run while we are already attempting to evaluate `type_of`.
 
+/// Most use-cases of dumping MIR should use the [dump_mir] entrypoint instead, which will also
+/// check if dumping MIR is enabled, and if this body matches the filters passed on the CLI.
+///
+/// That being said, if the above requirements have been validated already, this function is where
+/// most of the MIR dumping occurs, if one needs to export it to a file they have created with
+/// [create_dump_file], rather than to a new file created as part of [dump_mir], or to stdout/stderr
+/// for debugging purposes.
+pub fn dump_mir_to_writer<'tcx, F>(
+    tcx: TyCtxt<'tcx>,
+    pass_name: &str,
+    disambiguator: &dyn Display,
+    body: &Body<'tcx>,
+    w: &mut dyn io::Write,
+    mut extra_data: F,
+    options: PrettyPrintMirOptions,
+) -> io::Result<()>
+where
+    F: FnMut(PassWhere, &mut dyn io::Write) -> io::Result<()>,
+{
+    // see notes on #41697 above
+    let def_path =
+        ty::print::with_forced_impl_filename_line!(tcx.def_path_str(body.source.def_id()));
+    // ignore-tidy-odd-backticks the literal below is fine
+    write!(w, "// MIR for `{def_path}")?;
+    match body.source.promoted {
+        None => write!(w, "`")?,
+        Some(promoted) => write!(w, "::{promoted:?}`")?,
+    }
+    writeln!(w, " {disambiguator} {pass_name}")?;
+    if let Some(ref layout) = body.coroutine_layout_raw() {
+        writeln!(w, "/* coroutine_layout = {layout:#?} */")?;
+    }
+    writeln!(w)?;
+    extra_data(PassWhere::BeforeCFG, w)?;
+    write_user_type_annotations(tcx, body, w)?;
+    write_mir_fn(tcx, body, &mut extra_data, w, options)?;
+    extra_data(PassWhere::AfterCFG, w)
+}
+
 fn dump_matched_mir_node<'tcx, F>(
     tcx: TyCtxt<'tcx>,
     pass_num: bool,
     pass_name: &str,
     disambiguator: &dyn Display,
     body: &Body<'tcx>,
-    mut extra_data: F,
+    extra_data: F,
     options: PrettyPrintMirOptions,
 ) where
     F: FnMut(PassWhere, &mut dyn io::Write) -> io::Result<()>,
 {
     let _: io::Result<()> = try {
         let mut file = create_dump_file(tcx, "mir", pass_num, pass_name, disambiguator, body)?;
-        // see notes on #41697 above
-        let def_path =
-            ty::print::with_forced_impl_filename_line!(tcx.def_path_str(body.source.def_id()));
-        // ignore-tidy-odd-backticks the literal below is fine
-        write!(file, "// MIR for `{def_path}")?;
-        match body.source.promoted {
-            None => write!(file, "`")?,
-            Some(promoted) => write!(file, "::{promoted:?}`")?,
-        }
-        writeln!(file, " {disambiguator} {pass_name}")?;
-        if let Some(ref layout) = body.coroutine_layout_raw() {
-            writeln!(file, "/* coroutine_layout = {layout:#?} */")?;
-        }
-        writeln!(file)?;
-        extra_data(PassWhere::BeforeCFG, &mut file)?;
-        write_user_type_annotations(tcx, body, &mut file)?;
-        write_mir_fn(tcx, body, &mut extra_data, &mut file, options)?;
-        extra_data(PassWhere::AfterCFG, &mut file)?;
+        dump_mir_to_writer(tcx, pass_name, disambiguator, body, &mut file, extra_data, options)?;
     };
 
     if tcx.sess.opts.unstable_opts.dump_mir_graphviz {
@@ -1068,6 +1089,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                 pretty_print_const(b, fmt, false)?;
                 write!(fmt, "]")
             }
+            Len(ref a) => write!(fmt, "Len({a:?})"),
             Cast(ref kind, ref place, ref ty) => {
                 with_no_trimmed_paths!(write!(fmt, "{place:?} as {ty} ({kind:?})"))
             }
@@ -1226,6 +1248,10 @@ impl<'tcx> Debug for Rvalue<'tcx> {
             ShallowInitBox(ref place, ref ty) => {
                 with_no_trimmed_paths!(write!(fmt, "ShallowInitBox({place:?}, {ty})"))
             }
+
+            WrapUnsafeBinder(ref op, ty) => {
+                with_no_trimmed_paths!(write!(fmt, "wrap_binder!({op:?}; {ty})"))
+            }
         }
     }
 }
@@ -1286,6 +1312,9 @@ fn pre_fmt_projection(projection: &[PlaceElem<'_>], fmt: &mut Formatter<'_>) -> 
             ProjectionElem::Index(_)
             | ProjectionElem::ConstantIndex { .. }
             | ProjectionElem::Subslice { .. } => {}
+            ProjectionElem::UnwrapUnsafeBinder(_) => {
+                write!(fmt, "unwrap_binder!(")?;
+            }
         }
     }
 
@@ -1333,6 +1362,9 @@ fn post_fmt_projection(projection: &[PlaceElem<'_>], fmt: &mut Formatter<'_>) ->
             }
             ProjectionElem::Subslice { from, to, from_end: false } => {
                 write!(fmt, "[{from:?}..{to:?}]")?;
+            }
+            ProjectionElem::UnwrapUnsafeBinder(ty) => {
+                write!(fmt, "; {ty})")?;
             }
         }
     }
@@ -1419,7 +1451,9 @@ impl<'tcx> Visitor<'tcx> for ExtraComments<'tcx> {
                     ty::ConstKind::Unevaluated(uv) => {
                         format!("ty::Unevaluated({}, {:?})", self.tcx.def_path_str(uv.def), uv.args,)
                     }
-                    ty::ConstKind::Value(_, val) => format!("ty::Valtree({})", fmt_valtree(&val)),
+                    ty::ConstKind::Value(cv) => {
+                        format!("ty::Valtree({})", fmt_valtree(&cv.valtree))
+                    }
                     // No `ty::` prefix since we also use this to represent errors from `mir::Unevaluated`.
                     ty::ConstKind::Error(_) => "Error".to_string(),
                     // These variants shouldn't exist in the MIR.
@@ -1555,16 +1589,22 @@ pub fn write_allocations<'tcx>(
                 write!(w, " (vtable: impl {dyn_ty} for {ty})")?
             }
             Some(GlobalAlloc::Static(did)) if !tcx.is_foreign_item(did) => {
-                match tcx.eval_static_initializer(did) {
-                    Ok(alloc) => {
-                        write!(w, " (static: {}, ", tcx.def_path_str(did))?;
-                        write_allocation_track_relocs(w, alloc)?;
+                write!(w, " (static: {}", tcx.def_path_str(did))?;
+                if body.phase <= MirPhase::Runtime(RuntimePhase::PostCleanup)
+                    && tcx.hir().body_const_context(body.source.def_id()).is_some()
+                {
+                    // Statics may be cyclic and evaluating them too early
+                    // in the MIR pipeline may cause cycle errors even though
+                    // normal compilation is fine.
+                    write!(w, ")")?;
+                } else {
+                    match tcx.eval_static_initializer(did) {
+                        Ok(alloc) => {
+                            write!(w, ", ")?;
+                            write_allocation_track_relocs(w, alloc)?;
+                        }
+                        Err(_) => write!(w, ", error during initializer evaluation)")?,
                     }
-                    Err(_) => write!(
-                        w,
-                        " (static: {}, error during initializer evaluation)",
-                        tcx.def_path_str(did)
-                    )?,
                 }
             }
             Some(GlobalAlloc::Static(did)) => {

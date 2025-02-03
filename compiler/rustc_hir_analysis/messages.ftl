@@ -135,7 +135,7 @@ hir_analysis_dispatch_from_dyn_multi = implementing the `DispatchFromDyn` trait 
 
 hir_analysis_dispatch_from_dyn_repr = structs implementing `DispatchFromDyn` may not have `#[repr(packed)]` or `#[repr(C)]`
 
-hir_analysis_dispatch_from_dyn_zst = the trait `DispatchFromDyn` may only be implemented for structs containing the field being coerced, ZST fields with 1 byte alignment, and nothing else
+hir_analysis_dispatch_from_dyn_zst = the trait `DispatchFromDyn` may only be implemented for structs containing the field being coerced, ZST fields with 1 byte alignment that don't mention type/const generics, and nothing else
     .note = extra field `{$name}` of type `{$ty}` is not allowed
 
 hir_analysis_drop_impl_negative = negative `Drop` impls are not supported
@@ -233,6 +233,9 @@ hir_analysis_inherent_ty_outside_primitive = cannot define inherent `impl` for p
 hir_analysis_inherent_ty_outside_relevant = cannot define inherent `impl` for a type outside of the crate where the type is defined
     .help = consider moving this inherent impl into the crate defining the type if possible
     .span_help = alternatively add `#[rustc_allow_incoherent_impl]` to the relevant impl items
+
+hir_analysis_invalid_base_type = `{$ty}` is not a valid base type for range patterns
+    .note = range patterns only support integers
 
 hir_analysis_invalid_generic_receiver_ty = invalid generic `self` parameter type: `{$receiver_ty}`
     .note = type of `self` must not be a method generic parameter type
@@ -353,7 +356,13 @@ hir_analysis_missing_type_params =
         [one] reference
         *[other] references
     } to {$parameters}
-    .note = because of the default `Self` reference, type parameters must be specified on object types
+    .note = because the parameter {$parameterCount ->
+        [one] default references
+        *[other] defaults reference
+    } `Self`, the {$parameterCount ->
+        [one] parameter
+        *[other] parameters
+    } must be specified on the object type
 
 hir_analysis_multiple_relaxed_default_bounds =
     type parameter has more than one relaxed default bound, only one is supported
@@ -432,7 +441,6 @@ hir_analysis_pattern_type_wild_pat = wildcard patterns are not permitted for pat
     .label = this type is the same as the inner type without a pattern
 hir_analysis_placeholder_not_allowed_item_signatures = the placeholder `_` is not allowed within types on item signatures for {$kind}
     .label = not allowed in type signatures
-
 hir_analysis_precise_capture_self_alias = `Self` can't be captured in `use<...>` precise captures list, since it is an alias
     .label = `Self` is not a generic argument, but an alias to the type of the {$what}
 
@@ -488,21 +496,6 @@ hir_analysis_simd_ffi_highly_experimental = use of SIMD type{$snip} in FFI is hi
 
 hir_analysis_specialization_trait = implementing `rustc_specialization_trait` traits is unstable
     .help = add `#![feature(min_specialization)]` to the crate attributes to enable
-
-hir_analysis_start_function_parameters = `#[start]` function is not allowed to have type parameters
-    .label = `#[start]` function cannot have type parameters
-
-hir_analysis_start_function_where = `#[start]` function is not allowed to have a `where` clause
-    .label = `#[start]` function cannot have a `where` clause
-
-hir_analysis_start_not_async = `#[start]` function is not allowed to be `async`
-    .label = `#[start]` is not allowed to be `async`
-
-hir_analysis_start_not_target_feature = `#[start]` function is not allowed to have `#[target_feature]`
-    .label = `#[start]` function is not allowed to have `#[target_feature]`
-
-hir_analysis_start_not_track_caller = `#[start]` function is not allowed to be `#[track_caller]`
-    .label = `#[start]` function is not allowed to be `#[track_caller]`
 
 hir_analysis_static_specialize = cannot specialize on `'static` lifetime
 

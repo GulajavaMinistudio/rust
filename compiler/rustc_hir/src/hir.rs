@@ -7,7 +7,7 @@ use rustc_ast::token::CommentKind;
 use rustc_ast::util::parser::{AssocOp, ExprPrecedence};
 use rustc_ast::{
     self as ast, AttrId, AttrStyle, DelimArgs, FloatTy, InlineAsmOptions, InlineAsmTemplatePiece,
-    IntTy, Label, LitKind, MetaItemInner, MetaItemLit, TraitObjectSyntax, UintTy,
+    IntTy, Label, LitIntType, LitKind, MetaItemInner, MetaItemLit, TraitObjectSyntax, UintTy,
 };
 pub use rustc_ast::{
     BinOp, BinOpKind, BindingMode, BorrowKind, BoundConstness, BoundPolarity, ByRef, CaptureBy,
@@ -15,6 +15,7 @@ pub use rustc_ast::{
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::sorted_map::SortedMap;
+use rustc_data_structures::tagged_ptr::TaggedRef;
 use rustc_index::IndexVec;
 use rustc_macros::{Decodable, Encodable, HashStable_Generic};
 use rustc_span::def_id::LocalDefId;
@@ -30,10 +31,11 @@ use crate::LangItem;
 use crate::def::{CtorKind, DefKind, Res};
 use crate::def_id::{DefId, LocalDefIdMap};
 pub(crate) use crate::hir_id::{HirId, ItemLocalId, ItemLocalMap, OwnerId};
-use crate::intravisit::FnKind;
+use crate::intravisit::{FnKind, VisitorExt};
 
 #[derive(Debug, Copy, Clone, HashStable_Generic)]
 pub struct Lifetime {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
 
     /// Either "`'a`", referring to a named lifetime definition,
@@ -214,6 +216,7 @@ impl Path<'_> {
 pub struct PathSegment<'hir> {
     /// The identifier portion of this path segment.
     pub ident: Ident,
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub res: Res,
 
@@ -261,14 +264,58 @@ impl<'hir> PathSegment<'hir> {
 /// So, `ConstArg` (specifically, [`ConstArgKind`]) distinguishes between const args
 /// that are [just paths](ConstArgKind::Path) (currently just bare const params)
 /// versus const args that are literals or have arbitrary computations (e.g., `{ 1 + 3 }`).
+///
+/// The `Unambig` generic parameter represents whether the position this const is from is
+/// unambiguously a const or ambiguous as to whether it is a type or a const. When in an
+/// ambiguous context the parameter is instantiated with an uninhabited type making the
+/// [`ConstArgKind::Infer`] variant unusable and [`GenericArg::Infer`] is used instead.
 #[derive(Clone, Copy, Debug, HashStable_Generic)]
-pub struct ConstArg<'hir> {
+#[repr(C)]
+pub struct ConstArg<'hir, Unambig = ()> {
     #[stable_hasher(ignore)]
     pub hir_id: HirId,
-    pub kind: ConstArgKind<'hir>,
+    pub kind: ConstArgKind<'hir, Unambig>,
+}
+
+impl<'hir> ConstArg<'hir, AmbigArg> {
+    /// Converts a `ConstArg` in an ambiguous position to one in an unambiguous position.
+    ///
+    /// Functions accepting an unambiguous consts may expect the [`ConstArgKind::Infer`] variant
+    /// to be used. Care should be taken to separately handle infer consts when calling this
+    /// function as it cannot be handled by downstream code making use of the returned const.
+    ///
+    /// In practice this may mean overriding the [`Visitor::visit_infer`][visit_infer] method on hir visitors, or
+    /// specifically matching on [`GenericArg::Infer`] when handling generic arguments.
+    ///
+    /// [visit_infer]: [rustc_hir::intravisit::Visitor::visit_infer]
+    pub fn as_unambig_ct(&self) -> &ConstArg<'hir> {
+        // SAFETY: `ConstArg` is `repr(C)` and `ConstArgKind` is marked `repr(u8)` so that the
+        // layout is the same across different ZST type arguments.
+        let ptr = self as *const ConstArg<'hir, AmbigArg> as *const ConstArg<'hir, ()>;
+        unsafe { &*ptr }
+    }
 }
 
 impl<'hir> ConstArg<'hir> {
+    /// Converts a `ConstArg` in an unambigous position to one in an ambiguous position. This is
+    /// fallible as the [`ConstArgKind::Infer`] variant is not present in ambiguous positions.
+    ///
+    /// Functions accepting ambiguous consts will not handle the [`ConstArgKind::Infer`] variant, if
+    /// infer consts are relevant to you then care should be taken to handle them separately.
+    pub fn try_as_ambig_ct(&self) -> Option<&ConstArg<'hir, AmbigArg>> {
+        if let ConstArgKind::Infer(_, ()) = self.kind {
+            return None;
+        }
+
+        // SAFETY: `ConstArg` is `repr(C)` and `ConstArgKind` is marked `repr(u8)` so that the layout is
+        // the same across different ZST type arguments. We also asserted that the `self` is
+        // not a `ConstArgKind::Infer` so there is no risk of transmuting a `()` to `AmbigArg`.
+        let ptr = self as *const ConstArg<'hir> as *const ConstArg<'hir, AmbigArg>;
+        Some(unsafe { &*ptr })
+    }
+}
+
+impl<'hir, Unambig> ConstArg<'hir, Unambig> {
     pub fn anon_const_hir_id(&self) -> Option<HirId> {
         match self.kind {
             ConstArgKind::Anon(ac) => Some(ac.hir_id),
@@ -280,14 +327,15 @@ impl<'hir> ConstArg<'hir> {
         match self.kind {
             ConstArgKind::Path(path) => path.span(),
             ConstArgKind::Anon(anon) => anon.span,
-            ConstArgKind::Infer(span) => span,
+            ConstArgKind::Infer(span, _) => span,
         }
     }
 }
 
 /// See [`ConstArg`].
 #[derive(Clone, Copy, Debug, HashStable_Generic)]
-pub enum ConstArgKind<'hir> {
+#[repr(u8, C)]
+pub enum ConstArgKind<'hir, Unambig = ()> {
     /// **Note:** Currently this is only used for bare const params
     /// (`N` where `fn foo<const N: usize>(...)`),
     /// not paths to any const (`N` where `const N: usize = ...`).
@@ -295,34 +343,38 @@ pub enum ConstArgKind<'hir> {
     /// However, in the future, we'll be using it for all of those.
     Path(QPath<'hir>),
     Anon(&'hir AnonConst),
-    /// **Note:** Not all inferred consts are represented as
-    /// `ConstArgKind::Infer`. In cases where it is ambiguous whether
-    /// a generic arg is a type or a const, inference variables are
-    /// represented as `GenericArg::Infer` instead.
-    Infer(Span),
+    /// This variant is not always used to represent inference consts, sometimes
+    /// [`GenericArg::Infer`] is used instead.
+    Infer(Span, Unambig),
 }
 
 #[derive(Clone, Copy, Debug, HashStable_Generic)]
 pub struct InferArg {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub span: Span,
 }
 
 impl InferArg {
     pub fn to_ty(&self) -> Ty<'static> {
-        Ty { kind: TyKind::Infer, span: self.span, hir_id: self.hir_id }
+        Ty { kind: TyKind::Infer(()), span: self.span, hir_id: self.hir_id }
     }
 }
 
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub enum GenericArg<'hir> {
     Lifetime(&'hir Lifetime),
-    Type(&'hir Ty<'hir>),
-    Const(&'hir ConstArg<'hir>),
-    /// **Note:** Inference variables are only represented as
-    /// `GenericArg::Infer` in cases where it is ambiguous whether
-    /// a generic arg is a type or a const. Otherwise, inference variables
-    /// are represented as `TyKind::Infer` or `ConstArgKind::Infer`.
+    Type(&'hir Ty<'hir, AmbigArg>),
+    Const(&'hir ConstArg<'hir, AmbigArg>),
+    /// Inference variables in [`GenericArg`] are always represnted by
+    /// `GenericArg::Infer` instead of the `Infer` variants on [`TyKind`] and
+    /// [`ConstArgKind`] as it is not clear until hir ty lowering whether a
+    /// `_` argument is a type or const argument.
+    ///
+    /// However, some builtin types' generic arguments are represented by [`TyKind`]
+    /// without a [`GenericArg`], instead directly storing a [`Ty`] or [`ConstArg`]. In
+    /// such cases they *are* represented by the `Infer` variants on [`TyKind`] and
+    /// [`ConstArgKind`] as it is not ambiguous whether the argument is a type or const.
     Infer(InferArg),
 }
 
@@ -350,7 +402,7 @@ impl GenericArg<'_> {
             GenericArg::Lifetime(_) => "lifetime",
             GenericArg::Type(_) => "type",
             GenericArg::Const(_) => "constant",
-            GenericArg::Infer(_) => "inferred",
+            GenericArg::Infer(_) => "placeholder",
         }
     }
 
@@ -592,6 +644,7 @@ pub enum GenericParamKind<'hir> {
 
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct GenericParam<'hir> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub def_id: LocalDefId,
     pub name: ParamName,
@@ -760,11 +813,8 @@ impl<'hir> Generics<'hir> {
                     && let [.., segment] = trait_ref.path.segments
                     && let Some(ret_ty) = segment.args().paren_sugar_output()
                     && let ret_ty = ret_ty.peel_refs()
-                    && let TyKind::TraitObject(
-                        _,
-                        _,
-                        TraitObjectSyntax::Dyn | TraitObjectSyntax::DynStar,
-                    ) = ret_ty.kind
+                    && let TyKind::TraitObject(_, tagged_ptr) = ret_ty.kind
+                    && let TraitObjectSyntax::Dyn | TraitObjectSyntax::DynStar = tagged_ptr.tag()
                     && ret_ty.span.can_be_used_for_suggestions()
                 {
                     Some(ret_ty.span)
@@ -850,6 +900,7 @@ impl<'hir> Generics<'hir> {
 /// A single predicate in a where-clause.
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct WherePredicate<'hir> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub span: Span,
     pub kind: &'hir WherePredicateKind<'hir>,
@@ -1234,13 +1285,13 @@ impl fmt::Debug for OwnerNodes<'_> {
             .field("node", &self.nodes[ItemLocalId::ZERO])
             .field(
                 "parents",
-                &self
-                    .nodes
-                    .iter_enumerated()
-                    .map(|(id, parented_node)| {
-                        debug_fn(move |f| write!(f, "({id:?}, {:?})", parented_node.parent))
-                    })
-                    .collect::<Vec<_>>(),
+                &fmt::from_fn(|f| {
+                    f.debug_list()
+                        .entries(self.nodes.iter_enumerated().map(|(id, parented_node)| {
+                            fmt::from_fn(move |f| write!(f, "({id:?}, {:?})", parented_node.parent))
+                        }))
+                        .finish()
+                }),
             )
             .field("bodies", &self.bodies)
             .field("opt_hash_including_bodies", &self.opt_hash_including_bodies)
@@ -1386,7 +1437,7 @@ impl<'hir> Pat<'hir> {
 
         use PatKind::*;
         match self.kind {
-            Wild | Never | Lit(_) | Range(..) | Binding(.., None) | Path(_) | Err(_) => true,
+            Wild | Never | Expr(_) | Range(..) | Binding(.., None) | Err(_) => true,
             Box(s) | Deref(s) | Ref(s, _) | Binding(.., Some(s)) | Guard(s, _) => s.walk_short_(it),
             Struct(_, fields, _) => fields.iter().all(|field| field.pat.walk_short_(it)),
             TupleStruct(_, s, _) | Tuple(s, _) | Or(s) => s.iter().all(|p| p.walk_short_(it)),
@@ -1413,7 +1464,7 @@ impl<'hir> Pat<'hir> {
 
         use PatKind::*;
         match self.kind {
-            Wild | Never | Lit(_) | Range(..) | Binding(.., None) | Path(_) | Err(_) => {}
+            Wild | Never | Expr(_) | Range(..) | Binding(.., None) | Err(_) => {}
             Box(s) | Deref(s) | Ref(s, _) | Binding(.., Some(s)) | Guard(s, _) => s.walk_(it),
             Struct(_, fields, _) => fields.iter().for_each(|field| field.pat.walk_(it)),
             TupleStruct(_, s, _) | Tuple(s, _) | Or(s) => s.iter().for_each(|p| p.walk_(it)),
@@ -1520,6 +1571,27 @@ impl fmt::Debug for DotDotPos {
 }
 
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
+pub struct PatExpr<'hir> {
+    #[stable_hasher(ignore)]
+    pub hir_id: HirId,
+    pub span: Span,
+    pub kind: PatExprKind<'hir>,
+}
+
+#[derive(Debug, Clone, Copy, HashStable_Generic)]
+pub enum PatExprKind<'hir> {
+    Lit {
+        lit: &'hir Lit,
+        // FIXME: move this into `Lit` and handle negated literal expressions
+        // once instead of matching on unop neg expressions everywhere.
+        negated: bool,
+    },
+    ConstBlock(ConstBlock),
+    /// A path pattern for a unit struct/variant or a (maybe-associated) constant.
+    Path(QPath<'hir>),
+}
+
+#[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub enum PatKind<'hir> {
     /// Represents a wildcard pattern (i.e., `_`).
     Wild,
@@ -1546,9 +1618,6 @@ pub enum PatKind<'hir> {
     /// A never pattern `!`.
     Never,
 
-    /// A path pattern for a unit struct/variant or a (maybe-associated) constant.
-    Path(QPath<'hir>),
-
     /// A tuple pattern (e.g., `(a, b)`).
     /// If the `..` pattern fragment is present, then `Option<usize>` denotes its position.
     /// `0 <= position <= subpats.len()`
@@ -1563,14 +1632,14 @@ pub enum PatKind<'hir> {
     /// A reference pattern (e.g., `&mut (a, b)`).
     Ref(&'hir Pat<'hir>, Mutability),
 
-    /// A literal.
-    Lit(&'hir Expr<'hir>),
+    /// A literal, const block or path.
+    Expr(&'hir PatExpr<'hir>),
 
     /// A guard pattern (e.g., `x if guard(x)`).
     Guard(&'hir Pat<'hir>, &'hir Expr<'hir>),
 
     /// A range pattern (e.g., `1..=2` or `1..2`).
-    Range(Option<&'hir Expr<'hir>>, Option<&'hir Expr<'hir>>, RangeEnd),
+    Range(Option<&'hir PatExpr<'hir>>, Option<&'hir PatExpr<'hir>>, RangeEnd),
 
     /// A slice pattern, `[before_0, ..., before_n, (slice, after_0, ..., after_n)?]`.
     ///
@@ -1590,6 +1659,7 @@ pub enum PatKind<'hir> {
 /// A statement.
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct Stmt<'hir> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub kind: StmtKind<'hir>,
     pub span: Span,
@@ -1621,6 +1691,7 @@ pub struct LetStmt<'hir> {
     pub init: Option<&'hir Expr<'hir>>,
     /// Else block for a `let...else` binding.
     pub els: Option<&'hir Block<'hir>>,
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub span: Span,
     /// Can be `ForLoopDesugar` if the `let` statement is part of a `for` loop
@@ -1917,6 +1988,7 @@ pub type Lit = Spanned<LitKind>;
 /// `const N: usize = { ... }` with `tcx.hir().opt_const_param_default_param_def_id(..)`
 #[derive(Copy, Clone, Debug, HashStable_Generic)]
 pub struct AnonConst {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub def_id: LocalDefId,
     pub body: BodyId,
@@ -1926,6 +1998,7 @@ pub struct AnonConst {
 /// An inline constant expression `const { something }`.
 #[derive(Copy, Clone, Debug, HashStable_Generic)]
 pub struct ConstBlock {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub def_id: LocalDefId,
     pub body: BodyId,
@@ -1941,6 +2014,7 @@ pub struct ConstBlock {
 /// [rust lang reference]: https://doc.rust-lang.org/reference/expressions.html
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct Expr<'hir> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub kind: ExprKind<'hir>,
     pub span: Span,
@@ -2072,6 +2146,18 @@ impl Expr<'_> {
             | ExprKind::DropTemps(..)
             | ExprKind::Err(_) => false,
         }
+    }
+
+    /// Check if expression is an integer literal that can be used
+    /// where `usize` is expected.
+    pub fn is_size_lit(&self) -> bool {
+        matches!(
+            self.kind,
+            ExprKind::Lit(Lit {
+                node: LitKind::Int(_, LitIntType::Unsuffixed | LitIntType::Unsigned(UintTy::Usize)),
+                ..
+            })
+        )
     }
 
     /// If `Self.kind` is `ExprKind::DropTemps(expr)`, drill down until we get a non-`DropTemps`
@@ -2807,6 +2893,7 @@ pub enum ImplItemKind<'hir> {
 /// * the `f(..): Bound` in `Trait<f(..): Bound>` (feature `return_type_notation`)
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct AssocItemConstraint<'hir> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub ident: Ident,
     pub gen_args: &'hir GenericArgs<'hir>,
@@ -2873,14 +2960,84 @@ impl<'hir> AssocItemConstraintKind<'hir> {
     }
 }
 
+/// An uninhabited enum used to make `Infer` variants on [`Ty`] and [`ConstArg`] be
+/// unreachable. Zero-Variant enums are guaranteed to have the same layout as the never
+/// type.
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
-pub struct Ty<'hir> {
+pub enum AmbigArg {}
+
+#[derive(Debug, Clone, Copy, HashStable_Generic)]
+#[repr(C)]
+/// Represents a type in the `HIR`.
+///
+/// The `Unambig` generic parameter represents whether the position this type is from is
+/// unambiguously a type or ambiguous as to whether it is a type or a const. When in an
+/// ambiguous context the parameter is instantiated with an uninhabited type making the
+/// [`TyKind::Infer`] variant unusable and [`GenericArg::Infer`] is used instead.
+pub struct Ty<'hir, Unambig = ()> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
-    pub kind: TyKind<'hir>,
     pub span: Span,
+    pub kind: TyKind<'hir, Unambig>,
+}
+
+impl<'hir> Ty<'hir, AmbigArg> {
+    /// Converts a `Ty` in an ambiguous position to one in an unambiguous position.
+    ///
+    /// Functions accepting an unambiguous types may expect the [`TyKind::Infer`] variant
+    /// to be used. Care should be taken to separately handle infer types when calling this
+    /// function as it cannot be handled by downstream code making use of the returned ty.
+    ///
+    /// In practice this may mean overriding the [`Visitor::visit_infer`][visit_infer] method on hir visitors, or
+    /// specifically matching on [`GenericArg::Infer`] when handling generic arguments.
+    ///
+    /// [visit_infer]: [rustc_hir::intravisit::Visitor::visit_infer]
+    pub fn as_unambig_ty(&self) -> &Ty<'hir> {
+        // SAFETY: `Ty` is `repr(C)` and `TyKind` is marked `repr(u8)` so that the layout is
+        // the same across different ZST type arguments.
+        let ptr = self as *const Ty<'hir, AmbigArg> as *const Ty<'hir, ()>;
+        unsafe { &*ptr }
+    }
 }
 
 impl<'hir> Ty<'hir> {
+    /// Converts a `Ty` in an unambigous position to one in an ambiguous position. This is
+    /// fallible as the [`TyKind::Infer`] variant is not present in ambiguous positions.
+    ///
+    /// Functions accepting ambiguous types will not handle the [`TyKind::Infer`] variant, if
+    /// infer types are relevant to you then care should be taken to handle them separately.
+    pub fn try_as_ambig_ty(&self) -> Option<&Ty<'hir, AmbigArg>> {
+        if let TyKind::Infer(()) = self.kind {
+            return None;
+        }
+
+        // SAFETY: `Ty` is `repr(C)` and `TyKind` is marked `repr(u8)` so that the layout is
+        // the same across different ZST type arguments. We also asserted that the `self` is
+        // not a `TyKind::Infer` so there is no risk of transmuting a `()` to `AmbigArg`.
+        let ptr = self as *const Ty<'hir> as *const Ty<'hir, AmbigArg>;
+        Some(unsafe { &*ptr })
+    }
+}
+
+impl<'hir> Ty<'hir, AmbigArg> {
+    pub fn peel_refs(&self) -> &Ty<'hir> {
+        let mut final_ty = self.as_unambig_ty();
+        while let TyKind::Ref(_, MutTy { ty, .. }) = &final_ty.kind {
+            final_ty = ty;
+        }
+        final_ty
+    }
+}
+
+impl<'hir> Ty<'hir> {
+    pub fn peel_refs(&self) -> &Self {
+        let mut final_ty = self;
+        while let TyKind::Ref(_, MutTy { ty, .. }) = &final_ty.kind {
+            final_ty = ty;
+        }
+        final_ty
+    }
+
     /// Returns `true` if `param_def_id` matches the `bounded_ty` of this predicate.
     pub fn as_generic_param(&self) -> Option<(DefId, Ident)> {
         let TyKind::Path(QPath::Resolved(None, path)) = self.kind else {
@@ -2897,19 +3054,11 @@ impl<'hir> Ty<'hir> {
         }
     }
 
-    pub fn peel_refs(&self) -> &Self {
-        let mut final_ty = self;
-        while let TyKind::Ref(_, MutTy { ty, .. }) = &final_ty.kind {
-            final_ty = ty;
-        }
-        final_ty
-    }
-
     pub fn find_self_aliases(&self) -> Vec<Span> {
         use crate::intravisit::Visitor;
         struct MyVisitor(Vec<Span>);
         impl<'v> Visitor<'v> for MyVisitor {
-            fn visit_ty(&mut self, t: &'v Ty<'v>) {
+            fn visit_ty(&mut self, t: &'v Ty<'v, AmbigArg>) {
                 if matches!(
                     &t.kind,
                     TyKind::Path(QPath::Resolved(_, Path {
@@ -2925,7 +3074,7 @@ impl<'hir> Ty<'hir> {
         }
 
         let mut my_visitor = MyVisitor(vec![]);
-        my_visitor.visit_ty(self);
+        my_visitor.visit_ty_unambig(self);
         my_visitor.0
     }
 
@@ -2934,14 +3083,14 @@ impl<'hir> Ty<'hir> {
     pub fn is_suggestable_infer_ty(&self) -> bool {
         fn are_suggestable_generic_args(generic_args: &[GenericArg<'_>]) -> bool {
             generic_args.iter().any(|arg| match arg {
-                GenericArg::Type(ty) => ty.is_suggestable_infer_ty(),
+                GenericArg::Type(ty) => ty.as_unambig_ty().is_suggestable_infer_ty(),
                 GenericArg::Infer(_) => true,
                 _ => false,
             })
         }
         debug!(?self);
         match &self.kind {
-            TyKind::Infer => true,
+            TyKind::Infer(()) => true,
             TyKind::Slice(ty) => ty.is_suggestable_infer_ty(),
             TyKind::Array(ty, length) => {
                 ty.is_suggestable_infer_ty() || matches!(length.kind, ConstArgKind::Infer(..))
@@ -3070,6 +3219,7 @@ pub struct UnsafeBinderTy<'hir> {
 
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct OpaqueTy<'hir> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub def_id: LocalDefId,
     pub bounds: GenericBounds<'hir>,
@@ -3106,6 +3256,7 @@ impl PreciseCapturingArg<'_> {
 /// since resolve_bound_vars operates on `Lifetime`s.
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct PreciseCapturingNonLifetimeArg {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub ident: Ident,
     pub res: Res,
@@ -3153,7 +3304,9 @@ pub enum InferDelegationKind {
 
 /// The various kinds of types recognized by the compiler.
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
-pub enum TyKind<'hir> {
+// SAFETY: `repr(u8)` is required so that `TyKind<()>` and `TyKind<!>` are layout compatible
+#[repr(u8, C)]
+pub enum TyKind<'hir, Unambig = ()> {
     /// Actual type should be inherited from `DefId` signature
     InferDelegation(DefId, InferDelegationKind),
     /// A variable length slice (i.e., `[T]`).
@@ -3183,21 +3336,22 @@ pub enum TyKind<'hir> {
     TraitAscription(GenericBounds<'hir>),
     /// A trait object type `Bound1 + Bound2 + Bound3`
     /// where `Bound` is a trait or a lifetime.
-    TraitObject(&'hir [PolyTraitRef<'hir>], &'hir Lifetime, TraitObjectSyntax),
+    ///
+    /// We use pointer tagging to represent a `&'hir Lifetime` and `TraitObjectSyntax` pair
+    /// as otherwise this type being `repr(C)` would result in `TyKind` increasing in size.
+    TraitObject(&'hir [PolyTraitRef<'hir>], TaggedRef<'hir, Lifetime, TraitObjectSyntax>),
     /// Unused for now.
     Typeof(&'hir AnonConst),
-    /// `TyKind::Infer` means the type should be inferred instead of it having been
-    /// specified. This can appear anywhere in a type.
-    ///
-    /// **Note:** Not all inferred types are represented as
-    /// `TyKind::Infer`. In cases where it is ambiguous whether
-    /// a generic arg is a type or a const, inference variables are
-    /// represented as `GenericArg::Infer` instead.
-    Infer,
     /// Placeholder for a type that has failed to be defined.
     Err(rustc_span::ErrorGuaranteed),
     /// Pattern types (`pattern_type!(u32 is 1..)`)
     Pat(&'hir Ty<'hir>, &'hir Pat<'hir>),
+    /// `TyKind::Infer` means the type should be inferred instead of it having been
+    /// specified. This can appear anywhere in a type.
+    ///
+    /// This variant is not always used to represent inference types, sometimes
+    /// [`GenericArg::Infer`] is used instead.
+    Infer(Unambig),
 }
 
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
@@ -3279,6 +3433,7 @@ impl InlineAsm<'_> {
 /// Represents a parameter in a function header.
 #[derive(Debug, Clone, Copy, HashStable_Generic)]
 pub struct Param<'hir> {
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub pat: &'hir Pat<'hir>,
     pub ty_span: Span,
@@ -3436,6 +3591,7 @@ pub struct Variant<'hir> {
     /// Name of the variant.
     pub ident: Ident,
     /// Id of the variant (not the constructor, see `VariantData::ctor_hir_id()`).
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub def_id: LocalDefId,
     /// Fields and constructor id of the variant.
@@ -3508,6 +3664,7 @@ pub struct FieldDef<'hir> {
     pub span: Span,
     pub vis_span: Span,
     pub ident: Ident,
+    #[stable_hasher(ignore)]
     pub hir_id: HirId,
     pub def_id: LocalDefId,
     pub ty: &'hir Ty<'hir>,
@@ -3532,11 +3689,11 @@ pub enum VariantData<'hir> {
     /// A tuple variant.
     ///
     /// E.g., `Bar(..)` as in `enum Foo { Bar(..) }`.
-    Tuple(&'hir [FieldDef<'hir>], HirId, LocalDefId),
+    Tuple(&'hir [FieldDef<'hir>], #[stable_hasher(ignore)] HirId, LocalDefId),
     /// A unit variant.
     ///
     /// E.g., `Bar = ..` as in `enum Foo { Bar = .. }`.
-    Unit(HirId, LocalDefId),
+    Unit(#[stable_hasher(ignore)] HirId, LocalDefId),
 }
 
 impl<'hir> VariantData<'hir> {
@@ -3730,9 +3887,30 @@ impl fmt::Display for Constness {
     }
 }
 
+/// The actualy safety specified in syntax. We may treat
+/// its safety different within the type system to create a
+/// "sound by default" system that needs checking this enum
+/// explicitly to allow unsafe operations.
+#[derive(Copy, Clone, Debug, HashStable_Generic, PartialEq, Eq)]
+pub enum HeaderSafety {
+    /// A safe function annotated with `#[target_features]`.
+    /// The type system treats this function as an unsafe function,
+    /// but safety checking will check this enum to treat it as safe
+    /// and allowing calling other safe target feature functions with
+    /// the same features without requiring an additional unsafe block.
+    SafeTargetFeatures,
+    Normal(Safety),
+}
+
+impl From<Safety> for HeaderSafety {
+    fn from(v: Safety) -> Self {
+        Self::Normal(v)
+    }
+}
+
 #[derive(Copy, Clone, Debug, HashStable_Generic)]
 pub struct FnHeader {
-    pub safety: Safety,
+    pub safety: HeaderSafety,
     pub constness: Constness,
     pub asyncness: IsAsync,
     pub abi: ExternAbi,
@@ -3748,7 +3926,18 @@ impl FnHeader {
     }
 
     pub fn is_unsafe(&self) -> bool {
-        self.safety.is_unsafe()
+        self.safety().is_unsafe()
+    }
+
+    pub fn is_safe(&self) -> bool {
+        self.safety().is_safe()
+    }
+
+    pub fn safety(&self) -> Safety {
+        match self.safety {
+            HeaderSafety::SafeTargetFeatures => Safety::Unsafe,
+            HeaderSafety::Normal(safety) => safety,
+        }
     }
 }
 
@@ -4144,6 +4333,10 @@ pub enum Node<'hir> {
     OpaqueTy(&'hir OpaqueTy<'hir>),
     Pat(&'hir Pat<'hir>),
     PatField(&'hir PatField<'hir>),
+    /// Needed as its own node with its own HirId for tracking
+    /// the unadjusted type of literals within patterns
+    /// (e.g. byte str literals not being of slice type).
+    PatExpr(&'hir PatExpr<'hir>),
     Arm(&'hir Arm<'hir>),
     Block(&'hir Block<'hir>),
     LetStmt(&'hir LetStmt<'hir>),
@@ -4200,6 +4393,7 @@ impl<'hir> Node<'hir> {
             | Node::Block(..)
             | Node::Ctor(..)
             | Node::Pat(..)
+            | Node::PatExpr(..)
             | Node::Arm(..)
             | Node::LetStmt(..)
             | Node::Crate(..)
@@ -4441,12 +4635,5 @@ mod size_asserts {
     // tidy-alphabetical-end
 }
 
-fn debug_fn(f: impl Fn(&mut fmt::Formatter<'_>) -> fmt::Result) -> impl fmt::Debug {
-    struct DebugFn<F>(F);
-    impl<F: Fn(&mut fmt::Formatter<'_>) -> fmt::Result> fmt::Debug for DebugFn<F> {
-        fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-            (self.0)(fmt)
-        }
-    }
-    DebugFn(f)
-}
+#[cfg(test)]
+mod tests;

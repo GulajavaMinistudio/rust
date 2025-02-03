@@ -388,8 +388,8 @@ impl<'tcx> LateLintPass<'tcx> for Types {
 
         self.check_fn_decl(cx, decl, CheckTyContext {
             is_in_trait_impl,
-            is_exported,
             in_body: matches!(fn_kind, FnKind::Closure),
+            is_exported,
             ..CheckTyContext::default()
         });
     }
@@ -560,7 +560,7 @@ impl Types {
                                     _ => None,
                                 })
                         }) {
-                            self.check_ty(cx, ty, context);
+                            self.check_ty(cx, ty.as_unambig_ty(), context);
                         }
                     },
                     QPath::Resolved(None, p) => {
@@ -574,7 +574,7 @@ impl Types {
                                     _ => None,
                                 })
                         }) {
-                            self.check_ty(cx, ty, context);
+                            self.check_ty(cx, ty.as_unambig_ty(), context);
                         }
                     },
                     QPath::TypeRelative(ty, seg) => {
@@ -585,7 +585,7 @@ impl Types {
                                 GenericArg::Type(ty) => Some(ty),
                                 _ => None,
                             }) {
-                                self.check_ty(cx, ty, context);
+                                self.check_ty(cx, ty.as_unambig_ty(), context);
                             }
                         }
                     },

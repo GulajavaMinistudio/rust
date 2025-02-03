@@ -1,10 +1,11 @@
 //! Validates the MIR to ensure that invariants are upheld.
 
 use rustc_abi::{ExternAbi, FIRST_VARIANT, Size};
+use rustc_attr_parsing::InlineAttr;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::LangItem;
 use rustc_index::IndexVec;
-use rustc_index::bit_set::BitSet;
+use rustc_index::bit_set::DenseBitSet;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_infer::traits::{Obligation, ObligationCause};
 use rustc_middle::mir::coverage::CoverageKind;
@@ -90,6 +91,10 @@ impl<'tcx> crate::MirPass<'tcx> for Validator {
             }
         }
     }
+
+    fn is_required(&self) -> bool {
+        true
+    }
 }
 
 struct CfgChecker<'a, 'tcx> {
@@ -97,7 +102,7 @@ struct CfgChecker<'a, 'tcx> {
     body: &'a Body<'tcx>,
     tcx: TyCtxt<'tcx>,
     unwind_edge_count: usize,
-    reachable_blocks: BitSet<BasicBlock>,
+    reachable_blocks: DenseBitSet<BasicBlock>,
     value_cache: FxHashSet<u128>,
     // If `false`, then the MIR must not contain `UnwindAction::Continue` or
     // `TerminatorKind::Resume`.
@@ -366,7 +371,8 @@ impl<'a, 'tcx> Visitor<'tcx> for CfgChecker<'a, 'tcx> {
                 self.check_edge(location, *target, EdgeKind::Normal);
                 self.check_unwind_edge(location, *unwind);
             }
-            TerminatorKind::Call { args, .. } | TerminatorKind::TailCall { args, .. } => {
+            TerminatorKind::Call { func, args, .. }
+            | TerminatorKind::TailCall { func, args, .. } => {
                 // FIXME(explicit_tail_calls): refactor this & add tail-call specific checks
                 if let TerminatorKind::Call { target, unwind, destination, .. } = terminator.kind {
                     if let Some(target) = target {
@@ -418,6 +424,13 @@ impl<'a, 'tcx> Visitor<'tcx> for CfgChecker<'a, 'tcx> {
                             );
                         }
                     }
+                }
+
+                if let ty::FnDef(did, ..) = func.ty(&self.body.local_decls, self.tcx).kind()
+                    && self.body.phase >= MirPhase::Runtime(RuntimePhase::Optimized)
+                    && matches!(self.tcx.codegen_fn_attrs(did).inline, InlineAttr::Force { .. })
+                {
+                    self.fail(location, "`#[rustc_force_inline]`-annotated function not inlined");
                 }
             }
             TerminatorKind::Assert { target, unwind, .. } => {
@@ -794,6 +807,25 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                     )
                 }
             }
+            ProjectionElem::UnwrapUnsafeBinder(unwrapped_ty) => {
+                let binder_ty = place_ref.ty(&self.body.local_decls, self.tcx);
+                let ty::UnsafeBinder(binder_ty) = *binder_ty.ty.kind() else {
+                    self.fail(
+                        location,
+                        format!("WrapUnsafeBinder does not produce a ty::UnsafeBinder"),
+                    );
+                    return;
+                };
+                let binder_inner_ty = self.tcx.instantiate_bound_regions_with_erased(*binder_ty);
+                if !self.mir_assign_valid_types(unwrapped_ty, binder_inner_ty) {
+                    self.fail(
+                        location,
+                        format!(
+                            "Cannot unwrap unsafe binder {binder_ty:?} into type {unwrapped_ty:?}"
+                        ),
+                    );
+                }
+            }
             _ => {}
         }
         self.super_projection_elem(place_ref, elem, context, location);
@@ -1009,6 +1041,14 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                 }
             }
             Rvalue::Ref(..) => {}
+            Rvalue::Len(p) => {
+                let pty = p.ty(&self.body.local_decls, self.tcx).ty;
+                check_kinds!(
+                    pty,
+                    "Cannot compute length of non-array type {:?}",
+                    ty::Array(..) | ty::Slice(..)
+                );
+            }
             Rvalue::BinaryOp(op, vals) => {
                 use BinOp::*;
                 let a = vals.0.ty(&self.body.local_decls, self.tcx);
@@ -1341,6 +1381,24 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
             | Rvalue::RawPtr(_, _)
             | Rvalue::NullaryOp(NullOp::SizeOf | NullOp::AlignOf | NullOp::UbChecks, _)
             | Rvalue::Discriminant(_) => {}
+
+            Rvalue::WrapUnsafeBinder(op, ty) => {
+                let unwrapped_ty = op.ty(self.body, self.tcx);
+                let ty::UnsafeBinder(binder_ty) = *ty.kind() else {
+                    self.fail(
+                        location,
+                        format!("WrapUnsafeBinder does not produce a ty::UnsafeBinder"),
+                    );
+                    return;
+                };
+                let binder_inner_ty = self.tcx.instantiate_bound_regions_with_erased(*binder_ty);
+                if !self.mir_assign_valid_types(unwrapped_ty, binder_inner_ty) {
+                    self.fail(
+                        location,
+                        format!("Cannot wrap {unwrapped_ty:?} into unsafe binder {binder_ty:?}"),
+                    );
+                }
+            }
         }
         self.super_rvalue(rvalue, location);
     }

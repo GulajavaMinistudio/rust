@@ -1594,7 +1594,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// [`ptr::swap`]: crate::ptr::swap()
     #[stable(feature = "pointer_methods", since = "1.26.0")]
-    #[rustc_const_stable(feature = "const_swap", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_const_stable(feature = "const_swap", since = "1.85.0")]
     #[inline(always)]
     pub const unsafe fn swap(self, with: *mut T)
     where
@@ -2097,7 +2097,7 @@ impl<T, const N: usize> *mut [T; N] {
     }
 }
 
-// Equality for pointers
+/// Pointer equality is by address, as produced by the [`<*mut T>::addr`](pointer::addr) method.
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized> PartialEq for *mut T {
     #[inline(always)]
@@ -2107,9 +2107,11 @@ impl<T: ?Sized> PartialEq for *mut T {
     }
 }
 
+/// Pointer equality is an equivalence relation.
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized> Eq for *mut T {}
 
+/// Pointer comparison is by address, as produced by the [`<*mut T>::addr`](pointer::addr) method.
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized> Ord for *mut T {
     #[inline]
@@ -2125,6 +2127,7 @@ impl<T: ?Sized> Ord for *mut T {
     }
 }
 
+/// Pointer comparison is by address, as produced by the [`<*mut T>::addr`](pointer::addr) method.
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized> PartialOrd for *mut T {
     #[inline(always)]

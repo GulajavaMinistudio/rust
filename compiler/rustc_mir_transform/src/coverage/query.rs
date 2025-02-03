@@ -1,5 +1,5 @@
 use rustc_data_structures::captures::Captures;
-use rustc_index::bit_set::BitSet;
+use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::coverage::{
     CounterId, CovTerm, CoverageIdsInfo, CoverageKind, Expression, ExpressionId,
@@ -87,18 +87,12 @@ fn coverage_attr_on(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
 fn coverage_ids_info<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance_def: ty::InstanceKind<'tcx>,
-) -> CoverageIdsInfo {
+) -> Option<CoverageIdsInfo> {
     let mir_body = tcx.instance_mir(instance_def);
+    let fn_cov_info = mir_body.function_coverage_info.as_deref()?;
 
-    let Some(fn_cov_info) = mir_body.function_coverage_info.as_deref() else {
-        return CoverageIdsInfo {
-            counters_seen: BitSet::new_empty(0),
-            zero_expressions: BitSet::new_empty(0),
-        };
-    };
-
-    let mut counters_seen = BitSet::new_empty(fn_cov_info.num_counters);
-    let mut expressions_seen = BitSet::new_filled(fn_cov_info.expressions.len());
+    let mut counters_seen = DenseBitSet::new_empty(fn_cov_info.num_counters);
+    let mut expressions_seen = DenseBitSet::new_filled(fn_cov_info.expressions.len());
 
     // For each expression ID that is directly used by one or more mappings,
     // mark it as not-yet-seen. This indicates that we expect to see a
@@ -129,7 +123,7 @@ fn coverage_ids_info<'tcx>(
     let zero_expressions =
         identify_zero_expressions(fn_cov_info, &counters_seen, &expressions_seen);
 
-    CoverageIdsInfo { counters_seen, zero_expressions }
+    Some(CoverageIdsInfo { counters_seen, zero_expressions })
 }
 
 fn all_coverage_in_mir_body<'a, 'tcx>(
@@ -148,23 +142,23 @@ fn is_inlined(body: &Body<'_>, statement: &Statement<'_>) -> bool {
     scope_data.inlined.is_some() || scope_data.inlined_parent_scope.is_some()
 }
 
-/// Identify expressions that will always have a value of zero, and note
-/// their IDs in a `BitSet`. Mappings that refer to a zero expression
-/// can instead become mappings to a constant zero value.
+/// Identify expressions that will always have a value of zero, and note their
+/// IDs in a `DenseBitSet`. Mappings that refer to a zero expression can instead
+/// become mappings to a constant zero value.
 ///
 /// This function mainly exists to preserve the simplifications that were
 /// already being performed by the Rust-side expression renumbering, so that
 /// the resulting coverage mappings don't get worse.
 fn identify_zero_expressions(
     fn_cov_info: &FunctionCoverageInfo,
-    counters_seen: &BitSet<CounterId>,
-    expressions_seen: &BitSet<ExpressionId>,
-) -> BitSet<ExpressionId> {
+    counters_seen: &DenseBitSet<CounterId>,
+    expressions_seen: &DenseBitSet<ExpressionId>,
+) -> DenseBitSet<ExpressionId> {
     // The set of expressions that either were optimized out entirely, or
     // have zero as both of their operands, and will therefore always have
     // a value of zero. Other expressions that refer to these as operands
     // can have those operands replaced with `CovTerm::Zero`.
-    let mut zero_expressions = BitSet::new_empty(fn_cov_info.expressions.len());
+    let mut zero_expressions = DenseBitSet::new_empty(fn_cov_info.expressions.len());
 
     // Simplify a copy of each expression based on lower-numbered expressions,
     // and then update the set of always-zero expressions if necessary.
@@ -228,8 +222,8 @@ fn identify_zero_expressions(
 /// into account knowledge of which counters are unused and which expressions
 /// are always zero.
 fn is_zero_term(
-    counters_seen: &BitSet<CounterId>,
-    zero_expressions: &BitSet<ExpressionId>,
+    counters_seen: &DenseBitSet<CounterId>,
+    zero_expressions: &DenseBitSet<ExpressionId>,
     term: CovTerm,
 ) -> bool {
     match term {

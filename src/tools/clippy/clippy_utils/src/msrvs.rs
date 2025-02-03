@@ -18,10 +18,10 @@ macro_rules! msrv_aliases {
 
 // names may refer to stabilized feature flags or library items
 msrv_aliases! {
-    1,83,0 { CONST_EXTERN_FN, CONST_FLOAT_BITS_CONV, CONST_FLOAT_CLASSIFY }
+    1,83,0 { CONST_EXTERN_FN, CONST_FLOAT_BITS_CONV, CONST_FLOAT_CLASSIFY, CONST_MUT_REFS, CONST_UNWRAP }
     1,82,0 { IS_NONE_OR, REPEAT_N, RAW_REF_OP }
-    1,81,0 { LINT_REASONS_STABILIZATION, ERROR_IN_CORE }
-    1,80,0 { BOX_INTO_ITER }
+    1,81,0 { LINT_REASONS_STABILIZATION, ERROR_IN_CORE, EXPLICIT_SELF_TYPE_ELISION }
+    1,80,0 { BOX_INTO_ITER, LAZY_CELL }
     1,77,0 { C_STR_LITERALS }
     1,76,0 { PTR_FROM_REF, OPTION_RESULT_INSPECT }
     1,74,0 { REPR_RUST }
@@ -130,7 +130,7 @@ impl Msrv {
         let mut msrv_attrs = attrs.iter().filter(|attr| attr.path_matches(&[sym::clippy, sym_msrv]));
 
         if let Some(msrv_attr) = msrv_attrs.next() {
-            if let Some(duplicate) = msrv_attrs.last() {
+            if let Some(duplicate) = msrv_attrs.next_back() {
                 sess.dcx()
                     .struct_span_err(duplicate.span(), "`clippy::msrv` is defined multiple times")
                     .with_span_note(msrv_attr.span(), "first definition found here")

@@ -4,6 +4,7 @@ use std::num::{IntErrorKind, NonZero};
 use std::path::PathBuf;
 use std::str;
 
+use rustc_abi::Align;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::profiling::TimePassesFormat;
 use rustc_data_structures::stable_hasher::Hash64;
@@ -397,6 +398,7 @@ mod desc {
     pub(crate) const parse_list: &str = "a space-separated list of strings";
     pub(crate) const parse_list_with_polarity: &str =
         "a comma-separated list of strings, with elements beginning with + or -";
+    pub(crate) const parse_autodiff: &str = "a comma separated list of settings: `Print`, `PrintTA`, `PrintAA`, `PrintPerf`, `PrintModBefore`, `PrintModAfterOpts`, `PrintModAfterEnzyme`, `LooseTypes`, `NoModOptAfter`, `EnableFncOpt`, `NoVecUnroll`, `Inline`";
     pub(crate) const parse_comma_list: &str = "a comma-separated list of strings";
     pub(crate) const parse_opt_comma_list: &str = parse_comma_list;
     pub(crate) const parse_number: &str = "a number";
@@ -482,6 +484,7 @@ mod desc {
     pub(crate) const parse_wasm_c_abi: &str = "`legacy` or `spec`";
     pub(crate) const parse_mir_include_spans: &str =
         "either a boolean (`yes`, `no`, `on`, `off`, etc), or `nll` (default: `nll`)";
+    pub(crate) const parse_align: &str = "a number that is a power of 2 between 1 and 2^29";
 }
 
 pub mod parse {
@@ -1027,6 +1030,38 @@ pub mod parse {
         }
     }
 
+    pub(crate) fn parse_autodiff(slot: &mut Vec<AutoDiff>, v: Option<&str>) -> bool {
+        let Some(v) = v else {
+            *slot = vec![];
+            return true;
+        };
+        let mut v: Vec<&str> = v.split(",").collect();
+        v.sort_unstable();
+        for &val in v.iter() {
+            let variant = match val {
+                "PrintTA" => AutoDiff::PrintTA,
+                "PrintAA" => AutoDiff::PrintAA,
+                "PrintPerf" => AutoDiff::PrintPerf,
+                "Print" => AutoDiff::Print,
+                "PrintModBefore" => AutoDiff::PrintModBefore,
+                "PrintModAfterOpts" => AutoDiff::PrintModAfterOpts,
+                "PrintModAfterEnzyme" => AutoDiff::PrintModAfterEnzyme,
+                "LooseTypes" => AutoDiff::LooseTypes,
+                "NoModOptAfter" => AutoDiff::NoModOptAfter,
+                "EnableFncOpt" => AutoDiff::EnableFncOpt,
+                "NoVecUnroll" => AutoDiff::NoVecUnroll,
+                "Inline" => AutoDiff::Inline,
+                _ => {
+                    // FIXME(ZuseZ4): print an error saying which value is not recognized
+                    return false;
+                }
+            };
+            slot.push(variant);
+        }
+
+        true
+    }
+
     pub(crate) fn parse_instrument_coverage(
         slot: &mut InstrumentCoverage,
         v: Option<&str>,
@@ -1561,6 +1596,21 @@ pub mod parse {
 
         true
     }
+
+    pub(crate) fn parse_align(slot: &mut Option<Align>, v: Option<&str>) -> bool {
+        let mut bytes = 0u64;
+        if !parse_number(&mut bytes, v) {
+            return false;
+        }
+
+        let Ok(align) = Align::from_bytes(bytes) else {
+            return false;
+        };
+
+        *slot = Some(align);
+
+        true
+    }
 }
 
 options! {
@@ -1621,7 +1671,7 @@ options! {
         "extra arguments to append to the linker invocation (space separated)"),
     #[rustc_lint_opt_deny_field_access("use `Session::link_dead_code` instead of this field")]
     link_dead_code: Option<bool> = (None, parse_opt_bool, [TRACKED],
-        "keep dead code at link time (useful for code coverage) (default: no)"),
+        "try to generate and link dead code (default: no)"),
     link_self_contained: LinkSelfContained = (LinkSelfContained::default(), parse_link_self_contained, [UNTRACKED],
         "control whether to link Rust provided C objects/libraries or rely \
         on a C toolchain or linker installed in the system"),
@@ -1719,6 +1769,22 @@ options! {
          either `loaded` or `not-loaded`."),
     assume_incomplete_release: bool = (false, parse_bool, [TRACKED],
         "make cfg(version) treat the current version as incomplete (default: no)"),
+    autodiff: Vec<crate::config::AutoDiff> = (Vec::new(), parse_autodiff, [TRACKED],
+        "a list of optional autodiff flags to enable
+         Optional extra settings:
+         `=PrintTA`
+         `=PrintAA`
+         `=PrintPerf`
+         `=Print`
+         `=PrintModBefore`
+         `=PrintModAfterOpts`
+         `=PrintModAfterEnzyme`
+         `=LooseTypes`
+         `=NoModOptAfter`
+         `=EnableFncOpt`
+         `=NoVecUnroll`
+         `=Inline`
+         Multiple options can be combined with commas."),
     #[rustc_lint_opt_deny_field_access("use `Session::binary_dep_depinfo` instead of this field")]
     binary_dep_depinfo: bool = (false, parse_bool, [TRACKED],
         "include artifacts (sysroot, crate dependencies) used during compilation in dep-info \
@@ -1786,6 +1852,7 @@ options! {
         "output statistics about monomorphization collection"),
     dump_mono_stats_format: DumpMonoStatsFormat = (DumpMonoStatsFormat::Markdown, parse_dump_mono_stats, [UNTRACKED],
         "the format to use for -Z dump-mono-stats (`markdown` (default) or `json`)"),
+    #[rustc_lint_opt_deny_field_access("use `Session::dwarf_version` instead of this field")]
     dwarf_version: Option<u32> = (None, parse_opt_number, [TRACKED],
         "version of DWARF debug information to emit (default: 2 or 4, depending on platform)"),
     dylib_lto: bool = (false, parse_bool, [UNTRACKED],
@@ -1853,8 +1920,6 @@ options! {
         "verify extended properties for incr. comp. (default: no):
         - hashes of green query instances
         - hash collisions of query keys"),
-    inline_in_all_cgus: Option<bool> = (None, parse_opt_bool, [TRACKED],
-        "control whether `#[inline]` functions are in all CGUs"),
     inline_llvm: bool = (true, parse_bool, [TRACKED],
         "enable LLVM inlining (default: yes)"),
     inline_mir: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -1921,6 +1986,8 @@ options! {
         "gather metadata statistics (default: no)"),
     metrics_dir: Option<PathBuf> = (None, parse_opt_pathbuf, [UNTRACKED],
         "the directory metrics emitted by rustc are dumped into (implicitly enables default set of metrics)"),
+    min_function_alignment: Option<Align> = (None, parse_align, [TRACKED],
+        "align all functions to at least this many bytes. Must be a power of 2"),
     mir_emit_retag: bool = (false, parse_bool, [TRACKED],
         "emit Retagging MIR statements, interpreted e.g., by miri; implies -Zmir-opt-level=0 \
         (default: no)"),
@@ -2016,8 +2083,6 @@ options! {
          Note that this overwrites the effect `-Clink-dead-code` has on collection!"),
     print_type_sizes: bool = (false, parse_bool, [UNTRACKED],
         "print layout information for each type encountered (default: no)"),
-    print_vtable_sizes: bool = (false, parse_bool, [UNTRACKED],
-        "print size comparison between old and new vtable layouts (default: no)"),
     proc_macro_backtrace: bool = (false, parse_bool, [UNTRACKED],
          "show backtraces for panics during proc-macro execution (default: no)"),
     proc_macro_execution_strategy: ProcMacroExecutionStrategy = (ProcMacroExecutionStrategy::SameThread,

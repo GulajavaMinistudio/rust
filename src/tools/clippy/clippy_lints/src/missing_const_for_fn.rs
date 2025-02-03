@@ -2,13 +2,12 @@ use clippy_config::Conf;
 use clippy_utils::diagnostics::span_lint_and_then;
 use clippy_utils::msrvs::{self, Msrv};
 use clippy_utils::qualify_min_const_fn::is_min_const_fn;
-use clippy_utils::{fn_has_unsatisfiable_preds, is_entrypoint_fn, is_from_proc_macro, trait_ref_of_method};
+use clippy_utils::{fn_has_unsatisfiable_preds, is_entrypoint_fn, is_from_proc_macro, is_in_test, trait_ref_of_method};
 use rustc_errors::Applicability;
 use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_hir::intravisit::FnKind;
 use rustc_hir::{self as hir, Body, Constness, FnDecl, GenericParamKind};
 use rustc_lint::{LateContext, LateLintPass};
-use rustc_middle::lint::in_external_macro;
 use rustc_middle::ty;
 use rustc_session::impl_lint_pass;
 use rustc_span::Span;
@@ -97,11 +96,16 @@ impl<'tcx> LateLintPass<'tcx> for MissingConstForFn {
         span: Span,
         def_id: LocalDefId,
     ) {
+        let hir_id = cx.tcx.local_def_id_to_hir_id(def_id);
+        if is_in_test(cx.tcx, hir_id) {
+            return;
+        }
+
         if !self.msrv.meets(msrvs::CONST_IF_MATCH) {
             return;
         }
 
-        if in_external_macro(cx.tcx.sess, span) || is_entrypoint_fn(cx, def_id.to_def_id()) {
+        if span.in_external_macro(cx.tcx.sess.source_map()) || is_entrypoint_fn(cx, def_id.to_def_id()) {
             return;
         }
 
@@ -135,8 +139,6 @@ impl<'tcx> LateLintPass<'tcx> for MissingConstForFn {
         if fn_inputs_has_impl_trait_ty(cx, def_id) {
             return;
         }
-
-        let hir_id = cx.tcx.local_def_id_to_hir_id(def_id);
 
         // Const fns are not allowed as methods in a trait.
         {

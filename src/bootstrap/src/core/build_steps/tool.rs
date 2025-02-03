@@ -4,8 +4,10 @@ use std::{env, fs};
 use crate::core::build_steps::toolstate::ToolState;
 use crate::core::build_steps::{compile, llvm};
 use crate::core::builder;
-use crate::core::builder::{Builder, Cargo as CargoCommand, RunConfig, ShouldRun, Step};
-use crate::core::config::{DebuginfoLevel, TargetSelection};
+use crate::core::builder::{
+    Builder, Cargo as CargoCommand, RunConfig, ShouldRun, Step, cargo_profile_var,
+};
+use crate::core::config::{DebuginfoLevel, RustcLto, TargetSelection};
 use crate::utils::channel::GitInfo;
 use crate::utils::exec::{BootstrapCommand, command};
 use crate::utils::helpers::{add_dylib_path, exe, t};
@@ -334,7 +336,11 @@ macro_rules! bootstrap_tool {
 }
 
 bootstrap_tool!(
-    Rustbook, "src/tools/rustbook", "rustbook", submodules = SUBMODULES_FOR_RUSTBOOK;
+    // This is marked as an external tool because it includes dependencies
+    // from submodules. Trying to keep the lints in sync between all the repos
+    // is a bit of a pain. Unfortunately it means the rustbook source itself
+    // doesn't deny warnings, but it is a relatively small piece of code.
+    Rustbook, "src/tools/rustbook", "rustbook", is_external_tool = true, submodules = SUBMODULES_FOR_RUSTBOOK;
     UnstableBookGen, "src/tools/unstable-book-gen", "unstable-book-gen";
     Tidy, "src/tools/tidy", "tidy";
     Linkchecker, "src/tools/linkchecker", "linkchecker";
@@ -641,7 +647,7 @@ impl Step for Rustdoc {
         }
 
         // NOTE: Never modify the rustflags here, it breaks the build cache for other tools!
-        let cargo = prepare_tool_cargo(
+        let mut cargo = prepare_tool_cargo(
             builder,
             build_compiler,
             Mode::ToolRustc,
@@ -651,6 +657,17 @@ impl Step for Rustdoc {
             SourceType::InTree,
             features.as_slice(),
         );
+
+        // rustdoc is performance sensitive, so apply LTO to it.
+        let lto = match builder.config.rust_lto {
+            RustcLto::Off => Some("off"),
+            RustcLto::Thin => Some("thin"),
+            RustcLto::Fat => Some("fat"),
+            RustcLto::ThinLocal => None,
+        };
+        if let Some(lto) = lto {
+            cargo.env(cargo_profile_var("LTO", &builder.config), lto);
+        }
 
         let _guard = builder.msg_tool(
             Kind::Build,

@@ -10,7 +10,6 @@ use rustc_hir as hir;
 use rustc_hir::ItemKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::lang_items::LangItem;
-use rustc_infer::infer::outlives::env::OutlivesEnvironment;
 use rustc_infer::infer::{self, RegionResolutionError, TyCtxtInferExt};
 use rustc_infer::traits::Obligation;
 use rustc_middle::ty::adjustment::CoerceUnsizedInfo;
@@ -193,7 +192,7 @@ fn visit_implementation_of_coerce_unsized(checker: &Checker<'_>) -> Result<(), E
     // errors; other parts of the code may demand it for the info of
     // course.
     let span = tcx.def_span(impl_did);
-    tcx.at(span).ensure().coerce_unsized_info(impl_did)
+    tcx.at(span).ensure_ok().coerce_unsized_info(impl_did)
 }
 
 fn visit_implementation_of_dispatch_from_dyn(checker: &Checker<'_>) -> Result<(), ErrorGuaranteed> {
@@ -259,22 +258,40 @@ fn visit_implementation_of_dispatch_from_dyn(checker: &Checker<'_>) -> Result<()
             let coerced_fields = fields
                 .iter()
                 .filter(|field| {
+                    // Ignore PhantomData fields
+                    let unnormalized_ty = tcx.type_of(field.did).instantiate_identity();
+                    if tcx
+                        .try_normalize_erasing_regions(
+                            ty::TypingEnv::non_body_analysis(tcx, def_a.did()),
+                            unnormalized_ty,
+                        )
+                        .unwrap_or(unnormalized_ty)
+                        .is_phantom_data()
+                    {
+                        return false;
+                    }
+
                     let ty_a = field.ty(tcx, args_a);
                     let ty_b = field.ty(tcx, args_b);
 
-                    if let Ok(layout) =
-                        tcx.layout_of(infcx.typing_env(param_env).as_query_input(ty_a))
-                    {
-                        if layout.is_1zst() {
+                    // FIXME: We could do normalization here, but is it really worth it?
+                    if ty_a == ty_b {
+                        // Allow 1-ZSTs that don't mention type params.
+                        //
+                        // Allowing type params here would allow us to possibly transmute
+                        // between ZSTs, which may be used to create library unsoundness.
+                        if let Ok(layout) =
+                            tcx.layout_of(infcx.typing_env(param_env).as_query_input(ty_a))
+                            && layout.is_1zst()
+                            && !ty_a.has_non_region_param()
+                        {
                             // ignore 1-ZST fields
                             return false;
                         }
-                    }
 
-                    if ty_a == ty_b {
                         res = Err(tcx.dcx().emit_err(errors::DispatchFromDynZST {
                             span,
-                            name: field.name,
+                            name: field.ident(tcx),
                             ty: ty_a,
                         }));
 
@@ -328,8 +345,7 @@ fn visit_implementation_of_dispatch_from_dyn(checker: &Checker<'_>) -> Result<()
                 }
 
                 // Finally, resolve all regions.
-                let outlives_env = OutlivesEnvironment::new(param_env);
-                res = res.and(ocx.resolve_regions_and_report_errors(impl_did, &outlives_env));
+                res = res.and(ocx.resolve_regions_and_report_errors(impl_did, param_env, []));
             }
             res
         }
@@ -388,17 +404,12 @@ pub(crate) fn coerce_unsized_info<'tcx>(
             check_mutbl(mt_a, mt_b, &|ty| Ty::new_imm_ref(tcx, r_b, ty))
         }
 
-        (&ty::Ref(_, ty_a, mutbl_a), &ty::RawPtr(ty_b, mutbl_b)) => check_mutbl(
-            ty::TypeAndMut { ty: ty_a, mutbl: mutbl_a },
-            ty::TypeAndMut { ty: ty_b, mutbl: mutbl_b },
-            &|ty| Ty::new_imm_ptr(tcx, ty),
-        ),
-
-        (&ty::RawPtr(ty_a, mutbl_a), &ty::RawPtr(ty_b, mutbl_b)) => check_mutbl(
-            ty::TypeAndMut { ty: ty_a, mutbl: mutbl_a },
-            ty::TypeAndMut { ty: ty_b, mutbl: mutbl_b },
-            &|ty| Ty::new_imm_ptr(tcx, ty),
-        ),
+        (&ty::Ref(_, ty_a, mutbl_a), &ty::RawPtr(ty_b, mutbl_b))
+        | (&ty::RawPtr(ty_a, mutbl_a), &ty::RawPtr(ty_b, mutbl_b)) => {
+            let mt_a = ty::TypeAndMut { ty: ty_a, mutbl: mutbl_a };
+            let mt_b = ty::TypeAndMut { ty: ty_b, mutbl: mutbl_b };
+            check_mutbl(mt_a, mt_b, &|ty| Ty::new_imm_ptr(tcx, ty))
+        }
 
         (&ty::Adt(def_a, args_a), &ty::Adt(def_b, args_b))
             if def_a.is_struct() && def_b.is_struct() =>
@@ -460,8 +471,16 @@ pub(crate) fn coerce_unsized_info<'tcx>(
                 .filter_map(|(i, f)| {
                     let (a, b) = (f.ty(tcx, args_a), f.ty(tcx, args_b));
 
-                    if tcx.type_of(f.did).instantiate_identity().is_phantom_data() {
-                        // Ignore PhantomData fields
+                    // Ignore PhantomData fields
+                    let unnormalized_ty = tcx.type_of(f.did).instantiate_identity();
+                    if tcx
+                        .try_normalize_erasing_regions(
+                            ty::TypingEnv::non_body_analysis(tcx, def_a.did()),
+                            unnormalized_ty,
+                        )
+                        .unwrap_or(unnormalized_ty)
+                        .is_phantom_data()
+                    {
                         return None;
                     }
 
@@ -538,8 +557,7 @@ pub(crate) fn coerce_unsized_info<'tcx>(
     }
 
     // Finally, resolve all regions.
-    let outlives_env = OutlivesEnvironment::new(param_env);
-    let _ = ocx.resolve_regions_and_report_errors(impl_did, &outlives_env);
+    let _ = ocx.resolve_regions_and_report_errors(impl_did, param_env, []);
 
     Ok(CoerceUnsizedInfo { custom_kind: kind })
 }

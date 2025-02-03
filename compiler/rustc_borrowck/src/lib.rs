@@ -6,6 +6,7 @@
 #![feature(assert_matches)]
 #![feature(box_patterns)]
 #![feature(file_buffered)]
+#![feature(if_let_guard)]
 #![feature(let_chains)]
 #![feature(never_type)]
 #![feature(rustc_attrs)]
@@ -15,6 +16,7 @@
 #![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, Deref};
@@ -22,9 +24,11 @@ use std::ops::{ControlFlow, Deref};
 use rustc_abi::FieldIdx;
 use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_data_structures::graph::dominators::Dominators;
+use rustc_errors::LintDiagnostic;
 use rustc_hir as hir;
+use rustc_hir::CRATE_HIR_ID;
 use rustc_hir::def_id::LocalDefId;
-use rustc_index::bit_set::{BitSet, MixedBitSet};
+use rustc_index::bit_set::{DenseBitSet, MixedBitSet};
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_infer::infer::{
     InferCtxt, NllRegionVariableOrigin, RegionVariableOrigin, TyCtxtInferExt,
@@ -42,7 +46,7 @@ use rustc_mir_dataflow::move_paths::{
     InitIndex, InitLocation, LookupResult, MoveData, MovePathIndex,
 };
 use rustc_mir_dataflow::{Analysis, EntryStates, Results, ResultsVisitor, visit_results};
-use rustc_session::lint::builtin::UNUSED_MUT;
+use rustc_session::lint::builtin::{TAIL_EXPR_DROP_ORDER, UNUSED_MUT};
 use rustc_span::{Span, Symbol};
 use smallvec::SmallVec;
 use tracing::{debug, instrument};
@@ -56,7 +60,7 @@ use crate::diagnostics::{
 use crate::path_utils::*;
 use crate::place_ext::PlaceExt;
 use crate::places_conflict::{PlaceConflictBias, places_conflict};
-use crate::polonius::legacy::{LocationTable, PoloniusOutput};
+use crate::polonius::legacy::{PoloniusLocationTable, PoloniusOutput};
 use crate::prefixes::PrefixSet;
 use crate::region_infer::RegionInferenceContext;
 use crate::renumber::RegionCtxt;
@@ -175,12 +179,9 @@ fn do_mir_borrowck<'tcx>(
         infcx.register_predefined_opaques_for_next_solver(def);
     }
 
-    let location_table = LocationTable::new(body);
+    let location_table = PoloniusLocationTable::new(body);
 
     let move_data = MoveData::gather_moves(body, tcx, |_| true);
-    let promoted_move_data = promoted
-        .iter_enumerated()
-        .map(|(idx, body)| (idx, MoveData::gather_moves(body, tcx, |_| true)));
 
     let flow_inits = MaybeInitializedPlaces::new(tcx, body, &move_data)
         .iterate_to_fixpoint(tcx, body, Some("borrowck"))
@@ -238,15 +239,20 @@ fn do_mir_borrowck<'tcx>(
         false
     };
 
-    for (idx, move_data) in promoted_move_data {
+    // While promoteds should mostly be correct by construction, we need to check them for
+    // invalid moves to detect moving out of arrays:`struct S; fn main() { &([S][0]); }`.
+    for promoted_body in &promoted {
         use rustc_middle::mir::visit::Visitor;
-
-        let promoted_body = &promoted[idx];
+        // This assumes that we won't use some of the fields of the `promoted_mbcx`
+        // when detecting and reporting move errors. While it would be nice to move
+        // this check out of `MirBorrowckCtxt`, actually doing so is far from trivial.
+        let move_data = MoveData::gather_moves(promoted_body, tcx, |_| true);
         let mut promoted_mbcx = MirBorrowckCtxt {
             infcx: &infcx,
             body: promoted_body,
             move_data: &move_data,
-            location_table: &location_table, // no need to create a real one for the promoted, it is not used
+            // no need to create a real location table for the promoted, it is not used
+            location_table: &location_table,
             movable_coroutine,
             fn_self_span_reported: Default::default(),
             locals_are_invalidated_at_exit,
@@ -265,9 +271,6 @@ fn do_mir_borrowck<'tcx>(
             move_errors: Vec::new(),
             diags_buffer,
         };
-        MoveVisitor { ctxt: &mut promoted_mbcx }.visit_body(promoted_body);
-        promoted_mbcx.report_move_errors();
-
         struct MoveVisitor<'a, 'b, 'infcx, 'tcx> {
             ctxt: &'a mut MirBorrowckCtxt<'b, 'infcx, 'tcx>,
         }
@@ -279,6 +282,8 @@ fn do_mir_borrowck<'tcx>(
                 }
             }
         }
+        MoveVisitor { ctxt: &mut promoted_mbcx }.visit_body(promoted_body);
+        promoted_mbcx.report_move_errors();
     }
 
     let mut mbcx = MirBorrowckCtxt {
@@ -512,7 +517,7 @@ struct MirBorrowckCtxt<'a, 'infcx, 'tcx> {
 
     /// Map from MIR `Location` to `LocationIndex`; created
     /// when MIR borrowck begins.
-    location_table: &'a LocationTable,
+    location_table: &'a PoloniusLocationTable,
 
     movable_coroutine: bool,
     /// This keeps track of whether local variables are free-ed when the function
@@ -635,9 +640,11 @@ impl<'a, 'tcx> ResultsVisitor<'a, 'tcx, Borrowck<'a, 'tcx>> for MirBorrowckCtxt<
             | StatementKind::Coverage(..)
             // These do not actually affect borrowck
             | StatementKind::ConstEvalCounter
-            // This do not affect borrowck
-            | StatementKind::BackwardIncompatibleDropHint { .. }
             | StatementKind::StorageLive(..) => {}
+            // This does not affect borrowck
+            StatementKind::BackwardIncompatibleDropHint { place, reason: BackwardIncompatibleDropReason::Edition2024 } => {
+                self.check_backward_incompatible_drop(location, (**place, span), state);
+            }
             StatementKind::StorageDead(local) => {
                 self.access_place(
                     location,
@@ -822,6 +829,7 @@ use self::ReadOrWrite::{Activation, Read, Reservation, Write};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum ArtificialField {
+    ArrayLength,
     FakeBorrow,
 }
 
@@ -1006,6 +1014,24 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         }
     }
 
+    fn borrows_in_scope<'s>(
+        &self,
+        location: Location,
+        state: &'s BorrowckDomain,
+    ) -> Cow<'s, DenseBitSet<BorrowIndex>> {
+        if let Some(polonius) = &self.polonius_output {
+            // Use polonius output if it has been enabled.
+            let location = self.location_table.start_index(location);
+            let mut polonius_output = DenseBitSet::new_empty(self.borrow_set.len());
+            for &idx in polonius.errors_at(location) {
+                polonius_output.insert(idx);
+            }
+            Cow::Owned(polonius_output)
+        } else {
+            Cow::Borrowed(&state.borrows)
+        }
+    }
+
     #[instrument(level = "debug", skip(self, state))]
     fn check_access_for_conflict(
         &mut self,
@@ -1017,18 +1043,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
     ) -> bool {
         let mut error_reported = false;
 
-        // Use polonius output if it has been enabled.
-        let mut polonius_output;
-        let borrows_in_scope = if let Some(polonius) = &self.polonius_output {
-            let location = self.location_table.start_index(location);
-            polonius_output = BitSet::new_empty(self.borrow_set.len());
-            for &idx in polonius.errors_at(location) {
-                polonius_output.insert(idx);
-            }
-            &polonius_output
-        } else {
-            &state.borrows
-        };
+        let borrows_in_scope = self.borrows_in_scope(location, state);
 
         each_borrow_involving_path(
             self,
@@ -1148,6 +1163,61 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         error_reported
     }
 
+    /// Through #123739, backward incompatible drops (BIDs) are introduced.
+    /// We would like to emit lints whether borrow checking fails at these future drop locations.
+    #[instrument(level = "debug", skip(self, state))]
+    fn check_backward_incompatible_drop(
+        &mut self,
+        location: Location,
+        (place, place_span): (Place<'tcx>, Span),
+        state: &BorrowckDomain,
+    ) {
+        let tcx = self.infcx.tcx;
+        // If this type does not need `Drop`, then treat it like a `StorageDead`.
+        // This is needed because we track the borrows of refs to thread locals,
+        // and we'll ICE because we don't track borrows behind shared references.
+        let sd = if place.ty(self.body, tcx).ty.needs_drop(tcx, self.body.typing_env(tcx)) {
+            AccessDepth::Drop
+        } else {
+            AccessDepth::Shallow(None)
+        };
+
+        let borrows_in_scope = self.borrows_in_scope(location, state);
+
+        // This is a very simplified version of `Self::check_access_for_conflict`.
+        // We are here checking on BIDs and specifically still-live borrows of data involving the BIDs.
+        each_borrow_involving_path(
+            self,
+            self.infcx.tcx,
+            self.body,
+            (sd, place),
+            self.borrow_set,
+            |borrow_index| borrows_in_scope.contains(borrow_index),
+            |this, _borrow_index, borrow| {
+                if matches!(borrow.kind, BorrowKind::Fake(_)) {
+                    return ControlFlow::Continue(());
+                }
+                let borrowed = this.retrieve_borrow_spans(borrow).var_or_use_path_span();
+                let explain = this.explain_why_borrow_contains_point(
+                    location,
+                    borrow,
+                    Some((WriteKind::StorageDeadOrDrop, place)),
+                );
+                this.infcx.tcx.node_span_lint(
+                    TAIL_EXPR_DROP_ORDER,
+                    CRATE_HIR_ID,
+                    borrowed,
+                    |diag| {
+                        session_diagnostics::TailExprDropOrder { borrowed }.decorate_lint(diag);
+                        explain.add_explanation_to_diagnostic(&this, diag, "", None, None);
+                    },
+                );
+                // We may stop at the first case
+                ControlFlow::Break(())
+            },
+        );
+    }
+
     fn mutate_place(
         &mut self,
         location: Location,
@@ -1214,15 +1284,18 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 );
             }
 
-            &Rvalue::RawPtr(mutability, place) => {
-                let access_kind = match mutability {
-                    Mutability::Mut => (
+            &Rvalue::RawPtr(kind, place) => {
+                let access_kind = match kind {
+                    RawPtrKind::Mut => (
                         Deep,
                         Write(WriteKind::MutableBorrow(BorrowKind::Mut {
                             kind: MutBorrowKind::Default,
                         })),
                     ),
-                    Mutability::Not => (Deep, Read(ReadKind::Borrow(BorrowKind::Shared))),
+                    RawPtrKind::Const => (Deep, Read(ReadKind::Borrow(BorrowKind::Shared))),
+                    RawPtrKind::FakeForPtrMetadata => {
+                        (Shallow(Some(ArtificialField::ArrayLength)), Read(ReadKind::Copy))
+                    }
                 };
 
                 self.access_place(
@@ -1269,11 +1342,16 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 );
             }
 
-            &Rvalue::Discriminant(place) => {
+            &(Rvalue::Len(place) | Rvalue::Discriminant(place)) => {
+                let af = match *rvalue {
+                    Rvalue::Len(..) => Some(ArtificialField::ArrayLength),
+                    Rvalue::Discriminant(..) => None,
+                    _ => unreachable!(),
+                };
                 self.access_place(
                     location,
                     (place, span),
-                    (Shallow(None), Read(ReadKind::Copy)),
+                    (Shallow(af), Read(ReadKind::Copy)),
                     LocalMutationIsAllowed::No,
                     state,
                 );
@@ -1319,6 +1397,10 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 for operand in operands {
                     self.consume_operand(location, (operand, span), state);
                 }
+            }
+
+            Rvalue::WrapUnsafeBinder(op, _) => {
+                self.consume_operand(location, (op, span), state);
             }
         }
     }
@@ -1692,7 +1774,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 // So it's safe to skip these.
                 ProjectionElem::OpaqueCast(_)
                 | ProjectionElem::Subtype(_)
-                | ProjectionElem::Downcast(_, _) => (),
+                | ProjectionElem::Downcast(_, _)
+                | ProjectionElem::UnwrapUnsafeBinder(_) => (),
             }
 
             place_ty = place_ty.projection_ty(tcx, elem);
@@ -1925,6 +2008,10 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                 //
                 // FIXME: is this true even if P is an adt with a dtor?
                 { }
+
+                ProjectionElem::UnwrapUnsafeBinder(_) => {
+                    check_parent_of_field(self, location, place_base, span, state);
+                }
 
                 // assigning to (*P) requires P to be initialized
                 ProjectionElem::Deref => {
@@ -2306,7 +2393,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
                     | ProjectionElem::Subslice { .. }
                     | ProjectionElem::Subtype(..)
                     | ProjectionElem::OpaqueCast { .. }
-                    | ProjectionElem::Downcast(..) => {
+                    | ProjectionElem::Downcast(..)
+                    | ProjectionElem::UnwrapUnsafeBinder(_) => {
                         let upvar_field_projection = self.is_upvar_field_projection(place);
                         if let Some(field) = upvar_field_projection {
                             let upvar = &self.upvars[field.index()];

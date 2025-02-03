@@ -89,16 +89,6 @@ declare_clippy_lint! {
     ///
     /// The `const` value should be stored inside a `static` item.
     ///
-    /// ### Known problems
-    /// When an enum has variants with interior mutability, use of its non
-    /// interior mutable variants can generate false positives. See issue
-    /// [#3962](https://github.com/rust-lang/rust-clippy/issues/3962)
-    ///
-    /// Types that have underlying or potential interior mutability trigger the lint whether
-    /// the interior mutable field is used or not. See issues
-    /// [#5812](https://github.com/rust-lang/rust-clippy/issues/5812) and
-    /// [#3825](https://github.com/rust-lang/rust-clippy/issues/3825)
-    ///
     /// ### Example
     /// ```no_run
     /// use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
@@ -189,6 +179,8 @@ impl<'tcx> NonCopyConst<'tcx> {
     }
 
     fn is_value_unfrozen_raw_inner(cx: &LateContext<'tcx>, val: ty::ValTree<'tcx>, ty: Ty<'tcx>) -> bool {
+        // No branch that we check (yet) should continue if val isn't a ValTree::Branch
+        let ty::ValTree::Branch(val) = val else { return false };
         match *ty.kind() {
             // the fact that we have to dig into every structs to search enums
             // leads us to the point checking `UnsafeCell` directly is the only option.
@@ -197,12 +189,13 @@ impl<'tcx> NonCopyConst<'tcx> {
             // contained value.
             ty::Adt(def, ..) if def.is_union() => false,
             ty::Array(ty, _) => val
-                .unwrap_branch()
                 .iter()
                 .any(|field| Self::is_value_unfrozen_raw_inner(cx, *field, ty)),
             ty::Adt(def, args) if def.is_enum() => {
-                let (&variant_index, fields) = val.unwrap_branch().split_first().unwrap();
-                let variant_index = VariantIdx::from_u32(variant_index.unwrap_leaf().to_u32());
+                let Some((&ty::ValTree::Leaf(variant_index), fields)) = val.split_first() else {
+                    return false;
+                };
+                let variant_index = VariantIdx::from_u32(variant_index.to_u32());
                 fields
                     .iter()
                     .copied()
@@ -215,12 +208,10 @@ impl<'tcx> NonCopyConst<'tcx> {
                     .any(|(field, ty)| Self::is_value_unfrozen_raw_inner(cx, field, ty))
             },
             ty::Adt(def, args) => val
-                .unwrap_branch()
                 .iter()
                 .zip(def.non_enum_variant().fields.iter().map(|field| field.ty(cx.tcx, args)))
                 .any(|(field, ty)| Self::is_value_unfrozen_raw_inner(cx, *field, ty)),
             ty::Tuple(tys) => val
-                .unwrap_branch()
                 .iter()
                 .zip(tys)
                 .any(|(field, ty)| Self::is_value_unfrozen_raw_inner(cx, *field, ty)),

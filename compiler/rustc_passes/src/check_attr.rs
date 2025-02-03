@@ -25,6 +25,7 @@ use rustc_middle::traits::ObligationCause;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::{self, TyCtxt, TypingMode};
 use rustc_middle::{bug, span_bug};
+use rustc_session::config::CrateType;
 use rustc_session::lint::builtin::{
     CONFLICTING_REPR_HINTS, INVALID_DOC_ATTRIBUTES, INVALID_MACRO_EXPORT_ARGUMENTS,
     UNKNOWN_OR_MALFORMED_DIAGNOSTIC_ATTRIBUTES, UNUSED_ATTRIBUTES,
@@ -247,7 +248,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     self.check_coroutine(attr, target);
                 }
                 [sym::linkage, ..] => self.check_linkage(attr, span, target),
-                [sym::rustc_pub_transparent, ..] => self.check_rustc_pub_transparent( attr.span, span, attrs),
+                [sym::rustc_pub_transparent, ..] => self.check_rustc_pub_transparent(attr.span, span, attrs),
                 [
                     // ok
                     sym::allow
@@ -275,7 +276,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | sym::lang
                     | sym::needs_allocator
                     | sym::default_lib_allocator
-                    | sym::start
                     | sym::custom_mir,
                     ..
                 ] => {}
@@ -332,6 +332,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
 
         self.check_repr(attrs, span, target, item, hir_id);
         self.check_used(attrs, target, span);
+        self.check_rustc_force_inline(hir_id, attrs, span, target);
     }
 
     fn inline_attr_str_error_with_macro_def(&self, hir_id: HirId, attr: &Attribute, sym: &str) {
@@ -2327,6 +2328,42 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             && item.path == sym::reason
         {
             errors::UnusedNote::NoLints { name: attr.name_or_empty() }
+        } else if matches!(
+            attr.name_or_empty(),
+            sym::allow | sym::warn | sym::deny | sym::forbid | sym::expect
+        ) && let Some(meta) = attr.meta_item_list()
+            && meta.iter().any(|meta| {
+                meta.meta_item().map_or(false, |item| item.path == sym::linker_messages)
+            })
+        {
+            if hir_id != CRATE_HIR_ID {
+                match attr.style {
+                    ast::AttrStyle::Outer => self.tcx.emit_node_span_lint(
+                        UNUSED_ATTRIBUTES,
+                        hir_id,
+                        attr.span,
+                        errors::OuterCrateLevelAttr,
+                    ),
+                    ast::AttrStyle::Inner => self.tcx.emit_node_span_lint(
+                        UNUSED_ATTRIBUTES,
+                        hir_id,
+                        attr.span,
+                        errors::InnerCrateLevelAttr,
+                    ),
+                };
+                return;
+            } else {
+                let never_needs_link = self
+                    .tcx
+                    .crate_types()
+                    .iter()
+                    .all(|kind| matches!(kind, CrateType::Rlib | CrateType::Staticlib));
+                if never_needs_link {
+                    errors::UnusedNote::LinkerWarningsBinaryCrateOnly
+                } else {
+                    return;
+                }
+            }
         } else if attr.name_or_empty() == sym::default_method_body_is_const {
             errors::UnusedNote::DefaultMethodBodyConst
         } else {
@@ -2434,6 +2471,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 }))),
                 terr,
                 false,
+                None,
             );
             diag.emit();
             self.abort.set(true);
@@ -2477,6 +2515,45 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             .any(|nmi| nmi.has_name(sym::transparent))
         {
             self.dcx().emit_err(errors::RustcPubTransparent { span, attr_span });
+        }
+    }
+
+    fn check_rustc_force_inline(
+        &self,
+        hir_id: HirId,
+        attrs: &[Attribute],
+        span: Span,
+        target: Target,
+    ) {
+        let force_inline_attr = attrs.iter().find(|attr| attr.has_name(sym::rustc_force_inline));
+        match (target, force_inline_attr) {
+            (Target::Closure, None) => {
+                let is_coro = matches!(
+                    self.tcx.hir().expect_expr(hir_id).kind,
+                    hir::ExprKind::Closure(hir::Closure {
+                        kind: hir::ClosureKind::Coroutine(..)
+                            | hir::ClosureKind::CoroutineClosure(..),
+                        ..
+                    })
+                );
+                let parent_did = self.tcx.hir().get_parent_item(hir_id).to_def_id();
+                let parent_span = self.tcx.def_span(parent_did);
+                let parent_force_inline_attr =
+                    self.tcx.get_attr(parent_did, sym::rustc_force_inline);
+                if let Some(attr) = parent_force_inline_attr
+                    && is_coro
+                {
+                    self.dcx().emit_err(errors::RustcForceInlineCoro {
+                        attr_span: attr.span,
+                        span: parent_span,
+                    });
+                }
+            }
+            (Target::Fn, _) => (),
+            (_, Some(attr)) => {
+                self.dcx().emit_err(errors::RustcForceInline { attr_span: attr.span, span });
+            }
+            (_, None) => (),
         }
     }
 
@@ -2615,7 +2692,6 @@ fn check_invalid_crate_level_attr(tcx: TyCtxt<'_>, attrs: &[Attribute]) {
         sym::repr,
         sym::path,
         sym::automatically_derived,
-        sym::start,
         sym::rustc_main,
         sym::derive,
         sym::test,
@@ -2770,7 +2846,7 @@ fn doc_fake_variadic_is_allowed_self_ty(self_ty: &hir::Ty<'_>) -> bool {
             && let Some(&[hir::GenericArg::Type(ty)]) =
                 path.segments.last().map(|last| last.args().args)
         {
-            doc_fake_variadic_is_allowed_self_ty(ty)
+            doc_fake_variadic_is_allowed_self_ty(ty.as_unambig_ty())
         } else {
             false
         })

@@ -1115,6 +1115,8 @@ impl<T: ?Sized> Box<T> {
     /// memory problems. For example, a double-free may occur if the
     /// function is called twice on the same `NonNull` pointer.
     ///
+    /// The non-null pointer must point to a block of memory allocated by the global allocator.
+    ///
     /// The safety conditions are described in the [memory layout] section.
     ///
     /// # Examples
@@ -1170,7 +1172,7 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
     /// memory problems. For example, a double-free may occur if the
     /// function is called twice on the same raw pointer.
     ///
-    /// The raw pointer must point to a block of memory allocated by `alloc`
+    /// The raw pointer must point to a block of memory allocated by `alloc`.
     ///
     /// # Examples
     ///
@@ -1225,6 +1227,7 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
     /// memory problems. For example, a double-free may occur if the
     /// function is called twice on the same raw pointer.
     ///
+    /// The non-null pointer must point to a block of memory allocated by `alloc`.
     ///
     /// # Examples
     ///
@@ -2028,8 +2031,7 @@ impl<Args: Tuple, F: Fn<Args> + ?Sized, A: Allocator> Fn<Args> for Box<F, A> {
     }
 }
 
-#[cfg_attr(bootstrap, unstable(feature = "async_closure", issue = "62290"))]
-#[cfg_attr(not(bootstrap), stable(feature = "async_closure", since = "CURRENT_RUSTC_VERSION"))]
+#[stable(feature = "async_closure", since = "1.85.0")]
 impl<Args: Tuple, F: AsyncFnOnce<Args> + ?Sized, A: Allocator> AsyncFnOnce<Args> for Box<F, A> {
     type Output = F::Output;
     type CallOnceFuture = F::CallOnceFuture;
@@ -2039,8 +2041,7 @@ impl<Args: Tuple, F: AsyncFnOnce<Args> + ?Sized, A: Allocator> AsyncFnOnce<Args>
     }
 }
 
-#[cfg_attr(bootstrap, unstable(feature = "async_closure", issue = "62290"))]
-#[cfg_attr(not(bootstrap), stable(feature = "async_closure", since = "CURRENT_RUSTC_VERSION"))]
+#[stable(feature = "async_closure", since = "1.85.0")]
 impl<Args: Tuple, F: AsyncFnMut<Args> + ?Sized, A: Allocator> AsyncFnMut<Args> for Box<F, A> {
     type CallRefFuture<'a>
         = F::CallRefFuture<'a>
@@ -2052,8 +2053,7 @@ impl<Args: Tuple, F: AsyncFnMut<Args> + ?Sized, A: Allocator> AsyncFnMut<Args> f
     }
 }
 
-#[cfg_attr(bootstrap, unstable(feature = "async_closure", issue = "62290"))]
-#[cfg_attr(not(bootstrap), stable(feature = "async_closure", since = "CURRENT_RUSTC_VERSION"))]
+#[stable(feature = "async_closure", since = "1.85.0")]
 impl<Args: Tuple, F: AsyncFn<Args> + ?Sized, A: Allocator> AsyncFn<Args> for Box<F, A> {
     extern "rust-call" fn async_call(&self, args: Args) -> Self::CallRefFuture<'_> {
         F::async_call(self, args)

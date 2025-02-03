@@ -1,10 +1,8 @@
-use std::iter::FromIterator;
-
 #[cfg(feature = "master")]
 use gccjit::Context;
 use rustc_codegen_ssa::codegen_attrs::check_tied_features;
 use rustc_codegen_ssa::errors::TargetFeatureDisableOrEnable;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::unord::UnordSet;
 use rustc_session::Session;
 use rustc_target::target_features::RUSTC_SPECIFIC_FEATURES;
@@ -45,12 +43,6 @@ pub(crate) fn global_gcc_features(sess: &Session, diagnostics: bool) -> Vec<Stri
     let known_features = sess.target.rust_target_features();
     let mut featsmap = FxHashMap::default();
 
-    // Ensure that all ABI-required features are enabled, and the ABI-forbidden ones
-    // are disabled.
-    let abi_feature_constraints = sess.target.abi_required_features();
-    let abi_incompatible_set =
-        FxHashSet::from_iter(abi_feature_constraints.incompatible.iter().copied());
-
     // Compute implied features
     let mut all_rust_features = vec![];
     for feature in sess.opts.cg.target_feature.split(',') {
@@ -66,16 +58,14 @@ pub(crate) fn global_gcc_features(sess: &Session, diagnostics: bool) -> Vec<Stri
             // We do the equivalent above in `target_features_cfg`.
             // See <https://github.com/rust-lang/rust/issues/134792>.
             all_rust_features.push((false, feature));
-        } else if !feature.is_empty() {
-            if diagnostics {
-                sess.dcx().emit_warn(UnknownCTargetFeaturePrefix { feature });
-            }
+        } else if !feature.is_empty() && diagnostics {
+            sess.dcx().emit_warn(UnknownCTargetFeaturePrefix { feature });
         }
     }
     // Remove features that are meant for rustc, not codegen.
-    all_rust_features.retain(|(_, feature)| {
+    all_rust_features.retain(|&(_, feature)| {
         // Retain if it is not a rustc feature
-        !RUSTC_SPECIFIC_FEATURES.contains(feature)
+        !RUSTC_SPECIFIC_FEATURES.contains(&feature)
     });
 
     // Check feature validity.
@@ -103,7 +93,7 @@ pub(crate) fn global_gcc_features(sess: &Session, diagnostics: bool) -> Vec<Stri
                     };
                     sess.dcx().emit_warn(unknown_feature);
                 }
-                Some((_, stability, _)) => {
+                Some(&(_, stability, _)) => {
                     if let Err(reason) = stability.toggle_allowed() {
                         sess.dcx().emit_warn(ForbiddenCTargetFeature {
                             feature,
@@ -119,75 +109,31 @@ pub(crate) fn global_gcc_features(sess: &Session, diagnostics: bool) -> Vec<Stri
                 }
             }
 
-            // Ensure that the features we enable/disable are compatible with the ABI.
-            if enable {
-                if abi_incompatible_set.contains(feature) {
-                    sess.dcx().emit_warn(ForbiddenCTargetFeature {
-                        feature,
-                        enabled: "enabled",
-                        reason: "this feature is incompatible with the target ABI",
-                    });
-                }
-            } else {
-                // FIXME: we have to request implied features here since
-                // negative features do not handle implied features above.
-                for &required in abi_feature_constraints.required.iter() {
-                    let implied = sess.target.implied_target_features(std::iter::once(required));
-                    if implied.contains(feature) {
-                        sess.dcx().emit_warn(ForbiddenCTargetFeature {
-                            feature,
-                            enabled: "disabled",
-                            reason: "this feature is required by the target ABI",
-                        });
-                    }
-                }
-            }
-
             // FIXME(nagisa): figure out how to not allocate a full hashset here.
             featsmap.insert(feature, enable);
         }
     }
 
-    // To be sure the ABI-relevant features are all in the right state, we explicitly
-    // (un)set them here. This means if the target spec sets those features wrong,
-    // we will silently correct them rather than silently producing wrong code.
-    // (The target sanity check tries to catch this, but we can't know which features are
-    // enabled in GCC by default so we can't be fully sure about that check.)
-    // We add these at the beginning of the list so that `-Ctarget-features` can
-    // still override it... that's unsound, but more compatible with past behavior.
-    all_rust_features.splice(
-        0..0,
-        abi_feature_constraints
-            .required
-            .iter()
-            .map(|&f| (true, f))
-            .chain(abi_feature_constraints.incompatible.iter().map(|&f| (false, f))),
-    );
-
     // Translate this into GCC features.
-    let feats = all_rust_features
-        .iter()
-        .filter_map(|&(enable, feature)| {
+    let feats =
+        all_rust_features.iter().flat_map(|&(enable, feature)| {
             let enable_disable = if enable { '+' } else { '-' };
             // We run through `to_gcc_features` when
             // passing requests down to GCC. This means that all in-language
             // features also work on the command line instead of having two
             // different names when the GCC name and the Rust name differ.
-            Some(
-                to_gcc_features(sess, feature)
-                    .iter()
-                    .flat_map(|feat| to_gcc_features(sess, feat).into_iter())
-                    .map(|feature| {
-                        if enable_disable == '-' {
-                            format!("-{}", feature)
-                        } else {
-                            feature.to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .flatten();
+            to_gcc_features(sess, feature)
+                .iter()
+                .flat_map(|feat| to_gcc_features(sess, feat).into_iter())
+                .map(|feature| {
+                    if enable_disable == '-' {
+                        format!("-{}", feature)
+                    } else {
+                        feature.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
     features.extend(feats);
 
     if diagnostics {

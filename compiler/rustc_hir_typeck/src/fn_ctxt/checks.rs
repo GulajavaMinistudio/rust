@@ -4,8 +4,7 @@ use itertools::Itertools;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_errors::codes::*;
 use rustc_errors::{
-    Applicability, Diag, ErrorGuaranteed, MultiSpan, StashKey, a_or_an,
-    display_list_with_comma_and, pluralize,
+    Applicability, Diag, ErrorGuaranteed, MultiSpan, StashKey, a_or_an, listify, pluralize,
 };
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::DefId;
@@ -1147,6 +1146,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 Some(self.param_env.and(trace.values)),
                                 e,
                                 true,
+                                None,
                             );
                         }
                     }
@@ -1210,7 +1210,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             // - foo((), "current", 42u32, "next")
                             // + foo((), 42u32)
                             {
-                                prev_extra_idx.map_or(true, |prev_extra_idx| {
+                                prev_extra_idx.is_none_or(|prev_extra_idx| {
                                     prev_extra_idx + 1 == arg_idx.index()
                                 })
                             }
@@ -2460,16 +2460,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             spans.push_span_label(
                                 param.span,
                                 format!(
-                                    "{} {} to match the {} type of this parameter",
-                                    display_list_with_comma_and(&other_param_matched_names),
-                                    format!(
-                                        "need{}",
-                                        pluralize!(if other_param_matched_names.len() == 1 {
-                                            0
-                                        } else {
-                                            1
-                                        })
-                                    ),
+                                    "{} need{} to match the {} type of this parameter",
+                                    listify(&other_param_matched_names, |n| n.to_string())
+                                        .unwrap_or_default(),
+                                    pluralize!(if other_param_matched_names.len() == 1 {
+                                        0
+                                    } else {
+                                        1
+                                    }),
                                     matched_ty,
                                 ),
                             );
@@ -2479,7 +2477,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 format!(
                                     "this parameter needs to match the {} type of {}",
                                     matched_ty,
-                                    display_list_with_comma_and(&other_param_matched_names),
+                                    listify(&other_param_matched_names, |n| n.to_string())
+                                        .unwrap_or_default(),
                                 ),
                             );
                         }
@@ -2525,7 +2524,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             generic_param.span,
                             format!(
                                 "{} {} reference this parameter `{}`",
-                                display_list_with_comma_and(&param_idents_matching),
+                                listify(&param_idents_matching, |n| n.to_string())
+                                    .unwrap_or_default(),
                                 if param_idents_matching.len() == 2 { "both" } else { "all" },
                                 generic_param.name.ident().name,
                             ),

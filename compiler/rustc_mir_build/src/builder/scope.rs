@@ -785,6 +785,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     let local =
                         place.as_local().unwrap_or_else(|| bug!("projection in tail call args"));
 
+                    if !self.local_decls[local].ty.needs_drop(self.tcx, self.typing_env()) {
+                        return None;
+                    }
+
                     Some(DropData { source_info, local, kind: DropKind::Value })
                 }
                 Operand::Constant(_) => None,
@@ -795,6 +799,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             self.scopes.scopes.iter().rev().nth(1).unwrap().region_scope,
             DUMMY_SP,
         );
+        let typing_env = self.typing_env();
         let unwind_drops = &mut self.scopes.unwind_drops;
 
         // the innermost scope contains only the destructors for the tail call arguments
@@ -804,6 +809,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             for drop_data in scope.drops.iter().rev() {
                 let source_info = drop_data.source_info;
                 let local = drop_data.local;
+
+                if !self.local_decls[local].ty.needs_drop(self.tcx, typing_env) {
+                    continue;
+                }
 
                 match drop_data.kind {
                     DropKind::Value => {
@@ -1131,15 +1140,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
     /// Schedule emission of a backwards incompatible drop lint hint.
     /// Applicable only to temporary values for now.
+    #[instrument(level = "debug", skip(self))]
     pub(crate) fn schedule_backwards_incompatible_drop(
         &mut self,
         span: Span,
         region_scope: region::Scope,
         local: Local,
     ) {
-        if !self.local_decls[local].ty.has_significant_drop(self.tcx, self.typing_env()) {
-            return;
-        }
+        // Note that we are *not* gating BIDs here on whether they have significant destructor.
+        // We need to know all of them so that we can capture potential borrow-checking errors.
         for scope in self.scopes.scopes.iter_mut().rev() {
             // Since we are inserting linting MIR statement, we have to invalidate the caches
             scope.invalidate_cache();

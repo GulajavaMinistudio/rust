@@ -314,8 +314,6 @@ symbols! {
         Right,
         Rust,
         RustaceansAreAwesome,
-        RustcDecodable,
-        RustcEncodable,
         RwLock,
         RwLockReadGuard,
         RwLockWriteGuard,
@@ -379,6 +377,7 @@ symbols! {
         abi_avr_interrupt,
         abi_c_cmse_nonsecure_call,
         abi_efiapi,
+        abi_gpu_kernel,
         abi_msp430_interrupt,
         abi_ptx,
         abi_riscv_interrupt,
@@ -501,7 +500,6 @@ symbols! {
         augmented_assignments,
         auto_traits,
         autodiff,
-        autodiff_fallback,
         automatically_derived,
         avx,
         avx512_target_feature,
@@ -567,7 +565,6 @@ symbols! {
         cfg_accessible,
         cfg_attr,
         cfg_attr_multi,
-        cfg_autodiff_fallback,
         cfg_boolean_literals,
         cfg_doctest,
         cfg_emscripten_wasm_eh,
@@ -706,7 +703,6 @@ symbols! {
         coverage,
         coverage_attribute,
         cr,
-        crate_id,
         crate_in_paths,
         crate_local,
         crate_name,
@@ -1095,6 +1091,7 @@ symbols! {
         import,
         import_name_type,
         import_shadowing,
+        import_trait_associated_functions,
         imported_main,
         in_band_lifetimes,
         include,
@@ -1187,6 +1184,7 @@ symbols! {
         link_section,
         linkage,
         linker,
+        linker_messages,
         lint_reasons,
         literal,
         load,
@@ -1285,6 +1283,7 @@ symbols! {
         mir_drop,
         mir_field,
         mir_goto,
+        mir_len,
         mir_make_place,
         mir_move,
         mir_offset,
@@ -1386,7 +1385,6 @@ symbols! {
         no_mangle,
         no_sanitize,
         no_stack_check,
-        no_start,
         no_std,
         nomem,
         non_ascii_idents,
@@ -1474,6 +1472,7 @@ symbols! {
         panic_location,
         panic_misaligned_pointer_dereference,
         panic_nounwind,
+        panic_null_pointer_dereference,
         panic_runtime,
         panic_str_2015,
         panic_unwind,
@@ -1731,6 +1730,7 @@ symbols! {
         rustc_error,
         rustc_evaluate_where_clauses,
         rustc_expected_cgu_reuse,
+        rustc_force_inline,
         rustc_has_incoherent_inherent_impls,
         rustc_hidden_type_of_opaques,
         rustc_if_this_changed,
@@ -2150,7 +2150,6 @@ symbols! {
         unwrap,
         unwrap_binder,
         unwrap_or,
-        unwrap_unsafe_binder,
         use_extern_macros,
         use_nested_groups,
         used,
@@ -2181,8 +2180,10 @@ symbols! {
         vec_macro,
         vec_new,
         vec_pop,
+        vec_reserve,
         vec_with_capacity,
         vecdeque_iter,
+        vecdeque_reserve,
         vector,
         version,
         vfp2,
@@ -2239,6 +2240,10 @@ symbols! {
         zmm_reg,
     }
 }
+
+/// Symbols for crates that are part of the stable standard library: `std`, `core`, `alloc`, and
+/// `proc_macro`.
+pub const STDLIB_STABLE_CRATES: &[Symbol] = &[sym::std, sym::core, sym::alloc, sym::proc_macro];
 
 #[derive(Copy, Clone, Eq, HashStable_Generic, Encodable, Decodable)]
 pub struct Ident {

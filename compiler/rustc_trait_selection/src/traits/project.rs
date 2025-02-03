@@ -18,6 +18,7 @@ use rustc_middle::ty::visit::TypeVisitableExt;
 use rustc_middle::ty::{self, Term, Ty, TyCtxt, TypingMode, Upcast};
 use rustc_middle::{bug, span_bug};
 use rustc_span::sym;
+use rustc_type_ir::elaborate;
 use thin_vec::thin_vec;
 use tracing::{debug, instrument};
 
@@ -836,8 +837,7 @@ fn assemble_candidates_from_object_ty<'cx, 'tcx>(
     if tcx.is_impl_trait_in_trait(obligation.predicate.def_id)
         && let Some(out_trait_def_id) = data.principal_def_id()
         && let rpitit_trait_def_id = tcx.parent(obligation.predicate.def_id)
-        && tcx
-            .supertrait_def_ids(out_trait_def_id)
+        && elaborate::supertrait_def_ids(tcx, out_trait_def_id)
             .any(|trait_def_id| trait_def_id == rpitit_trait_def_id)
     {
         candidate_set.push_candidate(ProjectionCandidate::ObjectRpitit);
@@ -991,7 +991,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                     Err(ErrorGuaranteed { .. }) => true,
                 }
             }
-            ImplSource::Builtin(BuiltinImplSource::Misc, _) => {
+            ImplSource::Builtin(BuiltinImplSource::Misc | BuiltinImplSource::Trivial, _) => {
                 // While a builtin impl may be known to exist, the associated type may not yet
                 // be known. Any type with multiple potential associated types is therefore
                 // not eligible.
@@ -1148,7 +1148,9 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                         // If returned by `struct_tail` this is the empty tuple.
                         | ty::Tuple(..)
                         // Integers and floats are always Sized, and so have unit type metadata.
-                        | ty::Infer(ty::InferTy::IntVar(_) | ty::InferTy::FloatVar(..)) => true,
+                        | ty::Infer(ty::InferTy::IntVar(_) | ty::InferTy::FloatVar(..))
+                        // This happens if we reach the recursion limit when finding the struct tail.
+                        | ty::Error(..) => true,
 
                         // We normalize from `Wrapper<Tail>::Metadata` to `Tail::Metadata` if able.
                         // Otherwise, type parameters, opaques, and unnormalized projections have
@@ -1179,8 +1181,7 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                         | ty::Alias(..)
                         | ty::Bound(..)
                         | ty::Placeholder(..)
-                        | ty::Infer(..)
-                        | ty::Error(_) => {
+                        | ty::Infer(..) => {
                             if tail.has_infer_types() {
                                 candidate_set.mark_ambiguous();
                             }
@@ -1295,7 +1296,7 @@ fn confirm_select_candidate<'cx, 'tcx>(
 ) -> Progress<'tcx> {
     match impl_source {
         ImplSource::UserDefined(data) => confirm_impl_candidate(selcx, obligation, data),
-        ImplSource::Builtin(BuiltinImplSource::Misc, data) => {
+        ImplSource::Builtin(BuiltinImplSource::Misc | BuiltinImplSource::Trivial, data) => {
             let tcx = selcx.tcx();
             let trait_def_id = obligation.predicate.trait_def_id(tcx);
             if tcx.is_lang_item(trait_def_id, LangItem::Coroutine) {

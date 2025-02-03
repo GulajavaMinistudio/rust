@@ -199,6 +199,7 @@ impl<'a> State<'a> {
             Node::OpaqueTy(o) => self.print_opaque_ty(o),
             Node::Pat(a) => self.print_pat(a),
             Node::PatField(a) => self.print_patfield(a),
+            Node::PatExpr(a) => self.print_pat_expr(a),
             Node::Arm(a) => self.print_arm(a),
             Node::Infer(_) => self.word("_"),
             Node::PreciseCapturingNonLifetimeArg(param) => self.print_ident(param.ident),
@@ -401,7 +402,8 @@ impl<'a> State<'a> {
                 self.print_bounds("impl", bounds);
             }
             hir::TyKind::Path(ref qpath) => self.print_qpath(qpath, false),
-            hir::TyKind::TraitObject(bounds, lifetime, syntax) => {
+            hir::TyKind::TraitObject(bounds, lifetime) => {
+                let syntax = lifetime.tag();
                 match syntax {
                     ast::TraitObjectSyntax::Dyn => self.word_nbsp("dyn"),
                     ast::TraitObjectSyntax::DynStar => self.word_nbsp("dyn*"),
@@ -420,7 +422,7 @@ impl<'a> State<'a> {
                 if !lifetime.is_elided() {
                     self.nbsp();
                     self.word_space("+");
-                    self.print_lifetime(lifetime);
+                    self.print_lifetime(lifetime.pointer());
                 }
             }
             hir::TyKind::Array(ty, ref length) => {
@@ -440,7 +442,7 @@ impl<'a> State<'a> {
                 self.word("/*ERROR*/");
                 self.pclose();
             }
-            hir::TyKind::Infer | hir::TyKind::InferDelegation(..) => {
+            hir::TyKind::Infer(()) | hir::TyKind::InferDelegation(..) => {
                 self.word("_");
             }
             hir::TyKind::Pat(ty, pat) => {
@@ -1798,8 +1800,8 @@ impl<'a> State<'a> {
                         match generic_arg {
                             GenericArg::Lifetime(lt) if !elide_lifetimes => s.print_lifetime(lt),
                             GenericArg::Lifetime(_) => {}
-                            GenericArg::Type(ty) => s.print_type(ty),
-                            GenericArg::Const(ct) => s.print_const_arg(ct),
+                            GenericArg::Type(ty) => s.print_type(ty.as_unambig_ty()),
+                            GenericArg::Const(ct) => s.print_const_arg(ct.as_unambig_ct()),
                             GenericArg::Infer(_inf) => s.word("_"),
                         }
                     });
@@ -1849,6 +1851,19 @@ impl<'a> State<'a> {
         }
     }
 
+    fn print_pat_expr(&mut self, expr: &hir::PatExpr<'_>) {
+        match &expr.kind {
+            hir::PatExprKind::Lit { lit, negated } => {
+                if *negated {
+                    self.word("-");
+                }
+                self.print_literal(lit);
+            }
+            hir::PatExprKind::ConstBlock(c) => self.print_inline_const(c),
+            hir::PatExprKind::Path(qpath) => self.print_qpath(qpath, true),
+        }
+    }
+
     fn print_pat(&mut self, pat: &hir::Pat<'_>) {
         self.maybe_print_comment(pat.span.lo());
         self.ann.pre(self, AnnNode::Pat(pat));
@@ -1890,9 +1905,6 @@ impl<'a> State<'a> {
                     self.commasep(Inconsistent, elts, |s, p| s.print_pat(p));
                 }
                 self.pclose();
-            }
-            PatKind::Path(ref qpath) => {
-                self.print_qpath(qpath, true);
             }
             PatKind::Struct(ref qpath, fields, etc) => {
                 self.print_qpath(qpath, true);
@@ -1966,17 +1978,17 @@ impl<'a> State<'a> {
                     self.pclose();
                 }
             }
-            PatKind::Lit(e) => self.print_expr(e),
+            PatKind::Expr(e) => self.print_pat_expr(e),
             PatKind::Range(begin, end, end_kind) => {
                 if let Some(expr) = begin {
-                    self.print_expr(expr);
+                    self.print_pat_expr(expr);
                 }
                 match end_kind {
                     RangeEnd::Included => self.word("..."),
                     RangeEnd::Excluded => self.word(".."),
                 }
                 if let Some(expr) = end {
-                    self.print_expr(expr);
+                    self.print_pat_expr(expr);
                 }
             }
             PatKind::Slice(before, slice, after) => {
@@ -2136,7 +2148,7 @@ impl<'a> State<'a> {
             s.ann.nested(s, Nested::BodyParamPat(body_id, i));
             i += 1;
 
-            if let hir::TyKind::Infer = ty.kind {
+            if let hir::TyKind::Infer(()) = ty.kind {
                 // Print nothing.
             } else {
                 s.word(":");
@@ -2393,7 +2405,7 @@ impl<'a> State<'a> {
         self.print_fn(
             decl,
             hir::FnHeader {
-                safety,
+                safety: safety.into(),
                 abi,
                 constness: hir::Constness::NotConst,
                 asyncness: hir::IsAsync::NotAsync,
@@ -2409,12 +2421,20 @@ impl<'a> State<'a> {
     fn print_fn_header_info(&mut self, header: hir::FnHeader) {
         self.print_constness(header.constness);
 
+        let safety = match header.safety {
+            hir::HeaderSafety::SafeTargetFeatures => {
+                self.word_nbsp("#[target_feature]");
+                hir::Safety::Safe
+            }
+            hir::HeaderSafety::Normal(safety) => safety,
+        };
+
         match header.asyncness {
             hir::IsAsync::NotAsync => {}
             hir::IsAsync::Async(_) => self.word_nbsp("async"),
         }
 
-        self.print_safety(header.safety);
+        self.print_safety(safety);
 
         if header.abi != ExternAbi::Rust {
             self.word_nbsp("extern");
