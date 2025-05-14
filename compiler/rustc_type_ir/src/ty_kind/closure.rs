@@ -342,7 +342,7 @@ struct HasRegionsBoundAt {
 // FIXME: Could be optimized to not walk into components with no escaping bound vars.
 impl<I: Interner> TypeVisitor<I> for HasRegionsBoundAt {
     type Result = ControlFlow<()>;
-    fn visit_binder<T: TypeVisitable<I>>(&mut self, t: &ty::Binder<I, T>) -> Self::Result {
+    fn visit_binder<T: TypeFoldable<I>>(&mut self, t: &ty::Binder<I, T>) -> Self::Result {
         self.binder.shift_in(1);
         t.super_visit_with(self)?;
         self.binder.shift_out(1);
@@ -399,15 +399,18 @@ impl<I: Interner> CoroutineClosureSignature<I> {
         coroutine_def_id: I::DefId,
         tupled_upvars_ty: I::Ty,
     ) -> I::Ty {
-        let coroutine_args = ty::CoroutineArgs::new(cx, ty::CoroutineArgsParts {
-            parent_args,
-            kind_ty: coroutine_kind_ty,
-            resume_ty: self.resume_ty,
-            yield_ty: self.yield_ty,
-            return_ty: self.return_ty,
-            witness: self.interior,
-            tupled_upvars_ty,
-        });
+        let coroutine_args = ty::CoroutineArgs::new(
+            cx,
+            ty::CoroutineArgsParts {
+                parent_args,
+                kind_ty: coroutine_kind_ty,
+                resume_ty: self.resume_ty,
+                yield_ty: self.yield_ty,
+                return_ty: self.return_ty,
+                witness: self.interior,
+                tupled_upvars_ty,
+            },
+        );
 
         Ty::new_coroutine(cx, coroutine_def_id, coroutine_args.args)
     }

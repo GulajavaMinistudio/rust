@@ -32,7 +32,7 @@ declare_clippy_lint! {
     ///     None => 0,
     /// };
     /// ```
-    #[clippy::version = "1.83.0"]
+    #[clippy::version = "1.86.0"]
     pub UNNEEDED_STRUCT_PATTERN,
     style,
     "using struct pattern to match against unit variant"
@@ -51,7 +51,7 @@ impl LateLintPass<'_> for UnneededStructPattern {
             let variant = cx.tcx.adt_def(enum_did).variant_with_id(did);
 
             let has_only_fields_brackets = variant.ctor.is_some() && variant.fields.is_empty();
-            let non_exhaustive_activated = !variant.def_id.is_local() && variant.is_field_list_non_exhaustive();
+            let non_exhaustive_activated = variant.field_list_has_applicable_non_exhaustive();
             if !has_only_fields_brackets || non_exhaustive_activated {
                 return;
             }

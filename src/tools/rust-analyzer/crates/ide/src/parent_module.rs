@@ -1,7 +1,7 @@
-use hir::{db::DefDatabase, Semantics};
+use hir::{Semantics, db::DefDatabase};
 use ide_db::{
-    base_db::{CrateId, FileLoader},
     FileId, FilePosition, RootDatabase,
+    base_db::{Crate, RootQueryDb},
 };
 use itertools::Itertools;
 use syntax::{
@@ -15,13 +15,11 @@ use crate::NavigationTarget;
 //
 // Navigates to the parent module of the current module.
 //
-// |===
-// | Editor  | Action Name
+// | Editor  | Action Name |
+// |---------|-------------|
+// | VS Code | **rust-analyzer: Locate parent module** |
 //
-// | VS Code | **rust-analyzer: Locate parent module**
-// |===
-//
-// image::https://user-images.githubusercontent.com/48062697/113065580-04c21800-91b1-11eb-9a32-00086161c0bd.gif[]
+// ![Parent Module](https://user-images.githubusercontent.com/48062697/113065580-04c21800-91b1-11eb-9a32-00086161c0bd.gif)
 
 /// This returns `Vec` because a module may be included from several places.
 pub(crate) fn parent_module(db: &RootDatabase, position: FilePosition) -> Vec<NavigationTarget> {
@@ -55,11 +53,13 @@ pub(crate) fn parent_module(db: &RootDatabase, position: FilePosition) -> Vec<Na
 }
 
 /// This returns `Vec` because a module may be included from several places.
-pub(crate) fn crates_for(db: &RootDatabase, file_id: FileId) -> Vec<CrateId> {
+pub(crate) fn crates_for(db: &RootDatabase, file_id: FileId) -> Vec<Crate> {
     db.relevant_crates(file_id)
         .iter()
         .copied()
-        .filter(|&crate_id| db.crate_def_map(crate_id).modules_for_file(file_id).next().is_some())
+        .filter(|&crate_id| {
+            db.crate_def_map(crate_id).modules_for_file(db, file_id).next().is_some()
+        })
         .sorted()
         .collect()
 }

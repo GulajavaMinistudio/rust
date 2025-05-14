@@ -8,8 +8,7 @@
 //
 // A custom snippet can be defined by adding it to the `rust-analyzer.completion.snippets.custom` object respectively.
 //
-// [source,json]
-// ----
+// ```json
 // {
 //   "rust-analyzer.completion.snippets.custom": {
 //     "thread spawn": {
@@ -25,7 +24,7 @@
 //     }
 //   }
 // }
-// ----
+// ```
 //
 // In the example above:
 //
@@ -39,6 +38,7 @@
 // * `description` is an optional description of the snippet, if unset the snippet name will be used.
 //
 // * `requires` is an optional list of item paths that have to be resolvable in the current crate where the completion is rendered.
+
 // On failure of resolution the snippet won't be applicable, otherwise the snippet will insert an import for the items on insertion if
 // the items aren't yet in scope.
 //
@@ -55,8 +55,8 @@
 //
 // For the VSCode editor, rust-analyzer also ships with a small set of defaults which can be removed
 // by overwriting the settings object mentioned above, the defaults are:
-// [source,json]
-// ----
+//
+// ```json
 // {
 //     "Arc::new": {
 //         "postfix": "arc",
@@ -98,7 +98,7 @@
 //         "scope": "expr"
 //     }
 // }
-// ----
+// ````
 
 use hir::{ModPath, Name, Symbol};
 use ide_db::imports::import_assets::LocatedImport;
@@ -174,7 +174,7 @@ fn import_edits(ctx: &CompletionContext<'_>, requires: &[ModPath]) -> Option<Vec
             ctx.config.insert_use.prefix_kind,
             import_cfg,
         )?;
-        Some((path.len() > 1).then(|| LocatedImport::new(path.clone(), item, item)))
+        Some((path.len() > 1).then(|| LocatedImport::new_no_completion(path.clone(), item, item)))
     };
     let mut res = Vec::with_capacity(requires.len());
     for import in requires {

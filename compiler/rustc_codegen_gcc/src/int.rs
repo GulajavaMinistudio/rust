@@ -3,12 +3,11 @@
 //! 128-bit integers on 32-bit platforms and thus require to be handled manually.
 
 use gccjit::{BinaryOp, ComparisonOp, FunctionType, Location, RValue, ToRValue, Type, UnaryOp};
+use rustc_abi::{Endian, ExternAbi};
 use rustc_codegen_ssa::common::{IntPredicate, TypeKind};
 use rustc_codegen_ssa::traits::{BackendTypes, BaseTypeCodegenMethods, BuilderMethods, OverflowOp};
 use rustc_middle::ty::{self, Ty};
-use rustc_target::abi::Endian;
-use rustc_target::abi::call::{ArgAbi, ArgAttributes, Conv, FnAbi, PassMode};
-use rustc_target::spec;
+use rustc_target::callconv::{ArgAbi, ArgAttributes, Conv, FnAbi, PassMode};
 
 use crate::builder::{Builder, ToGccComp};
 use crate::common::{SignType, TypeReflection};
@@ -401,11 +400,11 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
             conv: Conv::C,
             can_unwind: false,
         };
-        fn_abi.adjust_for_foreign_abi(self.cx, spec::abi::Abi::C { unwind: false }).unwrap();
+        fn_abi.adjust_for_foreign_abi(self.cx, ExternAbi::C { unwind: false });
 
         let ret_indirect = matches!(fn_abi.ret.mode, PassMode::Indirect { .. });
 
-        let result = if ret_indirect {
+        let call = if ret_indirect {
             let res_value = self.current_func().new_local(self.location, res_type, "result_value");
             let res_addr = res_value.get_address(self.location);
             let res_param_type = res_type.make_pointer();
@@ -433,8 +432,17 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
             );
             self.context.new_call(self.location, func, &[lhs, rhs, overflow_addr])
         };
+        // NOTE: we must assign the result of the operation to a variable at this point to make
+        // sure it will be evaluated by libgccjit now.
+        // Otherwise, it will only be evaluated when the rvalue for the call is used somewhere else
+        // and overflow_value will not be initialized at the correct point in the program.
+        let result = self.current_func().new_local(self.location, res_type, "result");
+        self.block.add_assignment(self.location, result, call);
 
-        (result, self.context.new_cast(self.location, overflow_value, self.bool_type).to_rvalue())
+        (
+            result.to_rvalue(),
+            self.context.new_cast(self.location, overflow_value, self.bool_type).to_rvalue(),
+        )
     }
 
     pub fn gcc_icmp(
@@ -866,6 +874,7 @@ impl<'gcc, 'tcx> CodegenCx<'gcc, 'tcx> {
         let value_type = value.get_type();
         if self.is_native_int_type_or_bool(dest_typ) && self.is_native_int_type_or_bool(value_type)
         {
+            // TODO: use self.location.
             self.context.new_cast(None, value, dest_typ)
         } else if self.is_native_int_type_or_bool(dest_typ) {
             self.context.new_cast(None, self.low(value), dest_typ)
@@ -906,6 +915,7 @@ impl<'gcc, 'tcx> CodegenCx<'gcc, 'tcx> {
         let name_suffix = match self.type_kind(dest_typ) {
             TypeKind::Float => "tisf",
             TypeKind::Double => "tidf",
+            TypeKind::FP128 => "tixf",
             kind => panic!("cannot cast a non-native integer to type {:?}", kind),
         };
         let sign = if signed { "" } else { "un" };

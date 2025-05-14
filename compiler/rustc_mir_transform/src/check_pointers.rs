@@ -12,13 +12,13 @@ pub(crate) struct PointerCheck<'tcx> {
     pub(crate) assert_kind: Box<AssertKind<Operand<'tcx>>>,
 }
 
-/// Indicates whether we insert the checks for borrow places of a raw pointer.
-/// Concretely places with [MutatingUseContext::Borrow] or
-/// [NonMutatingUseContext::SharedBorrow].
+/// When checking for borrows of field projections (`&(*ptr).a`), we might want
+/// to check for the field type (type of `.a` in the example). This enum defines
+/// the variations (pass the pointer [Ty] or the field [Ty]).
 #[derive(Copy, Clone)]
-pub(crate) enum BorrowCheckMode {
-    IncludeBorrows,
-    ExcludeBorrows,
+pub(crate) enum BorrowedFieldProjectionMode {
+    FollowProjections,
+    NoFollowProjections,
 }
 
 /// Utility for adding a check for read/write on every sized, raw pointer.
@@ -27,8 +27,8 @@ pub(crate) enum BorrowCheckMode {
 /// new basic block directly before the pointer access. (Read/write accesses
 /// are determined by the `PlaceContext` of the MIR visitor.) Then calls
 /// `on_finding` to insert the actual logic for a pointer check (e.g. check for
-/// alignment). A check can choose to be inserted for (mutable) borrows of
-/// raw pointers via the `borrow_check_mode` parameter.
+/// alignment). A check can choose to follow borrows of field projections via
+/// the `field_projection_mode` parameter.
 ///
 /// This utility takes care of the right order of blocks, the only thing a
 /// caller must do in `on_finding` is:
@@ -40,17 +40,18 @@ pub(crate) enum BorrowCheckMode {
 ///   success and fail the check otherwise.
 /// This utility will insert a terminator block that asserts on the condition
 /// and panics on failure.
-pub(crate) fn check_pointers<'a, 'tcx, F>(
+pub(crate) fn check_pointers<'tcx, F>(
     tcx: TyCtxt<'tcx>,
     body: &mut Body<'tcx>,
-    excluded_pointees: &'a [Ty<'tcx>],
+    excluded_pointees: &[Ty<'tcx>],
     on_finding: F,
-    borrow_check_mode: BorrowCheckMode,
+    field_projection_mode: BorrowedFieldProjectionMode,
 ) where
     F: Fn(
         /* tcx: */ TyCtxt<'tcx>,
         /* pointer: */ Place<'tcx>,
         /* pointee_ty: */ Ty<'tcx>,
+        /* context: */ PlaceContext,
         /* local_decls: */ &mut IndexVec<Local, LocalDecl<'tcx>>,
         /* stmts: */ &mut Vec<Statement<'tcx>>,
         /* source_info: */ SourceInfo,
@@ -70,8 +71,7 @@ pub(crate) fn check_pointers<'a, 'tcx, F>(
     // statements/blocks after. Iterating or visiting the MIR in order would require updating
     // our current location after every insertion. By iterating backwards, we dodge this issue:
     // The only Locations that an insertion changes have already been handled.
-    for block in (0..basic_blocks.len()).rev() {
-        let block = block.into();
+    for block in basic_blocks.indices().rev() {
         for statement_index in (0..basic_blocks[block].statements.len()).rev() {
             let location = Location { block, statement_index };
             let statement = &basic_blocks[block].statements[statement_index];
@@ -82,11 +82,11 @@ pub(crate) fn check_pointers<'a, 'tcx, F>(
                 local_decls,
                 typing_env,
                 excluded_pointees,
-                borrow_check_mode,
+                field_projection_mode,
             );
             finder.visit_statement(statement, location);
 
-            for (local, ty) in finder.into_found_pointers() {
+            for (local, ty, context) in finder.into_found_pointers() {
                 debug!("Inserting check for {:?}", ty);
                 let new_block = split_block(basic_blocks, location);
 
@@ -98,6 +98,7 @@ pub(crate) fn check_pointers<'a, 'tcx, F>(
                     tcx,
                     local,
                     ty,
+                    context,
                     local_decls,
                     &mut block_data.statements,
                     source_info,
@@ -125,9 +126,9 @@ struct PointerFinder<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     local_decls: &'a mut LocalDecls<'tcx>,
     typing_env: ty::TypingEnv<'tcx>,
-    pointers: Vec<(Place<'tcx>, Ty<'tcx>)>,
+    pointers: Vec<(Place<'tcx>, Ty<'tcx>, PlaceContext)>,
     excluded_pointees: &'a [Ty<'tcx>],
-    borrow_check_mode: BorrowCheckMode,
+    field_projection_mode: BorrowedFieldProjectionMode,
 }
 
 impl<'a, 'tcx> PointerFinder<'a, 'tcx> {
@@ -136,7 +137,7 @@ impl<'a, 'tcx> PointerFinder<'a, 'tcx> {
         local_decls: &'a mut LocalDecls<'tcx>,
         typing_env: ty::TypingEnv<'tcx>,
         excluded_pointees: &'a [Ty<'tcx>],
-        borrow_check_mode: BorrowCheckMode,
+        field_projection_mode: BorrowedFieldProjectionMode,
     ) -> Self {
         PointerFinder {
             tcx,
@@ -144,11 +145,11 @@ impl<'a, 'tcx> PointerFinder<'a, 'tcx> {
             typing_env,
             excluded_pointees,
             pointers: Vec::new(),
-            borrow_check_mode,
+            field_projection_mode,
         }
     }
 
-    fn into_found_pointers(self) -> Vec<(Place<'tcx>, Ty<'tcx>)> {
+    fn into_found_pointers(self) -> Vec<(Place<'tcx>, Ty<'tcx>, PlaceContext)> {
         self.pointers
     }
 
@@ -162,15 +163,14 @@ impl<'a, 'tcx> PointerFinder<'a, 'tcx> {
                 MutatingUseContext::Store
                 | MutatingUseContext::Call
                 | MutatingUseContext::Yield
-                | MutatingUseContext::Drop,
+                | MutatingUseContext::Drop
+                | MutatingUseContext::Borrow,
             ) => true,
             PlaceContext::NonMutatingUse(
-                NonMutatingUseContext::Copy | NonMutatingUseContext::Move,
+                NonMutatingUseContext::Copy
+                | NonMutatingUseContext::Move
+                | NonMutatingUseContext::SharedBorrow,
             ) => true,
-            PlaceContext::MutatingUse(MutatingUseContext::Borrow)
-            | PlaceContext::NonMutatingUse(NonMutatingUseContext::SharedBorrow) => {
-                matches!(self.borrow_check_mode, BorrowCheckMode::IncludeBorrows)
-            }
             _ => false,
         }
     }
@@ -182,19 +182,29 @@ impl<'a, 'tcx> Visitor<'tcx> for PointerFinder<'a, 'tcx> {
             return;
         }
 
-        // Since Deref projections must come first and only once, the pointer for an indirect place
-        // is the Local that the Place is based on.
+        // Get the place and type we visit.
         let pointer = Place::from(place.local);
-        let pointer_ty = self.local_decls[place.local].ty;
+        let pointer_ty = pointer.ty(self.local_decls, self.tcx).ty;
 
         // We only want to check places based on raw pointers
-        if !pointer_ty.is_unsafe_ptr() {
+        let &ty::RawPtr(mut pointee_ty, _) = pointer_ty.kind() else {
             trace!("Indirect, but not based on an raw ptr, not checking {:?}", place);
             return;
+        };
+
+        // If we see a borrow of a field projection, we want to pass the field type to the
+        // check and not the pointee type.
+        if matches!(self.field_projection_mode, BorrowedFieldProjectionMode::FollowProjections)
+            && matches!(
+                context,
+                PlaceContext::NonMutatingUse(NonMutatingUseContext::SharedBorrow)
+                    | PlaceContext::MutatingUse(MutatingUseContext::Borrow)
+            )
+        {
+            // Naturally, the field type is type of the initial place we look at.
+            pointee_ty = place.ty(self.local_decls, self.tcx).ty;
         }
 
-        let pointee_ty =
-            pointer_ty.builtin_deref(true).expect("no builtin_deref for an raw pointer");
         // Ideally we'd support this in the future, but for now we are limited to sized types.
         if !pointee_ty.is_sized(self.tcx, self.typing_env) {
             trace!("Raw pointer, but pointee is not known to be sized: {:?}", pointer_ty);
@@ -206,12 +216,13 @@ impl<'a, 'tcx> Visitor<'tcx> for PointerFinder<'a, 'tcx> {
             ty::Array(ty, _) => *ty,
             _ => pointee_ty,
         };
+        // Check if we excluded this pointee type from the check.
         if self.excluded_pointees.contains(&element_ty) {
             trace!("Skipping pointer for type: {:?}", pointee_ty);
             return;
         }
 
-        self.pointers.push((pointer, pointee_ty));
+        self.pointers.push((pointer, pointee_ty, context));
 
         self.super_place(place, context, location);
     }

@@ -124,7 +124,7 @@ use rustc_target::spec::SymbolVisibility;
 use tracing::debug;
 
 use crate::collector::{self, MonoItemCollectionStrategy, UsageMap};
-use crate::errors::{CouldntDumpMonoStats, SymbolAlreadyDefined, UnknownCguCollectionMode};
+use crate::errors::{CouldntDumpMonoStats, SymbolAlreadyDefined};
 
 struct PartitioningCx<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -223,7 +223,7 @@ where
         match mono_item.instantiation_mode(cx.tcx) {
             InstantiationMode::GloballyShared { .. } => {}
             InstantiationMode::LocalCopy => {
-                if Some(mono_item.def_id()) != cx.tcx.lang_items().start_fn() {
+                if !cx.tcx.is_lang_item(mono_item.def_id(), LangItem::Start) {
                     continue;
                 }
             }
@@ -254,8 +254,9 @@ where
             always_export_generics,
         );
 
-        // We can't differentiate something that got inlined.
+        // We can't differentiate a function that got inlined.
         let autodiff_active = cfg!(llvm_enzyme)
+            && matches!(mono_item, MonoItem::Fn(_))
             && cx
                 .tcx
                 .codegen_fn_attrs(mono_item.def_id())
@@ -268,12 +269,8 @@ where
         }
         let size_estimate = mono_item.size_estimate(cx.tcx);
 
-        cgu.items_mut().insert(mono_item, MonoItemData {
-            inlined: false,
-            linkage,
-            visibility,
-            size_estimate,
-        });
+        cgu.items_mut()
+            .insert(mono_item, MonoItemData { inlined: false, linkage, visibility, size_estimate });
 
         // Get all inlined items that are reachable from `mono_item` without
         // going via another root item. This includes drop-glue, functions from
@@ -647,6 +644,8 @@ fn characteristic_def_id_of_mono_item<'tcx>(
                 | ty::InstanceKind::CloneShim(..)
                 | ty::InstanceKind::ThreadLocalShim(..)
                 | ty::InstanceKind::FnPtrAddrShim(..)
+                | ty::InstanceKind::FutureDropPollShim(..)
+                | ty::InstanceKind::AsyncDropGlue(..)
                 | ty::InstanceKind::AsyncDropGlueCtorShim(..) => return None,
             };
 
@@ -799,7 +798,9 @@ fn mono_item_visibility<'tcx>(
     let def_id = match instance.def {
         InstanceKind::Item(def_id)
         | InstanceKind::DropGlue(def_id, Some(_))
-        | InstanceKind::AsyncDropGlueCtorShim(def_id, Some(_)) => def_id,
+        | InstanceKind::FutureDropPollShim(def_id, _, _)
+        | InstanceKind::AsyncDropGlue(def_id, _)
+        | InstanceKind::AsyncDropGlueCtorShim(def_id, _) => def_id,
 
         // We match the visibility of statics here
         InstanceKind::ThreadLocalShim(def_id) => {
@@ -815,7 +816,6 @@ fn mono_item_visibility<'tcx>(
         | InstanceKind::ClosureOnceShim { .. }
         | InstanceKind::ConstructCoroutineInClosureShim { .. }
         | InstanceKind::DropGlue(..)
-        | InstanceKind::AsyncDropGlueCtorShim(..)
         | InstanceKind::CloneShim(..)
         | InstanceKind::FnPtrAddrShim(..) => return Visibility::Hidden,
     };
@@ -1127,27 +1127,10 @@ where
 }
 
 fn collect_and_partition_mono_items(tcx: TyCtxt<'_>, (): ()) -> MonoItemPartitions<'_> {
-    let collection_strategy = match tcx.sess.opts.unstable_opts.print_mono_items {
-        Some(ref s) => {
-            let mode = s.to_lowercase();
-            let mode = mode.trim();
-            if mode == "eager" {
-                MonoItemCollectionStrategy::Eager
-            } else {
-                if mode != "lazy" {
-                    tcx.dcx().emit_warn(UnknownCguCollectionMode { mode });
-                }
-
-                MonoItemCollectionStrategy::Lazy
-            }
-        }
-        None => {
-            if tcx.sess.link_dead_code() {
-                MonoItemCollectionStrategy::Eager
-            } else {
-                MonoItemCollectionStrategy::Lazy
-            }
-        }
+    let collection_strategy = if tcx.sess.link_dead_code() {
+        MonoItemCollectionStrategy::Eager
+    } else {
+        MonoItemCollectionStrategy::Lazy
     };
 
     let (items, usage_map) = collector::collect_crate_mono_items(tcx, collection_strategy);
@@ -1179,19 +1162,19 @@ fn collect_and_partition_mono_items(tcx: TyCtxt<'_>, (): ()) -> MonoItemPartitio
         }
     }
 
+    #[cfg(not(llvm_enzyme))]
+    let autodiff_mono_items: Vec<_> = vec![];
+    #[cfg(llvm_enzyme)]
+    let mut autodiff_mono_items: Vec<_> = vec![];
     let mono_items: DefIdSet = items
         .iter()
         .filter_map(|mono_item| match *mono_item {
-            MonoItem::Fn(ref instance) => Some(instance.def_id()),
+            MonoItem::Fn(ref instance) => {
+                #[cfg(llvm_enzyme)]
+                autodiff_mono_items.push((mono_item, instance));
+                Some(instance.def_id())
+            }
             MonoItem::Static(def_id) => Some(def_id),
-            _ => None,
-        })
-        .collect();
-
-    let autodiff_mono_items: Vec<_> = items
-        .iter()
-        .filter_map(|item| match *item {
-            MonoItem::Fn(ref instance) => Some((item, instance)),
             _ => None,
         })
         .collect();
@@ -1209,7 +1192,7 @@ fn collect_and_partition_mono_items(tcx: TyCtxt<'_>, (): ()) -> MonoItemPartitio
         }
     }
 
-    if tcx.sess.opts.unstable_opts.print_mono_items.is_some() {
+    if tcx.sess.opts.unstable_opts.print_mono_items {
         let mut item_to_cgus: UnordMap<_, Vec<_>> = Default::default();
 
         for cgu in codegen_units {
@@ -1238,9 +1221,7 @@ fn collect_and_partition_mono_items(tcx: TyCtxt<'_>, (): ()) -> MonoItemPartitio
                         Linkage::LinkOnceODR => "OnceODR",
                         Linkage::WeakAny => "WeakAny",
                         Linkage::WeakODR => "WeakODR",
-                        Linkage::Appending => "Appending",
                         Linkage::Internal => "Internal",
-                        Linkage::Private => "Private",
                         Linkage::ExternalWeak => "ExternalWeak",
                         Linkage::Common => "Common",
                     };
@@ -1275,7 +1256,7 @@ fn dump_mono_items_stats<'tcx>(
     output_directory: &Option<PathBuf>,
     crate_name: Symbol,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let output_directory = if let Some(ref directory) = output_directory {
+    let output_directory = if let Some(directory) = output_directory {
         fs::create_dir_all(directory)?;
         directory
     } else {

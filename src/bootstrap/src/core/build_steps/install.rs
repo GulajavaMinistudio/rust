@@ -53,7 +53,7 @@ fn is_dir_writable_for_user(dir: &Path) -> bool {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
                 false
             } else {
-                panic!("Failed the write access check for the current user. {}", e);
+                panic!("Failed the write access check for the current user. {e}");
             }
         }
     }
@@ -85,11 +85,11 @@ fn install_sh(
     } else {
         assert!(
             is_dir_writable_for_user(&prefix),
-            "User doesn't have write access on `install.prefix` path in the `config.toml`.",
+            "User doesn't have write access on `install.prefix` path in the `bootstrap.toml`.",
         );
         assert!(
             is_dir_writable_for_user(&sysconfdir),
-            "User doesn't have write access on `install.sysconfdir` path in `config.toml`."
+            "User doesn't have write access on `install.sysconfdir` path in `bootstrap.toml`."
         );
     }
 

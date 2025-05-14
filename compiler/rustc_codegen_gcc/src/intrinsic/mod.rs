@@ -7,6 +7,9 @@ use std::iter;
 #[cfg(feature = "master")]
 use gccjit::FunctionType;
 use gccjit::{ComparisonOp, Function, RValue, ToRValue, Type, UnaryOp};
+#[cfg(feature = "master")]
+use rustc_abi::ExternAbi;
+use rustc_abi::{BackendRepr, HasDataLayout};
 use rustc_codegen_ssa::MemFlags;
 use rustc_codegen_ssa::base::wants_msvc_seh;
 use rustc_codegen_ssa::common::IntPredicate;
@@ -25,11 +28,8 @@ use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt};
 use rustc_middle::ty::layout::{HasTypingEnv, LayoutOf};
 use rustc_middle::ty::{self, Instance, Ty};
 use rustc_span::{Span, Symbol, sym};
-use rustc_target::abi::HasDataLayout;
-use rustc_target::abi::call::{ArgAbi, FnAbi, PassMode};
+use rustc_target::callconv::{ArgAbi, FnAbi, PassMode};
 use rustc_target::spec::PanicStrategy;
-#[cfg(feature = "master")]
-use rustc_target::spec::abi::Abi;
 
 #[cfg(feature = "master")]
 use crate::abi::FnAbiGccExt;
@@ -74,24 +74,58 @@ fn get_simple_intrinsic<'gcc, 'tcx>(
         sym::fabsf64 => "fabs",
         sym::minnumf32 => "fminf",
         sym::minnumf64 => "fmin",
+        sym::minimumf32 => "fminimumf",
+        sym::minimumf64 => "fminimum",
+        sym::minimumf128 => {
+            // GCC doesn't have the intrinsic we want so we use the compiler-builtins one
+            // https://docs.rs/compiler_builtins/latest/compiler_builtins/math/full_availability/fn.fminimumf128.html
+            let f128_type = cx.type_f128();
+            return Some(cx.context.new_function(
+                None,
+                FunctionType::Extern,
+                f128_type,
+                &[
+                    cx.context.new_parameter(None, f128_type, "a"),
+                    cx.context.new_parameter(None, f128_type, "b"),
+                ],
+                "fminimumf128",
+                false,
+            ));
+        }
         sym::maxnumf32 => "fmaxf",
         sym::maxnumf64 => "fmax",
+        sym::maximumf32 => "fmaximumf",
+        sym::maximumf64 => "fmaximum",
+        sym::maximumf128 => {
+            // GCC doesn't have the intrinsic we want so we use the compiler-builtins one
+            // https://docs.rs/compiler_builtins/latest/compiler_builtins/math/full_availability/fn.fmaximumf128.html
+            let f128_type = cx.type_f128();
+            return Some(cx.context.new_function(
+                None,
+                FunctionType::Extern,
+                f128_type,
+                &[
+                    cx.context.new_parameter(None, f128_type, "a"),
+                    cx.context.new_parameter(None, f128_type, "b"),
+                ],
+                "fmaximumf128",
+                false,
+            ));
+        }
         sym::copysignf32 => "copysignf",
         sym::copysignf64 => "copysign",
+        sym::copysignf128 => "copysignl",
         sym::floorf32 => "floorf",
         sym::floorf64 => "floor",
         sym::ceilf32 => "ceilf",
         sym::ceilf64 => "ceil",
         sym::truncf32 => "truncf",
         sym::truncf64 => "trunc",
-        sym::rintf32 => "rintf",
-        sym::rintf64 => "rint",
-        sym::nearbyintf32 => "nearbyintf",
-        sym::nearbyintf64 => "nearbyint",
+        // We match the LLVM backend and lower this to `rint`.
+        sym::round_ties_even_f32 => "rintf",
+        sym::round_ties_even_f64 => "rint",
         sym::roundf32 => "roundf",
         sym::roundf64 => "round",
-        sym::roundevenf32 => "roundevenf",
-        sym::roundevenf64 => "roundeven",
         sym::abort => "abort",
         _ => return None,
     };
@@ -181,14 +215,19 @@ impl<'a, 'gcc, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'gcc, 'tc
             sym::volatile_load | sym::unaligned_volatile_load => {
                 let tp_ty = fn_args.type_at(0);
                 let ptr = args[0].immediate();
+                let layout = self.layout_of(tp_ty);
                 let load = if let PassMode::Cast { cast: ref ty, pad_i32: _ } = fn_abi.ret.mode {
                     let gcc_ty = ty.gcc_type(self);
                     self.volatile_load(gcc_ty, ptr)
                 } else {
-                    self.volatile_load(self.layout_of(tp_ty).gcc_type(self), ptr)
+                    self.volatile_load(layout.gcc_type(self), ptr)
                 };
                 // TODO(antoyo): set alignment.
-                self.to_immediate(load, self.layout_of(tp_ty))
+                if let BackendRepr::Scalar(scalar) = layout.backend_repr {
+                    self.to_immediate_scalar(load, scalar)
+                } else {
+                    load
+                }
             }
             sym::volatile_store => {
                 let dst = args[0].deref(self.cx());
@@ -310,7 +349,7 @@ impl<'a, 'gcc, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'gcc, 'tc
                 let layout = self.layout_of(tp_ty).layout;
                 let _use_integer_compare = match layout.backend_repr() {
                     Scalar(_) | ScalarPair(_, _) => true,
-                    Uninhabited | Vector { .. } => false,
+                    SimdVector { .. } => false,
                     Memory { .. } => {
                         // For rusty ABIs, small aggregates are actually passed
                         // as `RegKind::Integer` (see `FnAbi::adjust_for_abi`),
@@ -396,7 +435,7 @@ impl<'a, 'gcc, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'gcc, 'tc
             }
 
             // Fall back to default body
-            _ => return Err(Instance::new(instance.def_id(), instance.args)),
+            _ => return Err(Instance::new_raw(instance.def_id(), instance.args)),
         };
 
         if !fn_abi.ret.is_ignore() {
@@ -1238,7 +1277,7 @@ fn get_rust_try_fn<'a, 'gcc, 'tcx>(
             tcx.types.unit,
             false,
             rustc_hir::Safety::Unsafe,
-            Abi::Rust,
+            ExternAbi::Rust,
         )),
     );
     // `unsafe fn(*mut i8, *mut i8) -> ()`
@@ -1249,7 +1288,7 @@ fn get_rust_try_fn<'a, 'gcc, 'tcx>(
             tcx.types.unit,
             false,
             rustc_hir::Safety::Unsafe,
-            Abi::Rust,
+            ExternAbi::Rust,
         )),
     );
     // `unsafe fn(unsafe fn(*mut i8) -> (), *mut i8, unsafe fn(*mut i8, *mut i8) -> ()) -> i32`
@@ -1258,7 +1297,7 @@ fn get_rust_try_fn<'a, 'gcc, 'tcx>(
         tcx.types.i32,
         false,
         rustc_hir::Safety::Unsafe,
-        Abi::Rust,
+        ExternAbi::Rust,
     ));
     let rust_try = gen_fn(cx, "__rust_try", rust_fn_sig, codegen);
     cx.rust_try_fn.set(Some(rust_try));

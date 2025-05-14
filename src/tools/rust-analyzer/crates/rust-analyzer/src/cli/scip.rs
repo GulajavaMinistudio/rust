@@ -8,7 +8,7 @@ use ide::{
     TokenStaticData, VendoredLibrariesConfig,
 };
 use ide_db::LineIndexDatabase;
-use load_cargo::{load_workspace_at, LoadCargoConfig, ProcMacroServerChoice};
+use load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use rustc_hash::{FxHashMap, FxHashSet};
 use scip::types::{self as scip_types, SymbolInformation};
 use tracing::error;
@@ -128,7 +128,7 @@ impl flags::Scip {
             };
 
         // Generates symbols from token monikers.
-        let mut symbol_generator = SymbolGenerator::new();
+        let mut symbol_generator = SymbolGenerator::default();
 
         for StaticIndexedFile { file_id, tokens, .. } in si.files {
             symbol_generator.clear_document_local_state();
@@ -139,45 +139,42 @@ impl flags::Scip {
             let mut occurrences = Vec::new();
             let mut symbols = Vec::new();
 
-            tokens.into_iter().for_each(|(text_range, id)| {
+            for (text_range, id) in tokens.into_iter() {
                 let token = si.tokens.get(id).unwrap();
 
-                let (symbol, enclosing_symbol, is_inherent_impl) =
-                    if let Some(TokenSymbols { symbol, enclosing_symbol, is_inherent_impl }) =
-                        symbol_generator.token_symbols(id, token)
-                    {
-                        (symbol, enclosing_symbol, is_inherent_impl)
-                    } else {
-                        ("".to_owned(), None, false)
-                    };
+                let Some(TokenSymbols { symbol, enclosing_symbol, is_inherent_impl }) =
+                    symbol_generator.token_symbols(id, token)
+                else {
+                    // token did not have a moniker, so there is no reasonable occurrence to emit
+                    // see ide::moniker::def_to_moniker
+                    continue;
+                };
 
-                if !symbol.is_empty() {
-                    let is_defined_in_this_document = match token.definition {
-                        Some(def) => def.file_id == file_id,
-                        _ => false,
-                    };
-                    if is_defined_in_this_document {
-                        if token_ids_emitted.insert(id) {
-                            // token_ids_emitted does deduplication. This checks that this results
-                            // in unique emitted symbols, as otherwise references are ambiguous.
-                            let should_emit = record_error_if_symbol_already_used(
+                let is_defined_in_this_document = match token.definition {
+                    Some(def) => def.file_id == file_id,
+                    _ => false,
+                };
+                if is_defined_in_this_document {
+                    if token_ids_emitted.insert(id) {
+                        // token_ids_emitted does deduplication. This checks that this results
+                        // in unique emitted symbols, as otherwise references are ambiguous.
+                        let should_emit = record_error_if_symbol_already_used(
+                            symbol.clone(),
+                            is_inherent_impl,
+                            relative_path.as_str(),
+                            &line_index,
+                            text_range,
+                        );
+                        if should_emit {
+                            symbols.push(compute_symbol_info(
                                 symbol.clone(),
-                                is_inherent_impl,
-                                relative_path.as_str(),
-                                &line_index,
-                                text_range,
-                            );
-                            if should_emit {
-                                symbols.push(compute_symbol_info(
-                                    symbol.clone(),
-                                    enclosing_symbol,
-                                    token,
-                                ));
-                            }
+                                enclosing_symbol,
+                                token,
+                            ));
                         }
-                    } else {
-                        token_ids_referenced.insert(id);
                     }
+                } else {
+                    token_ids_referenced.insert(id);
                 }
 
                 // If the range of the def and the range of the token are the same, this must be the definition.
@@ -202,7 +199,7 @@ impl flags::Scip {
                     special_fields: Default::default(),
                     enclosing_range: Vec::new(),
                 });
-            });
+            }
 
             if occurrences.is_empty() {
                 continue;
@@ -268,10 +265,10 @@ impl flags::Scip {
         };
 
         if !duplicate_symbol_errors.is_empty() {
-            eprintln!("{}", DUPLICATE_SYMBOLS_MESSAGE);
+            eprintln!("{DUPLICATE_SYMBOLS_MESSAGE}");
             for (source_location, symbol) in duplicate_symbol_errors {
-                eprintln!("{}", source_location);
-                eprintln!("  Duplicate symbol: {}", symbol);
+                eprintln!("{source_location}");
+                eprintln!("  Duplicate symbol: {symbol}");
                 eprintln!();
             }
         }
@@ -420,16 +417,13 @@ struct TokenSymbols {
     is_inherent_impl: bool,
 }
 
+#[derive(Default)]
 struct SymbolGenerator {
     token_to_symbols: FxHashMap<TokenId, Option<TokenSymbols>>,
     local_count: usize,
 }
 
 impl SymbolGenerator {
-    fn new() -> Self {
-        SymbolGenerator { token_to_symbols: FxHashMap::default(), local_count: 0 }
-    }
-
     fn clear_document_local_state(&mut self) {
         self.local_count = 0;
     }
@@ -444,14 +438,14 @@ impl SymbolGenerator {
                     MonikerResult::Moniker(moniker) => TokenSymbols {
                         symbol: scip::symbol::format_symbol(moniker_to_symbol(moniker)),
                         enclosing_symbol: None,
-                        is_inherent_impl: moniker
-                            .identifier
-                            .description
-                            .get(moniker.identifier.description.len() - 2)
-                            .is_some_and(|descriptor| {
+                        is_inherent_impl: match &moniker.identifier.description[..] {
+                            // inherent impls are represented as impl#[SelfType]
+                            [.., descriptor, _] => {
                                 descriptor.desc == MonikerDescriptorKind::Type
                                     && descriptor.name == "impl"
-                            }),
+                            }
+                            _ => false,
+                        },
                     },
                     MonikerResult::Local { enclosing_moniker } => {
                         let local_symbol = scip::types::Symbol::new_local(local_count);
@@ -520,12 +514,13 @@ mod test {
 
     fn position(#[rust_analyzer::rust_fixture] ra_fixture: &str) -> (AnalysisHost, FilePosition) {
         let mut host = AnalysisHost::default();
-        let change_fixture = ChangeFixture::parse(ra_fixture);
+        let change_fixture = ChangeFixture::parse(host.raw_database(), ra_fixture);
         host.raw_database_mut().apply_change(change_fixture.change);
         let (file_id, range_or_offset) =
             change_fixture.file_position.expect("expected a marker ()");
         let offset = range_or_offset.expect_offset();
-        (host, FilePosition { file_id: file_id.into(), offset })
+        let position = FilePosition { file_id: file_id.file_id(host.raw_database()), offset };
+        (host, position)
     }
 
     /// If expected == "", then assert that there are no symbols (this is basically local symbol)
@@ -549,7 +544,9 @@ mod test {
                 continue;
             }
             for &(range, id) in &file.tokens {
-                if range.contains(offset - TextSize::from(1)) {
+                // check if cursor is within token, ignoring token for the module defined by the file (whose range is the whole file)
+                if range.start() != TextSize::from(0) && range.contains(offset - TextSize::from(1))
+                {
                     let token = si.tokens.get(id).unwrap();
                     found_symbol = match token.moniker.as_ref() {
                         None => None,
@@ -873,7 +870,7 @@ pub mod example_mod {
         let s = "/// foo\nfn bar() {}";
 
         let mut host = AnalysisHost::default();
-        let change_fixture = ChangeFixture::parse(s);
+        let change_fixture = ChangeFixture::parse(host.raw_database(), s);
         host.raw_database_mut().apply_change(change_fixture.change);
 
         let analysis = host.analysis();
@@ -885,7 +882,7 @@ pub mod example_mod {
         );
 
         let file = si.files.first().unwrap();
-        let (_, token_id) = file.tokens.first().unwrap();
+        let (_, token_id) = file.tokens.get(1).unwrap(); // first token is file module, second is `bar`
         let token = si.tokens.get(*token_id).unwrap();
 
         assert_eq!(token.documentation.as_ref().map(|d| d.as_str()), Some("foo"));

@@ -8,7 +8,7 @@ use rustc_middle::ty::adjustment::{
     PointerCoercion,
 };
 use rustc_middle::ty::{self, Ty};
-use rustc_span::{Ident, Span, sym};
+use rustc_span::{Span, sym};
 use tracing::debug;
 use {rustc_ast as ast, rustc_hir as hir};
 
@@ -30,10 +30,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let ok = self.try_overloaded_deref(expr.span, oprnd_ty)?;
         let method = self.register_infer_ok_obligations(ok);
         if let ty::Ref(_, _, hir::Mutability::Not) = method.sig.inputs()[0].kind() {
-            self.apply_adjustments(oprnd_expr, vec![Adjustment {
-                kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Not)),
-                target: method.sig.inputs()[0],
-            }]);
+            self.apply_adjustments(
+                oprnd_expr,
+                vec![Adjustment {
+                    kind: Adjust::Borrow(AutoBorrow::Ref(AutoBorrowMutability::Not)),
+                    target: method.sig.inputs()[0],
+                }],
+            );
         } else {
             span_bug!(expr.span, "input to deref is not a ref?");
         }
@@ -208,13 +211,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return None;
         };
 
-        self.lookup_method_in_trait(
-            self.misc(span),
-            Ident::with_dummy_span(imm_op),
-            imm_tr,
-            base_ty,
-            opt_rhs_ty,
-        )
+        self.lookup_method_for_operator(self.misc(span), imm_op, imm_tr, base_ty, opt_rhs_ty)
     }
 
     fn try_mutable_overloaded_place_op(
@@ -234,13 +231,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return None;
         };
 
-        self.lookup_method_in_trait(
-            self.misc(span),
-            Ident::with_dummy_span(mut_op),
-            mut_tr,
-            base_ty,
-            opt_rhs_ty,
-        )
+        self.lookup_method_for_operator(self.misc(span), mut_op, mut_tr, base_ty, opt_rhs_ty)
     }
 
     /// Convert auto-derefs, indices, etc of an expression from `Deref` and `Index`

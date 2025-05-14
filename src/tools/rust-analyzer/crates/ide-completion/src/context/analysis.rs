@@ -2,24 +2,28 @@
 use std::iter;
 
 use hir::{ExpandResult, Semantics, Type, TypeInfo, Variant};
-use ide_db::{active_parameter::ActiveParameter, RootDatabase};
+use ide_db::{RootDatabase, active_parameter::ActiveParameter};
 use itertools::Either;
 use syntax::{
-    algo::{self, ancestors_at_offset, find_node_at_offset, non_trivia_sibling},
+    AstNode, AstToken, Direction, NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken,
+    T, TextRange, TextSize,
+    algo::{
+        self, ancestors_at_offset, find_node_at_offset, non_trivia_sibling,
+        previous_non_trivia_token,
+    },
     ast::{
         self, AttrKind, HasArgList, HasGenericArgs, HasGenericParams, HasLoopBody, HasName,
         NameOrNameRef,
     },
-    match_ast, AstNode, AstToken, Direction, NodeOrToken, SyntaxElement, SyntaxKind, SyntaxNode,
-    SyntaxToken, TextRange, TextSize, T,
+    match_ast,
 };
 
 use crate::context::{
-    AttrCtx, BreakableKind, CompletionAnalysis, DotAccess, DotAccessExprCtx, DotAccessKind,
-    ItemListKind, LifetimeContext, LifetimeKind, NameContext, NameKind, NameRefContext,
-    NameRefKind, ParamContext, ParamKind, PathCompletionCtx, PathExprCtx, PathKind, PatternContext,
-    PatternRefutability, Qualified, QualifierCtx, TypeAscriptionTarget, TypeLocation,
-    COMPLETION_MARKER,
+    AttrCtx, BreakableKind, COMPLETION_MARKER, CompletionAnalysis, DotAccess, DotAccessExprCtx,
+    DotAccessKind, ItemListKind, LifetimeContext, LifetimeKind, NameContext, NameKind,
+    NameRefContext, NameRefKind, ParamContext, ParamKind, PathCompletionCtx, PathExprCtx, PathKind,
+    PatternContext, PatternRefutability, Qualified, QualifierCtx, TypeAscriptionTarget,
+    TypeLocation,
 };
 
 #[derive(Debug)]
@@ -59,7 +63,7 @@ pub(super) fn expand_and_analyze(
     // make the offset point to the start of the original token, as that is what the
     // intermediate offsets calculated in expansion always points to
     let offset = offset - relative_offset;
-    let expansion = expand(
+    let expansion = expand_maybe_stop(
         sema,
         original_file.clone(),
         speculative_file.clone(),
@@ -97,7 +101,8 @@ fn token_at_offset_ignore_whitespace(file: &SyntaxNode, offset: TextSize) -> Opt
 /// We do this by recursively expanding all macros and picking the best possible match. We cannot just
 /// choose the first expansion each time because macros can expand to something that does not include
 /// our completion marker, e.g.:
-/// ```
+///
+/// ```ignore
 /// macro_rules! helper { ($v:ident) => {} }
 /// macro_rules! my_macro {
 ///     ($v:ident) => {
@@ -106,7 +111,7 @@ fn token_at_offset_ignore_whitespace(file: &SyntaxNode, offset: TextSize) -> Opt
 ///     };
 /// }
 ///
-/// my_macro!(complete_me_here)
+/// my_macro!(complete_me_here);
 /// ```
 /// If we would expand the first thing we encounter only (which in fact this method used to do), we would
 /// be unable to complete here, because we would be walking directly into the void. So we instead try
@@ -118,6 +123,47 @@ fn token_at_offset_ignore_whitespace(file: &SyntaxNode, offset: TextSize) -> Opt
 /// that we check, we subtract `COMPLETION_MARKER.len()`. This may not be accurate because proc macros
 /// can insert the text of the completion marker in other places while removing the span, but this is
 /// the best we can do.
+fn expand_maybe_stop(
+    sema: &Semantics<'_, RootDatabase>,
+    original_file: SyntaxNode,
+    speculative_file: SyntaxNode,
+    original_offset: TextSize,
+    fake_ident_token: SyntaxToken,
+    relative_offset: TextSize,
+) -> Option<ExpansionResult> {
+    if let result @ Some(_) = expand(
+        sema,
+        original_file.clone(),
+        speculative_file.clone(),
+        original_offset,
+        fake_ident_token.clone(),
+        relative_offset,
+    ) {
+        return result;
+    }
+
+    // This needs to come after the recursive call, because our "inside macro" detection is subtly wrong
+    // with regard to attribute macros named `test` that are not std's test. So hopefully we will expand
+    // them successfully above and be able to analyze.
+    // Left biased since there may already be an identifier token there, and we appended to it.
+    if !sema.might_be_inside_macro_call(&fake_ident_token)
+        && token_at_offset_ignore_whitespace(&original_file, original_offset + relative_offset)
+            .is_some_and(|original_token| !sema.might_be_inside_macro_call(&original_token))
+    {
+        // Recursion base case.
+        Some(ExpansionResult {
+            original_file,
+            speculative_file,
+            original_offset,
+            speculative_offset: fake_ident_token.text_range().start(),
+            fake_ident_token,
+            derive_ctx: None,
+        })
+    } else {
+        None
+    }
+}
+
 fn expand(
     sema: &Semantics<'_, RootDatabase>,
     original_file: SyntaxNode,
@@ -127,22 +173,6 @@ fn expand(
     relative_offset: TextSize,
 ) -> Option<ExpansionResult> {
     let _p = tracing::info_span!("CompletionContext::expand").entered();
-
-    // Left biased since there may already be an identifier token there, and we appended to it.
-    if !sema.might_be_inside_macro_call(&fake_ident_token)
-        && token_at_offset_ignore_whitespace(&original_file, original_offset + relative_offset)
-            .is_some_and(|original_token| !sema.might_be_inside_macro_call(&original_token))
-    {
-        // Recursion base case.
-        return Some(ExpansionResult {
-            original_file,
-            speculative_file,
-            original_offset,
-            speculative_offset: fake_ident_token.text_range().start(),
-            fake_ident_token,
-            derive_ctx: None,
-        });
-    }
 
     let parent_item =
         |item: &ast::Item| item.syntax().ancestors().skip(1).find_map(ast::Item::cast);
@@ -197,7 +227,7 @@ fn expand(
                             // stop here to prevent problems from happening
                             return None;
                         }
-                        let result = expand(
+                        let result = expand_maybe_stop(
                             sema,
                             actual_expansion.clone(),
                             fake_expansion.clone(),
@@ -317,7 +347,7 @@ fn expand(
                                     // stop here to prevent problems from happening
                                     return None;
                                 }
-                                let result = expand(
+                                let result = expand_maybe_stop(
                                     sema,
                                     actual_expansion.clone(),
                                     fake_expansion.clone(),
@@ -357,11 +387,7 @@ fn expand(
 
     match (
         sema.expand_macro_call(&actual_macro_call),
-        sema.speculative_expand_macro_call(
-            &actual_macro_call,
-            &speculative_args,
-            fake_ident_token.clone(),
-        ),
+        sema.speculative_expand_macro_call(&actual_macro_call, &speculative_args, fake_ident_token),
     ) {
         // successful expansions
         (Some(actual_expansion), Some((fake_expansion, fake_mapped_tokens))) => {
@@ -386,7 +412,7 @@ fn expand(
                         // stop here to prevent problems from happening
                         return None;
                     }
-                    let result = expand(
+                    let result = expand_maybe_stop(
                         sema,
                         actual_expansion.clone(),
                         fake_expansion.clone(),
@@ -631,9 +657,8 @@ fn expected_type_and_name(
                             ))
                         } else {
                             cov_mark::hit!(expected_type_struct_field_without_leading_char);
-                            let expr_field = token.prev_sibling_or_token()?
-                                .into_node()
-                                .and_then(ast::RecordExprField::cast)?;
+                            cov_mark::hit!(expected_type_struct_field_followed_by_comma);
+                            let expr_field = previous_non_trivia_token(token.clone())?.parent().and_then(ast::RecordExprField::cast)?;
                             let (_, _, ty) = sema.resolve_record_field(&expr_field)?;
                             Some((
                                 Some(ty),
@@ -651,7 +676,6 @@ fn expected_type_and_name(
                             .or_else(|| sema.type_of_expr(&expr).map(TypeInfo::original));
                         (ty, field_name)
                     } else {
-                        cov_mark::hit!(expected_type_struct_field_followed_by_comma);
                         (field_ty, field_name)
                     }
                 },
@@ -1784,22 +1808,6 @@ fn is_in_block(node: &SyntaxNode) -> bool {
     node.parent()
         .map(|node| ast::ExprStmt::can_cast(node.kind()) || ast::StmtList::can_cast(node.kind()))
         .unwrap_or(false)
-}
-
-fn previous_non_trivia_token(e: impl Into<SyntaxElement>) -> Option<SyntaxToken> {
-    let mut token = match e.into() {
-        SyntaxElement::Node(n) => n.first_token()?,
-        SyntaxElement::Token(t) => t,
-    }
-    .prev_token();
-    while let Some(inner) = token {
-        if !inner.kind().is_trivia() {
-            return Some(inner);
-        } else {
-            token = inner.prev_token();
-        }
-    }
-    None
 }
 
 fn next_non_trivia_token(e: impl Into<SyntaxElement>) -> Option<SyntaxToken> {

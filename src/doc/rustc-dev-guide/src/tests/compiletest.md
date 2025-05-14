@@ -74,8 +74,7 @@ The following test suites are available, with links for more information:
 
 ### General purpose test suite
 
-[`run-make`](#run-make-tests) are general purpose tests using Rust programs (or
-Makefiles (legacy)).
+[`run-make`](#run-make-tests) are general purpose tests using Rust programs.
 
 ### Rustdoc test suites
 
@@ -326,12 +325,8 @@ The tests in [`tests/codegen-units`] test the
 [monomorphization](../backend/monomorph.md) collector and CGU partitioning.
 
 These tests work by running `rustc` with a flag to print the result of the
-monomorphization collection pass, and then special annotations in the file are
-used to compare against that.
-
-Each test should be annotated with the `//@
-compile-flags:-Zprint-mono-items=VAL` directive with the appropriate `VAL` to
-instruct `rustc` to print the monomorphization information.
+monomorphization collection pass, i.e., `-Zprint-mono-items`, and then special
+annotations in the file are used to compare against that.
 
 Then, the test should be annotated with comments of the form `//~ MONO_ITEM
 name` where `name` is the monomorphized string printed by rustc like `fn <u32 as
@@ -396,14 +391,6 @@ your test, causing separate files to be generated for 32bit and 64bit systems.
 
 ### `run-make` tests
 
-> **Note on phasing out `Makefile`s**
-> 
-> We are planning to migrate all existing Makefile-based `run-make` tests
-> to Rust programs. You should not be adding new Makefile-based `run-make`
-> tests.
->
-> See <https://github.com/rust-lang/rust/issues/121876>.
-
 The tests in [`tests/run-make`] are general-purpose tests using Rust *recipes*,
 which are small programs (`rmake.rs`) allowing arbitrary Rust code such as
 `rustc` invocations, and is supported by a [`run_make_support`] library. Using
@@ -424,10 +411,9 @@ Compiletest directives like `//@ only-<target>` or `//@ ignore-<target>` are
 supported in `rmake.rs`, like in UI tests. However, revisions or building
 auxiliary via directives are not currently supported.
 
-Two `run-make` tests are ported over to Rust recipes as examples:
-
-- <https://github.com/rust-lang/rust/tree/master/tests/run-make/CURRENT_RUSTC_VERSION>
-- <https://github.com/rust-lang/rust/tree/master/tests/run-make/a-b-a-linker-guard>
+`rmake.rs` and `run-make-support` may *not* use any nightly/unstable features,
+as they must be compilable by a stage 0 rustc that may be a beta or even stable
+rustc.
 
 #### Quickly check if `rmake.rs` tests can be compiled
 
@@ -481,20 +467,6 @@ Then add a corresponding entry to `"rust-analyzer.linkedProjects"`
 ],
 ```
 
-#### Using Makefiles (legacy)
-
-<div class="warning">
-You should avoid writing new Makefile-based `run-make` tests.
-</div>
-
-Each test should be in a separate directory with a `Makefile` indicating the
-commands to run.
-
-There is a [`tools.mk`] Makefile which you can include which provides a bunch of
-utilities to make it easier to run commands and compare outputs. Take a look at
-some of the other tests for some examples on how to get started.
-
-[`tools.mk`]: https://github.com/rust-lang/rust/blob/master/tests/run-make/tools.mk
 [`tests/run-make`]: https://github.com/rust-lang/rust/tree/master/tests/run-make
 [`run_make_support`]: https://github.com/rust-lang/rust/tree/master/src/tools/run-make-support
 
@@ -549,10 +521,10 @@ data into a human-readable code coverage report.
 
 Instrumented binaries need to be linked against the LLVM profiler runtime, so
 `coverage-run` tests are **automatically skipped** unless the profiler runtime
-is enabled in `config.toml`:
+is enabled in `bootstrap.toml`:
 
 ```toml
-# config.toml
+# bootstrap.toml
 [build]
 profiler = true
 ```

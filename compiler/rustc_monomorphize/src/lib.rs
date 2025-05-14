@@ -3,8 +3,7 @@
 #![feature(file_buffered)]
 #![feature(if_let_guard)]
 #![feature(impl_trait_in_assoc_type)]
-#![feature(let_chains)]
-#![warn(unreachable_pub)]
+#![feature(once_cell_get_mut)]
 // tidy-alphabetical-end
 
 use rustc_hir::lang_items::LangItem;

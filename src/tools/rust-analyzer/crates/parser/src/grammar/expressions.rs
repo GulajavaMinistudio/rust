@@ -4,8 +4,8 @@ use crate::grammar::attributes::ATTRIBUTE_FIRST;
 
 use super::*;
 
+pub(super) use atom::{EXPR_RECOVERY_SET, LITERAL_FIRST, literal};
 pub(crate) use atom::{block_expr, match_arm_list};
-pub(super) use atom::{literal, LITERAL_FIRST};
 
 #[derive(PartialEq, Eq)]
 pub(super) enum Semicolon {
@@ -58,7 +58,7 @@ pub(super) fn stmt(p: &mut Parser<'_>, semicolon: Semicolon) {
     // }
     attributes::outer_attrs(p);
 
-    if p.at(T![let]) {
+    if p.at(T![let]) || (p.at(T![super]) && p.nth_at(1, T![let])) {
         let_stmt(p, semicolon);
         m.complete(p, LET_STMT);
         return;
@@ -113,8 +113,9 @@ pub(super) fn stmt(p: &mut Parser<'_>, semicolon: Semicolon) {
 }
 
 // test let_stmt
-// fn f() { let x: i32 = 92; }
+// fn f() { let x: i32 = 92; super let y; super::foo; }
 pub(super) fn let_stmt(p: &mut Parser<'_>, with_semi: Semicolon) {
+    p.eat(T![super]);
     p.bump(T![let]);
     patterns::pattern(p);
     if p.at(T![:]) {
@@ -678,6 +679,8 @@ fn path_expr(p: &mut Parser<'_>, r: Restrictions) -> (CompletedMarker, BlockLike
 //     S { x };
 //     S { x, y: 32, };
 //     S { x, y: 32, ..Default::default() };
+//     S { x, y: 32, .. };
+//     S { .. };
 //     S { x: ::default() };
 //     TupleStruct { 0: 1 };
 // }
@@ -709,6 +712,8 @@ pub(crate) fn record_expr_field_list(p: &mut Parser<'_>) {
                 // fn main() {
                 //     S { field ..S::default() }
                 //     S { 0 ..S::default() }
+                //     S { field .. }
+                //     S { 0 .. }
                 // }
                 name_ref_or_index(p);
                 p.error("expected `:`");
@@ -739,7 +744,13 @@ pub(crate) fn record_expr_field_list(p: &mut Parser<'_>) {
                 //     S { .. } = S {};
                 // }
 
-                // We permit `.. }` on the left-hand side of a destructuring assignment.
+                // test struct_initializer_with_defaults
+                // fn foo() {
+                //     let _s = S { .. };
+                // }
+
+                // We permit `.. }` on the left-hand side of a destructuring assignment
+                // or defaults values.
                 if !p.at(T!['}']) {
                     expr(p);
 
@@ -748,6 +759,12 @@ pub(crate) fn record_expr_field_list(p: &mut Parser<'_>) {
                         // fn foo() {
                         //     S { ..x, };
                         //     S { ..x, a: 0 }
+                        // }
+
+                        // test_err comma_after_default_values_syntax
+                        // fn foo() {
+                        //     S { .., };
+                        //     S { .., a: 0 }
                         // }
 
                         // Do not bump, so we can support additional fields after this comma.

@@ -175,10 +175,9 @@ fn to_selection<'tcx>(
                 span_bug!(span, "didn't expect to select an unknowable candidate")
             }
         },
-        ProbeKind::TryNormalizeNonRigid { result: _ }
-        | ProbeKind::NormalizedSelfTyAssembly
+        ProbeKind::NormalizedSelfTyAssembly
         | ProbeKind::UnsizeAssembly
-        | ProbeKind::UpcastProjectionCompatibility
+        | ProbeKind::ProjectionCompatibility
         | ProbeKind::OpaqueTypeStorageLookup { result: _ }
         | ProbeKind::Root { result: _ }
         | ProbeKind::ShadowedEnvProbing

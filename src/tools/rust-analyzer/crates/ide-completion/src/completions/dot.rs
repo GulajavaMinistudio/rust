@@ -2,16 +2,16 @@
 
 use std::ops::ControlFlow;
 
-use hir::{HasContainer, ItemContainer, MethodCandidateCallback, Name};
+use hir::{Complete, HasContainer, ItemContainer, MethodCandidateCallback, Name};
 use ide_db::FxHashSet;
 use syntax::SmolStr;
 
 use crate::{
+    CompletionItem, CompletionItemKind, Completions,
     context::{
         CompletionContext, DotAccess, DotAccessExprCtx, DotAccessKind, PathCompletionCtx,
         PathExprCtx, Qualified,
     },
-    CompletionItem, CompletionItemKind, Completions,
 };
 
 /// Complete dot accesses, i.e. fields or methods.
@@ -89,7 +89,7 @@ pub(crate) fn complete_dot(
         acc.add_method(ctx, dot_access, func, None, None)
     });
 
-    if ctx.config.enable_auto_iter {
+    if ctx.config.enable_auto_iter && !receiver_ty.strip_references().impls_iterator(ctx.db) {
         // FIXME:
         // Checking for the existence of `iter()` is complicated in our setup, because we need to substitute
         // its return type, so we instead check for `<&Self as IntoIterator>::IntoIter`.
@@ -259,7 +259,9 @@ fn complete_methods(
             // This needs to come before the `seen_methods` test, so that if we see the same method twice,
             // once as inherent and once not, we will include it.
             if let ItemContainer::Trait(trait_) = func.container(self.ctx.db) {
-                if self.ctx.exclude_traits.contains(&trait_) {
+                if self.ctx.exclude_traits.contains(&trait_)
+                    || trait_.complete(self.ctx.db) == Complete::IgnoreMethods
+                {
                     return ControlFlow::Continue(());
                 }
             }
@@ -1500,9 +1502,31 @@ fn main() {
     bar.$0
 }
 "#,
+            expect![[r#""#]],
+        );
+    }
+
+    #[test]
+    fn no_iter_suggestion_on_iterator() {
+        check_no_kw(
+            r#"
+//- minicore: iterator
+struct MyIter;
+impl Iterator for MyIter {
+    type Item = ();
+    fn next(&mut self) -> Option<Self::Item> { None }
+}
+
+fn main() {
+    MyIter.$0
+}
+"#,
             expect![[r#"
-    me foo() fn(self: Bar)
-"#]],
+                me by_ref() (as Iterator)                             fn(&mut self) -> &mut Self
+                me into_iter() (as IntoIterator)    fn(self) -> <Self as IntoIterator>::IntoIter
+                me next() (as Iterator)        fn(&mut self) -> Option<<Self as Iterator>::Item>
+                me nth(…) (as Iterator) fn(&mut self, usize) -> Option<<Self as Iterator>::Item>
+            "#]],
         );
     }
 }

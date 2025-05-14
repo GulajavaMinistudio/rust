@@ -34,7 +34,7 @@ use crate::check_consts::is_fn_or_trait_safe_to_expose_on_stable;
 use crate::errors;
 
 type QualifResults<'mir, 'tcx, Q> =
-    rustc_mir_dataflow::ResultsCursor<'mir, 'tcx, FlowSensitiveAnalysis<'mir, 'mir, 'tcx, Q>>;
+    rustc_mir_dataflow::ResultsCursor<'mir, 'tcx, FlowSensitiveAnalysis<'mir, 'tcx, Q>>;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum ConstConditionsHold {
@@ -335,7 +335,7 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
             self.tcx.dcx().span_bug(span, "tls access is checked in `Rvalue::ThreadLocalRef`");
         }
         if let Some(def_id) = def_id.as_local()
-            && let Err(guar) = self.tcx.at(span).check_well_formed(hir::OwnerId { def_id })
+            && let Err(guar) = self.tcx.ensure_ok().check_well_formed(hir::OwnerId { def_id })
         {
             self.error_emitted = Some(guar);
         }
@@ -675,7 +675,11 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
             Rvalue::Cast(_, _, _) => {}
 
             Rvalue::NullaryOp(
-                NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(_) | NullOp::UbChecks,
+                NullOp::SizeOf
+                | NullOp::AlignOf
+                | NullOp::OffsetOf(_)
+                | NullOp::UbChecks
+                | NullOp::ContractChecks,
                 _,
             ) => {}
             Rvalue::ShallowInitBox(_, _) => {}
@@ -706,7 +710,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
 
                 if is_int_bool_float_or_char(lhs_ty) && is_int_bool_float_or_char(rhs_ty) {
                     // Int, bool, float, and char operations are fine.
-                } else if lhs_ty.is_fn_ptr() || lhs_ty.is_unsafe_ptr() {
+                } else if lhs_ty.is_fn_ptr() || lhs_ty.is_raw_ptr() {
                     assert_matches!(
                         op,
                         BinOp::Eq

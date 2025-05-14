@@ -59,7 +59,7 @@ fn lint_args(builder: &Builder<'_>, config: &LintConfig, ignored_rules: &[&str])
     let all_args = std::env::args().collect::<Vec<_>>();
     args.extend(get_clippy_rules_in_order(&all_args, config));
 
-    args.extend(ignored_rules.iter().map(|lint| format!("-Aclippy::{}", lint)));
+    args.extend(ignored_rules.iter().map(|lint| format!("-Aclippy::{lint}")));
     args.extend(builder.config.free_args.clone());
     args
 }
@@ -346,7 +346,6 @@ lint_any!(
     OptDist, "src/tools/opt-dist", "opt-dist";
     RemoteTestClient, "src/tools/remote-test-client", "remote-test-client";
     RemoteTestServer, "src/tools/remote-test-server", "remote-test-server";
-    Rls, "src/tools/rls", "rls";
     RustAnalyzer, "src/tools/rust-analyzer", "rust-analyzer";
     Rustdoc, "src/librustdoc", "clippy";
     Rustfmt, "src/tools/rustfmt", "rustfmt";

@@ -15,14 +15,15 @@
 
 mod on_enter;
 
+use hir::EditionedFileId;
+use ide_db::{FilePosition, RootDatabase, base_db::RootQueryDb};
+use span::Edition;
 use std::iter;
 
-use ide_db::{base_db::SourceDatabase, FilePosition, RootDatabase};
-use span::{Edition, EditionedFileId};
 use syntax::{
-    algo::{ancestors_at_offset, find_node_at_offset},
-    ast::{self, edit::IndentLevel, AstToken},
     AstNode, Parse, SourceFile, SyntaxKind, TextRange, TextSize,
+    algo::{ancestors_at_offset, find_node_at_offset},
+    ast::{self, AstToken, edit::IndentLevel},
 };
 
 use ide_db::text_edit::TextEdit;
@@ -51,16 +52,15 @@ struct ExtendedTextEdit {
 // - typing `{` in a use item adds a closing `}` in the right place
 // - typing `>` to complete a return type `->` will insert a whitespace after it
 //
-// VS Code::
+// #### VS Code
 //
 // Add the following to `settings.json`:
-// [source,json]
-// ----
+// ```json
 // "editor.formatOnType": true,
-// ----
+// ```
 //
-// image::https://user-images.githubusercontent.com/48062697/113166163-69758500-923a-11eb-81ee-eb33ec380399.gif[]
-// image::https://user-images.githubusercontent.com/48062697/113171066-105c2000-923f-11eb-87ab-f4a263346567.gif[]
+// ![On Typing Assists](https://user-images.githubusercontent.com/48062697/113166163-69758500-923a-11eb-81ee-eb33ec380399.gif)
+// ![On Typing Assists](https://user-images.githubusercontent.com/48062697/113171066-105c2000-923f-11eb-87ab-f4a263346567.gif)
 pub(crate) fn on_char_typed(
     db: &RootDatabase,
     position: FilePosition,
@@ -74,7 +74,8 @@ pub(crate) fn on_char_typed(
     // FIXME: We are hitting the database here, if we are unlucky this call might block momentarily
     // causing the editor to feel sluggish!
     let edition = Edition::CURRENT_FIXME;
-    let file = &db.parse(EditionedFileId::new(position.file_id, edition));
+    let editioned_file_id_wrapper = EditionedFileId::new(db, position.file_id, edition);
+    let file = &db.parse(editioned_file_id_wrapper);
     let char_matches_position =
         file.tree().syntax().text().char_at(position.offset) == Some(char_typed);
     if !stdx::always!(char_matches_position) {

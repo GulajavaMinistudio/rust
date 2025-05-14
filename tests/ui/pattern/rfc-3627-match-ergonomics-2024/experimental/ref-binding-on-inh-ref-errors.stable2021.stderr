@@ -31,7 +31,7 @@ LL +     let [ref x] = &mut [&mut 0];
    |
 
 error[E0596]: cannot borrow data in a `&` reference as mutable
-  --> $DIR/ref-binding-on-inh-ref-errors.rs:74:10
+  --> $DIR/ref-binding-on-inh-ref-errors.rs:73:10
    |
 LL |     let [ref mut x] = &[0];
    |          ^^^^^^^^^ cannot borrow as mutable

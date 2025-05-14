@@ -11,8 +11,6 @@
 #![crate_type = "rlib"]
 #![no_core]
 #![allow(asm_sub_register, non_camel_case_types)]
-// FIXME(f16_f128): Only needed for FIXME in check! and check_reg!
-#![feature(auto_traits, lang_items)]
 
 extern crate minicore;
 use minicore::*;
@@ -63,12 +61,6 @@ impl Copy for f16x8 {}
 impl Copy for f32x4 {}
 impl Copy for f64x2 {}
 
-// FIXME(f16_f128): Only needed for FIXME in check! and check_reg!
-#[lang = "freeze"]
-unsafe auto trait Freeze {}
-#[lang = "unpin"]
-auto trait Unpin {}
-
 extern "C" {
     fn extern_func();
     static extern_static: u8;
@@ -94,10 +86,12 @@ pub unsafe fn sym_static() {
 
 // Regression test for #75761
 // CHECK-LABEL: {{("#)?}}issue_75761{{"?}}
-// CHECK: str {{.*}}x30
+// aarch64: str {{.*}}x30
+// arm64ec: stp {{.*}}x30
 // CHECK: //APP
 // CHECK: //NO_APP
-// CHECK: ldr {{.*}}x30
+// aarch64: ldr {{.*}}x30
+// arm64ec: ldp {{.*}}x30
 #[no_mangle]
 pub unsafe fn issue_75761() {
     asm!("", out("v0") _, out("x30") _);

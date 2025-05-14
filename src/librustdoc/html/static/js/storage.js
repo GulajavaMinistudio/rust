@@ -22,6 +22,50 @@ const settingsDataset = (function() {
 })();
 
 /**
+ * Assert that the passed value is nonnull, then return it.
+ *
+ * Takes an optional error message argument.
+ *
+ * Must be defined in this file, as it is loaded before all others.
+ *
+ * @template T
+ * @param {T|null} x
+ * @param {string=} msg
+ * @returns T
+ */
+// used in other files, not yet used in this one.
+// eslint-disable-next-line no-unused-vars
+function nonnull(x, msg) {
+    if (x === null) {
+        throw (msg || "unexpected null value!");
+    } else {
+        return x;
+    }
+}
+
+/**
+ * Assert that the passed value is not undefined, then return it.
+ *
+ * Takes an optional error message argument.
+ *
+ * Must be defined in this file, as it is loaded before all others.
+ *
+ * @template T
+ * @param {T|undefined} x
+ * @param {string=} msg
+ * @returns T
+ */
+// used in other files, not yet used in this one.
+// eslint-disable-next-line no-unused-vars
+function nonundef(x, msg) {
+    if (x === undefined) {
+        throw (msg || "unexpected null value!");
+    } else {
+        return x;
+    }
+}
+
+/**
  * Get a configuration value. If it's not set, get the default.
  *
  * @param {string} settingName
@@ -59,7 +103,7 @@ function hasClass(elem, className) {
  * Add a class to a DOM Element. If `elem` is null,
  * does nothing. This function is idempotent.
  *
- * @param {HTMLElement|null} elem
+ * @param {Element|null} elem
  * @param {string} className
  */
 function addClass(elem, className) {
@@ -72,7 +116,7 @@ function addClass(elem, className) {
  * Remove a class from a DOM Element. If `elem` is null,
  * does nothing. This function is idempotent.
  *
- * @param {HTMLElement|null} elem
+ * @param {Element|null} elem
  * @param {string} className
  */
 // eslint-disable-next-line no-unused-vars
@@ -85,7 +129,7 @@ function removeClass(elem, className) {
 /**
  * Run a callback for every element of an Array.
  * @param {Array<?>}                       arr  - The array to iterate over
- * @param {function(?): boolean|undefined} func - The callback
+ * @param {function(?): boolean|void} func - The callback
  */
 function onEach(arr, func) {
     for (const elem of arr) {
@@ -103,7 +147,7 @@ function onEach(arr, func) {
  * https://developer.mozilla.org/en-US/docs/Web/API/HTMLCollection
  * https://developer.mozilla.org/en-US/docs/Web/API/NodeList
  * @param {NodeList|HTMLCollection} lazyArray  - An array to iterate over
- * @param {function(?): boolean}    func       - The callback
+ * @param {function(?): boolean|void}    func       - The callback
  */
 // eslint-disable-next-line no-unused-vars
 function onEachLazy(lazyArray, func) {
@@ -119,11 +163,15 @@ function onEachLazy(lazyArray, func) {
  * If localStorage is disabled, this function does nothing.
  *
  * @param {string} name
- * @param {string} value
+ * @param {string|null} value
  */
 function updateLocalStorage(name, value) {
     try {
-        window.localStorage.setItem("rustdoc-" + name, value);
+        if (value === null) {
+            window.localStorage.removeItem("rustdoc-" + name);
+        } else {
+            window.localStorage.setItem("rustdoc-" + name, value);
+        }
     } catch (e) {
         // localStorage is not accessible, do nothing
     }
@@ -281,6 +329,9 @@ if (getSettingValue("hide-modnav") === "true") {
 }
 if (getSettingValue("sans-serif-fonts") === "true") {
     addClass(document.documentElement, "sans-serif");
+}
+if (getSettingValue("word-wrap-source-code") === "true") {
+    addClass(document.documentElement, "word-wrap-source-code");
 }
 function updateSidebarWidth() {
     const desktopSidebarWidth = getSettingValue("desktop-sidebar-width");

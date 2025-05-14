@@ -9,7 +9,11 @@ smoothly.
 **NOTE: this section is for *language* features, not *library* features,
 which use [a different process].**
 
+See also [the Rust Language Design Team's procedures][lang-propose] for
+proposing changes to the language.
+
 [a different process]: ./stability.md
+[lang-propose]: https://lang-team.rust-lang.org/how_to/propose.html
 
 ## The @rfcbot FCP process
 
@@ -40,7 +44,7 @@ like this; for example, the compiler team recommends
 filing a Major Change Proposal ([MCP][mcp]) as a lightweight way to
 garner support and feedback without requiring full consensus.
 
-[mcp]: https://forge.rust-lang.org/compiler/mcp.html#public-facing-changes-require-rfcbot-fcp
+[mcp]: https://forge.rust-lang.org/compiler/proposals-and-stabilization.html#how-do-i-submit-an-mcp
 
 You don't need to have the implementation fully ready for r+ to propose an FCP,
 but it is generally a good idea to have at least a proof
@@ -163,9 +167,7 @@ a new unstable feature:
 
 1. Prevent usage of the new feature unless the feature gate is set.
    You can check it in most places in the compiler using the
-   expression `tcx.features().$feature_name` (or
-   `sess.features_untracked().$feature_name` if the
-   tcx is unavailable)
+   expression `tcx.features().$feature_name()`
 
     If the feature gate is not set, you should either maintain
     the pre-feature behavior or raise an error, depending on

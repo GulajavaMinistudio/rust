@@ -291,10 +291,13 @@ impl<'tcx> LateLintPass<'tcx> for Dereferencing<'tcx> {
                             && let Some(ty) = use_node.defined_ty(cx)
                             && TyCoercionStability::for_defined_ty(cx, ty, use_node.is_return()).is_deref_stable()
                         {
-                            self.state = Some((State::ExplicitDeref { mutability: None }, StateData {
-                                first_expr: expr,
-                                adjusted_ty,
-                            }));
+                            self.state = Some((
+                                State::ExplicitDeref { mutability: None },
+                                StateData {
+                                    first_expr: expr,
+                                    adjusted_ty,
+                                },
+                            ));
                         }
                     },
                     RefOp::Method { mutbl, is_ufcs }
@@ -456,10 +459,13 @@ impl<'tcx> LateLintPass<'tcx> for Dereferencing<'tcx> {
                             && next_adjust.is_none_or(|a| matches!(a.kind, Adjust::Deref(_) | Adjust::Borrow(_)))
                             && iter.all(|a| matches!(a.kind, Adjust::Deref(_) | Adjust::Borrow(_)))
                         {
-                            self.state = Some((State::Borrow { mutability }, StateData {
-                                first_expr: expr,
-                                adjusted_ty,
-                            }));
+                            self.state = Some((
+                                State::Borrow { mutability },
+                                StateData {
+                                    first_expr: expr,
+                                    adjusted_ty,
+                                },
+                            ));
                         }
                     },
                     _ => {},
@@ -503,10 +509,13 @@ impl<'tcx> LateLintPass<'tcx> for Dereferencing<'tcx> {
                 let stability = state.stability;
                 report(cx, expr, State::DerefedBorrow(state), data, typeck);
                 if stability.is_deref_stable() {
-                    self.state = Some((State::Borrow { mutability }, StateData {
-                        first_expr: expr,
-                        adjusted_ty,
-                    }));
+                    self.state = Some((
+                        State::Borrow { mutability },
+                        StateData {
+                            first_expr: expr,
+                            adjusted_ty,
+                        },
+                    ));
                 }
             },
             (Some((State::DerefedBorrow(state), data)), RefOp::Deref) => {
@@ -531,10 +540,13 @@ impl<'tcx> LateLintPass<'tcx> for Dereferencing<'tcx> {
                 } else if stability.is_deref_stable()
                     && let Some(parent) = get_parent_expr(cx, expr)
                 {
-                    self.state = Some((State::ExplicitDeref { mutability: None }, StateData {
-                        first_expr: parent,
-                        adjusted_ty,
-                    }));
+                    self.state = Some((
+                        State::ExplicitDeref { mutability: None },
+                        StateData {
+                            first_expr: parent,
+                            adjusted_ty,
+                        },
+                    ));
                 }
             },
 
@@ -670,7 +682,7 @@ fn try_parse_ref_op<'tcx>(
             },
             [arg],
         ) => (true, typeck.qpath_res(path, *hir_id).opt_def_id()?, arg),
-        ExprKind::Unary(UnOp::Deref, sub_expr) if !typeck.expr_ty(sub_expr).is_unsafe_ptr() => {
+        ExprKind::Unary(UnOp::Deref, sub_expr) if !typeck.expr_ty(sub_expr).is_raw_ptr() => {
             return Some((RefOp::Deref, sub_expr));
         },
         ExprKind::AddrOf(BorrowKind::Ref, mutability, sub_expr) => return Some((RefOp::AddrOf(mutability), sub_expr)),
@@ -841,7 +853,7 @@ impl TyCoercionStability {
                     continue;
                 },
                 ty::Param(_) if for_return => Self::Deref,
-                ty::Alias(ty::Weak | ty::Inherent, _) => unreachable!("should have been normalized away above"),
+                ty::Alias(ty::Free | ty::Inherent, _) => unreachable!("should have been normalized away above"),
                 ty::Alias(ty::Projection, _) if !for_return && ty.has_non_region_param() => Self::Reborrow,
                 ty::Infer(_)
                 | ty::Error(_)
@@ -1121,10 +1133,12 @@ fn report<'tcx>(
 
 impl<'tcx> Dereferencing<'tcx> {
     fn check_local_usage(&mut self, cx: &LateContext<'tcx>, e: &Expr<'tcx>, local: HirId) {
-        if let Some(outer_pat) = self.ref_locals.get_mut(&local) {
-            if let Some(pat) = outer_pat {
-                // Check for auto-deref
-                if !matches!(cx.typeck_results().expr_adjustments(e), [
+        if let Some(outer_pat) = self.ref_locals.get_mut(&local)
+            && let Some(pat) = outer_pat
+            // Check for auto-deref
+            && !matches!(
+                cx.typeck_results().expr_adjustments(e),
+                [
                     Adjustment {
                         kind: Adjust::Deref(_),
                         ..
@@ -1134,45 +1148,45 @@ impl<'tcx> Dereferencing<'tcx> {
                         ..
                     },
                     ..
-                ]) {
-                    match get_parent_expr(cx, e) {
-                        // Field accesses are the same no matter the number of references.
-                        Some(Expr {
-                            kind: ExprKind::Field(..),
-                            ..
-                        }) => (),
-                        Some(&Expr {
-                            span,
-                            kind: ExprKind::Unary(UnOp::Deref, _),
-                            ..
-                        }) if !span.from_expansion() => {
-                            // Remove explicit deref.
-                            let snip = snippet_with_context(cx, e.span, span.ctxt(), "..", &mut pat.app).0;
-                            pat.replacements.push((span, snip.into()));
-                        },
-                        Some(parent) if !parent.span.from_expansion() => {
-                            // Double reference might be needed at this point.
-                            if parent.precedence() == ExprPrecedence::Unambiguous {
-                                // Parentheses would be needed here, don't lint.
-                                *outer_pat = None;
-                            } else {
-                                pat.always_deref = false;
-                                let snip = snippet_with_context(cx, e.span, parent.span.ctxt(), "..", &mut pat.app).0;
-                                pat.replacements.push((e.span, format!("&{snip}")));
-                            }
-                        },
-                        _ if !e.span.from_expansion() => {
-                            // Double reference might be needed at this point.
-                            pat.always_deref = false;
-                            let snip = snippet_with_applicability(cx, e.span, "..", &mut pat.app);
-                            pat.replacements.push((e.span, format!("&{snip}")));
-                        },
-                        // Edge case for macros. The span of the identifier will usually match the context of the
-                        // binding, but not if the identifier was created in a macro. e.g. `concat_idents` and proc
-                        // macros
-                        _ => *outer_pat = None,
+                ]
+            )
+        {
+            match get_parent_expr(cx, e) {
+                // Field accesses are the same no matter the number of references.
+                Some(Expr {
+                    kind: ExprKind::Field(..),
+                    ..
+                }) => (),
+                Some(&Expr {
+                    span,
+                    kind: ExprKind::Unary(UnOp::Deref, _),
+                    ..
+                }) if !span.from_expansion() => {
+                    // Remove explicit deref.
+                    let snip = snippet_with_context(cx, e.span, span.ctxt(), "..", &mut pat.app).0;
+                    pat.replacements.push((span, snip.into()));
+                },
+                Some(parent) if !parent.span.from_expansion() => {
+                    // Double reference might be needed at this point.
+                    if parent.precedence() == ExprPrecedence::Unambiguous {
+                        // Parentheses would be needed here, don't lint.
+                        *outer_pat = None;
+                    } else {
+                        pat.always_deref = false;
+                        let snip = snippet_with_context(cx, e.span, parent.span.ctxt(), "..", &mut pat.app).0;
+                        pat.replacements.push((e.span, format!("&{snip}")));
                     }
-                }
+                },
+                _ if !e.span.from_expansion() => {
+                    // Double reference might be needed at this point.
+                    pat.always_deref = false;
+                    let snip = snippet_with_applicability(cx, e.span, "..", &mut pat.app);
+                    pat.replacements.push((e.span, format!("&{snip}")));
+                },
+                // Edge case for macros. The span of the identifier will usually match the context of the
+                // binding, but not if the identifier was created in a macro. e.g. `concat_idents` and proc
+                // macros
+                _ => *outer_pat = None,
             }
         }
     }

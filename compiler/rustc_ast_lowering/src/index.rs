@@ -164,7 +164,7 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
     fn visit_item(&mut self, i: &'hir Item<'hir>) {
         debug_assert_eq!(i.owner_id, self.owner);
         self.with_parent(i.hir_id(), |this| {
-            if let ItemKind::Struct(struct_def, _) = &i.kind {
+            if let ItemKind::Struct(_, struct_def, _) = &i.kind {
                 // If this is a tuple or unit-like struct, register the constructor.
                 if let Some(ctor_hir_id) = struct_def.ctor_hir_id() {
                     this.insert(i.span, ctor_hir_id, Node::Ctor(struct_def));
@@ -412,8 +412,12 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         });
     }
 
-    fn visit_pattern_type_pattern(&mut self, p: &'hir hir::Pat<'hir>) {
-        self.visit_pat(p)
+    fn visit_pattern_type_pattern(&mut self, pat: &'hir hir::TyPat<'hir>) {
+        self.insert(pat.span, pat.hir_id, Node::TyPat(pat));
+
+        self.with_parent(pat.hir_id, |this| {
+            intravisit::walk_ty_pat(this, pat);
+        });
     }
 
     fn visit_precise_capturing_arg(

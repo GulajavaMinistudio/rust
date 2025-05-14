@@ -17,6 +17,7 @@ pub mod assertion_helpers;
 pub mod diff;
 pub mod env;
 pub mod external_deps;
+pub mod linker;
 pub mod path_helpers;
 pub mod run;
 pub mod scoped_run;
@@ -66,8 +67,8 @@ pub use llvm::{
     LlvmFilecheck, LlvmNm, LlvmObjcopy, LlvmObjdump, LlvmProfdata, LlvmReadobj,
 };
 pub use python::python_command;
-pub use rustc::{aux_build, bare_rustc, rustc, rustc_path, Rustc};
-pub use rustdoc::{bare_rustdoc, rustdoc, Rustdoc};
+pub use rustc::{bare_rustc, rustc, rustc_path, Rustc};
+pub use rustdoc::{rustdoc, Rustdoc};
 
 /// [`diff`][mod@diff] is implemented in terms of the [similar] library.
 ///
@@ -82,7 +83,7 @@ pub use run::{cmd, run, run_fail, run_with_args};
 
 /// Helpers for checking target information.
 pub use targets::{
-    apple_os, is_aix, is_darwin, is_msvc, is_windows, is_windows_gnu, llvm_components_contain,
+    apple_os, is_aix, is_darwin, is_msvc, is_windows, is_windows_gnu, is_win7, llvm_components_contain,
     target, uname,
 };
 
@@ -94,8 +95,8 @@ pub use artifact_names::{
 
 /// Path-related helpers.
 pub use path_helpers::{
-    cwd, filename_contains, filename_not_in_denylist, has_extension, has_prefix, has_suffix,
-    not_contains, path, shallow_find_files, build_root, source_root,
+    build_root, cwd, filename_contains, filename_not_in_denylist, has_extension, has_prefix,
+    has_suffix, not_contains, path, shallow_find_directories, shallow_find_files, source_root,
 };
 
 /// Helpers for scoped test execution where certain properties are attempted to be maintained.

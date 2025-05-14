@@ -5,7 +5,9 @@ use rustc_ast::{
     self as ast, CRATE_NODE_ID, Crate, ItemKind, MetaItemInner, MetaItemKind, ModKind, NodeId, Path,
 };
 use rustc_ast_pretty::pprust;
+use rustc_attr_data_structures::{self as attr, Stability};
 use rustc_data_structures::fx::FxHashSet;
+use rustc_data_structures::unord::UnordSet;
 use rustc_errors::codes::*;
 use rustc_errors::{
     Applicability, Diag, DiagCtxtHandle, ErrorGuaranteed, MultiSpan, SuggestionStyle,
@@ -42,10 +44,10 @@ use crate::imports::{Import, ImportKind};
 use crate::late::{PatternSource, Rib};
 use crate::{
     AmbiguityError, AmbiguityErrorMisc, AmbiguityKind, BindingError, BindingKey, Finalize,
-    HasGenericParams, LexicalScopeBinding, MacroRulesScope, Module, ModuleKind,
-    ModuleOrUniformRoot, NameBinding, NameBindingKind, ParentScope, PathResult, PrivacyError,
-    ResolutionError, Resolver, Scope, ScopeSet, Segment, UseError, Used, VisResolutionError,
-    errors as errs, path_names_to_string,
+    ForwardGenericParamBanReason, HasGenericParams, LexicalScopeBinding, MacroRulesScope, Module,
+    ModuleKind, ModuleOrUniformRoot, NameBinding, NameBindingKind, ParentScope, PathResult,
+    PrivacyError, ResolutionError, Resolver, Scope, ScopeSet, Segment, UseError, Used,
+    VisResolutionError, errors as errs, path_names_to_string,
 };
 
 type Res = def::Res<ast::NodeId>;
@@ -109,6 +111,7 @@ pub(crate) struct ImportSuggestion {
     pub via_import: bool,
     /// An extra note that should be issued if this item is suggested
     pub note: Option<String>,
+    pub is_stable: bool,
 }
 
 /// Adjust the impl span so that just the `impl` keyword is taken by removing
@@ -169,10 +172,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
     fn report_with_use_injections(&mut self, krate: &Crate) {
         for UseError { mut err, candidates, def_id, instead, suggestion, path, is_call } in
-            self.use_injections.drain(..)
+            std::mem::take(&mut self.use_injections)
         {
             let (span, found_use) = if let Some(def_id) = def_id.as_local() {
-                UsePlacementFinder::check(krate, self.def_id_to_node_id[def_id])
+                UsePlacementFinder::check(krate, self.def_id_to_node_id(def_id))
             } else {
                 (None, FoundUse::No)
             };
@@ -887,12 +890,17 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 participle,
                 name,
             }),
-            ResolutionError::ForwardDeclaredGenericParam => {
-                self.dcx().create_err(errs::ForwardDeclaredGenericParam { span })
+            ResolutionError::ForwardDeclaredGenericParam(param, reason) => match reason {
+                ForwardGenericParamBanReason::Default => {
+                    self.dcx().create_err(errs::ForwardDeclaredGenericParam { param, span })
+                }
+                ForwardGenericParamBanReason::ConstParamTy => self
+                    .dcx()
+                    .create_err(errs::ForwardDeclaredGenericInConstParamTy { param, span }),
+            },
+            ResolutionError::ParamInTyOfConstParam { name } => {
+                self.dcx().create_err(errs::ParamInTyOfConstParam { span, name })
             }
-            ResolutionError::ParamInTyOfConstParam { name, param_kind: is_type } => self
-                .dcx()
-                .create_err(errs::ParamInTyOfConstParam { span, name, param_kind: is_type }),
             ResolutionError::ParamInNonTrivialAnonConst { name, param_kind: is_type } => {
                 self.dcx().create_err(errs::ParamInNonTrivialAnonConst {
                     span,
@@ -908,9 +916,14 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             ResolutionError::ParamInEnumDiscriminant { name, param_kind: is_type } => self
                 .dcx()
                 .create_err(errs::ParamInEnumDiscriminant { span, name, param_kind: is_type }),
-            ResolutionError::SelfInGenericParamDefault => {
-                self.dcx().create_err(errs::SelfInGenericParamDefault { span })
-            }
+            ResolutionError::ForwardDeclaredSelf(reason) => match reason {
+                ForwardGenericParamBanReason::Default => {
+                    self.dcx().create_err(errs::SelfInGenericParamDefault { span })
+                }
+                ForwardGenericParamBanReason::ConstParamTy => {
+                    self.dcx().create_err(errs::SelfInConstGenericTy { span })
+                }
+            },
             ResolutionError::UnreachableLabel { name, definition_span, suggestion } => {
                 let ((sub_suggestion_label, sub_suggestion), sub_unreachable_label) =
                     match suggestion {
@@ -990,14 +1003,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             VisResolutionError::AncestorOnly(span) => {
                 self.dcx().create_err(errs::AncestorOnly(span))
             }
-            VisResolutionError::FailedToResolve(span, label, suggestion) => {
-                self.into_struct_error(span, ResolutionError::FailedToResolve {
-                    segment: None,
-                    label,
-                    suggestion,
-                    module: None,
-                })
-            }
+            VisResolutionError::FailedToResolve(span, label, suggestion) => self.into_struct_error(
+                span,
+                ResolutionError::FailedToResolve { segment: None, label, suggestion, module: None },
+            ),
             VisResolutionError::ExpectedFound(span, path_str, res) => {
                 self.dcx().create_err(errs::ExpectedModuleFound { span, res, path_str })
             }
@@ -1084,7 +1093,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                     ));
                 }
                 Scope::BuiltinAttrs => {
-                    let res = Res::NonMacroAttr(NonMacroAttrKind::Builtin(kw::Empty));
+                    let res = Res::NonMacroAttr(NonMacroAttrKind::Builtin(sym::dummy));
                     if filter_fn(res) {
                         suggestions.extend(
                             BUILTIN_ATTRIBUTES
@@ -1131,7 +1140,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         });
 
         // Make sure error reporting is deterministic.
-        suggestions.sort_by(|a, b| a.candidate.as_str().partial_cmp(b.candidate.as_str()).unwrap());
+        suggestions.sort_by(|a, b| a.candidate.as_str().cmp(b.candidate.as_str()));
 
         match find_best_match_for_name(
             &suggestions.iter().map(|suggestion| suggestion.candidate).collect::<Vec<Symbol>>(),
@@ -1165,20 +1174,21 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             ThinVec::<ast::PathSegment>::new(),
             true,
             start_did.is_local() || !self.tcx.is_doc_hidden(start_did),
+            true,
         )];
         let mut worklist_via_import = vec![];
 
-        while let Some((in_module, path_segments, accessible, doc_visible)) = match worklist.pop() {
-            None => worklist_via_import.pop(),
-            Some(x) => Some(x),
-        } {
+        while let Some((in_module, path_segments, accessible, doc_visible, is_stable)) =
+            match worklist.pop() {
+                None => worklist_via_import.pop(),
+                Some(x) => Some(x),
+            }
+        {
             let in_module_is_extern = !in_module.def_id().is_local();
             in_module.for_each_child(self, |this, ident, ns, name_binding| {
-                // avoid non-importable candidates
-                if !name_binding.is_importable()
-                    // FIXME(import_trait_associated_functions): remove this when `import_trait_associated_functions` is stable
-                    || name_binding.is_assoc_const_or_fn()
-                        && !this.tcx.features().import_trait_associated_functions()
+                // Avoid non-importable candidates.
+                if name_binding.is_assoc_item()
+                    && !this.tcx.features().import_trait_associated_functions()
                 {
                     return;
                 }
@@ -1253,6 +1263,27 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         candidates.remove(idx);
                     }
 
+                    let is_stable = if is_stable
+                        && let Some(did) = did
+                        && this.is_stable(did, path.span)
+                    {
+                        true
+                    } else {
+                        false
+                    };
+
+                    // Rreplace unstable suggestions if we meet a new stable one,
+                    // and do nothing if any other situation. For example, if we
+                    // meet `std::ops::Range` after `std::range::legacy::Range`,
+                    // we will remove the latter and then insert the former.
+                    if is_stable
+                        && let Some(idx) = candidates
+                            .iter()
+                            .position(|v: &ImportSuggestion| v.did == did && !v.is_stable)
+                    {
+                        candidates.remove(idx);
+                    }
+
                     if candidates.iter().all(|v: &ImportSuggestion| v.did != did) {
                         // See if we're recommending TryFrom, TryInto, or FromIterator and add
                         // a note about editions
@@ -1284,6 +1315,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                             doc_visible: child_doc_visible,
                             note,
                             via_import,
+                            is_stable,
                         });
                     }
                 }
@@ -1310,20 +1342,50 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                     if !is_extern_crate_that_also_appears_in_prelude || alias_import {
                         // add the module to the lookup
                         if seen_modules.insert(module.def_id()) {
-                            if via_import { &mut worklist_via_import } else { &mut worklist }
-                                .push((module, path_segments, child_accessible, child_doc_visible));
+                            if via_import { &mut worklist_via_import } else { &mut worklist }.push(
+                                (
+                                    module,
+                                    path_segments,
+                                    child_accessible,
+                                    child_doc_visible,
+                                    is_stable && this.is_stable(module.def_id(), name_binding.span),
+                                ),
+                            );
                         }
                     }
                 }
             })
         }
 
-        // If only some candidates are accessible, take just them
-        if !candidates.iter().all(|v: &ImportSuggestion| !v.accessible) {
-            candidates.retain(|x| x.accessible)
+        candidates
+    }
+
+    fn is_stable(&self, did: DefId, span: Span) -> bool {
+        if did.is_local() {
+            return true;
         }
 
-        candidates
+        match self.tcx.lookup_stability(did) {
+            Some(Stability {
+                level: attr::StabilityLevel::Unstable { implied_by, .. },
+                feature,
+                ..
+            }) => {
+                if span.allows_unstable(feature) {
+                    true
+                } else if self.tcx.features().enabled(feature) {
+                    true
+                } else if let Some(implied_by) = implied_by
+                    && self.tcx.features().enabled(implied_by)
+                {
+                    true
+                } else {
+                    false
+                }
+            }
+            Some(_) => true,
+            None => false,
+        }
     }
 
     /// When name resolution fails, this method can be used to look up candidate
@@ -1433,7 +1495,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         let import_suggestions =
             self.lookup_import_candidates(ident, Namespace::MacroNS, parent_scope, is_expected);
         let (span, found_use) = match parent_scope.module.nearest_parent_mod().as_local() {
-            Some(def_id) => UsePlacementFinder::check(krate, self.def_id_to_node_id[def_id]),
+            Some(def_id) => UsePlacementFinder::check(krate, self.def_id_to_node_id(def_id)),
             None => (None, FoundUse::No),
         };
         show_candidates(
@@ -1786,7 +1848,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 &import_suggestions,
                 Instead::Yes,
                 FoundUse::Yes,
-                DiagMode::Import { append: single_nested },
+                DiagMode::Import { append: single_nested, unresolved_import: false },
                 vec![],
                 "",
             );
@@ -1810,7 +1872,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             && !def_id.is_local()
             && let Some(attr) = self.tcx.get_attr(def_id, sym::non_exhaustive)
         {
-            non_exhaustive = Some(attr.span);
+            non_exhaustive = Some(attr.span());
         } else if let Some(span) = ctor_fields_span {
             let label = errors::ConstructorPrivateIfAnyFieldPrivate { span };
             err.subdiagnostic(label);
@@ -2256,21 +2318,21 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
     #[instrument(level = "debug", skip(self, parent_scope))]
     pub(crate) fn make_path_suggestion(
         &mut self,
-        span: Span,
         mut path: Vec<Segment>,
         parent_scope: &ParentScope<'ra>,
     ) -> Option<(Vec<Segment>, Option<String>)> {
-        match (path.get(0), path.get(1)) {
+        match path[..] {
             // `{{root}}::ident::...` on both editions.
             // On 2015 `{{root}}` is usually added implicitly.
-            (Some(fst), Some(snd))
-                if fst.ident.name == kw::PathRoot && !snd.ident.is_path_segment_keyword() => {}
+            [first, second, ..]
+                if first.ident.name == kw::PathRoot && !second.ident.is_path_segment_keyword() => {}
             // `ident::...` on 2018.
-            (Some(fst), _)
-                if fst.ident.span.at_least_rust_2018() && !fst.ident.is_path_segment_keyword() =>
+            [first, ..]
+                if first.ident.span.at_least_rust_2018()
+                    && !first.ident.is_path_segment_keyword() =>
             {
                 // Insert a placeholder that's later replaced by `self`/`super`/etc.
-                path.insert(0, Segment::from_ident(Ident::empty()));
+                path.insert(0, Segment::from_ident(Ident::dummy()));
             }
             _ => return None,
         }
@@ -2378,7 +2440,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         // 2) `std` suggestions before `core` suggestions.
         let mut extern_crate_names =
             self.extern_prelude.keys().map(|ident| ident.name).collect::<Vec<_>>();
-        extern_crate_names.sort_by(|a, b| b.as_str().partial_cmp(a.as_str()).unwrap());
+        extern_crate_names.sort_by(|a, b| b.as_str().cmp(a.as_str()));
 
         for name in extern_crate_names.into_iter() {
             // Replace first ident with a crate name and check if that is valid.
@@ -2431,7 +2493,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         let Res::Def(DefKind::Macro(MacroKind::Bang), _) = binding.res() else {
             return None;
         };
-        let module_name = crate_module.kind.name().unwrap();
+        let module_name = crate_module.kind.name().unwrap_or(kw::Empty);
         let import_snippet = match import.kind {
             ImportKind::Single { source, target, .. } if source != target => {
                 format!("{source} as {target}")
@@ -2483,7 +2545,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             //   or  `use a::{b, c, d}};`
             //               ^^^^^^^^^^^
             let (has_nested, after_crate_name) =
-                find_span_immediately_after_crate_name(self.tcx.sess, module_name, import.use_span);
+                find_span_immediately_after_crate_name(self.tcx.sess, import.use_span);
             debug!(has_nested, ?after_crate_name);
 
             let source_map = self.tcx.sess.source_map();
@@ -2548,7 +2610,11 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 .iter()
                 .filter_map(|item| {
                     let parent_module = self.opt_local_def_id(item.parent_module)?.to_def_id();
-                    Some(StrippedCfgItem { parent_module, name: item.name, cfg: item.cfg.clone() })
+                    Some(StrippedCfgItem {
+                        parent_module,
+                        ident: item.ident,
+                        cfg: item.cfg.clone(),
+                    })
                 })
                 .collect::<Vec<_>>();
             local_items.as_slice()
@@ -2556,12 +2622,12 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             self.tcx.stripped_cfg_items(module.krate)
         };
 
-        for &StrippedCfgItem { parent_module, name, ref cfg } in symbols {
-            if parent_module != module || name.name != *segment {
+        for &StrippedCfgItem { parent_module, ident, ref cfg } in symbols {
+            if parent_module != module || ident.name != *segment {
                 continue;
             }
 
-            let note = errors::FoundItemConfigureOut { span: name.span };
+            let note = errors::FoundItemConfigureOut { span: ident.span };
             err.subdiagnostic(note);
 
             if let MetaItemKind::List(nested) = &cfg.kind
@@ -2690,11 +2756,7 @@ fn extend_span_to_previous_binding(sess: &Session, binding_span: Span) -> Option
 /// //       ^^^^^^^^^^^^^^^ -- true
 /// ```
 #[instrument(level = "debug", skip(sess))]
-fn find_span_immediately_after_crate_name(
-    sess: &Session,
-    module_name: Symbol,
-    use_span: Span,
-) -> (bool, Span) {
+fn find_span_immediately_after_crate_name(sess: &Session, use_span: Span) -> (bool, Span) {
     let source_map = sess.source_map();
 
     // Using `use issue_59764::foo::{baz, makro};` as an example throughout..
@@ -2747,6 +2809,8 @@ pub(crate) enum DiagMode {
     Pattern,
     /// The binding is part of a use statement
     Import {
+        /// `true` means diagnostics is for unresolved import
+        unresolved_import: bool,
         /// `true` mean add the tips afterward for case `use a::{b,c}`,
         /// rather than replacing within.
         append: bool,
@@ -2797,6 +2861,7 @@ fn show_candidates(
         return false;
     }
 
+    let mut showed = false;
     let mut accessible_path_strings: Vec<PathString<'_>> = Vec::new();
     let mut inaccessible_path_strings: Vec<PathString<'_>> = Vec::new();
 
@@ -2861,18 +2926,11 @@ fn show_candidates(
             } else {
                 // Get the unique item kinds and if there's only one, we use the right kind name
                 // instead of the more generic "items".
-                let mut kinds = accessible_path_strings
+                let kinds = accessible_path_strings
                     .iter()
                     .map(|(_, descr, _, _, _)| *descr)
-                    .collect::<FxHashSet<&str>>()
-                    .into_iter();
-                let kind = if let Some(kind) = kinds.next()
-                    && let None = kinds.next()
-                {
-                    kind
-                } else {
-                    "item"
-                };
+                    .collect::<UnordSet<&str>>();
+                let kind = if let Some(kind) = kinds.get_only() { kind } else { "item" };
                 let s = if kind.ends_with('s') { "es" } else { "s" };
 
                 ("one of these", kind, s, String::new(), "")
@@ -2962,8 +3020,11 @@ fn show_candidates(
             append_candidates(&mut msg, accessible_path_strings);
             err.help(msg);
         }
-        true
-    } else if !(inaccessible_path_strings.is_empty() || matches!(mode, DiagMode::Import { .. })) {
+        showed = true;
+    }
+    if !inaccessible_path_strings.is_empty()
+        && (!matches!(mode, DiagMode::Import { unresolved_import: false, .. }))
+    {
         let prefix =
             if let DiagMode::Pattern = mode { "you might have meant to match on " } else { "" };
         if let [(name, descr, source_span, note, _)] = &inaccessible_path_strings[..] {
@@ -3026,10 +3087,9 @@ fn show_candidates(
 
             err.span_note(multi_span, msg);
         }
-        true
-    } else {
-        false
+        showed = true;
     }
+    showed
 }
 
 #[derive(Debug)]
@@ -3067,7 +3127,7 @@ impl<'tcx> visit::Visitor<'tcx> for UsePlacementFinder {
 
     fn visit_item(&mut self, item: &'tcx ast::Item) {
         if self.target_module == item.id {
-            if let ItemKind::Mod(_, ModKind::Loaded(items, _inline, mod_spans, _)) = &item.kind {
+            if let ItemKind::Mod(_, _, ModKind::Loaded(items, _inline, mod_spans, _)) = &item.kind {
                 let inject = mod_spans.inject_use_span;
                 if is_span_suitable_for_use_injection(inject) {
                     self.first_legal_span = Some(inject);

@@ -11,13 +11,11 @@
 
 use std::assert_matches::assert_matches;
 
-use rustc_ast_ir::try_visit;
-use rustc_ast_ir::visit::VisitorResult;
 use rustc_infer::infer::{DefineOpaqueTypes, InferCtxt, InferOk};
 use rustc_macros::extension;
 use rustc_middle::traits::ObligationCause;
 use rustc_middle::traits::solve::{Certainty, Goal, GoalSource, NoSolution, QueryResult};
-use rustc_middle::ty::{TyCtxt, TypeFoldable};
+use rustc_middle::ty::{TyCtxt, TypeFoldable, VisitorResult, try_visit};
 use rustc_middle::{bug, ty};
 use rustc_next_trait_solver::resolve::EagerResolver;
 use rustc_next_trait_solver::solve::inspect::{self, instantiate_canonical_state};
@@ -238,7 +236,7 @@ impl<'a, 'tcx> InspectCandidate<'a, 'tcx> {
                 // constraints, we get an ICE if we already applied the constraints
                 // from the chosen candidate.
                 let proof_tree = infcx
-                    .probe(|_| infcx.evaluate_root_goal(goal, GenerateProofTree::Yes).1)
+                    .probe(|_| infcx.evaluate_root_goal(goal, GenerateProofTree::Yes, span).1)
                     .unwrap();
                 InspectGoal::new(infcx, self.goal.depth + 1, proof_tree, None, source)
             }
@@ -294,13 +292,12 @@ impl<'a, 'tcx> InspectGoal<'a, 'tcx> {
                 inspect::ProbeStep::NestedProbe(ref probe) => {
                     match probe.kind {
                         // These never assemble candidates for the goal we're trying to solve.
-                        inspect::ProbeKind::UpcastProjectionCompatibility
+                        inspect::ProbeKind::ProjectionCompatibility
                         | inspect::ProbeKind::ShadowedEnvProbing => continue,
 
                         inspect::ProbeKind::NormalizedSelfTyAssembly
                         | inspect::ProbeKind::UnsizeAssembly
                         | inspect::ProbeKind::Root { .. }
-                        | inspect::ProbeKind::TryNormalizeNonRigid { .. }
                         | inspect::ProbeKind::TraitCandidate { .. }
                         | inspect::ProbeKind::OpaqueTypeStorageLookup { .. }
                         | inspect::ProbeKind::RigidAlias { .. } => {
@@ -317,15 +314,16 @@ impl<'a, 'tcx> InspectGoal<'a, 'tcx> {
         }
 
         match probe.kind {
-            inspect::ProbeKind::UpcastProjectionCompatibility
-            | inspect::ProbeKind::ShadowedEnvProbing => bug!(),
+            inspect::ProbeKind::ProjectionCompatibility
+            | inspect::ProbeKind::ShadowedEnvProbing => {
+                bug!()
+            }
 
             inspect::ProbeKind::NormalizedSelfTyAssembly | inspect::ProbeKind::UnsizeAssembly => {}
 
             // We add a candidate even for the root evaluation if there
             // is only one way to prove a given goal, e.g. for `WellFormed`.
             inspect::ProbeKind::Root { result }
-            | inspect::ProbeKind::TryNormalizeNonRigid { result }
             | inspect::ProbeKind::TraitCandidate { source: _, result }
             | inspect::ProbeKind::OpaqueTypeStorageLookup { result }
             | inspect::ProbeKind::RigidAlias { result } => {
@@ -384,7 +382,7 @@ impl<'a, 'tcx> InspectGoal<'a, 'tcx> {
             if let Some(term_hack) = normalizes_to_term_hack {
                 infcx
                     .probe(|_| term_hack.constrain(infcx, DUMMY_SP, uncanonicalized_goal.param_env))
-                    .map(|certainty| ok.value.certainty.unify_with(certainty))
+                    .map(|certainty| ok.value.certainty.and(certainty))
             } else {
                 Ok(ok.value.certainty)
             }
@@ -440,8 +438,11 @@ impl<'tcx> InferCtxt<'tcx> {
         depth: usize,
         visitor: &mut V,
     ) -> V::Result {
-        let (_, proof_tree) =
-            <&SolverDelegate<'tcx>>::from(self).evaluate_root_goal(goal, GenerateProofTree::Yes);
+        let (_, proof_tree) = <&SolverDelegate<'tcx>>::from(self).evaluate_root_goal(
+            goal,
+            GenerateProofTree::Yes,
+            visitor.span(),
+        );
         let proof_tree = proof_tree.unwrap();
         visitor.visit_goal(&InspectGoal::new(self, depth, proof_tree, None, GoalSource::Misc))
     }

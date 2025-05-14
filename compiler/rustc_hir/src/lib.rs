@@ -5,14 +5,15 @@
 // tidy-alphabetical-start
 #![allow(internal_features)]
 #![feature(associated_type_defaults)]
+#![feature(box_patterns)]
 #![feature(closure_track_caller)]
 #![feature(debug_closure_helpers)]
 #![feature(exhaustive_patterns)]
-#![feature(let_chains)]
+#![feature(negative_impls)]
 #![feature(never_type)]
 #![feature(rustc_attrs)]
 #![feature(variant_count)]
-#![warn(unreachable_pub)]
+#![recursion_limit = "256"]
 // tidy-alphabetical-end
 
 extern crate self as rustc_hir;

@@ -5,16 +5,16 @@ use std::{fs, io};
 
 use rustc_abi::Size;
 use rustc_ast::InlineAsmTemplatePiece;
-use rustc_middle::mir::interpret::{
-    AllocBytes, AllocId, Allocation, GlobalAlloc, Pointer, Provenance, alloc_range,
-    read_target_uint,
-};
-use rustc_middle::mir::visit::Visitor;
-use rustc_middle::mir::*;
 use tracing::trace;
+use ty::print::PrettyPrinter;
 
 use super::graphviz::write_mir_fn_graphviz;
-use crate::mir::interpret::ConstAllocation;
+use crate::mir::interpret::{
+    AllocBytes, AllocId, Allocation, ConstAllocation, GlobalAlloc, Pointer, Provenance,
+    alloc_range, read_target_uint,
+};
+use crate::mir::visit::Visitor;
+use crate::mir::*;
 
 const INDENT: &str = "    ";
 /// Alignment for lining up comments following MIR statements
@@ -22,7 +22,7 @@ pub(crate) const ALIGN: usize = 40;
 
 /// An indication of where we are in the control flow graph. Used for printing
 /// extra information in `dump_mir`
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum PassWhere {
     /// We have not started dumping the control flow graph, but we are about to.
     BeforeCFG,
@@ -231,7 +231,8 @@ fn dump_path<'tcx>(
     let pass_num = if tcx.sess.opts.unstable_opts.dump_mir_exclude_pass_number {
         String::new()
     } else if pass_num {
-        format!(".{:03}-{:03}", body.phase.phase_index(), body.pass_count)
+        let (dialect_index, phase_index) = body.phase.index();
+        format!(".{}-{}-{:03}", dialect_index, phase_index, body.pass_count)
     } else {
         ".-------".to_string()
     };
@@ -252,11 +253,37 @@ fn dump_path<'tcx>(
             }));
             s
         }
-        ty::InstanceKind::AsyncDropGlueCtorShim(_, Some(ty)) => {
-            // Unfortunately, pretty-printed typed are not very filename-friendly.
-            // We dome some filtering.
+        ty::InstanceKind::AsyncDropGlueCtorShim(_, ty) => {
             let mut s = ".".to_owned();
             s.extend(ty.to_string().chars().filter_map(|c| match c {
+                ' ' => None,
+                ':' | '<' | '>' => Some('_'),
+                c => Some(c),
+            }));
+            s
+        }
+        ty::InstanceKind::AsyncDropGlue(_, ty) => {
+            let ty::Coroutine(_, args) = ty.kind() else {
+                bug!();
+            };
+            let ty = args.first().unwrap().expect_ty();
+            let mut s = ".".to_owned();
+            s.extend(ty.to_string().chars().filter_map(|c| match c {
+                ' ' => None,
+                ':' | '<' | '>' => Some('_'),
+                c => Some(c),
+            }));
+            s
+        }
+        ty::InstanceKind::FutureDropPollShim(_, proxy_cor, impl_cor) => {
+            let mut s = ".".to_owned();
+            s.extend(proxy_cor.to_string().chars().filter_map(|c| match c {
+                ' ' => None,
+                ':' | '<' | '>' => Some('_'),
+                c => Some(c),
+            }));
+            s.push('.');
+            s.extend(impl_cor.to_string().chars().filter_map(|c| match c {
                 ' ' => None,
                 ':' | '<' | '>' => Some('_'),
                 c => Some(c),
@@ -318,6 +345,7 @@ pub fn write_mir_pretty<'tcx>(
 
     writeln!(w, "// WARNING: This output format is intended for human consumers only")?;
     writeln!(w, "// and is subject to change without notice. Knock yourself out.")?;
+    writeln!(w, "// HINT: See also -Z dump-mir for MIR at specific points during compilation.")?;
 
     let mut first = true;
     for def_id in dump_mir_def_ids(tcx, single) {
@@ -529,12 +557,12 @@ fn write_mir_intro<'tcx>(
 
     // construct a scope tree and write it out
     let mut scope_tree: FxHashMap<SourceScope, Vec<SourceScope>> = Default::default();
-    for (index, scope_data) in body.source_scopes.iter().enumerate() {
+    for (index, scope_data) in body.source_scopes.iter_enumerated() {
         if let Some(parent) = scope_data.parent_scope {
-            scope_tree.entry(parent).or_default().push(SourceScope::new(index));
+            scope_tree.entry(parent).or_default().push(index);
         } else {
             // Only the argument scope has no parent, because it's the root.
-            assert_eq!(index, OUTERMOST_SOURCE_SCOPE.index());
+            assert_eq!(index, OUTERMOST_SOURCE_SCOPE);
         }
     }
 
@@ -618,13 +646,8 @@ fn write_function_coverage_info(
     function_coverage_info: &coverage::FunctionCoverageInfo,
     w: &mut dyn io::Write,
 ) -> io::Result<()> {
-    let coverage::FunctionCoverageInfo { body_span, expressions, mappings, .. } =
-        function_coverage_info;
+    let coverage::FunctionCoverageInfo { mappings, .. } = function_coverage_info;
 
-    writeln!(w, "{INDENT}coverage body span: {body_span:?}")?;
-    for (id, expression) in expressions.iter_enumerated() {
-        writeln!(w, "{INDENT}coverage {id:?} => {expression:?};")?;
-    }
     for coverage::Mapping { kind, span } in mappings {
         writeln!(w, "{INDENT}coverage {kind:?} => {span:?};")?;
     }
@@ -655,7 +678,10 @@ fn write_mir_sig(tcx: TyCtxt<'_>, body: &Body<'_>, w: &mut dyn io::Write) -> io:
             write!(w, "static mut ")?
         }
         (_, _) if is_function => write!(w, "fn ")?,
-        (DefKind::AnonConst | DefKind::InlineConst, _) => {} // things like anon const, not an item
+        // things like anon const, not an item
+        (DefKind::AnonConst | DefKind::InlineConst, _) => {}
+        // `global_asm!` have fake bodies, which we may dump after mir-build
+        (DefKind::GlobalAsm, _) => {}
         _ => bug!("Unexpected def kind {:?}", kind),
     }
 
@@ -859,7 +885,7 @@ impl Debug for Statement<'_> {
             BackwardIncompatibleDropHint { ref place, reason: _ } => {
                 // For now, we don't record the reason because there is only one use case,
                 // which is to report breaking change in drop order by Edition 2024
-                write!(fmt, "backward incompatible drop({place:?})")
+                write!(fmt, "BackwardIncompatibleDropHint({place:?})")
             }
         }
     }
@@ -973,7 +999,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             }
             FalseEdge { .. } => write!(fmt, "falseEdge"),
             FalseUnwind { .. } => write!(fmt, "falseUnwind"),
-            InlineAsm { template, ref operands, options, .. } => {
+            InlineAsm { template, operands, options, .. } => {
                 write!(fmt, "asm!(\"{}\"", InlineAsmTemplatePiece::to_string(template))?;
                 for op in operands {
                     write!(fmt, ", ")?;
@@ -1050,7 +1076,13 @@ impl<'tcx> TerminatorKind<'tcx> {
             Call { target: None, unwind: _, .. } => vec![],
             Yield { drop: Some(_), .. } => vec!["resume".into(), "drop".into()],
             Yield { drop: None, .. } => vec!["resume".into()],
-            Drop { unwind: UnwindAction::Cleanup(_), .. } => vec!["return".into(), "unwind".into()],
+            Drop { unwind: UnwindAction::Cleanup(_), drop: Some(_), .. } => {
+                vec!["return".into(), "unwind".into(), "drop".into()]
+            }
+            Drop { unwind: UnwindAction::Cleanup(_), drop: None, .. } => {
+                vec!["return".into(), "unwind".into()]
+            }
+            Drop { unwind: _, drop: Some(_), .. } => vec!["return".into(), "drop".into()],
             Drop { unwind: _, .. } => vec!["return".into()],
             Assert { unwind: UnwindAction::Cleanup(_), .. } => {
                 vec!["success".into(), "unwind".into()]
@@ -1103,6 +1135,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                     NullOp::AlignOf => write!(fmt, "AlignOf({t})"),
                     NullOp::OffsetOf(fields) => write!(fmt, "OffsetOf({t}, {fields:?})"),
                     NullOp::UbChecks => write!(fmt, "UbChecks()"),
+                    NullOp::ContractChecks => write!(fmt, "ContractChecks()"),
                 }
             }
             ThreadLocalRef(did) => ty::tls::with(|tcx| {
@@ -1201,7 +1234,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             && let Some(upvars) = tcx.upvars_mentioned(def_id)
                         {
                             for (&var_id, place) in iter::zip(upvars.keys(), places) {
-                                let var_name = tcx.hir().name(var_id);
+                                let var_name = tcx.hir_name(var_id);
                                 struct_fmt.field(var_name.as_str(), place);
                             }
                         } else {
@@ -1222,7 +1255,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                             && let Some(upvars) = tcx.upvars_mentioned(def_id)
                         {
                             for (&var_id, place) in iter::zip(upvars.keys(), places) {
-                                let var_name = tcx.hir().name(var_id);
+                                let var_name = tcx.hir_name(var_id);
                                 struct_fmt.field(var_name.as_str(), place);
                             }
                         } else {
@@ -1439,10 +1472,10 @@ impl<'tcx> Visitor<'tcx> for ExtraComments<'tcx> {
                 })
             };
 
-            // FIXME: call pretty_print_const_valtree?
-            let fmt_valtree = |valtree: &ty::ValTree<'tcx>| match valtree {
-                ty::ValTree::Leaf(leaf) => format!("Leaf({leaf:?})"),
-                ty::ValTree::Branch(_) => "Branch(..)".to_string(),
+            let fmt_valtree = |cv: &ty::Value<'tcx>| {
+                let mut cx = FmtPrinter::new(self.tcx, Namespace::ValueNS);
+                cx.pretty_print_const_valtree(*cv, /*print_ty*/ true).unwrap();
+                cx.into_buffer()
             };
 
             let val = match const_ {
@@ -1452,7 +1485,7 @@ impl<'tcx> Visitor<'tcx> for ExtraComments<'tcx> {
                         format!("ty::Unevaluated({}, {:?})", self.tcx.def_path_str(uv.def), uv.args,)
                     }
                     ty::ConstKind::Value(cv) => {
-                        format!("ty::Valtree({})", fmt_valtree(&cv.valtree))
+                        format!("ty::Valtree({})", fmt_valtree(&cv))
                     }
                     // No `ty::` prefix since we also use this to represent errors from `mir::Unevaluated`.
                     ty::ConstKind::Error(_) => "Error".to_string(),
@@ -1525,7 +1558,7 @@ pub fn write_allocations<'tcx>(
 ) -> io::Result<()> {
     fn alloc_ids_from_alloc(
         alloc: ConstAllocation<'_>,
-    ) -> impl DoubleEndedIterator<Item = AllocId> + '_ {
+    ) -> impl DoubleEndedIterator<Item = AllocId> {
         alloc.inner().provenance().ptrs().values().map(|p| p.alloc_id())
     }
 
@@ -1591,7 +1624,7 @@ pub fn write_allocations<'tcx>(
             Some(GlobalAlloc::Static(did)) if !tcx.is_foreign_item(did) => {
                 write!(w, " (static: {}", tcx.def_path_str(did))?;
                 if body.phase <= MirPhase::Runtime(RuntimePhase::PostCleanup)
-                    && tcx.hir().body_const_context(body.source.def_id()).is_some()
+                    && tcx.hir_body_const_context(body.source.def_id()).is_some()
                 {
                     // Statics may be cyclic and evaluating them too early
                     // in the MIR pipeline may cause cycle errors even though

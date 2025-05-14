@@ -17,8 +17,9 @@ use rustc_middle::traits::query::NoSolution;
 use rustc_middle::traits::solve::{CandidateSource, Certainty, Goal};
 use rustc_middle::traits::specialization_graph::OverlapMode;
 use rustc_middle::ty::fast_reject::DeepRejectCtxt;
-use rustc_middle::ty::visit::{TypeSuperVisitable, TypeVisitable, TypeVisitableExt, TypeVisitor};
-use rustc_middle::ty::{self, Ty, TyCtxt, TypingMode};
+use rustc_middle::ty::{
+    self, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitableExt, TypeVisitor, TypingMode,
+};
 pub use rustc_next_trait_solver::coherence::*;
 use rustc_next_trait_solver::solve::SolverDelegateEvalExt;
 use rustc_span::{DUMMY_SP, Span, sym};
@@ -368,9 +369,10 @@ fn impl_intersection_has_impossible_obligation<'a, 'cx, 'tcx>(
                 overflowing_predicates: ambiguities
                     .into_iter()
                     .filter(|error| {
-                        matches!(error.code, FulfillmentErrorCode::Ambiguity {
-                            overflow: Some(true)
-                        })
+                        matches!(
+                            error.code,
+                            FulfillmentErrorCode::Ambiguity { overflow: Some(true) }
+                        )
                     })
                     .map(|e| infcx.resolve_vars_if_possible(e.obligation.predicate))
                     .collect(),
@@ -491,13 +493,16 @@ fn plug_infer_with_placeholders<'tcx>(
                         // Comparing against a type variable never registers hidden types anyway
                         DefineOpaqueTypes::Yes,
                         ty,
-                        Ty::new_placeholder(self.infcx.tcx, ty::Placeholder {
-                            universe: self.universe,
-                            bound: ty::BoundTy {
-                                var: self.next_var(),
-                                kind: ty::BoundTyKind::Anon,
+                        Ty::new_placeholder(
+                            self.infcx.tcx,
+                            ty::Placeholder {
+                                universe: self.universe,
+                                bound: ty::BoundTy {
+                                    var: self.next_var(),
+                                    kind: ty::BoundTyKind::Anon,
+                                },
                             },
-                        }),
+                        ),
                     )
                 else {
                     bug!("we always expect to be able to plug an infer var with placeholder")
@@ -517,10 +522,10 @@ fn plug_infer_with_placeholders<'tcx>(
                         // registration happening anyway.
                         DefineOpaqueTypes::Yes,
                         ct,
-                        ty::Const::new_placeholder(self.infcx.tcx, ty::Placeholder {
-                            universe: self.universe,
-                            bound: self.next_var(),
-                        }),
+                        ty::Const::new_placeholder(
+                            self.infcx.tcx,
+                            ty::Placeholder { universe: self.universe, bound: self.next_var() },
+                        ),
                     )
                 else {
                     bug!("we always expect to be able to plug an infer var with placeholder")
@@ -532,7 +537,7 @@ fn plug_infer_with_placeholders<'tcx>(
         }
 
         fn visit_region(&mut self, r: ty::Region<'tcx>) {
-            if let ty::ReVar(vid) = *r {
+            if let ty::ReVar(vid) = r.kind() {
                 let r = self
                     .infcx
                     .inner
@@ -545,13 +550,16 @@ fn plug_infer_with_placeholders<'tcx>(
                             // Lifetimes don't contain opaque types (or any types for that matter).
                             DefineOpaqueTypes::Yes,
                             r,
-                            ty::Region::new_placeholder(self.infcx.tcx, ty::Placeholder {
-                                universe: self.universe,
-                                bound: ty::BoundRegion {
-                                    var: self.next_var(),
-                                    kind: ty::BoundRegionKind::Anon,
+                            ty::Region::new_placeholder(
+                                self.infcx.tcx,
+                                ty::Placeholder {
+                                    universe: self.universe,
+                                    bound: ty::BoundRegion {
+                                        var: self.next_var(),
+                                        kind: ty::BoundRegionKind::Anon,
+                                    },
                                 },
-                            }),
+                            ),
                         )
                     else {
                         bug!("we always expect to be able to plug an infer var with placeholder")
@@ -617,7 +625,7 @@ fn compute_intercrate_ambiguity_causes<'tcx>(
     let mut causes: FxIndexSet<IntercrateAmbiguityCause<'tcx>> = Default::default();
 
     for obligation in obligations {
-        search_ambiguity_causes(infcx, obligation.clone().into(), &mut causes);
+        search_ambiguity_causes(infcx, obligation.as_goal(), &mut causes);
     }
 
     causes
@@ -763,9 +771,9 @@ fn search_ambiguity_causes<'tcx>(
     causes: &mut FxIndexSet<IntercrateAmbiguityCause<'tcx>>,
 ) {
     infcx.probe(|_| {
-        infcx.visit_proof_tree(goal, &mut AmbiguityCausesVisitor {
-            cache: Default::default(),
-            causes,
-        })
+        infcx.visit_proof_tree(
+            goal,
+            &mut AmbiguityCausesVisitor { cache: Default::default(), causes },
+        )
     });
 }

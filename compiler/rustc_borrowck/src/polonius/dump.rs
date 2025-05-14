@@ -5,26 +5,28 @@ use rustc_index::IndexVec;
 use rustc_middle::mir::pretty::{
     PassWhere, PrettyPrintMirOptions, create_dump_file, dump_enabled, dump_mir_to_writer,
 };
-use rustc_middle::mir::{Body, ClosureRegionRequirements, Location};
+use rustc_middle::mir::{Body, Location};
 use rustc_middle::ty::{RegionVid, TyCtxt};
 use rustc_mir_dataflow::points::PointIndex;
 use rustc_session::config::MirIncludeSpans;
 
 use crate::borrow_set::BorrowSet;
 use crate::constraints::OutlivesConstraint;
-use crate::polonius::{LocalizedOutlivesConstraint, LocalizedOutlivesConstraintSet};
+use crate::polonius::{
+    LocalizedOutlivesConstraint, LocalizedOutlivesConstraintSet, PoloniusDiagnosticsContext,
+};
 use crate::region_infer::values::LivenessValues;
 use crate::type_check::Locations;
-use crate::{BorrowckInferCtxt, RegionInferenceContext};
+use crate::{BorrowckInferCtxt, ClosureRegionRequirements, RegionInferenceContext};
 
 /// `-Zdump-mir=polonius` dumps MIR annotated with NLL and polonius specific information.
 pub(crate) fn dump_polonius_mir<'tcx>(
     infcx: &BorrowckInferCtxt<'tcx>,
     body: &Body<'tcx>,
     regioncx: &RegionInferenceContext<'tcx>,
-    borrow_set: &BorrowSet<'tcx>,
-    localized_outlives_constraints: Option<LocalizedOutlivesConstraintSet>,
     closure_region_requirements: &Option<ClosureRegionRequirements<'tcx>>,
+    borrow_set: &BorrowSet<'tcx>,
+    polonius_diagnostics: Option<&PoloniusDiagnosticsContext>,
 ) {
     let tcx = infcx.tcx;
     if !tcx.sess.opts.unstable_opts.polonius.is_next_enabled() {
@@ -35,8 +37,8 @@ pub(crate) fn dump_polonius_mir<'tcx>(
         return;
     }
 
-    let localized_outlives_constraints = localized_outlives_constraints
-        .expect("missing localized constraints with `-Zpolonius=next`");
+    let polonius_diagnostics =
+        polonius_diagnostics.expect("missing diagnostics context with `-Zpolonius=next`");
 
     let _: io::Result<()> = try {
         let mut file = create_dump_file(tcx, "html", false, "polonius", &0, body)?;
@@ -45,7 +47,7 @@ pub(crate) fn dump_polonius_mir<'tcx>(
             body,
             regioncx,
             borrow_set,
-            localized_outlives_constraints,
+            &polonius_diagnostics.localized_outlives_constraints,
             closure_region_requirements,
             &mut file,
         )?;
@@ -63,7 +65,7 @@ fn emit_polonius_dump<'tcx>(
     body: &Body<'tcx>,
     regioncx: &RegionInferenceContext<'tcx>,
     borrow_set: &BorrowSet<'tcx>,
-    localized_outlives_constraints: LocalizedOutlivesConstraintSet,
+    localized_outlives_constraints: &LocalizedOutlivesConstraintSet,
     closure_region_requirements: &Option<ClosureRegionRequirements<'tcx>>,
     out: &mut dyn io::Write,
 ) -> io::Result<()> {
@@ -224,7 +226,7 @@ fn emit_polonius_mir<'tcx>(
         regioncx,
         closure_region_requirements,
         borrow_set,
-        pass_where.clone(),
+        pass_where,
         out,
     )?;
 
@@ -332,7 +334,7 @@ fn emit_mermaid_nll_regions<'tcx>(
     writeln!(out, "flowchart TD")?;
 
     // Emit the region nodes.
-    for region in regioncx.var_infos.indices() {
+    for region in regioncx.definitions.indices() {
         write!(out, "{}[\"", region.as_usize())?;
         render_region(region, regioncx, out)?;
         writeln!(out, "\"]")?;
@@ -385,7 +387,7 @@ fn emit_mermaid_nll_sccs<'tcx>(
     // Gather and emit the SCC nodes.
     let mut nodes_per_scc: IndexVec<_, _> =
         regioncx.constraint_sccs().all_sccs().map(|_| Vec::new()).collect();
-    for region in regioncx.var_infos.indices() {
+    for region in regioncx.definitions.indices() {
         let scc = regioncx.constraint_sccs().scc(region);
         nodes_per_scc[scc].push(region);
     }

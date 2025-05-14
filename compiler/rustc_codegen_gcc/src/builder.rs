@@ -29,7 +29,7 @@ use rustc_middle::ty::layout::{
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
 use rustc_span::Span;
 use rustc_span::def_id::DefId;
-use rustc_target::abi::call::FnAbi;
+use rustc_target::callconv::FnAbi;
 use rustc_target::spec::{HasTargetSpec, HasWasmCAbiOpt, HasX86AbiOpt, Target, WasmCAbi, X86Abi};
 
 use crate::common::{SignType, TypeReflection, type_is_pointer};
@@ -45,7 +45,7 @@ enum ExtremumOperation {
     Min,
 }
 
-pub struct Builder<'a: 'gcc, 'gcc, 'tcx> {
+pub struct Builder<'a, 'gcc, 'tcx> {
     pub cx: &'a CodegenCx<'gcc, 'tcx>,
     pub block: Block<'gcc>,
     pub location: Option<Location<'gcc>>,
@@ -155,14 +155,11 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
         // NOTE: not sure why, but we have the wrong type here.
         let int_type = compare_exchange.get_param(2).to_rvalue().get_type();
         let src = self.context.new_bitcast(self.location, src, int_type);
-        self.context.new_call(self.location, compare_exchange, &[
-            dst,
-            expected,
-            src,
-            weak,
-            order,
-            failure_order,
-        ])
+        self.context.new_call(
+            self.location,
+            compare_exchange,
+            &[dst, expected, src, weak, order, failure_order],
+        )
     }
 
     pub fn assign(&self, lvalue: LValue<'gcc>, value: RValue<'gcc>) {
@@ -371,16 +368,8 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
         let previous_arg_count = args.len();
         let orig_args = args;
         let args = {
-            let function_address_names = self.function_address_names.borrow();
-            let original_function_name = function_address_names.get(&func_ptr);
             func_ptr = llvm::adjust_function(self.context, &func_name, func_ptr, args);
-            llvm::adjust_intrinsic_arguments(
-                self,
-                gcc_func,
-                args.into(),
-                &func_name,
-                original_function_name,
-            )
+            llvm::adjust_intrinsic_arguments(self, gcc_func, args.into(), &func_name)
         };
         let args_adjusted = args.len() != previous_arg_count;
         let args = self.check_ptr_call("call", func_ptr, &args);
@@ -668,6 +657,7 @@ impl<'a, 'gcc, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'gcc, 'tcx> {
         a + b
     }
 
+    // TODO(antoyo): should we also override the `unchecked_` versions?
     fn sub(&mut self, a: RValue<'gcc>, b: RValue<'gcc>) -> RValue<'gcc> {
         self.gcc_sub(a, b)
     }
@@ -835,31 +825,6 @@ impl<'a, 'gcc, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'gcc, 'tcx> {
         set_rvalue_location(self, self.gcc_not(a))
     }
 
-    fn unchecked_sadd(&mut self, a: RValue<'gcc>, b: RValue<'gcc>) -> RValue<'gcc> {
-        set_rvalue_location(self, self.gcc_add(a, b))
-    }
-
-    fn unchecked_uadd(&mut self, a: RValue<'gcc>, b: RValue<'gcc>) -> RValue<'gcc> {
-        set_rvalue_location(self, self.gcc_add(a, b))
-    }
-
-    fn unchecked_ssub(&mut self, a: RValue<'gcc>, b: RValue<'gcc>) -> RValue<'gcc> {
-        set_rvalue_location(self, self.gcc_sub(a, b))
-    }
-
-    fn unchecked_usub(&mut self, a: RValue<'gcc>, b: RValue<'gcc>) -> RValue<'gcc> {
-        // TODO(antoyo): should generate poison value?
-        set_rvalue_location(self, self.gcc_sub(a, b))
-    }
-
-    fn unchecked_smul(&mut self, a: RValue<'gcc>, b: RValue<'gcc>) -> RValue<'gcc> {
-        set_rvalue_location(self, self.gcc_mul(a, b))
-    }
-
-    fn unchecked_umul(&mut self, a: RValue<'gcc>, b: RValue<'gcc>) -> RValue<'gcc> {
-        set_rvalue_location(self, self.gcc_mul(a, b))
-    }
-
     fn fadd_fast(&mut self, lhs: RValue<'gcc>, rhs: RValue<'gcc>) -> RValue<'gcc> {
         // NOTE: it seems like we cannot enable fast-mode for a single operation in GCC.
         set_rvalue_location(self, lhs + rhs)
@@ -1016,10 +981,14 @@ impl<'a, 'gcc, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'gcc, 'tcx> {
             OperandValue::Ref(place.val)
         } else if place.layout.is_gcc_immediate() {
             let load = self.load(place.layout.gcc_type(self), place.val.llval, place.val.align);
-            if let abi::BackendRepr::Scalar(ref scalar) = place.layout.backend_repr {
-                scalar_load_metadata(self, load, scalar);
-            }
-            OperandValue::Immediate(self.to_immediate(load, place.layout))
+            OperandValue::Immediate(
+                if let abi::BackendRepr::Scalar(ref scalar) = place.layout.backend_repr {
+                    scalar_load_metadata(self, load, scalar);
+                    self.to_immediate_scalar(load, *scalar)
+                } else {
+                    load
+                },
+            )
         } else if let abi::BackendRepr::ScalarPair(ref a, ref b) = place.layout.backend_repr {
             let b_offset = a.size(self).align_to(b.align(self).abi);
 
@@ -1076,9 +1045,11 @@ impl<'a, 'gcc, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'gcc, 'tcx> {
         let align = dest.val.align.restrict_for_offset(dest.layout.field(self.cx(), 0).size);
         cg_elem.val.store(self, PlaceRef::new_sized_aligned(current_val, cg_elem.layout, align));
 
-        let next = self.inbounds_gep(self.backend_type(cg_elem.layout), current.to_rvalue(), &[
-            self.const_usize(1),
-        ]);
+        let next = self.inbounds_gep(
+            self.backend_type(cg_elem.layout),
+            current.to_rvalue(),
+            &[self.const_usize(1)],
+        );
         self.llbb().add_assignment(self.location, current, next);
         self.br(header_bb);
 
@@ -1292,7 +1263,50 @@ impl<'a, 'gcc, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'gcc, 'tcx> {
     }
 
     fn fcmp(&mut self, op: RealPredicate, lhs: RValue<'gcc>, rhs: RValue<'gcc>) -> RValue<'gcc> {
-        self.context.new_comparison(self.location, op.to_gcc_comparison(), lhs, rhs)
+        // LLVM has a concept of "unordered compares", where eg ULT returns true if either the two
+        // arguments are unordered (i.e. either is NaN), or the lhs is less than the rhs. GCC does
+        // not natively have this concept, so in some cases we must manually handle NaNs
+        let must_handle_nan = match op {
+            RealPredicate::RealPredicateFalse => unreachable!(),
+            RealPredicate::RealOEQ => false,
+            RealPredicate::RealOGT => false,
+            RealPredicate::RealOGE => false,
+            RealPredicate::RealOLT => false,
+            RealPredicate::RealOLE => false,
+            RealPredicate::RealONE => false,
+            RealPredicate::RealORD => unreachable!(),
+            RealPredicate::RealUNO => unreachable!(),
+            RealPredicate::RealUEQ => false,
+            RealPredicate::RealUGT => true,
+            RealPredicate::RealUGE => true,
+            RealPredicate::RealULT => true,
+            RealPredicate::RealULE => true,
+            RealPredicate::RealUNE => false,
+            RealPredicate::RealPredicateTrue => unreachable!(),
+        };
+
+        let cmp = self.context.new_comparison(self.location, op.to_gcc_comparison(), lhs, rhs);
+
+        if must_handle_nan {
+            let is_nan = self.context.new_binary_op(
+                self.location,
+                BinaryOp::LogicalOr,
+                self.cx.bool_type,
+                // compare a value to itself to check whether it is NaN
+                self.context.new_comparison(self.location, ComparisonOp::NotEquals, lhs, lhs),
+                self.context.new_comparison(self.location, ComparisonOp::NotEquals, rhs, rhs),
+            );
+
+            self.context.new_binary_op(
+                self.location,
+                BinaryOp::LogicalOr,
+                self.cx.bool_type,
+                is_nan,
+                cmp,
+            )
+        } else {
+            cmp
+        }
     }
 
     /* Miscellaneous instructions */
@@ -1719,7 +1733,7 @@ impl<'a, 'gcc, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'gcc, 'tcx> {
 
     fn to_immediate_scalar(&mut self, val: Self::Value, scalar: abi::Scalar) -> Self::Value {
         if scalar.is_bool() {
-            return self.trunc(val, self.cx().type_i1());
+            return self.unchecked_utrunc(val, self.cx().type_i1());
         }
         val
     }
@@ -2440,7 +2454,6 @@ impl ToGccOrdering for AtomicOrdering {
         use MemOrdering::*;
 
         let ordering = match self {
-            AtomicOrdering::Unordered => __ATOMIC_RELAXED,
             AtomicOrdering::Relaxed => __ATOMIC_RELAXED, // TODO(antoyo): check if that's the same.
             AtomicOrdering::Acquire => __ATOMIC_ACQUIRE,
             AtomicOrdering::Release => __ATOMIC_RELEASE,
@@ -2460,9 +2473,5 @@ fn get_maybe_pointer_size(value: RValue<'_>) -> u32 {
 #[cfg(not(feature = "master"))]
 fn get_maybe_pointer_size(value: RValue<'_>) -> u32 {
     let type_ = value.get_type();
-    if type_.get_pointee().is_some() {
-        std::mem::size_of::<*const ()>() as _
-    } else {
-        type_.get_size()
-    }
+    if type_.get_pointee().is_some() { size_of::<*const ()>() as _ } else { type_.get_size() }
 }

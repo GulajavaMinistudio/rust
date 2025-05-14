@@ -213,6 +213,52 @@ macro_rules! uint_impl {
             (!self).trailing_zeros()
         }
 
+        /// Returns `self` with only the most significant bit set, or `0` if
+        /// the input is `0`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// #![feature(isolate_most_least_significant_one)]
+        ///
+        #[doc = concat!("let n: ", stringify!($SelfT), " = 0b_01100100;")]
+        ///
+        /// assert_eq!(n.isolate_most_significant_one(), 0b_01000000);
+        #[doc = concat!("assert_eq!(0_", stringify!($SelfT), ".isolate_most_significant_one(), 0);")]
+        /// ```
+        #[unstable(feature = "isolate_most_least_significant_one", issue = "136909")]
+        #[must_use = "this returns the result of the operation, \
+                      without modifying the original"]
+        #[inline(always)]
+        pub const fn isolate_most_significant_one(self) -> Self {
+            self & (((1 as $SelfT) << (<$SelfT>::BITS - 1)).wrapping_shr(self.leading_zeros()))
+        }
+
+        /// Returns `self` with only the least significant bit set, or `0` if
+        /// the input is `0`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// #![feature(isolate_most_least_significant_one)]
+        ///
+        #[doc = concat!("let n: ", stringify!($SelfT), " = 0b_01100100;")]
+        ///
+        /// assert_eq!(n.isolate_least_significant_one(), 0b_00000100);
+        #[doc = concat!("assert_eq!(0_", stringify!($SelfT), ".isolate_least_significant_one(), 0);")]
+        /// ```
+        #[unstable(feature = "isolate_most_least_significant_one", issue = "136909")]
+        #[must_use = "this returns the result of the operation, \
+                      without modifying the original"]
+        #[inline(always)]
+        pub const fn isolate_least_significant_one(self) -> Self {
+            self & self.wrapping_neg()
+        }
+
         /// Returns the bit pattern of `self` reinterpreted as a signed integer of the same size.
         ///
         /// This produces the same result as an `as` cast, but ensures that the bit-width remains
@@ -223,13 +269,12 @@ macro_rules! uint_impl {
         /// Basic usage:
         ///
         /// ```
-        /// #![feature(integer_sign_cast)]
-        ///
         #[doc = concat!("let n = ", stringify!($SelfT), "::MAX;")]
         ///
         #[doc = concat!("assert_eq!(n.cast_signed(), -1", stringify!($SignedT), ");")]
         /// ```
-        #[unstable(feature = "integer_sign_cast", issue = "125882")]
+        #[stable(feature = "integer_sign_cast", since = "1.87.0")]
+        #[rustc_const_stable(feature = "integer_sign_cast", since = "1.87.0")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline(always)]
@@ -1187,6 +1232,50 @@ macro_rules! uint_impl {
             self % rhs
         }
 
+        /// Same value as `self | other`, but UB if any bit position is set in both inputs.
+        ///
+        /// This is a situational micro-optimization for places where you'd rather
+        /// use addition on some platforms and bitwise or on other platforms, based
+        /// on exactly which instructions combine better with whatever else you're
+        /// doing.  Note that there's no reason to bother using this for places
+        /// where it's clear from the operations involved that they can't overlap.
+        /// For example, if you're combining `u16`s into a `u32` with
+        /// `((a as u32) << 16) | (b as u32)`, that's fine, as the backend will
+        /// know those sides of the `|` are disjoint without needing help.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// #![feature(disjoint_bitor)]
+        ///
+        /// // SAFETY: `1` and `4` have no bits in common.
+        /// unsafe {
+        #[doc = concat!("    assert_eq!(1_", stringify!($SelfT), ".unchecked_disjoint_bitor(4), 5);")]
+        /// }
+        /// ```
+        ///
+        /// # Safety
+        ///
+        /// Requires that `(self & other) == 0`, otherwise it's immediate UB.
+        ///
+        /// Equivalently, requires that `(self | other) == (self + other)`.
+        #[unstable(feature = "disjoint_bitor", issue = "135758")]
+        #[rustc_const_unstable(feature = "disjoint_bitor", issue = "135758")]
+        #[inline]
+        pub const unsafe fn unchecked_disjoint_bitor(self, other: Self) -> Self {
+            assert_unsafe_precondition!(
+                check_language_ub,
+                concat!(stringify!($SelfT), "::unchecked_disjoint_bitor cannot have overlapping bits"),
+                (
+                    lhs: $SelfT = self,
+                    rhs: $SelfT = other,
+                ) => (lhs & rhs) == 0,
+            );
+
+            // SAFETY: Same precondition
+            unsafe { intrinsics::disjoint_bitor(self, other) }
+        }
+
         /// Returns the logarithm of the number with respect to an arbitrary base,
         /// rounded down.
         ///
@@ -1524,11 +1613,11 @@ macro_rules! uint_impl {
         ///
         /// Basic usage:
         /// ```
-        /// #![feature(unbounded_shifts)]
         #[doc = concat!("assert_eq!(0x1", stringify!($SelfT), ".unbounded_shl(4), 0x10);")]
         #[doc = concat!("assert_eq!(0x1", stringify!($SelfT), ".unbounded_shl(129), 0);")]
         /// ```
-        #[unstable(feature = "unbounded_shifts", issue = "129375")]
+        #[stable(feature = "unbounded_shifts", since = "1.87.0")]
+        #[rustc_const_stable(feature = "unbounded_shifts", since = "1.87.0")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
@@ -1645,11 +1734,11 @@ macro_rules! uint_impl {
         ///
         /// Basic usage:
         /// ```
-        /// #![feature(unbounded_shifts)]
         #[doc = concat!("assert_eq!(0x10", stringify!($SelfT), ".unbounded_shr(4), 0x1);")]
         #[doc = concat!("assert_eq!(0x10", stringify!($SelfT), ".unbounded_shr(129), 0);")]
         /// ```
-        #[unstable(feature = "unbounded_shifts", issue = "129375")]
+        #[stable(feature = "unbounded_shifts", since = "1.87.0")]
+        #[rustc_const_stable(feature = "unbounded_shifts", since = "1.87.0")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
@@ -2346,15 +2435,22 @@ macro_rules! uint_impl {
         /// assert_eq!((sum1, sum0), (9, 6));
         /// ```
         #[unstable(feature = "bigint_helper_methods", issue = "85532")]
+        #[rustc_const_unstable(feature = "bigint_helper_methods", issue = "85532")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
         pub const fn carrying_add(self, rhs: Self, carry: bool) -> (Self, bool) {
             // note: longer-term this should be done via an intrinsic, but this has been shown
             //   to generate optimal code for now, and LLVM doesn't have an equivalent intrinsic
-            let (a, b) = self.overflowing_add(rhs);
-            let (c, d) = a.overflowing_add(carry as $SelfT);
-            (c, b | d)
+            let (a, c1) = self.overflowing_add(rhs);
+            let (b, c2) = a.overflowing_add(carry as $SelfT);
+            // Ideally LLVM would know this is disjoint without us telling them,
+            // but it doesn't <https://github.com/llvm/llvm-project/issues/118162>
+            // SAFETY: Only one of `c1` and `c2` can be set.
+            // For c1 to be set we need to have overflowed, but if we did then
+            // `a` is at most `MAX-1`, which means that `c2` cannot possibly
+            // overflow because it's adding at most `1` (since it came from `bool`)
+            (b, unsafe { intrinsics::disjoint_bitor(c1, c2) })
         }
 
         /// Calculates `self` + `rhs` with a signed `rhs`.
@@ -2437,15 +2533,20 @@ macro_rules! uint_impl {
         #[doc = concat!("assert_eq!((diff1, diff0), (3, ", stringify!($SelfT), "::MAX));")]
         /// ```
         #[unstable(feature = "bigint_helper_methods", issue = "85532")]
+        #[rustc_const_unstable(feature = "bigint_helper_methods", issue = "85532")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
         pub const fn borrowing_sub(self, rhs: Self, borrow: bool) -> (Self, bool) {
             // note: longer-term this should be done via an intrinsic, but this has been shown
             //   to generate optimal code for now, and LLVM doesn't have an equivalent intrinsic
-            let (a, b) = self.overflowing_sub(rhs);
-            let (c, d) = a.overflowing_sub(borrow as $SelfT);
-            (c, b | d)
+            let (a, c1) = self.overflowing_sub(rhs);
+            let (b, c2) = a.overflowing_sub(borrow as $SelfT);
+            // SAFETY: Only one of `c1` and `c2` can be set.
+            // For c1 to be set we need to have underflowed, but if we did then
+            // `a` is nonzero, which means that `c2` cannot possibly
+            // underflow because it's subtracting at most `1` (since it came from `bool`)
+            (b, unsafe { intrinsics::disjoint_bitor(c1, c2) })
         }
 
         /// Calculates `self` - `rhs` with a signed `rhs`
@@ -2490,7 +2591,7 @@ macro_rules! uint_impl {
                       without modifying the original"]
         #[inline]
         pub const fn abs_diff(self, other: Self) -> Self {
-            if mem::size_of::<Self>() == 1 {
+            if size_of::<Self>() == 1 {
                 // Trick LLVM into generating the psadbw instruction when SSE2
                 // is available and this function is autovectorized for u8's.
                 (self as i32).wrapping_sub(other as i32).abs() as Self
@@ -3224,14 +3325,14 @@ macro_rules! uint_impl {
         /// Basic usage:
         ///
         /// ```
-        /// #![feature(unsigned_is_multiple_of)]
         #[doc = concat!("assert!(6_", stringify!($SelfT), ".is_multiple_of(2));")]
         #[doc = concat!("assert!(!5_", stringify!($SelfT), ".is_multiple_of(2));")]
         ///
         #[doc = concat!("assert!(0_", stringify!($SelfT), ".is_multiple_of(0));")]
         #[doc = concat!("assert!(!6_", stringify!($SelfT), ".is_multiple_of(0));")]
         /// ```
-        #[unstable(feature = "unsigned_is_multiple_of", issue = "128101")]
+        #[stable(feature = "unsigned_is_multiple_of", since = "1.87.0")]
+        #[rustc_const_stable(feature = "unsigned_is_multiple_of", since = "1.87.0")]
         #[must_use]
         #[inline]
         #[rustc_inherit_overflow_checks]
@@ -3242,7 +3343,7 @@ macro_rules! uint_impl {
             }
         }
 
-        /// Returns `true` if and only if `self == 2^k` for some `k`.
+        /// Returns `true` if and only if `self == 2^k` for some unsigned integer `k`.
         ///
         /// # Examples
         ///
@@ -3369,7 +3470,7 @@ macro_rules! uint_impl {
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
-        pub const fn to_be_bytes(self) -> [u8; mem::size_of::<Self>()] {
+        pub const fn to_be_bytes(self) -> [u8; size_of::<Self>()] {
             self.to_be().to_ne_bytes()
         }
 
@@ -3389,7 +3490,7 @@ macro_rules! uint_impl {
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
-        pub const fn to_le_bytes(self) -> [u8; mem::size_of::<Self>()] {
+        pub const fn to_le_bytes(self) -> [u8; size_of::<Self>()] {
             self.to_le().to_ne_bytes()
         }
 
@@ -3422,10 +3523,11 @@ macro_rules! uint_impl {
         #[rustc_const_stable(feature = "const_int_conversion", since = "1.44.0")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
+        #[allow(unnecessary_transmutes)]
         // SAFETY: const sound because integers are plain old datatypes so we can always
         // transmute them to arrays of bytes
         #[inline]
-        pub const fn to_ne_bytes(self) -> [u8; mem::size_of::<Self>()] {
+        pub const fn to_ne_bytes(self) -> [u8; size_of::<Self>()] {
             // SAFETY: integers are plain old datatypes so we can always transmute them to
             // arrays of bytes
             unsafe { mem::transmute(self) }
@@ -3447,7 +3549,7 @@ macro_rules! uint_impl {
         ///
         /// ```
         #[doc = concat!("fn read_be_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {")]
-        #[doc = concat!("    let (int_bytes, rest) = input.split_at(std::mem::size_of::<", stringify!($SelfT), ">());")]
+        #[doc = concat!("    let (int_bytes, rest) = input.split_at(size_of::<", stringify!($SelfT), ">());")]
         ///     *input = rest;
         #[doc = concat!("    ", stringify!($SelfT), "::from_be_bytes(int_bytes.try_into().unwrap())")]
         /// }
@@ -3456,7 +3558,7 @@ macro_rules! uint_impl {
         #[rustc_const_stable(feature = "const_int_conversion", since = "1.44.0")]
         #[must_use]
         #[inline]
-        pub const fn from_be_bytes(bytes: [u8; mem::size_of::<Self>()]) -> Self {
+        pub const fn from_be_bytes(bytes: [u8; size_of::<Self>()]) -> Self {
             Self::from_be(Self::from_ne_bytes(bytes))
         }
 
@@ -3476,7 +3578,7 @@ macro_rules! uint_impl {
         ///
         /// ```
         #[doc = concat!("fn read_le_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {")]
-        #[doc = concat!("    let (int_bytes, rest) = input.split_at(std::mem::size_of::<", stringify!($SelfT), ">());")]
+        #[doc = concat!("    let (int_bytes, rest) = input.split_at(size_of::<", stringify!($SelfT), ">());")]
         ///     *input = rest;
         #[doc = concat!("    ", stringify!($SelfT), "::from_le_bytes(int_bytes.try_into().unwrap())")]
         /// }
@@ -3485,7 +3587,7 @@ macro_rules! uint_impl {
         #[rustc_const_stable(feature = "const_int_conversion", since = "1.44.0")]
         #[must_use]
         #[inline]
-        pub const fn from_le_bytes(bytes: [u8; mem::size_of::<Self>()]) -> Self {
+        pub const fn from_le_bytes(bytes: [u8; size_of::<Self>()]) -> Self {
             Self::from_le(Self::from_ne_bytes(bytes))
         }
 
@@ -3516,18 +3618,19 @@ macro_rules! uint_impl {
         ///
         /// ```
         #[doc = concat!("fn read_ne_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {")]
-        #[doc = concat!("    let (int_bytes, rest) = input.split_at(std::mem::size_of::<", stringify!($SelfT), ">());")]
+        #[doc = concat!("    let (int_bytes, rest) = input.split_at(size_of::<", stringify!($SelfT), ">());")]
         ///     *input = rest;
         #[doc = concat!("    ", stringify!($SelfT), "::from_ne_bytes(int_bytes.try_into().unwrap())")]
         /// }
         /// ```
         #[stable(feature = "int_to_from_bytes", since = "1.32.0")]
         #[rustc_const_stable(feature = "const_int_conversion", since = "1.44.0")]
+        #[allow(unnecessary_transmutes)]
         #[must_use]
         // SAFETY: const sound because integers are plain old datatypes so we can always
         // transmute to them
         #[inline]
-        pub const fn from_ne_bytes(bytes: [u8; mem::size_of::<Self>()]) -> Self {
+        pub const fn from_ne_bytes(bytes: [u8; size_of::<Self>()]) -> Self {
             // SAFETY: integers are plain old datatypes so we can always transmute to them
             unsafe { mem::transmute(bytes) }
         }

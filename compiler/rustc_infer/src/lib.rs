@@ -21,10 +21,8 @@
 #![feature(assert_matches)]
 #![feature(extend_one)]
 #![feature(iterator_try_collect)]
-#![feature(let_chains)]
 #![feature(rustdoc_internals)]
 #![recursion_limit = "512"] // For rustdoc
-#![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
 mod errors;

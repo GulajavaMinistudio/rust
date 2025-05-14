@@ -1,7 +1,6 @@
 use std::mem;
 
 use rustc_index::IndexVec;
-use rustc_middle::mir::tcx::{PlaceTy, RvalueInitializationState};
 use rustc_middle::mir::*;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
 use rustc_middle::{bug, span_bug};
@@ -417,7 +416,11 @@ impl<'a, 'tcx, F: Fn(Ty<'tcx>) -> bool> MoveDataBuilder<'a, 'tcx, F> {
             | Rvalue::Discriminant(..)
             | Rvalue::Len(..)
             | Rvalue::NullaryOp(
-                NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(..) | NullOp::UbChecks,
+                NullOp::SizeOf
+                | NullOp::AlignOf
+                | NullOp::OffsetOf(..)
+                | NullOp::UbChecks
+                | NullOp::ContractChecks,
                 _,
             ) => {}
         }

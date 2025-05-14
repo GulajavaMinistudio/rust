@@ -4,16 +4,18 @@
 //! executable MIR bodies, so we have to do this instead.
 #![allow(clippy::float_cmp)]
 
+use std::sync::Arc;
+
 use crate::source::{SpanRangeExt, walk_span_to_context};
 use crate::{clip, is_direct_expn_of, sext, unsext};
 
+use rustc_abi::Size;
 use rustc_apfloat::Float;
 use rustc_apfloat::ieee::{Half, Quad};
 use rustc_ast::ast::{self, LitFloatType, LitKind};
-use rustc_data_structures::sync::Lrc;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::{
-    BinOp, BinOpKind, Block, ConstBlock, Expr, ExprKind, HirId, Item, ItemKind, Node, PatExpr, PatExprKind, QPath, UnOp,
+    BinOpKind, Block, ConstBlock, Expr, ExprKind, HirId, Item, ItemKind, Node, PatExpr, PatExprKind, QPath, UnOp,
 };
 use rustc_lexer::tokenize;
 use rustc_lint::LateContext;
@@ -24,7 +26,6 @@ use rustc_middle::{bug, mir, span_bug};
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::Ident;
 use rustc_span::{SyntaxContext, sym};
-use rustc_target::abi::Size;
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -37,19 +38,21 @@ pub enum Constant<'tcx> {
     /// A `String` (e.g., "abc").
     Str(String),
     /// A binary string (e.g., `b"abc"`).
-    Binary(Lrc<[u8]>),
+    Binary(Arc<[u8]>),
     /// A single `char` (e.g., `'a'`).
     Char(char),
     /// An integer's bit representation.
     Int(u128),
-    /// An `f16`.
-    F16(f16),
+    /// An `f16` bitcast to a `u16`.
+    // FIXME(f16_f128): use `f16` once builtins are available on all host tools platforms.
+    F16(u16),
     /// An `f32`.
     F32(f32),
     /// An `f64`.
     F64(f64),
-    /// An `f128`.
-    F128(f128),
+    /// An `f128` bitcast to a `u128`.
+    // FIXME(f16_f128): use `f128` once builtins are available on all host tools platforms.
+    F128(u128),
     /// `true` or `false`.
     Bool(bool),
     /// An array of constants.
@@ -176,7 +179,7 @@ impl Hash for Constant<'_> {
             },
             Self::F16(f) => {
                 // FIXME(f16_f128): once conversions to/from `f128` are available on all platforms,
-                f.to_bits().hash(state);
+                f.hash(state);
             },
             Self::F32(f) => {
                 f64::from(f).to_bits().hash(state);
@@ -185,7 +188,7 @@ impl Hash for Constant<'_> {
                 f.to_bits().hash(state);
             },
             Self::F128(f) => {
-                f.to_bits().hash(state);
+                f.hash(state);
             },
             Self::Bool(b) => {
                 b.hash(state);
@@ -291,12 +294,12 @@ impl Constant<'_> {
 
     fn parse_f16(s: &str) -> Self {
         let f: Half = s.parse().unwrap();
-        Self::F16(f16::from_bits(f.to_bits().try_into().unwrap()))
+        Self::F16(f.to_bits().try_into().unwrap())
     }
 
     fn parse_f128(s: &str) -> Self {
         let f: Quad = s.parse().unwrap();
-        Self::F128(f128::from_bits(f.to_bits()))
+        Self::F128(f.to_bits())
     }
 }
 
@@ -305,7 +308,7 @@ pub fn lit_to_mir_constant<'tcx>(lit: &LitKind, ty: Option<Ty<'tcx>>) -> Constan
     match *lit {
         LitKind::Str(ref is, _) => Constant::Str(is.to_string()),
         LitKind::Byte(b) => Constant::Int(u128::from(b)),
-        LitKind::ByteStr(ref s, _) | LitKind::CStr(ref s, _) => Constant::Binary(Lrc::clone(s)),
+        LitKind::ByteStr(ref s, _) | LitKind::CStr(ref s, _) => Constant::Binary(Arc::clone(s)),
         LitKind::Char(c) => Constant::Char(c),
         LitKind::Int(n, _) => Constant::Int(n.get()),
         LitKind::Float(ref is, LitFloatType::Suffixed(fty)) => match fty {
@@ -350,21 +353,18 @@ pub enum FullInt {
 }
 
 impl PartialEq for FullInt {
-    #[must_use]
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
 
 impl PartialOrd for FullInt {
-    #[must_use]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for FullInt {
-    #[must_use]
     fn cmp(&self, other: &Self) -> Ordering {
         use FullInt::{S, U};
 
@@ -454,7 +454,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                     Some(val)
                 }
             },
-            PatExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir().body(*body).value),
+            PatExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir_body(*body).value),
             PatExprKind::Path(qpath) => self.qpath(qpath, pat_expr.hir_id),
         }
     }
@@ -482,7 +482,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
     /// Simple constant folding: Insert an expression, get a constant or none.
     fn expr(&self, e: &Expr<'_>) -> Option<Constant<'tcx>> {
         match e.kind {
-            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir().body(body).value),
+            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.expr(self.tcx.hir_body(body).value),
             ExprKind::DropTemps(e) => self.expr(e),
             ExprKind::Path(ref qpath) => self.qpath(qpath, e.hir_id),
             ExprKind::Block(block, _) => self.block(block),
@@ -508,7 +508,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                 UnOp::Deref => Some(if let Constant::Ref(r) = o { *r } else { o }),
             }),
             ExprKind::If(cond, then, ref otherwise) => self.ifthenelse(cond, then, *otherwise),
-            ExprKind::Binary(op, left, right) => self.binop(op, left, right),
+            ExprKind::Binary(op, left, right) => self.binop(op.node, left, right),
             ExprKind::Call(callee, []) => {
                 // We only handle a few const functions for now.
                 if let ExprKind::Path(qpath) = &callee.kind
@@ -549,7 +549,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
     /// leaves the local crate.
     pub fn eval_is_empty(&self, e: &Expr<'_>) -> Option<bool> {
         match e.kind {
-            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.eval_is_empty(self.tcx.hir().body(body).value),
+            ExprKind::ConstBlock(ConstBlock { body, .. }) => self.eval_is_empty(self.tcx.hir_body(body).value),
             ExprKind::DropTemps(e) => self.eval_is_empty(e),
             ExprKind::Path(ref qpath) => {
                 if !self
@@ -644,7 +644,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
             Res::Def(DefKind::Const | DefKind::AssocConst, def_id) => {
                 // Check if this constant is based on `cfg!(..)`,
                 // which is NOT constant for our purposes.
-                if let Some(node) = self.tcx.hir().get_if_local(def_id)
+                if let Some(node) = self.tcx.hir_get_if_local(def_id)
                     && let Node::Item(Item {
                         kind: ItemKind::Const(.., body_id),
                         ..
@@ -746,7 +746,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
         }
     }
 
-    fn binop(&self, op: BinOp, left: &Expr<'_>, right: &Expr<'_>) -> Option<Constant<'tcx>> {
+    fn binop(&self, op: BinOpKind, left: &Expr<'_>, right: &Expr<'_>) -> Option<Constant<'tcx>> {
         let l = self.expr(left)?;
         let r = self.expr(right);
         match (l, r) {
@@ -759,7 +759,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
 
                     // Using / or %, where the left-hand argument is the smallest integer of a signed integer type and
                     // the right-hand argument is -1 always panics, even with overflow-checks disabled
-                    if let BinOpKind::Div | BinOpKind::Rem = op.node
+                    if let BinOpKind::Div | BinOpKind::Rem = op
                         && l == ty_min_value
                         && r == -1
                     {
@@ -767,7 +767,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                     }
 
                     let zext = |n: i128| Constant::Int(unsext(self.tcx, n, ity));
-                    match op.node {
+                    match op {
                         // When +, * or binary - create a value greater than the maximum value, or less than
                         // the minimum value that can be stored, it panics.
                         BinOpKind::Add => l.checked_add(r).and_then(|n| ity.ensure_fits(n)).map(zext),
@@ -794,7 +794,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                 ty::Uint(ity) => {
                     let bits = ity.bits();
 
-                    match op.node {
+                    match op {
                         BinOpKind::Add => l.checked_add(r).and_then(|n| ity.ensure_fits(n)).map(Constant::Int),
                         BinOpKind::Sub => l.checked_sub(r).and_then(|n| ity.ensure_fits(n)).map(Constant::Int),
                         BinOpKind::Mul => l.checked_mul(r).and_then(|n| ity.ensure_fits(n)).map(Constant::Int),
@@ -817,7 +817,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                 _ => None,
             },
             // FIXME(f16_f128): add these types when binary operations are available on all platforms
-            (Constant::F32(l), Some(Constant::F32(r))) => match op.node {
+            (Constant::F32(l), Some(Constant::F32(r))) => match op {
                 BinOpKind::Add => Some(Constant::F32(l + r)),
                 BinOpKind::Sub => Some(Constant::F32(l - r)),
                 BinOpKind::Mul => Some(Constant::F32(l * r)),
@@ -831,7 +831,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                 BinOpKind::Gt => Some(Constant::Bool(l > r)),
                 _ => None,
             },
-            (Constant::F64(l), Some(Constant::F64(r))) => match op.node {
+            (Constant::F64(l), Some(Constant::F64(r))) => match op {
                 BinOpKind::Add => Some(Constant::F64(l + r)),
                 BinOpKind::Sub => Some(Constant::F64(l - r)),
                 BinOpKind::Mul => Some(Constant::F64(l * r)),
@@ -845,7 +845,7 @@ impl<'tcx> ConstEvalCtxt<'tcx> {
                 BinOpKind::Gt => Some(Constant::Bool(l > r)),
                 _ => None,
             },
-            (l, r) => match (op.node, l, r) {
+            (l, r) => match (op, l, r) {
                 (BinOpKind::And, Constant::Bool(false), _) => Some(Constant::Bool(false)),
                 (BinOpKind::Or, Constant::Bool(true), _) => Some(Constant::Bool(true)),
                 (BinOpKind::And, Constant::Bool(true), Some(r)) | (BinOpKind::Or, Constant::Bool(false), Some(r)) => {
@@ -870,10 +870,10 @@ pub fn mir_to_const<'tcx>(tcx: TyCtxt<'tcx>, result: mir::Const<'tcx>) -> Option
             ty::Adt(adt_def, _) if adt_def.is_struct() => Some(Constant::Adt(result)),
             ty::Bool => Some(Constant::Bool(int == ScalarInt::TRUE)),
             ty::Uint(_) | ty::Int(_) => Some(Constant::Int(int.to_bits(int.size()))),
-            ty::Float(FloatTy::F16) => Some(Constant::F16(f16::from_bits(int.into()))),
+            ty::Float(FloatTy::F16) => Some(Constant::F16(int.into())),
             ty::Float(FloatTy::F32) => Some(Constant::F32(f32::from_bits(int.into()))),
             ty::Float(FloatTy::F64) => Some(Constant::F64(f64::from_bits(int.into()))),
-            ty::Float(FloatTy::F128) => Some(Constant::F128(f128::from_bits(int.into()))),
+            ty::Float(FloatTy::F128) => Some(Constant::F128(int.into())),
             ty::RawPtr(_, _) => Some(Constant::RawPtr(int.to_bits(int.size()))),
             _ => None,
         },
@@ -894,10 +894,10 @@ pub fn mir_to_const<'tcx>(tcx: TyCtxt<'tcx>, result: mir::Const<'tcx>) -> Option
                 let range = alloc_range(offset + size * idx, size);
                 let val = alloc.read_scalar(&tcx, range, /* read_provenance */ false).ok()?;
                 res.push(match flt {
-                    FloatTy::F16 => Constant::F16(f16::from_bits(val.to_u16().discard_err()?)),
+                    FloatTy::F16 => Constant::F16(val.to_u16().discard_err()?),
                     FloatTy::F32 => Constant::F32(f32::from_bits(val.to_u32().discard_err()?)),
                     FloatTy::F64 => Constant::F64(f64::from_bits(val.to_u64().discard_err()?)),
-                    FloatTy::F128 => Constant::F128(f128::from_bits(val.to_u128().discard_err()?)),
+                    FloatTy::F128 => Constant::F128(val.to_u128().discard_err()?),
                 });
             }
             Some(Constant::Vec(res))

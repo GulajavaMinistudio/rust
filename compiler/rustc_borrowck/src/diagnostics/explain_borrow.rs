@@ -75,10 +75,10 @@ impl<'tcx> BorrowExplanation<'tcx> {
 
         if let Some(span) = borrow_span {
             let def_id = body.source.def_id();
-            if let Some(node) = tcx.hir().get_if_local(def_id)
+            if let Some(node) = tcx.hir_get_if_local(def_id)
                 && let Some(body_id) = node.body_id()
             {
-                let body = tcx.hir().body(body_id);
+                let body = tcx.hir_body(body_id);
                 let mut expr_finder = FindExprBySpan::new(span, tcx);
                 expr_finder.visit_expr(body.value);
                 if let Some(mut expr) = expr_finder.result {
@@ -95,7 +95,9 @@ impl<'tcx> BorrowExplanation<'tcx> {
                         && let hir::def::Res::Local(hir_id) = p.res
                         && let hir::Node::Pat(pat) = tcx.hir_node(hir_id)
                     {
-                        err.span_label(pat.span, format!("binding `{ident}` declared here"));
+                        if !ident.span.in_external_macro(tcx.sess.source_map()) {
+                            err.span_label(pat.span, format!("binding `{ident}` declared here"));
+                        }
                     }
                 }
             }
@@ -117,7 +119,7 @@ impl<'tcx> BorrowExplanation<'tcx> {
                 let local_decl = &body.local_decls[dropped_local];
 
                 if let &LocalInfo::IfThenRescopeTemp { if_then } = local_decl.local_info()
-                    && let Some((_, hir::Node::Expr(expr))) = tcx.hir().parent_iter(if_then).next()
+                    && let Some((_, hir::Node::Expr(expr))) = tcx.hir_parent_iter(if_then).next()
                     && let hir::ExprKind::If(cond, conseq, alt) = expr.kind
                     && let hir::ExprKind::Let(&hir::LetExpr {
                         span: _,
@@ -256,13 +258,13 @@ impl<'tcx> BorrowExplanation<'tcx> {
 
                         impl<'hir> rustc_hir::intravisit::Visitor<'hir> for FindLetExpr<'hir> {
                             type NestedFilter = rustc_middle::hir::nested_filter::OnlyBodies;
-                            fn nested_visit_map(&mut self) -> Self::Map {
-                                self.tcx.hir()
+                            fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
+                                self.tcx
                             }
                             fn visit_expr(&mut self, expr: &'hir hir::Expr<'hir>) {
                                 if let hir::ExprKind::If(cond, _conseq, _alt)
                                 | hir::ExprKind::Loop(
-                                    hir::Block {
+                                    &hir::Block {
                                         expr:
                                             Some(&hir::Expr {
                                                 kind: hir::ExprKind::If(cond, _conseq, _alt),
@@ -308,9 +310,9 @@ impl<'tcx> BorrowExplanation<'tcx> {
                             suggest_rewrite_if_let(tcx, expr, &pat, init, conseq, alt, err);
                         } else if let Some((old, new)) = multiple_borrow_span
                             && let def_id = body.source.def_id()
-                            && let Some(node) = tcx.hir().get_if_local(def_id)
+                            && let Some(node) = tcx.hir_get_if_local(def_id)
                             && let Some(body_id) = node.body_id()
-                            && let hir_body = tcx.hir().body(body_id)
+                            && let hir_body = tcx.hir_body(body_id)
                             && let mut expr_finder = (FindLetExpr { span: old, result: None, tcx })
                             && let Some((let_expr_span, let_expr_pat, let_expr_init)) = {
                                 expr_finder.visit_expr(hir_body.value);
@@ -522,7 +524,7 @@ fn suggest_rewrite_if_let<G: EmissionGuarantee>(
     );
     if expr.span.can_be_used_for_suggestions() && conseq.span.can_be_used_for_suggestions() {
         let needs_block = if let Some(hir::Node::Expr(expr)) =
-            alt.and_then(|alt| tcx.hir().parent_iter(alt.hir_id).next()).map(|(_, node)| node)
+            alt.and_then(|alt| tcx.hir_parent_iter(alt.hir_id).next()).map(|(_, node)| node)
         {
             matches!(expr.kind, hir::ExprKind::If(..))
         } else {
@@ -622,8 +624,25 @@ impl<'tcx> MirBorrowckCtxt<'_, '_, 'tcx> {
             }
         }
 
+        // NLL doesn't consider boring locals for liveness, and wouldn't encounter a
+        // `Cause::LiveVar` for such a local. Polonius can't avoid computing liveness for boring
+        // locals yet, and will encounter them when trying to explain why a borrow contains a given
+        // point.
+        //
+        // We want to focus on relevant live locals in diagnostics, so when polonius is enabled, we
+        // ensure that we don't emit live boring locals as explanations.
+        let is_local_boring = |local| {
+            if let Some(polonius_diagnostics) = self.polonius_diagnostics {
+                polonius_diagnostics.boring_nll_locals.contains(&local)
+            } else {
+                assert!(!tcx.sess.opts.unstable_opts.polonius.is_next_enabled());
+
+                // Boring locals are never the cause of a borrow explanation in NLLs.
+                false
+            }
+        };
         match find_use::find(body, regioncx, tcx, region_sub, use_location) {
-            Some(Cause::LiveVar(local, location)) => {
+            Some(Cause::LiveVar(local, location)) if !is_local_boring(local) => {
                 let span = body.source_info(location).span;
                 let spans = self
                     .move_spans(Place::from(local).as_ref(), location)
@@ -666,7 +685,9 @@ impl<'tcx> MirBorrowckCtxt<'_, '_, 'tcx> {
                 }
             }
 
-            None => {
+            Some(Cause::LiveVar(..)) | None => {
+                // Here, under NLL: no cause was found. Under polonius: no cause was found, or a
+                // boring local was found, which we ignore like NLLs do to match its diagnostics.
                 if let Some(region) = self.to_error_region_vid(borrow_region_vid) {
                     let (category, from_closure, span, region_name, path) =
                         self.free_region_constraint_info(borrow_region_vid, region);

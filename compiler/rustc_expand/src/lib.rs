@@ -5,7 +5,6 @@
 #![feature(array_windows)]
 #![feature(associated_type_defaults)]
 #![feature(if_let_guard)]
-#![feature(let_chains)]
 #![feature(macro_metavar_expr)]
 #![feature(map_try_insert)]
 #![feature(proc_macro_diagnostic)]
@@ -13,7 +12,6 @@
 #![feature(rustdoc_internals)]
 #![feature(try_blocks)]
 #![feature(yeet_expr)]
-#![warn(unreachable_pub)]
 // tidy-alphabetical-end
 
 extern crate proc_macro as pm;

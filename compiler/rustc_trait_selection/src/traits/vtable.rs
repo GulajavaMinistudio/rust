@@ -196,11 +196,9 @@ fn own_existential_vtable_entries(tcx: TyCtxt<'_>, trait_def_id: DefId) -> &[Def
 fn own_existential_vtable_entries_iter(
     tcx: TyCtxt<'_>,
     trait_def_id: DefId,
-) -> impl Iterator<Item = DefId> + '_ {
-    let trait_methods = tcx
-        .associated_items(trait_def_id)
-        .in_definition_order()
-        .filter(|item| item.kind == ty::AssocKind::Fn);
+) -> impl Iterator<Item = DefId> {
+    let trait_methods =
+        tcx.associated_items(trait_def_id).in_definition_order().filter(|item| item.is_fn());
 
     // Now list each method's DefId (for within its trait).
     let own_entries = trait_methods.filter_map(move |&trait_method| {
@@ -318,8 +316,16 @@ pub(crate) fn first_method_vtable_slot<'tcx>(tcx: TyCtxt<'tcx>, key: ty::TraitRe
         bug!();
     };
     let source_principal = tcx.instantiate_bound_regions_with_erased(
-        source.principal().unwrap().with_self_ty(tcx, tcx.types.trait_object_dummy_self),
+        source.principal().unwrap().with_self_ty(tcx, key.self_ty()),
     );
+
+    // We're monomorphizing a call to a dyn trait object that can never be constructed.
+    if tcx.instantiate_and_check_impossible_predicates((
+        source_principal.def_id,
+        source_principal.args,
+    )) {
+        return 0;
+    }
 
     let target_principal = ty::ExistentialTraitRef::erase_self_ty(tcx, key);
 
@@ -373,18 +379,26 @@ pub(crate) fn supertrait_vtable_slot<'tcx>(
     let (source, target) = key;
 
     // If the target principal is `None`, we can just return `None`.
-    let ty::Dynamic(target, _, _) = *target.kind() else {
+    let ty::Dynamic(target_data, _, _) = *target.kind() else {
         bug!();
     };
-    let target_principal = tcx.instantiate_bound_regions_with_erased(target.principal()?);
+    let target_principal = tcx.instantiate_bound_regions_with_erased(target_data.principal()?);
 
     // Given that we have a target principal, it is a bug for there not to be a source principal.
-    let ty::Dynamic(source, _, _) = *source.kind() else {
+    let ty::Dynamic(source_data, _, _) = *source.kind() else {
         bug!();
     };
     let source_principal = tcx.instantiate_bound_regions_with_erased(
-        source.principal().unwrap().with_self_ty(tcx, tcx.types.trait_object_dummy_self),
+        source_data.principal().unwrap().with_self_ty(tcx, source),
     );
+
+    // We're monomorphizing a dyn trait object upcast that can never be constructed.
+    if tcx.instantiate_and_check_impossible_predicates((
+        source_principal.def_id,
+        source_principal.args,
+    )) {
+        return None;
+    }
 
     let vtable_segment_callback = {
         let mut vptr_offset = 0;

@@ -122,7 +122,7 @@ fn collect_unsafe_exprs<'tcx>(
                 unsafe_ops.push(("access of a mutable static occurs here", expr.span));
             },
 
-            ExprKind::Unary(UnOp::Deref, e) if cx.typeck_results().expr_ty_adjusted(e).is_unsafe_ptr() => {
+            ExprKind::Unary(UnOp::Deref, e) if cx.typeck_results().expr_ty_adjusted(e).is_raw_ptr() => {
                 unsafe_ops.push(("raw pointer dereference occurs here", expr.span));
             },
 
@@ -142,26 +142,28 @@ fn collect_unsafe_exprs<'tcx>(
                     .typeck_results()
                     .type_dependent_def_id(expr.hir_id)
                     .map(|def_id| cx.tcx.fn_sig(def_id))
+                    && sig.skip_binder().safety().is_unsafe()
                 {
-                    if sig.skip_binder().safety().is_unsafe() {
-                        unsafe_ops.push(("unsafe method call occurs here", expr.span));
-                    }
+                    unsafe_ops.push(("unsafe method call occurs here", expr.span));
                 }
             },
 
             ExprKind::AssignOp(_, lhs, rhs) | ExprKind::Assign(lhs, rhs, _) => {
                 if matches!(
                     lhs.kind,
-                    ExprKind::Path(QPath::Resolved(_, hir::Path {
-                        res: Res::Def(
-                            DefKind::Static {
-                                mutability: Mutability::Mut,
-                                ..
-                            },
-                            _
-                        ),
-                        ..
-                    }))
+                    ExprKind::Path(QPath::Resolved(
+                        _,
+                        hir::Path {
+                            res: Res::Def(
+                                DefKind::Static {
+                                    mutability: Mutability::Mut,
+                                    ..
+                                },
+                                _
+                            ),
+                            ..
+                        }
+                    ))
                 ) {
                     unsafe_ops.push(("modification of a mutable static occurs here", expr.span));
                     collect_unsafe_exprs(cx, rhs, unsafe_ops);
