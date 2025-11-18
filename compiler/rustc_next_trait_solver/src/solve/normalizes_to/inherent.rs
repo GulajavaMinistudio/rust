@@ -41,6 +41,9 @@ where
         // and we tag the impl bounds with `GoalSource::ImplWhereBound`?
         // Right now this includes both the impl and the assoc item where bounds,
         // and I don't think the assoc item where-bounds are allowed to be coinductive.
+        //
+        // Projecting to the IAT also "steps out the impl constructor", so we would have
+        // to be very careful when changing the impl where-clauses to be productive.
         self.add_goals(
             GoalSource::Misc,
             cx.predicates_of(inherent.def_id)
@@ -51,8 +54,7 @@ where
         let normalized = if inherent.kind(cx).is_type() {
             cx.type_of(inherent.def_id).instantiate(cx, inherent_args).into()
         } else {
-            // FIXME(mgca): Properly handle IACs in the type system
-            panic!("normalizing inherent associated consts in the type system is unsupported");
+            cx.const_of_item(inherent.def_id).instantiate(cx, inherent_args).into()
         };
         self.instantiate_normalizes_to_term(goal, normalized);
         self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)

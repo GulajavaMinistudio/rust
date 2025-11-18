@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+use clippy_utils::res::MaybeDef;
 use rustc_errors::{Applicability, Diag};
 use rustc_hir::intravisit::{Visitor, VisitorExt, walk_body, walk_expr, walk_ty};
 use rustc_hir::{self as hir, AmbigArg, Body, Expr, ExprKind, GenericArg, Item, ItemKind, QPath, TyKind};
@@ -14,7 +15,6 @@ use rustc_span::Span;
 use clippy_utils::diagnostics::span_lint_and_then;
 use clippy_utils::source::{IntoSpan, SpanRangeExt, snippet};
 use clippy_utils::sym;
-use clippy_utils::ty::is_type_diagnostic_item;
 
 declare_clippy_lint! {
     /// ### What it does
@@ -119,7 +119,7 @@ impl<'tcx> LateLintPass<'tcx> for ImplicitHasher {
                     }
 
                     let generics_suggestion_span = impl_.generics.span.substitute_dummy({
-                        let range = (item.span.lo()..target.span().lo()).map_range(cx, |src, range| {
+                        let range = (item.span.lo()..target.span().lo()).map_range(cx, |_, src, range| {
                             Some(src.get(range.clone())?.find("impl")? + 4..range.end)
                         });
                         if let Some(range) = range {
@@ -130,7 +130,7 @@ impl<'tcx> LateLintPass<'tcx> for ImplicitHasher {
                     });
 
                     let mut ctr_vis = ImplicitHasherConstructorVisitor::new(cx, target);
-                    for item in impl_.items.iter().map(|item| cx.tcx.hir_impl_item(item.id)) {
+                    for item in impl_.items.iter().map(|&item| cx.tcx.hir_impl_item(item)) {
                         ctr_vis.visit_impl_item(item);
                     }
 
@@ -165,11 +165,12 @@ impl<'tcx> LateLintPass<'tcx> for ImplicitHasher {
                             continue;
                         }
                         let generics_suggestion_span = generics.span.substitute_dummy({
-                            let range = (item.span.lo()..body.params[0].pat.span.lo()).map_range(cx, |src, range| {
-                                let (pre, post) = src.get(range.clone())?.split_once("fn")?;
-                                let pos = post.find('(')? + pre.len() + 2;
-                                Some(pos..pos)
-                            });
+                            let range =
+                                (item.span.lo()..body.params[0].pat.span.lo()).map_range(cx, |_, src, range| {
+                                    let (pre, post) = src.get(range.clone())?.split_once("fn")?;
+                                    let pos = post.find('(')? + pre.len() + 2;
+                                    Some(pos..pos)
+                                });
                             if let Some(range) = range {
                                 range.with_ctxt(item.span.ctxt())
                             } else {
@@ -226,14 +227,14 @@ impl<'tcx> ImplicitHasherType<'tcx> {
 
             let ty = lower_ty(cx.tcx, hir_ty);
 
-            if is_type_diagnostic_item(cx, ty, sym::HashMap) && params_len == 2 {
+            if ty.is_diag_item(cx, sym::HashMap) && params_len == 2 {
                 Some(ImplicitHasherType::HashMap(
                     hir_ty.span,
                     ty,
                     snippet(cx, params[0].span, "K"),
                     snippet(cx, params[1].span, "V"),
                 ))
-            } else if is_type_diagnostic_item(cx, ty, sym::HashSet) && params_len == 1 {
+            } else if ty.is_diag_item(cx, sym::HashSet) && params_len == 1 {
                 Some(ImplicitHasherType::HashSet(
                     hir_ty.span,
                     ty,

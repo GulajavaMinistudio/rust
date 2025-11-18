@@ -6,7 +6,9 @@
 #![stable(feature = "rust1", since = "1.0.0")]
 
 use crate::alloc::Layout;
-use crate::marker::DiscriminantKind;
+use crate::clone::TrivialClone;
+use crate::marker::{Destruct, DiscriminantKind};
+use crate::panic::const_assert;
 use crate::{clone, cmp, fmt, hash, intrinsics, ptr};
 
 mod manually_drop;
@@ -21,6 +23,12 @@ mod transmutability;
 #[unstable(feature = "transmutability", issue = "99571")]
 pub use transmutability::{Assume, TransmuteFrom};
 
+mod drop_guard;
+#[unstable(feature = "drop_guard", issue = "144426")]
+pub use drop_guard::DropGuard;
+
+// This one has to be a re-export (rather than wrapping the underlying intrinsic) so that we can do
+// the special magic "types have equal size" check at the call site.
 #[stable(feature = "rust1", since = "1.0.0")]
 #[doc(inline)]
 pub use crate::intrinsics::transmute;
@@ -34,7 +42,7 @@ pub use crate::intrinsics::transmute;
 /// * If you want to leak memory, see [`Box::leak`].
 /// * If you want to obtain a raw pointer to the memory, see [`Box::into_raw`].
 /// * If you want to dispose of a value properly, running its destructor, see
-/// [`mem::drop`].
+///   [`mem::drop`].
 ///
 /// # Safety
 ///
@@ -147,8 +155,32 @@ pub const fn forget<T>(t: T) {
 
 /// Like [`forget`], but also accepts unsized values.
 ///
-/// This function is just a shim intended to be removed when the `unsized_locals` feature gets
-/// stabilized.
+/// While Rust does not permit unsized locals since its removal in [#111942] it is
+/// still possible to call functions with unsized values from a function argument
+/// or place expression.
+///
+/// ```rust
+/// #![feature(unsized_fn_params, forget_unsized)]
+/// #![allow(internal_features)]
+///
+/// use std::mem::forget_unsized;
+///
+/// pub fn in_place() {
+///     forget_unsized(*Box::<str>::from("str"));
+/// }
+///
+/// pub fn param(x: str) {
+///     forget_unsized(x);
+/// }
+/// ```
+///
+/// This works because the compiler will alter these functions to pass the parameter
+/// by reference instead. This trick is necessary to support `Box<dyn FnOnce()>: FnOnce()`.
+/// See [#68304] and [#71170] for more information.
+///
+/// [#111942]: https://github.com/rust-lang/rust/issues/111942
+/// [#68304]: https://github.com/rust-lang/rust/issues/68304
+/// [#71170]: https://github.com/rust-lang/rust/pull/71170
 #[inline]
 #[unstable(feature = "forget_unsized", issue = "none")]
 pub fn forget_unsized<T: ?Sized>(t: T) {
@@ -302,7 +334,7 @@ pub fn forget_unsized<T: ?Sized>(t: T) {
 #[rustc_const_stable(feature = "const_mem_size_of", since = "1.24.0")]
 #[rustc_diagnostic_item = "mem_size_of"]
 pub const fn size_of<T>() -> usize {
-    intrinsics::size_of::<T>()
+    <T as SizedTypeProperties>::SIZE
 }
 
 /// Returns the size of the pointed-to value in bytes.
@@ -410,7 +442,7 @@ pub const unsafe fn size_of_val_raw<T: ?Sized>(val: *const T) -> usize {
 #[stable(feature = "rust1", since = "1.0.0")]
 #[deprecated(note = "use `align_of` instead", since = "1.2.0", suggestion = "align_of")]
 pub fn min_align_of<T>() -> usize {
-    intrinsics::min_align_of::<T>()
+    <T as SizedTypeProperties>::ALIGN
 }
 
 /// Returns the [ABI]-required minimum alignment of the type of the value that `val` points to in
@@ -434,7 +466,7 @@ pub fn min_align_of<T>() -> usize {
 #[deprecated(note = "use `align_of_val` instead", since = "1.2.0", suggestion = "align_of_val")]
 pub fn min_align_of_val<T: ?Sized>(val: &T) -> usize {
     // SAFETY: val is a reference, so it's a valid raw pointer
-    unsafe { intrinsics::min_align_of_val(val) }
+    unsafe { intrinsics::align_of_val(val) }
 }
 
 /// Returns the [ABI]-required minimum alignment of a type in bytes.
@@ -455,8 +487,9 @@ pub fn min_align_of_val<T: ?Sized>(val: &T) -> usize {
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_promotable]
 #[rustc_const_stable(feature = "const_align_of", since = "1.24.0")]
+#[rustc_diagnostic_item = "mem_align_of"]
 pub const fn align_of<T>() -> usize {
-    intrinsics::min_align_of::<T>()
+    <T as SizedTypeProperties>::ALIGN
 }
 
 /// Returns the [ABI]-required minimum alignment of the type of the value that `val` points to in
@@ -475,10 +508,9 @@ pub const fn align_of<T>() -> usize {
 #[must_use]
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_const_stable(feature = "const_align_of_val", since = "1.85.0")]
-#[allow(deprecated)]
 pub const fn align_of_val<T: ?Sized>(val: &T) -> usize {
     // SAFETY: val is a reference, so it's a valid raw pointer
-    unsafe { intrinsics::min_align_of_val(val) }
+    unsafe { intrinsics::align_of_val(val) }
 }
 
 /// Returns the [ABI]-required minimum alignment of the type of the value that `val` points to in
@@ -525,7 +557,7 @@ pub const fn align_of_val<T: ?Sized>(val: &T) -> usize {
 #[unstable(feature = "layout_for_ptr", issue = "69835")]
 pub const unsafe fn align_of_val_raw<T: ?Sized>(val: *const T) -> usize {
     // SAFETY: the caller must provide a valid raw pointer
-    unsafe { intrinsics::min_align_of_val(val) }
+    unsafe { intrinsics::align_of_val(val) }
 }
 
 /// Returns `true` if dropping values of type `T` matters.
@@ -590,7 +622,7 @@ pub const unsafe fn align_of_val_raw<T: ?Sized>(val: *const T) -> usize {
 #[rustc_const_stable(feature = "const_mem_needs_drop", since = "1.36.0")]
 #[rustc_diagnostic_item = "needs_drop"]
 pub const fn needs_drop<T: ?Sized>() -> bool {
-    intrinsics::needs_drop::<T>()
+    const { intrinsics::needs_drop::<T>() }
 }
 
 /// Returns the value of type `T` represented by the all-zero byte-pattern.
@@ -635,8 +667,6 @@ pub const fn needs_drop<T: ?Sized>() -> bool {
 #[inline(always)]
 #[must_use]
 #[stable(feature = "rust1", since = "1.0.0")]
-#[allow(deprecated_in_future)]
-#[allow(deprecated)]
 #[rustc_diagnostic_item = "mem_zeroed"]
 #[track_caller]
 #[rustc_const_stable(feature = "const_mem_zeroed", since = "1.75.0")]
@@ -675,8 +705,6 @@ pub const unsafe fn zeroed<T>() -> T {
 #[must_use]
 #[deprecated(since = "1.39.0", note = "use `mem::MaybeUninit` instead")]
 #[stable(feature = "rust1", since = "1.0.0")]
-#[allow(deprecated_in_future)]
-#[allow(deprecated)]
 #[rustc_diagnostic_item = "mem_uninitialized"]
 #[track_caller]
 pub unsafe fn uninitialized<T>() -> T {
@@ -780,7 +808,8 @@ pub const fn swap<T>(x: &mut T, y: &mut T) {
 /// ```
 #[inline]
 #[stable(feature = "mem_take", since = "1.40.0")]
-pub fn take<T: Default>(dest: &mut T) -> T {
+#[rustc_const_unstable(feature = "const_default", issue = "143894")]
+pub const fn take<T: [const] Default>(dest: &mut T) -> T {
     replace(dest, T::default())
 }
 
@@ -931,14 +960,19 @@ pub const fn replace<T>(dest: &mut T, src: T) -> T {
 /// [`RefCell`]: crate::cell::RefCell
 #[inline]
 #[stable(feature = "rust1", since = "1.0.0")]
+#[rustc_const_unstable(feature = "const_destruct", issue = "133214")]
 #[rustc_diagnostic_item = "mem_drop"]
-pub fn drop<T>(_x: T) {}
+pub const fn drop<T>(_x: T)
+where
+    T: [const] Destruct,
+{
+}
 
 /// Bitwise-copies a value.
 ///
 /// This function is not magic; it is literally defined as
 /// ```
-/// pub fn copy<T: Copy>(x: &T) -> T { *x }
+/// pub const fn copy<T: Copy>(x: &T) -> T { *x }
 /// ```
 ///
 /// It is useful when you want to pass a function pointer to a combinator, rather than defining a new closure.
@@ -1037,6 +1071,10 @@ impl<T> clone::Clone for Discriminant<T> {
         *self
     }
 }
+
+#[doc(hidden)]
+#[unstable(feature = "trivial_clone", issue = "none")]
+unsafe impl<T> TrivialClone for Discriminant<T> {}
 
 #[stable(feature = "discriminant_value", since = "1.21.0")]
 impl<T> cmp::PartialEq for Discriminant<T> {
@@ -1193,7 +1231,7 @@ pub const fn discriminant<T>(v: &T) -> Discriminant<T> {
 #[rustc_const_unstable(feature = "variant_count", issue = "73662")]
 #[rustc_diagnostic_item = "mem_variant_count"]
 pub const fn variant_count<T>() -> usize {
-    intrinsics::variant_count::<T>()
+    const { intrinsics::variant_count::<T>() }
 }
 
 /// Provides associated constants for various useful properties of types,
@@ -1204,6 +1242,16 @@ pub const fn variant_count<T>() -> usize {
 #[doc(hidden)]
 #[unstable(feature = "sized_type_properties", issue = "none")]
 pub trait SizedTypeProperties: Sized {
+    #[doc(hidden)]
+    #[unstable(feature = "sized_type_properties", issue = "none")]
+    #[lang = "mem_size_const"]
+    const SIZE: usize = intrinsics::size_of::<Self>();
+
+    #[doc(hidden)]
+    #[unstable(feature = "sized_type_properties", issue = "none")]
+    #[lang = "mem_align_const"]
+    const ALIGN: usize = intrinsics::align_of::<Self>();
+
     /// `true` if this type requires no storage.
     /// `false` if its [size](size_of) is greater than zero.
     ///
@@ -1231,7 +1279,7 @@ pub trait SizedTypeProperties: Sized {
     /// ```
     #[doc(hidden)]
     #[unstable(feature = "sized_type_properties", issue = "none")]
-    const IS_ZST: bool = size_of::<Self>() == 0;
+    const IS_ZST: bool = Self::SIZE == 0;
 
     #[doc(hidden)]
     #[unstable(feature = "sized_type_properties", issue = "none")]
@@ -1243,7 +1291,7 @@ pub trait SizedTypeProperties: Sized {
     /// which is never allowed for a single object.
     #[doc(hidden)]
     #[unstable(feature = "sized_type_properties", issue = "none")]
-    const MAX_SLICE_LEN: usize = match size_of::<Self>() {
+    const MAX_SLICE_LEN: usize = match Self::SIZE {
         0 => usize::MAX,
         n => (isize::MAX as usize) / n,
     };
@@ -1380,4 +1428,61 @@ impl<T> SizedTypeProperties for T {}
 pub macro offset_of($Container:ty, $($fields:expr)+ $(,)?) {
     // The `{}` is for better error messages
     {builtin # offset_of($Container, $($fields)+)}
+}
+
+/// Create a fresh instance of the inhabited ZST type `T`.
+///
+/// Prefer this to [`zeroed`] or [`uninitialized`] or [`transmute_copy`]
+/// in places where you know that `T` is zero-sized, but don't have a bound
+/// (such as [`Default`]) that would allow you to instantiate it using safe code.
+///
+/// If you're not sure whether `T` is an inhabited ZST, then you should be
+/// using [`MaybeUninit`], not this function.
+///
+/// # Panics
+///
+/// If `size_of::<T>() != 0`.
+///
+/// # Safety
+///
+/// - `T` must be *[inhabited]*, i.e. possible to construct. This means that types
+///   like zero-variant enums and [`!`] are unsound to conjure.
+/// - You must use the value only in ways which do not violate any *safety*
+///   invariants of the type.
+///
+/// While it's easy to create a *valid* instance of an inhabited ZST, since having
+/// no bits in its representation means there's only one possible value, that
+/// doesn't mean that it's always *sound* to do so.
+///
+/// For example, a library could design zero-sized tokens that are `!Default + !Clone`, limiting
+/// their creation to functions that initialize some state or establish a scope. Conjuring such a
+/// token could break invariants and lead to unsoundness.
+///
+/// # Examples
+///
+/// ```
+/// #![feature(mem_conjure_zst)]
+/// use std::mem::conjure_zst;
+///
+/// assert_eq!(unsafe { conjure_zst::<()>() }, ());
+/// assert_eq!(unsafe { conjure_zst::<[i32; 0]>() }, []);
+/// ```
+///
+/// [inhabited]: https://doc.rust-lang.org/reference/glossary.html#inhabited
+#[unstable(feature = "mem_conjure_zst", issue = "95383")]
+pub const unsafe fn conjure_zst<T>() -> T {
+    const_assert!(
+        size_of::<T>() == 0,
+        "mem::conjure_zst invoked on a nonzero-sized type",
+        "mem::conjure_zst invoked on type {t}, which is not zero-sized",
+        t: &str = stringify!(T)
+    );
+
+    // SAFETY: because the caller must guarantee that it's inhabited and zero-sized,
+    // there's nothing in the representation that needs to be set.
+    // `assume_init` calls `assert_inhabited`, so we don't need to here.
+    unsafe {
+        #[allow(clippy::uninit_assumed_init)]
+        MaybeUninit::uninit().assume_init()
+    }
 }

@@ -25,7 +25,6 @@ pub mod futex;
 pub mod os;
 #[path = "../unsupported/pipe.rs"]
 pub mod pipe;
-pub mod thread;
 pub mod time;
 
 pub fn unsupported<T>() -> crate::io::Result<T> {
@@ -41,15 +40,6 @@ pub fn unsupported_err() -> crate::io::Error {
 
 pub fn abort_internal() -> ! {
     unsafe { hermit_abi::abort() }
-}
-
-// This function is needed by the panic runtime. The symbol is named in
-// pre-link args for the target specification, so keep that in sync.
-#[cfg(not(test))]
-#[unsafe(no_mangle)]
-// NB. used by both libunwind and libpanic_abort
-pub extern "C" fn __rust_abort() {
-    abort_internal();
 }
 
 // SAFETY: must be called only once during runtime initialization.

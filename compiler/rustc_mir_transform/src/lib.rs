@@ -5,12 +5,10 @@
 #![feature(const_type_name)]
 #![feature(cow_is_borrowed)]
 #![feature(file_buffered)]
+#![feature(gen_blocks)]
 #![feature(if_let_guard)]
 #![feature(impl_trait_in_assoc_type)]
-#![feature(map_try_insert)]
-#![feature(never_type)]
 #![feature(try_blocks)]
-#![feature(vec_deque_pop_if)]
 #![feature(yeet_expr)]
 // tidy-alphabetical-end
 
@@ -53,9 +51,11 @@ mod errors;
 mod ffi_unwind_calls;
 mod lint;
 mod lint_tail_expr_drop_order;
+mod liveness;
 mod patch;
 mod shim;
 mod ssa;
+mod trivial_const;
 
 /// We import passes via this macro so that we can have a static list of pass names
 /// (used to verify CLI arguments). It takes a list of modules, followed by the passes
@@ -119,12 +119,12 @@ declare_passes! {
     mod add_subtyping_projections : Subtyper;
     mod check_inline : CheckForceInline;
     mod check_call_recursion : CheckCallRecursion, CheckDropRecursion;
+    mod check_inline_always_target_features: CheckInlineAlwaysTargetFeature;
     mod check_alignment : CheckAlignment;
+    mod check_enums : CheckEnums;
     mod check_const_item_mutation : CheckConstItemMutation;
     mod check_null : CheckNull;
     mod check_packed_ref : CheckPackedRef;
-    mod check_undefined_transmutes : CheckUndefinedTransmutes;
-    mod check_unnecessary_transmutes: CheckUnnecessaryTransmutes;
     // This pass is public to allow external drivers to perform MIR cleanup
     pub mod cleanup_post_borrowck : CleanupPostBorrowck;
 
@@ -141,6 +141,7 @@ declare_passes! {
     mod dest_prop : DestinationPropagation;
     pub mod dump_mir : Marker;
     mod early_otherwise_branch : EarlyOtherwiseBranch;
+    mod erase_deref_temps : EraseDerefTemps;
     mod elaborate_box_derefs : ElaborateBoxDerefs;
     mod elaborate_drops : ElaborateDrops;
     mod function_item_references : FunctionItemReferences;
@@ -158,7 +159,6 @@ declare_passes! {
     mod match_branches : MatchBranchSimplification;
     mod mentioned_items : MentionedItems;
     mod multiple_return_terminators : MultipleReturnTerminators;
-    mod nrvo : RenameReturnPlace;
     mod post_drop_elaboration : CheckLiveDrops;
     mod prettify : ReorderBasicBlocks, ReorderLocals;
     mod promote_consts : PromoteTemps;
@@ -190,6 +190,7 @@ declare_passes! {
             Final
         };
     mod simplify_branches : SimplifyConstCondition {
+        AfterInstSimplify,
         AfterConstProp,
         Final
     };
@@ -218,13 +219,15 @@ pub fn provide(providers: &mut Providers) {
         mir_for_ctfe,
         mir_coroutine_witnesses: coroutine::mir_coroutine_witnesses,
         optimized_mir,
+        check_liveness: liveness::check_liveness,
         is_mir_available,
         is_ctfe_mir_available: is_mir_available,
-        mir_callgraph_reachable: inline::cycle::mir_callgraph_reachable,
+        mir_callgraph_cyclic: inline::cycle::mir_callgraph_cyclic,
         mir_inliner_callees: inline::cycle::mir_inliner_callees,
         promoted_mir,
         deduced_param_attrs: deduce_param_attrs::deduced_param_attrs,
         coroutine_by_move_body_def_id: coroutine::coroutine_by_move_body_def_id,
+        trivial_const: trivial_const::trivial_const_provider,
         ..providers.queries
     };
 }
@@ -263,13 +266,13 @@ fn remap_mir_for_const_eval_select<'tcx>(
                             // (const generic stuff) so we just create a temporary and deconstruct
                             // that.
                             let local = body.local_decls.push(LocalDecl::new(ty, fn_span));
-                            bb.statements.push(Statement {
-                                source_info: SourceInfo::outermost(fn_span),
-                                kind: StatementKind::Assign(Box::new((
+                            bb.statements.push(Statement::new(
+                                SourceInfo::outermost(fn_span),
+                                StatementKind::Assign(Box::new((
                                     local.into(),
                                     Rvalue::Use(tupled_args.node.clone()),
                                 ))),
-                            });
+                            ));
                             (Operand::Move, local.into())
                         }
                         Operand::Move(place) => (Operand::Move, place),
@@ -378,6 +381,16 @@ fn mir_const_qualif(tcx: TyCtxt<'_>, def: LocalDefId) -> ConstQualifs {
 fn mir_built(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<Body<'_>> {
     let mut body = build_mir(tcx, def);
 
+    // Identifying trivial consts based on their mir_built is easy, but a little wasteful.
+    // Trying to push this logic earlier in the compiler and never even produce the Body would
+    // probably improve compile time.
+    if trivial_const::trivial_const(tcx, def, || &body).is_some() {
+        // Skip all the passes below for trivial consts.
+        let body = tcx.alloc_steal_mir(body);
+        pass_manager::dump_mir_for_phase_change(tcx, &body.borrow());
+        return body;
+    }
+
     pass_manager::dump_mir_for_phase_change(tcx, &body);
 
     pm::run_passes(
@@ -387,11 +400,12 @@ fn mir_built(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<Body<'_>> {
             // MIR-level lints.
             &Lint(check_inline::CheckForceInline),
             &Lint(check_call_recursion::CheckCallRecursion),
+            // Check callee's target features match callers target features when
+            // using `#[inline(always)]`
+            &Lint(check_inline_always_target_features::CheckInlineAlwaysTargetFeature),
             &Lint(check_packed_ref::CheckPackedRef),
             &Lint(check_const_item_mutation::CheckConstItemMutation),
             &Lint(function_item_references::FunctionItemReferences),
-            &Lint(check_undefined_transmutes::CheckUndefinedTransmutes),
-            &Lint(check_unnecessary_transmutes::CheckUnnecessaryTransmutes),
             // What we need to do constant evaluation.
             &simplify::SimplifyCfg::Initial,
             &Lint(sanity_check::SanityCheck),
@@ -407,6 +421,8 @@ fn mir_promoted(
     tcx: TyCtxt<'_>,
     def: LocalDefId,
 ) -> (&Steal<Body<'_>>, &Steal<IndexVec<Promoted, Body<'_>>>) {
+    debug_assert!(!tcx.is_trivial_const(def), "Tried to get mir_promoted of a trivial const");
+
     // Ensure that we compute the `mir_const_qualif` for constants at
     // this point, before we steal the mir-const result.
     // Also this means promotion can rely on all const checks having been done.
@@ -433,6 +449,9 @@ fn mir_promoted(
     if tcx.needs_coroutine_by_move_body_def_id(def.to_def_id()) {
         tcx.ensure_done().coroutine_by_move_body_def_id(def);
     }
+
+    // the `trivial_const` query uses mir_built, so make sure it is run.
+    tcx.ensure_done().trivial_const(def);
 
     let mut body = tcx.mir_built(def).steal();
     if let Some(error_reported) = const_qualifs.tainted_by_errors {
@@ -461,6 +480,7 @@ fn mir_promoted(
 
 /// Compute the MIR that is used during CTFE (and thus has no optimizations run on it)
 fn mir_for_ctfe(tcx: TyCtxt<'_>, def_id: LocalDefId) -> &Body<'_> {
+    debug_assert!(!tcx.is_trivial_const(def_id), "Tried to get mir_for_ctfe of a trivial const");
     tcx.arena.alloc(inner_mir_for_ctfe(tcx, def_id))
 }
 
@@ -513,6 +533,8 @@ fn mir_drops_elaborated_and_const_checked(tcx: TyCtxt<'_>, def: LocalDefId) -> &
             tcx.ensure_done().mir_inliner_callees(ty::InstanceKind::Item(def.to_def_id()));
         }
     }
+
+    tcx.ensure_done().check_liveness(def);
 
     let (body, _) = tcx.mir_promoted(def);
     let mut body = body.steal();
@@ -621,6 +643,7 @@ fn run_runtime_lowering_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         // `AddRetag` needs to run after `ElaborateDrops` but before `ElaborateBoxDerefs`.
         // Otherwise it should run fairly late, but before optimizations begin.
         &add_retag::AddRetag,
+        &erase_deref_temps::EraseDerefTemps,
         &elaborate_box_derefs::ElaborateBoxDerefs,
         &coroutine::StateTransform,
         &Lint(known_panics_lint::KnownPanicsLint),
@@ -673,6 +696,7 @@ pub(crate) fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'
             // Add some UB checks before any UB gets optimized away.
             &check_alignment::CheckAlignment,
             &check_null::CheckNull,
+            &check_enums::CheckEnums,
             // Before inlining: trim down MIR with passes to reduce inlining work.
 
             // Has to be done before inlining, otherwise actual call will be almost always inlined.
@@ -685,6 +709,8 @@ pub(crate) fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'
             &inline::ForceInline,
             // Perform inlining, which may add a lot of code.
             &inline::Inline,
+            // Inlining may have introduced a lot of redundant code and a large move pattern.
+            // Now, we need to shrink the generated MIR.
             // Code from other crates may have storage markers, so this needs to happen after
             // inlining.
             &remove_storage_markers::RemoveStorageMarkers,
@@ -696,14 +722,22 @@ pub(crate) fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'
             &unreachable_enum_branching::UnreachableEnumBranching,
             &unreachable_prop::UnreachablePropagation,
             &o1(simplify::SimplifyCfg::AfterUnreachableEnumBranching),
-            // Inlining may have introduced a lot of redundant code and a large move pattern.
-            // Now, we need to shrink the generated MIR.
-            &ref_prop::ReferencePropagation,
-            &sroa::ScalarReplacementOfAggregates,
             &multiple_return_terminators::MultipleReturnTerminators,
             // After simplifycfg, it allows us to discover new opportunities for peephole
-            // optimizations.
+            // optimizations. This invalidates CFG caches, so avoid putting between
+            // `ReferencePropagation` and `GVN` which both use the dominator tree.
             &instsimplify::InstSimplify::AfterSimplifyCfg,
+            // After `InstSimplify-after-simplifycfg` with `-Zub_checks=false`, simplify
+            // ```
+            // _13 = const false;
+            // assume(copy _13);
+            // Call(precondition_check);
+            // ```
+            // to unreachable to eliminate the call to help later passes.
+            // This invalidates CFG caches also.
+            &o1(simplify_branches::SimplifyConstCondition::AfterInstSimplify),
+            &ref_prop::ReferencePropagation,
+            &sroa::ScalarReplacementOfAggregates,
             &simplify::SimplifyLocals::BeforeConstProp,
             &dead_store_elimination::DeadStoreElimination::Initial,
             &gvn::GVN,
@@ -715,7 +749,6 @@ pub(crate) fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'
             &jump_threading::JumpThreading,
             &early_otherwise_branch::EarlyOtherwiseBranch,
             &simplify_comparison_integral::SimplifyComparisonIntegral,
-            &dest_prop::DestinationPropagation,
             &o1(simplify_branches::SimplifyConstCondition::Final),
             &o1(remove_noop_landing_pads::RemoveNoopLandingPads),
             &o1(simplify::SimplifyCfg::Final),
@@ -723,7 +756,7 @@ pub(crate) fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'
             &strip_debuginfo::StripDebugInfo,
             &copy_prop::CopyProp,
             &dead_store_elimination::DeadStoreElimination::Final,
-            &nrvo::RenameReturnPlace,
+            &dest_prop::DestinationPropagation,
             &simplify::SimplifyLocals::Final,
             &multiple_return_terminators::MultipleReturnTerminators,
             &large_enums::EnumSizeOpt { discrepancy: 128 },

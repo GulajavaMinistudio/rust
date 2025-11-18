@@ -64,6 +64,11 @@ where
             continue;
         }
 
+        if arg.layout.pass_indirectly_in_non_rustic_abis(cx) {
+            arg.make_indirect();
+            continue;
+        }
+
         let t = cx.target_spec();
         let align_4 = Align::from_bytes(4).unwrap();
         let align_16 = Align::from_bytes(16).unwrap();
@@ -171,7 +176,7 @@ pub(crate) fn fill_inregs<'a, Ty, C>(
             continue;
         }
 
-        let size_in_regs = (arg.layout.size.bits() + 31) / 32;
+        let size_in_regs = arg.layout.size.bits().div_ceil(32);
 
         if size_in_regs == 0 {
             continue;
@@ -219,7 +224,7 @@ where
                 // SSE ABI. We prefer this over integer registers as float scalars need to be in SSE
                 // registers for float operations, so that's the best place to pass them around.
                 fn_abi.ret.cast_to(Reg { kind: RegKind::Vector, size: fn_abi.ret.layout.size });
-            } else if fn_abi.ret.layout.size <= Primitive::Pointer(AddressSpace::DATA).size(cx) {
+            } else if fn_abi.ret.layout.size <= Primitive::Pointer(AddressSpace::ZERO).size(cx) {
                 // Same size or smaller than pointer, return in an integer register.
                 fn_abi.ret.cast_to(Reg { kind: RegKind::Integer, size: fn_abi.ret.layout.size });
             } else {

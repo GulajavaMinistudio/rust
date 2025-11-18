@@ -6,7 +6,7 @@ repository = "https://github.com/rust-lang/rust.git"
 description = "Tests for the Rust Allocation Library"
 autotests = false
 autobenches = false
-edition = "2021"
+edition = "2024"
 
 [lib]
 path = "lib.rs"
@@ -39,7 +39,6 @@ harness = false
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = [
-    'cfg(bootstrap)',
     'cfg(no_global_oom_handling)',
     'cfg(no_rc)',
     'cfg(no_sync)',

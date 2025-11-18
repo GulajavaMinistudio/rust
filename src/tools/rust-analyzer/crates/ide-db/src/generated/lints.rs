@@ -4458,20 +4458,6 @@ The tracking issue for this feature is: [#133214]
         deny_since: None,
     },
     Lint {
-        label: "const_eq_ignore_ascii_case",
-        description: r##"# `const_eq_ignore_ascii_case`
-
-The tracking issue for this feature is: [#131719]
-
-[#131719]: https://github.com/rust-lang/rust/issues/131719
-
-------------------------
-"##,
-        default_severity: Severity::Allow,
-        warn_since: None,
-        deny_since: None,
-    },
-    Lint {
         label: "const_eval_select",
         description: r##"# `const_eval_select`
 
@@ -4725,9 +4711,9 @@ The tracking issue for this feature is: [#133668]
         label: "const_trait_impl",
         description: r##"# `const_trait_impl`
 
-The tracking issue for this feature is: [#67792]
+The tracking issue for this feature is: [#143874]
 
-[#67792]: https://github.com/rust-lang/rust/issues/67792
+[#143874]: https://github.com/rust-lang/rust/issues/143874
 
 ------------------------
 "##,
@@ -7525,7 +7511,7 @@ Most lang items are defined by `core`, but if you're trying to build
 an executable without the `std` crate, you might run into the need
 for lang item definitions.
 
-[personality]: https://github.com/rust-lang/rust/blob/master/library/std/src/sys/personality/gcc.rs
+[personality]: https://github.com/rust-lang/rust/blob/HEAD/library/std/src/sys/personality/gcc.rs
 
 ## Example: Implementing a `Box`
 
@@ -7600,7 +7586,7 @@ return a valid pointer, and so needs to do the check internally.
 
 An up-to-date list of all language items can be found [here] in the compiler code.
 
-[here]: https://github.com/rust-lang/rust/blob/master/compiler/rustc_hir/src/lang_items.rs
+[here]: https://github.com/rust-lang/rust/blob/HEAD/compiler/rustc_hir/src/lang_items.rs
 "##,
         default_severity: Severity::Allow,
         warn_since: None,
@@ -10720,20 +10706,6 @@ The tracking issue for this feature is: [#77998]
         deny_since: None,
     },
     Lint {
-        label: "strict_overflow_ops",
-        description: r##"# `strict_overflow_ops`
-
-The tracking issue for this feature is: [#118260]
-
-[#118260]: https://github.com/rust-lang/rust/issues/118260
-
-------------------------
-"##,
-        default_severity: Severity::Allow,
-        warn_since: None,
-        deny_since: None,
-    },
-    Lint {
         label: "strict_provenance_atomic_ptr",
         description: r##"# `strict_provenance_atomic_ptr`
 
@@ -10751,9 +10723,9 @@ The tracking issue for this feature is: [#99108]
         label: "strict_provenance_lints",
         description: r##"# `strict_provenance_lints`
 
-The tracking issue for this feature is: [#95228]
+The tracking issue for this feature is: [#130351]
 
-[#95228]: https://github.com/rust-lang/rust/issues/95228
+[#130351]: https://github.com/rust-lang/rust/issues/130351
 -----
 
 The `strict_provenance_lints` feature allows to enable the `fuzzy_provenance_casts` and `lossy_provenance_casts` lints.

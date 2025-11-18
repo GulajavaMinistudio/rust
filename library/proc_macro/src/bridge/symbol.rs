@@ -11,7 +11,6 @@
 
 use std::cell::RefCell;
 use std::num::NonZero;
-use std::str;
 
 use super::*;
 
@@ -33,7 +32,7 @@ impl Symbol {
     /// Validates and normalizes before converting it to a symbol.
     pub(crate) fn new_ident(string: &str, is_raw: bool) -> Self {
         // Fast-path: check if this is a valid ASCII identifier
-        if Self::is_valid_ascii_ident(string.as_bytes()) {
+        if Self::is_valid_ascii_ident(string.as_bytes()) || string == "$crate" {
             if is_raw && !Self::can_be_raw(string) {
                 panic!("`{}` cannot be a raw identifier", string);
             }
@@ -79,7 +78,7 @@ impl Symbol {
     // Mimics the behavior of `Symbol::can_be_raw` from `rustc_span`
     fn can_be_raw(string: &str) -> bool {
         match string {
-            "_" | "super" | "self" | "Self" | "crate" => false,
+            "_" | "super" | "self" | "Self" | "crate" | "$crate" => false,
             _ => true,
         }
     }
@@ -103,7 +102,7 @@ impl<S> Encode<S> for Symbol {
     }
 }
 
-impl<S: server::Server> DecodeMut<'_, '_, server::HandleStore<server::MarkedTypes<S>>>
+impl<S: server::Server> Decode<'_, '_, server::HandleStore<server::MarkedTypes<S>>>
     for Marked<S::Symbol, Symbol>
 {
     fn decode(r: &mut Reader<'_>, s: &mut server::HandleStore<server::MarkedTypes<S>>) -> Self {
@@ -119,7 +118,7 @@ impl<S: server::Server> Encode<server::HandleStore<server::MarkedTypes<S>>>
     }
 }
 
-impl<S> DecodeMut<'_, '_, S> for Symbol {
+impl<S> Decode<'_, '_, S> for Symbol {
     fn decode(r: &mut Reader<'_>, s: &mut S) -> Self {
         Symbol::new(<&str>::decode(r, s))
     }

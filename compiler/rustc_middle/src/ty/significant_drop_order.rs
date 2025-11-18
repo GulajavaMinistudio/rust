@@ -70,7 +70,7 @@ fn true_significant_drop_ty<'tcx>(
     }
 }
 
-/// Returns the list of types with a "potentially sigificant" that may be dropped
+/// Returns the list of types with a "potentially significant" that may be dropped
 /// by dropping a value of type `ty`.
 #[instrument(level = "trace", skip(tcx, typing_env))]
 pub fn extract_component_raw<'tcx>(
@@ -132,7 +132,7 @@ pub fn ty_dtor_span<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Span> {
         | ty::Ref(_, _, _)
         | ty::FnPtr(_, _)
         | ty::Tuple(_)
-        | ty::Dynamic(_, _, _)
+        | ty::Dynamic(_, _)
         | ty::Alias(_, _)
         | ty::Bound(_, _)
         | ty::Pat(_, _)

@@ -95,3 +95,28 @@ fn issue_13959() {
 "#
     );
 }
+
+fn issue_14930() {
+    println!("Hello {3} is {0:2$.1$}", 0.01, 2, 3, "x");
+    //~^ print_literal
+    println!("Hello {2} is {0:3$.1$}", 0.01, 2, "x", 3);
+    //~^ print_literal
+    println!("Hello {1} is {0:3$.2$}", 0.01, "x", 2, 3);
+    //~^ print_literal
+    println!("Hello {0} is {1:3$.2$}", "x", 0.01, 2, 3);
+    //~^ print_literal
+}
+
+fn issue_15576() {
+    println!("Hello {} is {2:.*}", "x", 5, 0.01);
+    //~^ print_literal
+
+    println!("Hello {} is {:.p$}", "x", 0.01, p = 5);
+    //~^ print_literal
+
+    println!(
+        "Hello {}: {2} is {3:.*} (which {3} with {1} places)",
+        "name", 5, "x", 0.01
+    );
+    //~^^ print_literal
+}

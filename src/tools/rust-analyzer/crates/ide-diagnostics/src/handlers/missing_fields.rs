@@ -1,6 +1,6 @@
 use either::Either;
 use hir::{
-    AssocItem, HirDisplay, ImportPathConfig, InFile, Type,
+    AssocItem, FindPathConfig, HirDisplay, InFile, Type,
     db::{ExpandDatabase, HirDatabase},
     sym,
 };
@@ -47,6 +47,7 @@ pub(crate) fn missing_fields(ctx: &DiagnosticsContext<'_>, d: &hir::MissingField
     );
 
     Diagnostic::new_with_syntax_node_ptr(ctx, DiagnosticCode::RustcHardError("E0063"), message, ptr)
+        .stable()
         .with_fixes(fixes(ctx, d))
 }
 
@@ -65,7 +66,7 @@ fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::MissingFields) -> Option<Vec<Ass
     let current_module =
         ctx.sema.scope(d.field_list_parent.to_node(&root).syntax()).map(|it| it.module());
     let range = InFile::new(d.file, d.field_list_parent.text_range())
-        .original_node_file_range_rooted(ctx.sema.db);
+        .original_node_file_range_rooted_opt(ctx.sema.db)?;
 
     let build_text_edit = |new_syntax: &SyntaxNode, old_syntax| {
         let edit = {
@@ -105,7 +106,7 @@ fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::MissingFields) -> Option<Vec<Ass
                 }
             });
 
-            let generate_fill_expr = |ty: &Type| match ctx.config.expr_fill_default {
+            let generate_fill_expr = |ty: &Type<'_>| match ctx.config.expr_fill_default {
                 ExprFillDefaultMode::Todo => make::ext::expr_todo(),
                 ExprFillDefaultMode::Underscore => make::ext::expr_underscore(),
                 ExprFillDefaultMode::Default => {
@@ -131,7 +132,7 @@ fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::MissingFields) -> Option<Vec<Ass
                         let type_path = current_module?.find_path(
                             ctx.sema.db,
                             item_for_path_search(ctx.sema.db, item_in_ns)?,
-                            ImportPathConfig {
+                            FindPathConfig {
                                 prefer_no_std: ctx.config.prefer_no_std,
                                 prefer_prelude: ctx.config.prefer_prelude,
                                 prefer_absolute: ctx.config.prefer_absolute,
@@ -179,7 +180,7 @@ fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::MissingFields) -> Option<Vec<Ass
 }
 
 fn make_ty(
-    ty: &hir::Type,
+    ty: &hir::Type<'_>,
     db: &dyn HirDatabase,
     module: hir::Module,
     edition: Edition,
@@ -197,7 +198,7 @@ fn make_ty(
 fn get_default_constructor(
     ctx: &DiagnosticsContext<'_>,
     d: &hir::MissingFields,
-    ty: &Type,
+    ty: &Type<'_>,
 ) -> Option<ast::Expr> {
     if let Some(builtin_ty) = ty.as_builtin() {
         if builtin_ty.is_int() || builtin_ty.is_uint() {
@@ -226,12 +227,11 @@ fn get_default_constructor(
     // Look for a ::new() associated function
     let has_new_func = ty
         .iterate_assoc_items(ctx.sema.db, krate, |assoc_item| {
-            if let AssocItem::Function(func) = assoc_item {
-                if func.name(ctx.sema.db) == sym::new
-                    && func.assoc_fn_params(ctx.sema.db).is_empty()
-                {
-                    return Some(());
-                }
+            if let AssocItem::Function(func) = assoc_item
+                && func.name(ctx.sema.db) == sym::new
+                && func.assoc_fn_params(ctx.sema.db).is_empty()
+            {
+                return Some(());
             }
 
             None

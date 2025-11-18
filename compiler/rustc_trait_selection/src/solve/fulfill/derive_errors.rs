@@ -11,11 +11,11 @@ use rustc_middle::traits::query::NoSolution;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_middle::{bug, span_bug};
-use rustc_next_trait_solver::solve::{GenerateProofTree, SolverDelegateEvalExt as _};
+use rustc_next_trait_solver::solve::{GoalEvaluation, SolverDelegateEvalExt as _};
 use tracing::{instrument, trace};
 
 use crate::solve::delegate::SolverDelegate;
-use crate::solve::inspect::{self, ProofTreeInferCtxtExt, ProofTreeVisitor};
+use crate::solve::inspect::{self, InferCtxtProofTreeExt, ProofTreeVisitor};
 use crate::solve::{Certainty, deeply_normalize_for_diagnostics};
 use crate::traits::{FulfillmentError, FulfillmentErrorCode, wf};
 
@@ -37,7 +37,9 @@ pub(super) fn fulfillment_error_for_no_solution<'tcx>(
                 ty::ConstKind::Unevaluated(uv) => {
                     infcx.tcx.type_of(uv.def).instantiate(infcx.tcx, uv.args)
                 }
-                ty::ConstKind::Param(param_ct) => param_ct.find_ty_from_env(obligation.param_env),
+                ty::ConstKind::Param(param_ct) => {
+                    param_ct.find_const_ty_from_env(obligation.param_env)
+                }
                 ty::ConstKind::Value(cv) => cv.ty,
                 kind => span_bug!(
                     obligation.cause.span,
@@ -88,24 +90,24 @@ pub(super) fn fulfillment_error_for_stalled<'tcx>(
     root_obligation: PredicateObligation<'tcx>,
 ) -> FulfillmentError<'tcx> {
     let (code, refine_obligation) = infcx.probe(|_| {
-        match <&SolverDelegate<'tcx>>::from(infcx)
-            .evaluate_root_goal(
-                root_obligation.as_goal(),
-                GenerateProofTree::No,
-                root_obligation.cause.span,
-            )
-            .0
-        {
-            Ok((_, Certainty::Maybe(MaybeCause::Ambiguity))) => {
-                (FulfillmentErrorCode::Ambiguity { overflow: None }, true)
-            }
-            Ok((
-                _,
-                Certainty::Maybe(MaybeCause::Overflow {
-                    suggest_increasing_limit,
-                    keep_constraints: _,
-                }),
-            )) => (
+        match <&SolverDelegate<'tcx>>::from(infcx).evaluate_root_goal(
+            root_obligation.as_goal(),
+            root_obligation.cause.span,
+            None,
+        ) {
+            Ok(GoalEvaluation {
+                certainty: Certainty::Maybe { cause: MaybeCause::Ambiguity, .. },
+                ..
+            }) => (FulfillmentErrorCode::Ambiguity { overflow: None }, true),
+            Ok(GoalEvaluation {
+                certainty:
+                    Certainty::Maybe {
+                        cause:
+                            MaybeCause::Overflow { suggest_increasing_limit, keep_constraints: _ },
+                        ..
+                    },
+                ..
+            }) => (
                 FulfillmentErrorCode::Ambiguity { overflow: Some(suggest_increasing_limit) },
                 // Don't look into overflows because we treat overflows weirdly anyways.
                 // We discard the inference constraints from overflowing goals, so
@@ -115,14 +117,16 @@ pub(super) fn fulfillment_error_for_stalled<'tcx>(
                 // FIXME: We should probably just look into overflows here.
                 false,
             ),
-            Ok((_, Certainty::Yes)) => {
-                bug!(
+            Ok(GoalEvaluation { certainty: Certainty::Yes, .. }) => {
+                span_bug!(
+                    root_obligation.cause.span,
                     "did not expect successful goal when collecting ambiguity errors for `{:?}`",
                     infcx.resolve_vars_if_possible(root_obligation.predicate),
                 )
             }
             Err(_) => {
-                bug!(
+                span_bug!(
+                    root_obligation.cause.span,
                     "did not expect selection error when collecting ambiguity errors for `{:?}`",
                     infcx.resolve_vars_if_possible(root_obligation.predicate),
                 )
@@ -227,7 +231,6 @@ impl<'tcx> BestObligation<'tcx> {
                                         nested_goal.source(),
                                         GoalSource::ImplWhereBound
                                             | GoalSource::AliasBoundConstCondition
-                                            | GoalSource::InstantiateHigherRanked
                                             | GoalSource::AliasWellFormed
                                     ) && nested_goal.result().is_err()
                                 },
@@ -264,7 +267,8 @@ impl<'tcx> BestObligation<'tcx> {
             );
             // Skip nested goals that aren't the *reason* for our goal's failure.
             match (self.consider_ambiguities, nested_goal.result()) {
-                (true, Ok(Certainty::Maybe(MaybeCause::Ambiguity))) | (false, Err(_)) => {}
+                (true, Ok(Certainty::Maybe { cause: MaybeCause::Ambiguity, .. }))
+                | (false, Err(_)) => {}
                 _ => continue,
             }
 
@@ -405,7 +409,8 @@ impl<'tcx> ProofTreeVisitor<'tcx> for BestObligation<'tcx> {
         let tcx = goal.infcx().tcx;
         // Skip goals that aren't the *reason* for our goal's failure.
         match (self.consider_ambiguities, goal.result()) {
-            (true, Ok(Certainty::Maybe(MaybeCause::Ambiguity))) | (false, Err(_)) => {}
+            (true, Ok(Certainty::Maybe { cause: MaybeCause::Ambiguity, .. })) | (false, Err(_)) => {
+            }
             _ => return ControlFlow::Continue(()),
         }
 
@@ -516,10 +521,6 @@ impl<'tcx> ProofTreeVisitor<'tcx> for BestObligation<'tcx> {
                         parent_host_pred,
                     ));
                     impl_where_bound_count += 1;
-                }
-                // Skip over a higher-ranked predicate.
-                (_, GoalSource::InstantiateHigherRanked) => {
-                    obligation = self.obligation.clone();
                 }
                 (ChildMode::PassThrough, _)
                 | (_, GoalSource::AliasWellFormed | GoalSource::AliasBoundConstCondition) => {

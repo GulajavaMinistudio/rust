@@ -5,16 +5,14 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::thread::panicking;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io, panic, str};
 
-use build_helper::util::fail;
 use object::read::archive::ArchiveFile;
 
-use crate::LldMode;
+use crate::BootstrapOverrideLld;
 use crate::core::builder::Builder;
 use crate::core::config::{Config, TargetSelection};
 use crate::utils::exec::{BootstrapCommand, command};
@@ -98,7 +96,7 @@ pub fn is_dylib(path: &Path) -> bool {
 
 /// Return the path to the containing submodule if available.
 pub fn submodule_path_of(builder: &Builder<'_>, path: &str) -> Option<String> {
-    let submodule_paths = build_helper::util::parse_gitmodules(&builder.src);
+    let submodule_paths = builder.submodule_paths();
     submodule_paths.iter().find_map(|submodule_path| {
         if path.starts_with(submodule_path) { Some(submodule_path.to_string()) } else { None }
     })
@@ -130,7 +128,7 @@ pub fn is_debug_info(name: &str) -> bool {
 /// Returns the corresponding relative library directory that the compiler's
 /// dylibs will be found in.
 pub fn libdir(target: TargetSelection) -> &'static str {
-    if target.is_windows() { "bin" } else { "lib" }
+    if target.is_windows() || target.contains("cygwin") { "bin" } else { "lib" }
 }
 
 /// Adds a list of lookup paths to `cmd`'s dynamic library lookup path.
@@ -178,6 +176,11 @@ pub fn symlink_dir(config: &Config, original: &Path, link: &Path) -> io::Result<
     fn symlink_dir_inner(target: &Path, junction: &Path) -> io::Result<()> {
         junction::create(target, junction)
     }
+}
+
+/// Return the host target on which we are currently running.
+pub fn get_host_target() -> TargetSelection {
+    TargetSelection::from_user(env!("BUILD_TRIPLE"))
 }
 
 /// Rename a file if from and to are in the same filesystem or
@@ -270,24 +273,6 @@ pub fn is_valid_test_suite_arg<'a, P: AsRef<Path>>(
     }
 }
 
-// FIXME: get rid of this function
-pub fn check_run(cmd: &mut BootstrapCommand, print_cmd_on_fail: bool) -> bool {
-    let status = match cmd.as_command_mut().status() {
-        Ok(status) => status,
-        Err(e) => {
-            println!("failed to execute command: {cmd:?}\nERROR: {e}");
-            return false;
-        }
-    };
-    if !status.success() && print_cmd_on_fail {
-        println!(
-            "\n\ncommand did not execute successfully: {cmd:?}\n\
-             expected success, got: {status}\n\n"
-        );
-    }
-    status.success()
-}
-
 pub fn make(host: &str) -> PathBuf {
     if host.contains("dragonfly")
         || host.contains("freebsd")
@@ -297,52 +282,6 @@ pub fn make(host: &str) -> PathBuf {
         PathBuf::from("gmake")
     } else {
         PathBuf::from("make")
-    }
-}
-
-#[track_caller]
-pub fn output(cmd: &mut Command) -> String {
-    #[cfg(feature = "tracing")]
-    let _run_span = crate::trace_cmd!(cmd);
-
-    let output = match cmd.stderr(Stdio::inherit()).output() {
-        Ok(status) => status,
-        Err(e) => fail(&format!("failed to execute command: {cmd:?}\nERROR: {e}")),
-    };
-    if !output.status.success() {
-        panic!(
-            "command did not execute successfully: {:?}\n\
-             expected success, got: {}",
-            cmd, output.status
-        );
-    }
-    String::from_utf8(output.stdout).unwrap()
-}
-
-/// Spawn a process and return a closure that will wait for the process
-/// to finish and then return its output. This allows the spawned process
-/// to do work without immediately blocking bootstrap.
-#[track_caller]
-pub fn start_process(cmd: &mut Command) -> impl FnOnce() -> String + use<> {
-    let child = match cmd.stderr(Stdio::inherit()).stdout(Stdio::piped()).spawn() {
-        Ok(child) => child,
-        Err(e) => fail(&format!("failed to execute command: {cmd:?}\nERROR: {e}")),
-    };
-
-    let command = format!("{cmd:?}");
-
-    move || {
-        let output = child.wait_with_output().unwrap();
-
-        if !output.status.success() {
-            panic!(
-                "command did not execute successfully: {}\n\
-                 expected success, got: {}",
-                command, output.status
-            );
-        }
-
-        String::from_utf8(output.stdout).unwrap()
     }
 }
 
@@ -418,15 +357,19 @@ pub fn get_clang_cl_resource_dir(builder: &Builder<'_>, clang_cl_path: &str) -> 
 /// Returns a flag that configures LLD to use only a single thread.
 /// If we use an external LLD, we need to find out which version is it to know which flag should we
 /// pass to it (LLD older than version 10 had a different flag).
-fn lld_flag_no_threads(builder: &Builder<'_>, lld_mode: LldMode, is_windows: bool) -> &'static str {
+fn lld_flag_no_threads(
+    builder: &Builder<'_>,
+    bootstrap_override_lld: BootstrapOverrideLld,
+    is_windows: bool,
+) -> &'static str {
     static LLD_NO_THREADS: OnceLock<(&'static str, &'static str)> = OnceLock::new();
 
     let new_flags = ("/threads:1", "--threads=1");
     let old_flags = ("/no-threads", "--no-threads");
 
     let (windows_flag, other_flag) = LLD_NO_THREADS.get_or_init(|| {
-        let newer_version = match lld_mode {
-            LldMode::External => {
+        let newer_version = match bootstrap_override_lld {
+            BootstrapOverrideLld::External => {
                 let mut cmd = command("lld");
                 cmd.arg("-flavor").arg("ld").arg("--version");
                 let out = cmd.run_capture_stdout(builder).stdout();
@@ -483,26 +426,29 @@ pub fn linker_flags(
     lld_threads: LldThreads,
 ) -> Vec<String> {
     let mut args = vec![];
-    if !builder.is_lld_direct_linker(target) && builder.config.lld_mode.is_used() {
-        match builder.config.lld_mode {
-            LldMode::External => {
-                args.push("-Zlinker-features=+lld".to_string());
-                // FIXME(kobzol): remove this flag once MCP510 gets stabilized
+    if !builder.is_lld_direct_linker(target) && builder.config.bootstrap_override_lld.is_used() {
+        match builder.config.bootstrap_override_lld {
+            BootstrapOverrideLld::External => {
+                args.push("-Clinker-features=+lld".to_string());
+                args.push("-Clink-self-contained=-linker".to_string());
                 args.push("-Zunstable-options".to_string());
             }
-            LldMode::SelfContained => {
-                args.push("-Zlinker-features=+lld".to_string());
+            BootstrapOverrideLld::SelfContained => {
+                args.push("-Clinker-features=+lld".to_string());
                 args.push("-Clink-self-contained=+linker".to_string());
-                // FIXME(kobzol): remove this flag once MCP510 gets stabilized
                 args.push("-Zunstable-options".to_string());
             }
-            LldMode::Unused => unreachable!(),
+            BootstrapOverrideLld::None => unreachable!(),
         };
 
         if matches!(lld_threads, LldThreads::No) {
             args.push(format!(
                 "-Clink-arg=-Wl,{}",
-                lld_flag_no_threads(builder, builder.config.lld_mode, target.is_windows())
+                lld_flag_no_threads(
+                    builder,
+                    builder.config.bootstrap_override_lld,
+                    target.is_windows()
+                )
             ));
         }
     }
@@ -573,6 +519,8 @@ pub fn check_cfg_arg(name: &str, values: Option<&[&str]>) -> String {
 #[track_caller]
 pub fn git(source_dir: Option<&Path>) -> BootstrapCommand {
     let mut git = command("git");
+    // git commands are almost always read-only, so cache them by default
+    git.cached();
 
     if let Some(source_dir) = source_dir {
         git.current_dir(source_dir);

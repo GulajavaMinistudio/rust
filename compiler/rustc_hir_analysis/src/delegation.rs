@@ -272,12 +272,10 @@ fn create_generic_args<'tcx>(
         (FnKind::AssocTraitImpl, FnKind::AssocTrait) => {
             let callee_generics = tcx.generics_of(sig_id);
             let parent = tcx.parent(def_id.into());
-            let parent_args =
-                tcx.impl_trait_header(parent).unwrap().trait_ref.instantiate_identity().args;
+            let parent_args = tcx.impl_trait_header(parent).trait_ref.instantiate_identity().args;
 
             let trait_args = ty::GenericArgs::identity_for_item(tcx, sig_id);
-            let method_args =
-                tcx.mk_args_from_iter(trait_args.iter().skip(callee_generics.parent_count));
+            let method_args = tcx.mk_args(&trait_args[callee_generics.parent_count..]);
             let method_args = build_generic_args(tcx, sig_id, def_id, method_args);
 
             tcx.mk_args_from_iter(parent_args.iter().chain(method_args))

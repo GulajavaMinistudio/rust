@@ -10,7 +10,7 @@ use syntax::{
 use crate::{
     AssistId,
     assist_context::{AssistContext, Assists, SourceChangeBuilder},
-    utils::generate_trait_impl_text,
+    utils::generate_trait_impl_text_intransitive,
 };
 
 // Assist: generate_deref
@@ -57,9 +57,9 @@ fn generate_record_deref(acc: &mut Assists, ctx: &AssistContext<'_>) -> Option<(
     };
 
     let module = ctx.sema.to_def(&strukt)?.module(ctx.db());
+    let cfg = ctx.config.find_path_config(ctx.sema.is_nightly(module.krate()));
     let trait_ = deref_type_to_generate.to_trait(&ctx.sema, module.krate())?;
-    let trait_path =
-        module.find_path(ctx.db(), ModuleDef::Trait(trait_), ctx.config.import_path_config())?;
+    let trait_path = module.find_path(ctx.db(), ModuleDef::Trait(trait_), cfg)?;
 
     let field_type = field.ty()?;
     let field_name = field.name()?;
@@ -99,9 +99,9 @@ fn generate_tuple_deref(acc: &mut Assists, ctx: &AssistContext<'_>) -> Option<()
     };
 
     let module = ctx.sema.to_def(&strukt)?.module(ctx.db());
+    let cfg = ctx.config.find_path_config(ctx.sema.is_nightly(module.krate()));
     let trait_ = deref_type_to_generate.to_trait(&ctx.sema, module.krate())?;
-    let trait_path =
-        module.find_path(ctx.db(), ModuleDef::Trait(trait_), ctx.config.import_path_config())?;
+    let trait_path = module.find_path(ctx.db(), ModuleDef::Trait(trait_), cfg)?;
 
     let field_type = field.ty()?;
     let target = field.syntax().text_range();
@@ -150,7 +150,7 @@ fn generate_edit(
         ),
     };
     let strukt_adt = ast::Adt::Struct(strukt);
-    let deref_impl = generate_trait_impl_text(
+    let deref_impl = generate_trait_impl_text_intransitive(
         &strukt_adt,
         &trait_path.display(db, edition).to_string(),
         &impl_code,
@@ -224,6 +224,28 @@ impl core::ops::Deref for B {
         &self.a
     }
 }"#,
+        );
+    }
+
+    #[test]
+    fn test_generate_record_deref_with_generic() {
+        check_assist(
+            generate_deref,
+            r#"
+//- minicore: deref
+struct A<T>($0T);
+"#,
+            r#"
+struct A<T>(T);
+
+impl<T> core::ops::Deref for A<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+"#,
         );
     }
 

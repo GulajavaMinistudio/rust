@@ -33,6 +33,7 @@ pub(crate) fn trait_impl_incorrect_safety(
             },
         ),
     )
+    .stable()
 }
 
 #[cfg(test)]
@@ -124,6 +125,15 @@ struct S;
   unsafe impl S {}
 //^^^^^^^^^^^ error: unsafe impl for safe trait
 "#,
+        );
+    }
+
+    #[test]
+    fn unsafe_unresolved_trait() {
+        check_diagnostics(
+            r#"
+unsafe impl TestTrait for u32 {}
+        "#,
         );
     }
 }

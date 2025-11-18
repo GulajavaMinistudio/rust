@@ -9,7 +9,10 @@ use triomphe::Arc;
 
 use crate::{
     AdtId, AssocItemId, AttrDefId, Crate, EnumId, EnumVariantId, FunctionId, ImplId, ModuleDefId,
-    StaticId, StructId, TraitId, TypeAliasId, UnionId, db::DefDatabase, expr_store::path::Path,
+    StaticId, StructId, TraitId, TypeAliasId, UnionId,
+    db::DefDatabase,
+    expr_store::path::Path,
+    nameres::{assoc::TraitItems, crate_def_map, crate_local_def_map},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,21 +84,30 @@ impl LangItemTarget {
             _ => None,
         }
     }
+
+    pub fn as_adt(self) -> Option<AdtId> {
+        match self {
+            LangItemTarget::Union(it) => Some(it.into()),
+            LangItemTarget::EnumId(it) => Some(it.into()),
+            LangItemTarget::Struct(it) => Some(it.into()),
+            _ => None,
+        }
+    }
 }
 
 /// Salsa query. This will look for lang items in a specific crate.
-#[salsa_macros::tracked(return_ref)]
+#[salsa_macros::tracked(returns(ref))]
 pub fn crate_lang_items(db: &dyn DefDatabase, krate: Crate) -> Option<Box<LangItems>> {
     let _p = tracing::info_span!("crate_lang_items_query").entered();
 
     let mut lang_items = LangItems::default();
 
-    let crate_def_map = db.crate_def_map(krate);
+    let crate_def_map = crate_def_map(db, krate);
 
     for (_, module_data) in crate_def_map.modules() {
         for impl_def in module_data.scope.impls() {
             lang_items.collect_lang_item(db, impl_def, LangItemTarget::ImplDef);
-            for &(_, assoc) in db.impl_items(impl_def).items.iter() {
+            for &(_, assoc) in impl_def.impl_items(db).items.iter() {
                 match assoc {
                     AssocItemId::FunctionId(f) => {
                         lang_items.collect_lang_item(db, f, LangItemTarget::Function)
@@ -112,19 +124,21 @@ pub fn crate_lang_items(db: &dyn DefDatabase, krate: Crate) -> Option<Box<LangIt
             match def {
                 ModuleDefId::TraitId(trait_) => {
                     lang_items.collect_lang_item(db, trait_, LangItemTarget::Trait);
-                    db.trait_items(trait_).items.iter().for_each(|&(_, assoc_id)| match assoc_id {
-                        AssocItemId::FunctionId(f) => {
-                            lang_items.collect_lang_item(db, f, LangItemTarget::Function);
+                    TraitItems::query(db, trait_).items.iter().for_each(|&(_, assoc_id)| {
+                        match assoc_id {
+                            AssocItemId::FunctionId(f) => {
+                                lang_items.collect_lang_item(db, f, LangItemTarget::Function);
+                            }
+                            AssocItemId::TypeAliasId(alias) => {
+                                lang_items.collect_lang_item(db, alias, LangItemTarget::TypeAlias)
+                            }
+                            AssocItemId::ConstId(_) => {}
                         }
-                        AssocItemId::TypeAliasId(alias) => {
-                            lang_items.collect_lang_item(db, alias, LangItemTarget::TypeAlias)
-                        }
-                        AssocItemId::ConstId(_) => {}
                     });
                 }
                 ModuleDefId::AdtId(AdtId::EnumId(e)) => {
                     lang_items.collect_lang_item(db, e, LangItemTarget::EnumId);
-                    db.enum_variants(e).variants.iter().for_each(|&(id, _)| {
+                    e.enum_variants(db).variants.iter().for_each(|&(id, _, _)| {
                         lang_items.collect_lang_item(db, id, LangItemTarget::EnumVariant);
                     });
                 }
@@ -165,7 +179,19 @@ pub fn lang_item(
     {
         return Some(target);
     }
-    start_crate.data(db).dependencies.iter().find_map(|dep| lang_item(db, dep.crate_id, item))
+
+    // Our `CrateGraph` eagerly inserts sysroot dependencies like `core` or `std` into dependencies
+    // even if the target crate has `#![no_std]`, `#![no_core]` or shadowed sysroot dependencies
+    // like `dependencies.std.path = ".."`. So we use `extern_prelude()` instead of
+    // `CrateData.dependencies` here, which has already come through such sysroot complexities
+    // while nameres.
+    //
+    // See https://github.com/rust-lang/rust-analyzer/pull/20475 for details.
+    crate_local_def_map(db, start_crate).local(db).extern_prelude().find_map(|(_, (krate, _))| {
+        // Some crates declares themselves as extern crate like `extern crate self as core`.
+        // Ignore these to prevent cycles.
+        if krate.krate == start_crate { None } else { lang_item(db, krate.krate, item) }
+    })
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
@@ -209,14 +235,14 @@ pub(crate) fn crate_notable_traits(db: &dyn DefDatabase, krate: Crate) -> Option
 
     let mut traits = Vec::new();
 
-    let crate_def_map = db.crate_def_map(krate);
+    let crate_def_map = crate_def_map(db, krate);
 
     for (_, module_data) in crate_def_map.modules() {
         for def in module_data.scope.declarations() {
-            if let ModuleDefId::TraitId(trait_) = def {
-                if db.attrs(trait_.into()).has_doc_notable_trait() {
-                    traits.push(trait_);
-                }
+            if let ModuleDefId::TraitId(trait_) = def
+                && db.attrs(trait_.into()).has_doc_notable_trait()
+            {
+                traits.push(trait_);
             }
         }
     }
@@ -272,6 +298,10 @@ impl LangItem {
         lang_item(db, start_crate, self).and_then(|t| t.as_trait())
     }
 
+    pub fn resolve_adt(self, db: &dyn DefDatabase, start_crate: Crate) -> Option<AdtId> {
+        lang_item(db, start_crate, self).and_then(|t| t.as_adt())
+    }
+
     pub fn resolve_enum(self, db: &dyn DefDatabase, start_crate: Crate) -> Option<EnumId> {
         lang_item(db, start_crate, self).and_then(|t| t.as_enum())
     }
@@ -303,6 +333,8 @@ impl LangItem {
 language_item_table! {
 //  Variant name,            Name,                     Getter method name,         Target                  Generic requirements;
     Sized,                   sym::sized,               sized_trait,                Target::Trait,          GenericRequirement::Exact(0);
+    MetaSized,               sym::meta_sized,          sized_trait,                Target::Trait,          GenericRequirement::Exact(0);
+    PointeeSized,            sym::pointee_sized,       sized_trait,                Target::Trait,          GenericRequirement::Exact(0);
     Unsize,                  sym::unsize,              unsize_trait,               Target::Trait,          GenericRequirement::Minimum(1);
     /// Trait injected by `#[derive(PartialEq)]`, (i.e. "Partial EQ").
     StructuralPeq,           sym::structural_peq,      structural_peq_trait,       Target::Trait,          GenericRequirement::None;
@@ -376,11 +408,17 @@ language_item_table! {
     AsyncFnMut,              sym::async_fn_mut,        async_fn_mut_trait,         Target::Trait,          GenericRequirement::Exact(1);
     AsyncFnOnce,             sym::async_fn_once,       async_fn_once_trait,        Target::Trait,          GenericRequirement::Exact(1);
 
+    CallRefFuture,           sym::call_ref_future,     call_ref_future_ty,         Target::AssocTy,        GenericRequirement::None;
+    CallOnceFuture,          sym::call_once_future,    call_once_future_ty,        Target::AssocTy,        GenericRequirement::None;
+    AsyncFnOnceOutput,       sym::async_fn_once_output, async_fn_once_output_ty,   Target::AssocTy,        GenericRequirement::None;
+
     FnOnceOutput,            sym::fn_once_output,      fn_once_output,             Target::AssocTy,        GenericRequirement::None;
 
     Future,                  sym::future_trait,        future_trait,               Target::Trait,          GenericRequirement::Exact(0);
     CoroutineState,          sym::coroutine_state,     coroutine_state,            Target::Enum,           GenericRequirement::None;
     Coroutine,               sym::coroutine,           coroutine_trait,            Target::Trait,          GenericRequirement::Minimum(1);
+    CoroutineReturn,         sym::coroutine_return,    coroutine_return_ty,        Target::AssocTy,        GenericRequirement::None;
+    CoroutineYield,          sym::coroutine_yield,     coroutine_yield_ty,         Target::AssocTy,        GenericRequirement::None;
     Unpin,                   sym::unpin,               unpin_trait,                Target::Trait,          GenericRequirement::None;
     Pin,                     sym::pin,                 pin_type,                   Target::Struct,         GenericRequirement::None;
 

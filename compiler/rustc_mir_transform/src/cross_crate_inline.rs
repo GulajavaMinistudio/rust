@@ -1,4 +1,4 @@
-use rustc_attr_parsing::InlineAttr;
+use rustc_hir::attrs::InlineAttr;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::mir::visit::Visitor;
@@ -48,6 +48,13 @@ fn cross_crate_inlinable(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
         InlineAttr::Never => return false,
         InlineAttr::Hint | InlineAttr::Always | InlineAttr::Force { .. } => return true,
         _ => {}
+    }
+
+    // If the crate is likely to be mostly unused, use cross-crate inlining to defer codegen until
+    // the function is referenced, in order to skip codegen for unused functions. This is
+    // intentionally after the check for `inline(never)`, so that `inline(never)` wins.
+    if tcx.sess.opts.unstable_opts.hint_mostly_unused {
+        return true;
     }
 
     let sig = tcx.fn_sig(def_id).instantiate_identity();
@@ -108,10 +115,7 @@ impl<'tcx> Visitor<'tcx> for CostChecker<'_, 'tcx> {
     fn visit_statement(&mut self, statement: &Statement<'tcx>, _: Location) {
         // Don't count StorageLive/StorageDead in the inlining cost.
         match statement.kind {
-            StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
-            | StatementKind::Deinit(_)
-            | StatementKind::Nop => {}
+            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) | StatementKind::Nop => {}
             _ => self.statements += 1,
         }
     }
@@ -128,7 +132,16 @@ impl<'tcx> Visitor<'tcx> for CostChecker<'_, 'tcx> {
                     }
                 }
             }
-            TerminatorKind::Call { unwind, .. } => {
+            TerminatorKind::Call { ref func, unwind, .. } => {
+                // We track calls because they make our function not a leaf (and in theory, the
+                // number of calls indicates how likely this function is to perturb other CGUs).
+                // But intrinsics don't have a body that gets assigned to a CGU, so they are
+                // ignored.
+                if let Some((fn_def_id, _)) = func.const_fn_def()
+                    && self.tcx.has_attr(fn_def_id, sym::rustc_intrinsic)
+                {
+                    return;
+                }
                 self.calls += 1;
                 if let UnwindAction::Cleanup(_) = unwind {
                     self.landing_pads += 1;

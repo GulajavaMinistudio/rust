@@ -1,20 +1,38 @@
 #![warn(clippy::arithmetic_side_effects)]
 
 mod atomic;
+mod math;
 mod simd;
 
+pub use self::atomic::AtomicRmwOp;
+
+#[rustfmt::skip] // prevent `use` reordering
 use rand::Rng;
 use rustc_abi::Size;
-use rustc_apfloat::{Float, Round};
-use rustc_middle::mir;
-use rustc_middle::ty::{self, FloatTy};
+use rustc_middle::{mir, ty};
 use rustc_span::{Symbol, sym};
 
 use self::atomic::EvalContextExt as _;
-use self::helpers::{ToHost, ToSoft, check_intrinsic_arg_count};
+use self::math::EvalContextExt as _;
 use self::simd::EvalContextExt as _;
-use crate::math::apply_random_float_error_to_imm;
 use crate::*;
+
+/// Check that the number of args is what we expect.
+fn check_intrinsic_arg_count<'a, 'tcx, const N: usize>(
+    args: &'a [OpTy<'tcx>],
+) -> InterpResult<'tcx, &'a [OpTy<'tcx>; N]>
+where
+    &'a [OpTy<'tcx>; N]: TryFrom<&'a [OpTy<'tcx>]>,
+{
+    if let Ok(ops) = args.try_into() {
+        return interp_ok(ops);
+    }
+    throw_ub_format!(
+        "incorrect number of arguments for intrinsic: got {}, expected {}",
+        args.len(),
+        N
+    )
+}
 
 impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
 pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
@@ -22,7 +40,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         &mut self,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx>],
-        dest: &MPlaceTy<'tcx>,
+        dest: &PlaceTy<'tcx>,
         ret: Option<mir::BasicBlock>,
         unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx, Option<ty::Instance<'tcx>>> {
@@ -45,7 +63,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let intrinsic_name = this.tcx.item_name(instance.def_id());
         let intrinsic_name = intrinsic_name.as_str();
 
-        match this.emulate_intrinsic_by_name(intrinsic_name, instance.args, args, dest, ret)? {
+        // FIXME: avoid allocating memory
+        let dest = this.force_allocation(dest)?;
+
+        match this.emulate_intrinsic_by_name(intrinsic_name, instance.args, args, &dest, ret)? {
             EmulateItemResult::NotSupported => {
                 // We haven't handled the intrinsic, let's see if we can use a fallback body.
                 if this.tcx.intrinsic(instance.def_id()).unwrap().must_be_overridden {
@@ -94,10 +115,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
 
         if let Some(name) = intrinsic_name.strip_prefix("atomic_") {
-            return this.emulate_atomic_intrinsic(name, args, dest);
+            return this.emulate_atomic_intrinsic(name, generic_args, args, dest);
         }
         if let Some(name) = intrinsic_name.strip_prefix("simd_") {
-            return this.emulate_simd_intrinsic(name, generic_args, args, dest);
+            return this.emulate_simd_intrinsic(name, args, dest);
         }
 
         match intrinsic_name {
@@ -108,7 +129,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 ));
             }
             "catch_unwind" => {
-                this.handle_catch_unwind(args, dest, ret)?;
+                let [try_fn, data, catch_fn] = check_intrinsic_arg_count(args)?;
+                this.handle_catch_unwind(try_fn, data, catch_fn, dest, ret)?;
                 // This pushed a stack frame, don't jump to `ret`.
                 return interp_ok(EmulateItemResult::AlreadyJumped);
             }
@@ -156,320 +178,6 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 this.write_scalar(Scalar::from_bool(branch), dest)?;
             }
 
-            "floorf16" | "ceilf16" | "truncf16" | "roundf16" | "round_ties_even_f16" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f16()?;
-                let mode = match intrinsic_name {
-                    "floorf16" => Round::TowardNegative,
-                    "ceilf16" => Round::TowardPositive,
-                    "truncf16" => Round::TowardZero,
-                    "roundf16" => Round::NearestTiesToAway,
-                    "round_ties_even_f16" => Round::NearestTiesToEven,
-                    _ => bug!(),
-                };
-                let res = f.round_to_integral(mode).value;
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-            "floorf32" | "ceilf32" | "truncf32" | "roundf32" | "round_ties_even_f32" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f32()?;
-                let mode = match intrinsic_name {
-                    "floorf32" => Round::TowardNegative,
-                    "ceilf32" => Round::TowardPositive,
-                    "truncf32" => Round::TowardZero,
-                    "roundf32" => Round::NearestTiesToAway,
-                    "round_ties_even_f32" => Round::NearestTiesToEven,
-                    _ => bug!(),
-                };
-                let res = f.round_to_integral(mode).value;
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-            "floorf64" | "ceilf64" | "truncf64" | "roundf64" | "round_ties_even_f64" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f64()?;
-                let mode = match intrinsic_name {
-                    "floorf64" => Round::TowardNegative,
-                    "ceilf64" => Round::TowardPositive,
-                    "truncf64" => Round::TowardZero,
-                    "roundf64" => Round::NearestTiesToAway,
-                    "round_ties_even_f64" => Round::NearestTiesToEven,
-                    _ => bug!(),
-                };
-                let res = f.round_to_integral(mode).value;
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-            "floorf128" | "ceilf128" | "truncf128" | "roundf128" | "round_ties_even_f128" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f128()?;
-                let mode = match intrinsic_name {
-                    "floorf128" => Round::TowardNegative,
-                    "ceilf128" => Round::TowardPositive,
-                    "truncf128" => Round::TowardZero,
-                    "roundf128" => Round::NearestTiesToAway,
-                    "round_ties_even_f128" => Round::NearestTiesToEven,
-                    _ => bug!(),
-                };
-                let res = f.round_to_integral(mode).value;
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-
-            "sqrtf32" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f32()?;
-                // Sqrt is specified to be fully precise.
-                let res = math::sqrt(f);
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-            "sqrtf64" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f64()?;
-                // Sqrt is specified to be fully precise.
-                let res = math::sqrt(f);
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-
-            #[rustfmt::skip]
-            | "sinf32"
-            | "cosf32"
-            | "expf32"
-            | "exp2f32"
-            | "logf32"
-            | "log10f32"
-            | "log2f32"
-            => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f32()?;
-                // Using host floats (but it's fine, these operations do not have
-                // guaranteed precision).
-                let host = f.to_host();
-                let res = match intrinsic_name {
-                    "sinf32" => host.sin(),
-                    "cosf32" => host.cos(),
-                    "expf32" => host.exp(),
-                    "exp2f32" => host.exp2(),
-                    "logf32" => host.ln(),
-                    "log10f32" => host.log10(),
-                    "log2f32" => host.log2(),
-                    _ => bug!(),
-                };
-                let res = res.to_soft();
-                // Apply a relative error of 16ULP to introduce some non-determinism
-                // simulating imprecise implementations and optimizations.
-                // FIXME: temporarily disabled as it breaks std tests.
-                // let res = apply_random_float_error_ulp(
-                //     this,
-                //     res,
-                //     4, // log2(16)
-                // );
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-            #[rustfmt::skip]
-            | "sinf64"
-            | "cosf64"
-            | "expf64"
-            | "exp2f64"
-            | "logf64"
-            | "log10f64"
-            | "log2f64"
-            => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f64()?;
-                // Using host floats (but it's fine, these operations do not have
-                // guaranteed precision).
-                let host = f.to_host();
-                let res = match intrinsic_name {
-                    "sinf64" => host.sin(),
-                    "cosf64" => host.cos(),
-                    "expf64" => host.exp(),
-                    "exp2f64" => host.exp2(),
-                    "logf64" => host.ln(),
-                    "log10f64" => host.log10(),
-                    "log2f64" => host.log2(),
-                    _ => bug!(),
-                };
-                let res = res.to_soft();
-                // Apply a relative error of 16ULP to introduce some non-determinism
-                // simulating imprecise implementations and optimizations.
-                // FIXME: temporarily disabled as it breaks std tests.
-                // let res = apply_random_float_error_ulp(
-                //     this,
-                //     res,
-                //     4, // log2(16)
-                // );
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-
-            "fmaf32" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f32()?;
-                let b = this.read_scalar(b)?.to_f32()?;
-                let c = this.read_scalar(c)?.to_f32()?;
-                // FIXME: Using host floats, to work around https://github.com/rust-lang/rustc_apfloat/issues/11
-                let res = a.to_host().mul_add(b.to_host(), c.to_host()).to_soft();
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
-            "fmaf64" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f64()?;
-                let b = this.read_scalar(b)?.to_f64()?;
-                let c = this.read_scalar(c)?.to_f64()?;
-                // FIXME: Using host floats, to work around https://github.com/rust-lang/rustc_apfloat/issues/11
-                let res = a.to_host().mul_add(b.to_host(), c.to_host()).to_soft();
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
-
-            "fmuladdf32" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f32()?;
-                let b = this.read_scalar(b)?.to_f32()?;
-                let c = this.read_scalar(c)?.to_f32()?;
-                let fuse: bool = this.machine.rng.get_mut().random();
-                let res = if fuse {
-                    // FIXME: Using host floats, to work around https://github.com/rust-lang/rustc_apfloat/issues/11
-                    a.to_host().mul_add(b.to_host(), c.to_host()).to_soft()
-                } else {
-                    ((a * b).value + c).value
-                };
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
-            "fmuladdf64" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f64()?;
-                let b = this.read_scalar(b)?.to_f64()?;
-                let c = this.read_scalar(c)?.to_f64()?;
-                let fuse: bool = this.machine.rng.get_mut().random();
-                let res = if fuse {
-                    // FIXME: Using host floats, to work around https://github.com/rust-lang/rustc_apfloat/issues/11
-                    a.to_host().mul_add(b.to_host(), c.to_host()).to_soft()
-                } else {
-                    ((a * b).value + c).value
-                };
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
-
-            "powf32" => {
-                // FIXME: apply random relative error but without altering behaviour of powf
-                let [f1, f2] = check_intrinsic_arg_count(args)?;
-                let f1 = this.read_scalar(f1)?.to_f32()?;
-                let f2 = this.read_scalar(f2)?.to_f32()?;
-                // Using host floats (but it's fine, this operation does not have guaranteed precision).
-                let res = f1.to_host().powf(f2.to_host()).to_soft();
-                let res = this.adjust_nan(res, &[f1, f2]);
-                this.write_scalar(res, dest)?;
-            }
-            "powf64" => {
-                // FIXME: apply random relative error but without altering behaviour of powf
-                let [f1, f2] = check_intrinsic_arg_count(args)?;
-                let f1 = this.read_scalar(f1)?.to_f64()?;
-                let f2 = this.read_scalar(f2)?.to_f64()?;
-                // Using host floats (but it's fine, this operation does not have guaranteed precision).
-                let res = f1.to_host().powf(f2.to_host()).to_soft();
-                let res = this.adjust_nan(res, &[f1, f2]);
-                this.write_scalar(res, dest)?;
-            }
-
-            "powif32" => {
-                // FIXME: apply random relative error but without altering behaviour of powi
-                let [f, i] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f32()?;
-                let i = this.read_scalar(i)?.to_i32()?;
-                // Using host floats (but it's fine, this operation does not have guaranteed precision).
-                let res = f.to_host().powi(i).to_soft();
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-            "powif64" => {
-                // FIXME: apply random relative error but without altering behaviour of powi
-                let [f, i] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f64()?;
-                let i = this.read_scalar(i)?.to_i32()?;
-                // Using host floats (but it's fine, this operation does not have guaranteed precision).
-                let res = f.to_host().powi(i).to_soft();
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-
-            #[rustfmt::skip]
-            | "fadd_fast"
-            | "fsub_fast"
-            | "fmul_fast"
-            | "fdiv_fast"
-            | "frem_fast"
-            => {
-                let [a, b] = check_intrinsic_arg_count(args)?;
-                let a = this.read_immediate(a)?;
-                let b = this.read_immediate(b)?;
-                let op = match intrinsic_name {
-                    "fadd_fast" => mir::BinOp::Add,
-                    "fsub_fast" => mir::BinOp::Sub,
-                    "fmul_fast" => mir::BinOp::Mul,
-                    "fdiv_fast" => mir::BinOp::Div,
-                    "frem_fast" => mir::BinOp::Rem,
-                    _ => bug!(),
-                };
-                let float_finite = |x: &ImmTy<'tcx>| -> InterpResult<'tcx, bool> {
-                    let ty::Float(fty) = x.layout.ty.kind() else {
-                        bug!("float_finite: non-float input type {}", x.layout.ty)
-                    };
-                    interp_ok(match fty {
-                        FloatTy::F16 => x.to_scalar().to_f16()?.is_finite(),
-                        FloatTy::F32 => x.to_scalar().to_f32()?.is_finite(),
-                        FloatTy::F64 => x.to_scalar().to_f64()?.is_finite(),
-                        FloatTy::F128 => x.to_scalar().to_f128()?.is_finite(),
-                    })
-                };
-                match (float_finite(&a)?, float_finite(&b)?) {
-                    (false, false) => throw_ub_format!(
-                        "`{intrinsic_name}` intrinsic called with non-finite value as both parameters",
-                    ),
-                    (false, _) => throw_ub_format!(
-                        "`{intrinsic_name}` intrinsic called with non-finite value as first parameter",
-                    ),
-                    (_, false) => throw_ub_format!(
-                        "`{intrinsic_name}` intrinsic called with non-finite value as second parameter",
-                    ),
-                    _ => {}
-                }
-                let res = this.binary_op(op, &a, &b)?;
-                // This cannot be a NaN so we also don't have to apply any non-determinism.
-                // (Also, `binary_op` already called `generate_nan` if needed.)
-                if !float_finite(&res)? {
-                    throw_ub_format!("`{intrinsic_name}` intrinsic produced non-finite value as result");
-                }
-                // Apply a relative error of 4ULP to simulate non-deterministic precision loss
-                // due to optimizations.
-                let res = apply_random_float_error_to_imm(this, res, 2 /* log2(4) */)?;
-                this.write_immediate(*res, dest)?;
-            }
-
-            "float_to_int_unchecked" => {
-                let [val] = check_intrinsic_arg_count(args)?;
-                let val = this.read_immediate(val)?;
-
-                let res = this
-                    .float_to_int_checked(&val, dest.layout, Round::TowardZero)?
-                    .ok_or_else(|| {
-                        err_ub_format!(
-                            "`float_to_int_unchecked` intrinsic called on {val} which cannot be represented in target type `{:?}`",
-                            dest.layout.ty
-                        )
-                    })?;
-
-                this.write_immediate(*res, dest)?;
-            }
-
             // Other
             "breakpoint" => {
                 let [] = check_intrinsic_arg_count(args)?;
@@ -477,7 +185,11 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 throw_machine_stop!(TerminationInfo::Abort(format!("trace/breakpoint trap")))
             }
 
-            _ => return interp_ok(EmulateItemResult::NotSupported),
+            "assert_inhabited" | "assert_zero_valid" | "assert_mem_uninitialized_valid" => {
+                // Make these a NOP, so we get the better Miri-native error messages.
+            }
+
+            _ => return this.emulate_math_intrinsic(intrinsic_name, generic_args, args, dest),
         }
 
         interp_ok(EmulateItemResult::NeedsReturn)

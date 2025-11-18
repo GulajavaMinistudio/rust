@@ -1,6 +1,5 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::graph;
 use rustc_data_structures::graph::dominators::{Dominators, dominators};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
@@ -10,25 +9,17 @@ use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
 use smallvec::SmallVec;
 
 use crate::mir::traversal::Postorder;
-use crate::mir::{BasicBlock, BasicBlockData, START_BLOCK, Terminator, TerminatorKind};
+use crate::mir::{BasicBlock, BasicBlockData, START_BLOCK};
 
 #[derive(Clone, TyEncodable, TyDecodable, Debug, HashStable, TypeFoldable, TypeVisitable)]
 pub struct BasicBlocks<'tcx> {
     basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>,
-    cache: Cache,
+    /// Use an `Arc` so we can share the cache when we clone the MIR body, as borrowck does.
+    cache: Arc<Cache>,
 }
 
 // Typically 95%+ of basic blocks have 4 or fewer predecessors.
 type Predecessors = IndexVec<BasicBlock, SmallVec<[BasicBlock; 4]>>;
-
-/// Each `(target, switch)` entry in the map contains a list of switch values
-/// that lead to a `target` block from a `switch` block.
-///
-/// Note: this type is currently never instantiated, because it's only used for
-/// `BasicBlocks::switch_sources`, which is only called by backwards analyses
-/// that do `SwitchInt` handling, and we don't have any of those, not even in
-/// tests. See #95120 and #94576.
-type SwitchSources = FxHashMap<(BasicBlock, BasicBlock), SmallVec<[SwitchTargetValue; 1]>>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SwitchTargetValue {
@@ -41,7 +32,6 @@ pub enum SwitchTargetValue {
 #[derive(Clone, Default, Debug)]
 struct Cache {
     predecessors: OnceLock<Predecessors>,
-    switch_sources: OnceLock<SwitchSources>,
     reverse_postorder: OnceLock<Vec<BasicBlock>>,
     dominators: OnceLock<Dominators<BasicBlock>>,
 }
@@ -49,9 +39,10 @@ struct Cache {
 impl<'tcx> BasicBlocks<'tcx> {
     #[inline]
     pub fn new(basic_blocks: IndexVec<BasicBlock, BasicBlockData<'tcx>>) -> Self {
-        BasicBlocks { basic_blocks, cache: Cache::default() }
+        BasicBlocks { basic_blocks, cache: Arc::new(Cache::default()) }
     }
 
+    #[inline]
     pub fn dominators(&self) -> &Dominators<BasicBlock> {
         self.cache.dominators.get_or_init(|| dominators(self))
     }
@@ -86,33 +77,6 @@ impl<'tcx> BasicBlocks<'tcx> {
         })
     }
 
-    /// Returns info about switch values that lead from one block to another
-    /// block. See `SwitchSources`.
-    #[inline]
-    pub fn switch_sources(&self) -> &SwitchSources {
-        self.cache.switch_sources.get_or_init(|| {
-            let mut switch_sources: SwitchSources = FxHashMap::default();
-            for (bb, data) in self.basic_blocks.iter_enumerated() {
-                if let Some(Terminator {
-                    kind: TerminatorKind::SwitchInt { targets, .. }, ..
-                }) = &data.terminator
-                {
-                    for (value, target) in targets.iter() {
-                        switch_sources
-                            .entry((target, bb))
-                            .or_default()
-                            .push(SwitchTargetValue::Normal(value));
-                    }
-                    switch_sources
-                        .entry((targets.otherwise(), bb))
-                        .or_default()
-                        .push(SwitchTargetValue::Otherwise);
-                }
-            }
-            switch_sources
-        })
-    }
-
     /// Returns mutable reference to basic blocks. Invalidates CFG cache.
     #[inline]
     pub fn as_mut(&mut self) -> &mut IndexVec<BasicBlock, BasicBlockData<'tcx>> {
@@ -142,7 +106,14 @@ impl<'tcx> BasicBlocks<'tcx> {
     /// All other methods that allow you to mutate the basic blocks also call this method
     /// themselves, thereby avoiding any risk of accidentally cache invalidation.
     pub fn invalidate_cfg_cache(&mut self) {
-        self.cache = Cache::default();
+        if let Some(cache) = Arc::get_mut(&mut self.cache) {
+            // If we only have a single reference to this cache, clear it.
+            *cache = Cache::default();
+        } else {
+            // If we have several references to this cache, overwrite the pointer itself so other
+            // users can continue to use their (valid) cache.
+            self.cache = Arc::new(Cache::default());
+        }
     }
 }
 

@@ -4,25 +4,26 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use cfg_if::cfg_if;
-
 use crate::ffi::OsStr;
 use crate::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use crate::path::Path;
 use crate::sealed::Sealed;
 use crate::sys_common::{AsInner, AsInnerMut, FromInner, IntoInner};
 use crate::{io, process, sys};
 
-cfg_if! {
-    if #[cfg(any(target_os = "vxworks", target_os = "espidf", target_os = "horizon", target_os = "vita"))] {
+cfg_select! {
+    any(target_os = "vxworks", target_os = "espidf", target_os = "horizon", target_os = "vita") => {
         type UserId = u16;
         type GroupId = u16;
-    } else if #[cfg(target_os = "nto")] {
+    }
+    target_os = "nto" => {
         // Both IDs are signed, see `sys/target_nto.h` of the QNX Neutrino SDP.
         // Only positive values should be used, see e.g.
         // https://www.qnx.com/developers/docs/7.1/#com.qnx.doc.neutrino.lib_ref/topic/s/setuid.html
         type UserId = i32;
         type GroupId = i32;
-    } else {
+    }
+    _ => {
         type UserId = u32;
         type GroupId = u32;
     }
@@ -79,6 +80,9 @@ pub trait CommandExt: Sealed {
     /// or acquiring a mutex are not guaranteed to work (due to
     /// other threads perhaps still running when the `fork` was run).
     ///
+    /// Note that the list of allocating functions includes [`Error::new`] and
+    /// [`Error::other`]. To signal a non-trivial error, prefer [`panic!`].
+    ///
     /// For further details refer to the [POSIX fork() specification]
     /// and the equivalent documentation for any targeted
     /// platform, especially the requirements around *async-signal-safety*.
@@ -101,6 +105,8 @@ pub trait CommandExt: Sealed {
     /// [POSIX fork() specification]:
     ///     https://pubs.opengroup.org/onlinepubs/9699919799/functions/fork.html
     /// [`std::env`]: mod@crate::env
+    /// [`Error::new`]: crate::io::Error::new
+    /// [`Error::other`]: crate::io::Error::other
     #[stable(feature = "process_pre_exec", since = "1.34.0")]
     unsafe fn pre_exec<F>(&mut self, f: F) -> &mut process::Command
     where
@@ -197,6 +203,21 @@ pub trait CommandExt: Sealed {
     /// ```
     #[stable(feature = "process_set_process_group", since = "1.64.0")]
     fn process_group(&mut self, pgroup: i32) -> &mut process::Command;
+
+    /// Set the root of the child process. This calls `chroot` in the child process before executing
+    /// the command.
+    ///
+    /// This happens before changing to the directory specified with
+    /// [`process::Command::current_dir`], and that directory will be relative to the new root.
+    ///
+    /// If no directory has been specified with [`process::Command::current_dir`], this will set the
+    /// directory to `/`, to avoid leaving the current directory outside the chroot. (This is an
+    /// intentional difference from the underlying `chroot` system call.)
+    #[unstable(feature = "process_chroot", issue = "141298")]
+    fn chroot<P: AsRef<Path>>(&mut self, dir: P) -> &mut process::Command;
+
+    #[unstable(feature = "process_setsid", issue = "105376")]
+    fn setsid(&mut self, setsid: bool) -> &mut process::Command;
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -240,6 +261,16 @@ impl CommandExt for process::Command {
 
     fn process_group(&mut self, pgroup: i32) -> &mut process::Command {
         self.as_inner_mut().pgroup(pgroup);
+        self
+    }
+
+    fn chroot<P: AsRef<Path>>(&mut self, dir: P) -> &mut process::Command {
+        self.as_inner_mut().chroot(dir.as_ref());
+        self
+    }
+
+    fn setsid(&mut self, setsid: bool) -> &mut process::Command {
+        self.as_inner_mut().setsid(setsid);
         self
     }
 }
@@ -357,6 +388,43 @@ impl ExitStatusExt for process::ExitStatusError {
 
     fn into_raw(self) -> i32 {
         self.into_status().into_raw()
+    }
+}
+
+#[unstable(feature = "unix_send_signal", issue = "141975")]
+pub trait ChildExt: Sealed {
+    /// Sends a signal to a child process.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the signal is invalid. The integer values associated
+    /// with signals are implementation-specific, so it's encouraged to use a crate that provides
+    /// posix bindings.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// #![feature(unix_send_signal)]
+    ///
+    /// use std::{io, os::unix::process::ChildExt, process::{Command, Stdio}};
+    ///
+    /// use libc::SIGTERM;
+    ///
+    /// fn main() -> io::Result<()> {
+    ///     # if cfg!(not(all(target_vendor = "apple", not(target_os = "macos")))) {
+    ///     let child = Command::new("cat").stdin(Stdio::piped()).spawn()?;
+    ///     child.send_signal(SIGTERM)?;
+    ///     # }
+    ///     Ok(())
+    /// }
+    /// ```
+    fn send_signal(&self, signal: i32) -> io::Result<()>;
+}
+
+#[unstable(feature = "unix_send_signal", issue = "141975")]
+impl ChildExt for process::Child {
+    fn send_signal(&self, signal: i32) -> io::Result<()> {
+        self.handle.send_signal(signal)
     }
 }
 

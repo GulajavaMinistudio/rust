@@ -4,19 +4,16 @@
 //@ [aarch64-sve2] compile-flags: -Ctarget-feature=-neon,+sve2 --target=aarch64-unknown-linux-gnu
 //@ [aarch64-sve2] needs-llvm-components: aarch64
 //@ build-pass
+//@ add-minicore
 #![no_core]
 #![crate_type = "rlib"]
-#![feature(intrinsics, rustc_attrs, no_core, lang_items, staged_api)]
+#![feature(intrinsics, rustc_attrs, no_core, staged_api)]
 #![stable(feature = "test", since = "1.0.0")]
 
 // Tests vetting "feature hierarchies" in the cases where we impose them.
 
-// Supporting minimal rust core code
-#[lang = "sized"]
-trait Sized {}
-#[lang = "copy"]
-trait Copy {}
-impl Copy for bool {}
+extern crate minicore;
+use minicore::*;
 
 #[stable(feature = "test", since = "1.0.0")]
 #[rustc_const_stable(feature = "test", since = "1.0.0")]

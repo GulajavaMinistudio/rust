@@ -422,6 +422,10 @@ impl File {
         self.0.seek(pos)
     }
 
+    pub fn size(&self) -> Option<io::Result<u64>> {
+        None
+    }
+
     pub fn tell(&self) -> io::Result<u64> {
         self.0.tell()
     }
@@ -559,6 +563,14 @@ pub fn rename(_old: &Path, _new: &Path) -> io::Result<()> {
 }
 
 pub fn set_perm(_p: &Path, _perm: FilePermissions) -> io::Result<()> {
+    Err(Error::from_raw_os_error(22))
+}
+
+pub fn set_times(_p: &Path, _times: FileTimes) -> io::Result<()> {
+    Err(Error::from_raw_os_error(22))
+}
+
+pub fn set_times_nofollow(_p: &Path, _times: FileTimes) -> io::Result<()> {
     Err(Error::from_raw_os_error(22))
 }
 

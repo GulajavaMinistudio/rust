@@ -1,8 +1,17 @@
 // Check that we eventually catch types of assoc const bounds
 // (containing late-bound vars) that are ill-formed.
-#![feature(associated_const_equality)]
+#![feature(
+    associated_const_equality,
+    min_generic_const_args,
+    adt_const_params,
+    unsized_const_params,
+)]
+#![allow(incomplete_features)]
 
-trait Trait<T> {
+use std::marker::ConstParamTy_;
+
+trait Trait<T: ConstParamTy_> {
+    #[type_const]
     const K: T;
 }
 
@@ -12,7 +21,7 @@ fn take(
         K = { () }
     >,
 ) {}
-//~^^^^^^ ERROR implementation of `Project` is not general enough
+//~^^^^^ ERROR implementation of `Project` is not general enough
 //~^^^^ ERROR higher-ranked subtype error
 //~| ERROR higher-ranked subtype error
 

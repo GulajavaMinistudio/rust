@@ -3,7 +3,6 @@
 //! Currently this renders the implied `Sized` bound.
 use ide_db::{FileRange, famous_defs::FamousDefs};
 
-use span::EditionedFileId;
 use syntax::ast::{self, AstNode, HasTypeBounds};
 
 use crate::{
@@ -14,8 +13,7 @@ use crate::{
 pub(super) fn hints(
     acc: &mut Vec<InlayHint>,
     famous_defs @ FamousDefs(sema, _): &FamousDefs<'_, '_>,
-    config: &InlayHintsConfig,
-    _file_id: EditionedFileId,
+    config: &InlayHintsConfig<'_>,
     params: ast::GenericParamList,
 ) -> Option<()> {
     if !config.sized_bound {
@@ -46,7 +44,7 @@ pub(super) fn hints(
                             text: "Sized".to_owned(),
                             linked_location: sized_trait.and_then(|it| {
                                 config.lazy_location_opt(|| {
-                                    it.try_to_nav(sema.db).map(|it| {
+                                    it.try_to_nav(sema).map(|it| {
                                         let n = it.call_site();
                                         FileRange {
                                             file_id: n.file_id,
@@ -145,7 +143,7 @@ fn foo<T>() {}
                                             file_id: FileId(
                                                 1,
                                             ),
-                                            range: 135..140,
+                                            range: 446..451,
                                         },
                                     ),
                                 ),

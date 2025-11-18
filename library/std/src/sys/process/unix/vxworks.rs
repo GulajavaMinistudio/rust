@@ -4,8 +4,8 @@ use libc::{self, RTP_ID, c_char, c_int};
 use super::common::*;
 use crate::io::{self, ErrorKind};
 use crate::num::NonZero;
-use crate::sys::cvt;
-use crate::sys::pal::thread;
+use crate::process::StdioPipes;
+use crate::sys::{cvt, thread};
 use crate::{fmt, sys};
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -25,6 +25,12 @@ impl Command {
             return Err(io::const_error!(
                 ErrorKind::InvalidInput,
                 "nul byte found in provided data",
+            ));
+        }
+        if self.get_chroot().is_some() {
+            return Err(io::const_error!(
+                ErrorKind::Unsupported,
+                "chroot not supported by vxworks",
             ));
         }
         let (ours, theirs) = self.setup_io(default, needs_stdin)?;
@@ -140,14 +146,18 @@ impl Process {
         self.pid as u32
     }
 
-    pub fn kill(&mut self) -> io::Result<()> {
-        // If we've already waited on this process then the pid can be recycled
-        // and used for another process, and we probably shouldn't be killing
+    pub fn kill(&self) -> io::Result<()> {
+        self.send_signal(libc::SIGKILL)
+    }
+
+    pub fn send_signal(&self, signal: i32) -> io::Result<()> {
+        // If we've already waited on this process then the pid can be recycled and
+        // used for another process, and we probably shouldn't be sending signals to
         // random processes, so return Ok because the process has exited already.
         if self.status.is_some() {
             Ok(())
         } else {
-            cvt(unsafe { libc::kill(self.pid, libc::SIGKILL) }).map(drop)
+            cvt(unsafe { libc::kill(self.pid, signal) }).map(drop)
         }
     }
 

@@ -6,6 +6,7 @@ use rustc_errors::{
     Applicability, Diag, DiagCtxtHandle, DiagSymbolList, Diagnostic, EmissionGuarantee, Level,
     MultiSpan,
 };
+use rustc_hir::limit::Limit;
 use rustc_macros::{Diagnostic, LintDiagnostic, Subdiagnostic};
 use rustc_middle::ty::Ty;
 use rustc_span::{Ident, Span, Symbol};
@@ -127,6 +128,7 @@ pub(crate) enum AssocItemNotFoundSugg<'a> {
     SimilarInOtherTrait {
         #[primary_span]
         span: Span,
+        trait_name: &'a str,
         assoc_kind: &'static str,
         suggested_name: Symbol,
     },
@@ -162,15 +164,6 @@ pub(crate) enum AssocItemNotFoundSugg<'a> {
 }
 
 #[derive(Diagnostic)]
-#[diag(hir_analysis_unrecognized_atomic_operation, code = E0092)]
-pub(crate) struct UnrecognizedAtomicOperation<'a> {
-    #[primary_span]
-    #[label]
-    pub span: Span,
-    pub op: &'a str,
-}
-
-#[derive(Diagnostic)]
 #[diag(hir_analysis_wrong_number_of_generic_arguments_to_intrinsic, code = E0094)]
 pub(crate) struct WrongNumberOfGenericArgumentsToIntrinsic<'a> {
     #[primary_span]
@@ -198,7 +191,7 @@ pub(crate) struct LifetimesOrBoundsMismatchOnTrait {
     #[label]
     pub span: Span,
     #[label(hir_analysis_generics_label)]
-    pub generics_span: Option<Span>,
+    pub generics_span: Span,
     #[label(hir_analysis_where_label)]
     pub where_span: Option<Span>,
     #[label(hir_analysis_bounds_label)]
@@ -213,6 +206,7 @@ pub(crate) struct DropImplOnWrongItem {
     #[primary_span]
     #[label]
     pub span: Span,
+    pub trait_: Symbol,
 }
 
 #[derive(Diagnostic)]
@@ -284,13 +278,6 @@ pub(crate) struct CopyImplOnTypeWithDtor {
     #[primary_span]
     #[label]
     pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(hir_analysis_multiple_relaxed_default_bounds, code = E0203)]
-pub(crate) struct MultipleRelaxedDefaultBounds {
-    #[primary_span]
-    pub spans: Vec<Span>,
 }
 
 #[derive(Diagnostic)]
@@ -424,17 +411,6 @@ pub(crate) struct UnconstrainedOpaqueType {
     pub what: &'static str,
 }
 
-#[derive(Diagnostic)]
-#[diag(hir_analysis_tait_forward_compat2)]
-#[note]
-pub(crate) struct TaitForwardCompat2 {
-    #[primary_span]
-    pub span: Span,
-    #[note(hir_analysis_opaque)]
-    pub opaque_type_span: Span,
-    pub opaque_type: String,
-}
-
 pub(crate) struct MissingTypeParams {
     pub span: Span,
     pub def_span: Span,
@@ -524,12 +500,8 @@ pub(crate) struct ConstImplForNonConstTrait {
     #[label]
     pub trait_ref_span: Span,
     pub trait_name: String,
-    #[suggestion(
-        applicability = "machine-applicable",
-        code = "#[const_trait] ",
-        style = "verbose"
-    )]
-    pub local_trait_span: Option<Span>,
+    #[suggestion(applicability = "machine-applicable", code = "const ", style = "verbose")]
+    pub suggestion: Option<Span>,
     pub suggestion_pre: &'static str,
     #[note]
     pub marking: (),
@@ -546,13 +518,9 @@ pub(crate) struct ConstBoundForNonConstTrait {
     pub modifier: &'static str,
     #[note]
     pub def_span: Option<Span>,
-    pub suggestion_pre: &'static str,
-    #[suggestion(
-        applicability = "machine-applicable",
-        code = "#[const_trait] ",
-        style = "verbose"
-    )]
+    #[suggestion(applicability = "machine-applicable", code = "const ", style = "verbose")]
     pub suggestion: Option<Span>,
+    pub suggestion_pre: &'static str,
     pub trait_name: String,
 }
 
@@ -580,7 +548,7 @@ pub(crate) struct AutoDerefReachedRecursionLimit<'a> {
     #[label]
     pub span: Span,
     pub ty: Ty<'a>,
-    pub suggested_limit: rustc_session::Limit,
+    pub suggested_limit: Limit,
     pub crate_name: Symbol,
 }
 
@@ -642,7 +610,7 @@ pub(crate) struct VariadicFunctionCompatibleConvention<'a> {
     #[primary_span]
     #[label]
     pub span: Span,
-    pub conventions: &'a str,
+    pub convention: &'a str,
 }
 
 #[derive(Diagnostic)]
@@ -1281,6 +1249,16 @@ pub(crate) struct CoerceUnsizedNonStruct {
 }
 
 #[derive(Diagnostic)]
+#[diag(hir_analysis_coerce_same_pat_kind)]
+pub(crate) struct CoerceSamePatKind {
+    #[primary_span]
+    pub span: Span,
+    pub trait_name: &'static str,
+    pub pat_a: String,
+    pub pat_b: String,
+}
+
+#[derive(Diagnostic)]
 #[diag(hir_analysis_coerce_unsized_may, code = E0377)]
 pub(crate) struct CoerceSameStruct {
     #[primary_span]
@@ -1638,8 +1616,7 @@ pub(crate) struct InvalidGenericReceiverTy<'tcx> {
 pub(crate) struct CmseInputsStackSpill {
     #[primary_span]
     #[label]
-    pub span: Span,
-    pub plural: bool,
+    pub spans: Vec<Span>,
     pub abi: ExternAbi,
 }
 
@@ -1655,22 +1632,24 @@ pub(crate) struct CmseOutputStackSpill {
 }
 
 #[derive(Diagnostic)]
-#[diag(hir_analysis_cmse_call_generic, code = E0798)]
-pub(crate) struct CmseCallGeneric {
+#[diag(hir_analysis_cmse_generic, code = E0798)]
+pub(crate) struct CmseGeneric {
     #[primary_span]
     pub span: Span,
+    pub abi: ExternAbi,
+}
+
+#[derive(Diagnostic)]
+#[diag(hir_analysis_cmse_impl_trait, code = E0798)]
+pub(crate) struct CmseImplTrait {
+    #[primary_span]
+    pub span: Span,
+    pub abi: ExternAbi,
 }
 
 #[derive(Diagnostic)]
 #[diag(hir_analysis_bad_return_type_notation_position)]
 pub(crate) struct BadReturnTypeNotation {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(hir_analysis_cmse_entry_generic, code = E0798)]
-pub(crate) struct CmseEntryGeneric {
     #[primary_span]
     pub span: Span,
 }
@@ -1705,5 +1684,27 @@ pub(crate) enum SupertraitItemShadowee {
 pub(crate) struct SelfInTypeAlias {
     #[primary_span]
     #[label]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(hir_analysis_abi_custom_clothed_function)]
+pub(crate) struct AbiCustomClothedFunction {
+    #[primary_span]
+    pub span: Span,
+    #[suggestion(
+        hir_analysis_suggestion,
+        applicability = "maybe-incorrect",
+        code = "#[unsafe(naked)]\n",
+        style = "short"
+    )]
+    pub naked_span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(hir_analysis_async_drop_without_sync_drop)]
+#[help]
+pub(crate) struct AsyncDropWithoutSyncDrop {
+    #[primary_span]
     pub span: Span,
 }

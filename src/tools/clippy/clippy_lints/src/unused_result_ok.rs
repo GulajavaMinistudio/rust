@@ -1,11 +1,11 @@
 use clippy_utils::diagnostics::span_lint_and_sugg;
+use clippy_utils::res::MaybeDef;
 use clippy_utils::source::snippet_with_context;
-use clippy_utils::ty::is_type_diagnostic_item;
+use clippy_utils::sym;
 use rustc_errors::Applicability;
 use rustc_hir::{ExprKind, Stmt, StmtKind};
 use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_session::declare_lint_pass;
-use rustc_span::sym;
 
 declare_clippy_lint! {
     /// ### What it does
@@ -36,8 +36,8 @@ impl LateLintPass<'_> for UnusedResultOk {
     fn check_stmt(&mut self, cx: &LateContext<'_>, stmt: &Stmt<'_>) {
         if let StmtKind::Semi(expr) = stmt.kind
             && let ExprKind::MethodCall(ok_path, recv, [], ..) = expr.kind //check is expr.ok() has type Result<T,E>.ok(, _)
-            && ok_path.ident.as_str() == "ok"
-            && is_type_diagnostic_item(cx, cx.typeck_results().expr_ty(recv), sym::Result)
+            && ok_path.ident.name == sym::ok
+            && cx.typeck_results().expr_ty(recv).is_diag_item(cx, sym::Result)
             && !stmt.span.in_external_macro(cx.sess().source_map())
         {
             let ctxt = expr.span.ctxt();

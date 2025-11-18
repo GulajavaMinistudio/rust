@@ -21,6 +21,7 @@
 //@[avr_cpu] needs-llvm-components: avr
 //@[avr_cpu] compile-flags: -Ctarget-cpu=atmega328p
 //@[avr_cpu] build-pass
+//@ ignore-backends: gcc
 
 #![crate_type = "rlib"]
 
@@ -28,6 +29,12 @@
 // `-C target-cpu` for targets that *require* a `target-cpu` being specified.
 #![feature(no_core, lang_items)]
 #![no_core]
+
+#[lang = "pointee_sized"]
+pub trait PointeeSized {}
+
+#[lang = "meta_sized"]
+pub trait MetaSized: PointeeSized {}
 
 #[lang="sized"]
 trait Sized {}

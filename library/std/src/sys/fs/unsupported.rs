@@ -259,6 +259,10 @@ impl File {
         self.0
     }
 
+    pub fn size(&self) -> Option<io::Result<u64>> {
+        self.0
+    }
+
     pub fn tell(&self) -> io::Result<u64> {
         self.0
     }
@@ -306,6 +310,14 @@ pub fn rename(_old: &Path, _new: &Path) -> io::Result<()> {
 
 pub fn set_perm(_p: &Path, perm: FilePermissions) -> io::Result<()> {
     match perm.0 {}
+}
+
+pub fn set_times(_p: &Path, _times: FileTimes) -> io::Result<()> {
+    unsupported()
+}
+
+pub fn set_times_nofollow(_p: &Path, _times: FileTimes) -> io::Result<()> {
+    unsupported()
 }
 
 pub fn rmdir(_p: &Path) -> io::Result<()> {

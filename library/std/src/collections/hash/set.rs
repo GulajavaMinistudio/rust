@@ -276,11 +276,11 @@ impl<T, S> HashSet<T, S> {
         Drain { base: self.base.drain() }
     }
 
-    /// Creates an iterator which uses a closure to determine if a value should be removed.
+    /// Creates an iterator which uses a closure to determine if an element should be removed.
     ///
-    /// If the closure returns true, then the value is removed and yielded.
-    /// If the closure returns false, the value will remain in the list and will not be yielded
-    /// by the iterator.
+    /// If the closure returns `true`, the element is removed from the set and
+    /// yielded. If the closure returns `false`, or panics, the element remains
+    /// in the set and will not be yielded.
     ///
     /// If the returned `ExtractIf` is not exhausted, e.g. because it is dropped without iterating
     /// or the iteration short-circuits, then the remaining elements will be retained.
@@ -1391,6 +1391,8 @@ pub struct Drain<'a, K: 'a> {
 /// let mut extract_ifed = a.extract_if(|v| v % 2 == 0);
 /// ```
 #[stable(feature = "hash_extract_if", since = "1.88.0")]
+#[must_use = "iterators are lazy and do nothing unless consumed; \
+    use `retain` to remove and discard elements"]
 pub struct ExtractIf<'a, K, F> {
     base: base::ExtractIf<'a, K, F>,
 }

@@ -4,7 +4,7 @@ use crate::FxHashSet;
 use clippy_utils::diagnostics::span_lint_and_then;
 use clippy_utils::source::{first_line_of_span, indent_of, snippet};
 use clippy_utils::ty::{for_each_top_level_late_bound_region, is_copy};
-use clippy_utils::{get_attr, is_lint_allowed};
+use clippy_utils::{get_builtin_attr, is_lint_allowed, sym};
 use itertools::Itertools;
 use rustc_ast::Mutability;
 use rustc_data_structures::fx::FxIndexSet;
@@ -183,10 +183,10 @@ impl<'a, 'tcx> SigDropChecker<'a, 'tcx> {
 
     fn has_sig_drop_attr_impl(&mut self, ty: Ty<'tcx>) -> bool {
         if let Some(adt) = ty.ty_adt_def()
-            && get_attr(
+            && get_builtin_attr(
                 self.cx.sess(),
-                self.cx.tcx.get_attrs_unchecked(adt.did()),
-                "has_significant_drop",
+                self.cx.tcx.get_all_attrs(adt.did()),
+                sym::has_significant_drop,
             )
             .count()
                 > 0
@@ -208,12 +208,12 @@ impl<'a, 'tcx> SigDropChecker<'a, 'tcx> {
                     // (to avoid false positive on `Ref<'a, MutexGuard<Foo>>`)
                     || (args
                         .iter()
-                        .all(|arg| !matches!(arg.unpack(), GenericArgKind::Lifetime(_)))
+                        .all(|arg| !matches!(arg.kind(), GenericArgKind::Lifetime(_)))
                         // some generic parameter has significant drop
                         // (to avoid false negative on `Box<MutexGuard<Foo>>`)
                         && args
                             .iter()
-                            .filter_map(|arg| match arg.unpack() {
+                            .filter_map(|arg| match arg.kind() {
                                 GenericArgKind::Type(ty) => Some(ty),
                                 _ => None,
                             })
@@ -226,11 +226,12 @@ impl<'a, 'tcx> SigDropChecker<'a, 'tcx> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 enum SigDropHolder {
     /// No values with significant drop present in this expression.
     ///
     /// Expressions that we've emitted lints do not count.
+    #[default]
     None,
     /// Some field in this expression references to values with significant drop.
     ///
@@ -242,12 +243,6 @@ enum SigDropHolder {
     DirectRef,
     /// This expression should be moved out to avoid significant drop in scrutinee.
     Moved,
-}
-
-impl Default for SigDropHolder {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 struct SigDropHelper<'a, 'tcx> {

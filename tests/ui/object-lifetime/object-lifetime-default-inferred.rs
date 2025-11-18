@@ -3,8 +3,7 @@
 // valid.
 
 
-#![allow(dead_code)]
-#![feature(generic_arg_infer)]
+#![allow(dead_code, unused)]
 
 trait Test {
     fn foo(&self) { }

@@ -13,7 +13,6 @@ pub(crate) fn missing_lifetime(
         "missing lifetime specifier",
         d.generics_or_segment.map(Into::into),
     )
-    .experimental()
 }
 
 #[cfg(test)]
@@ -86,6 +85,18 @@ struct Foo<'a>(&'a ());
 
 fn bar<const F: Foo>() {}
              // ^^^ error: missing lifetime specifier
+        "#,
+        );
+    }
+
+    #[test]
+    fn fn_traits() {
+        check_diagnostics(
+            r#"
+//- minicore: fn
+struct WithLifetime<'a>(&'a ());
+
+fn foo<T: Fn(WithLifetime) -> WithLifetime>() {}
         "#,
         );
     }

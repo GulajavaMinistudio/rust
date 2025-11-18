@@ -16,13 +16,11 @@ impl<'a> const Drop for S<'a> {
     }
 }
 
-const fn a<T: ~const Destruct>(_: T) {}
-//FIXME ~^ ERROR destructor of
+const fn a<T: [const] Destruct>(_: T) {}
 
 const fn b() -> u8 {
     let mut c = 0;
     let _ = S(&mut c);
-    //FIXME ~^ ERROR destructor of
     a(S(&mut c));
     c
 }
@@ -51,8 +49,7 @@ mod t {
     pub struct HasConstDrop(pub ConstDrop);
     pub struct TrivialFields(pub u8, pub i8, pub usize, pub isize);
 
-    #[const_trait]
-    pub trait SomeTrait {
+    pub const trait SomeTrait {
         fn foo();
     }
     impl const SomeTrait for () {
@@ -108,7 +105,7 @@ fn main() {
         }
     }
 
-    // These types should pass because ~const in a non-const context should have no effect.
+    // These types should pass because [const] in a non-const context should have no effect.
     a(HasDropGlue(Box::new(0)));
     a(HasDropImpl);
 

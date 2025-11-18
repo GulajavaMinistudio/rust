@@ -1,8 +1,8 @@
 use ide_db::defs::{Definition, NameRefClass};
 use syntax::{
     AstNode, SyntaxNode,
-    ast::{self, HasName, Name},
-    ted,
+    ast::{self, HasName, Name, edit::AstNodeEdit, syntax_factory::SyntaxFactory},
+    syntax_editor::SyntaxEditor,
 };
 
 use crate::{
@@ -45,7 +45,7 @@ pub(crate) fn convert_match_to_let_else(acc: &mut Assists, ctx: &AssistContext<'
         return None;
     }
 
-    let diverging_arm_expr = match diverging_arm.expr()? {
+    let diverging_arm_expr = match diverging_arm.expr()?.dedent(1.into()) {
         ast::Expr::BlockExpr(block) if block.modifier().is_none() && block.label().is_none() => {
             block.to_string()
         }
@@ -121,34 +121,41 @@ fn find_extracted_variable(ctx: &AssistContext<'_>, arm: &ast::MatchArm) -> Opti
 
 // Rename `extracted` with `binding` in `pat`.
 fn rename_variable(pat: &ast::Pat, extracted: &[Name], binding: ast::Pat) -> SyntaxNode {
-    let syntax = pat.syntax().clone_for_update();
+    let syntax = pat.syntax().clone_subtree();
+    let mut editor = SyntaxEditor::new(syntax.clone());
+    let make = SyntaxFactory::with_mappings();
     let extracted = extracted
         .iter()
-        .map(|e| syntax.covering_element(e.syntax().text_range()))
+        .map(|e| e.syntax().text_range() - pat.syntax().text_range().start())
+        .map(|r| syntax.covering_element(r))
         .collect::<Vec<_>>();
     for extracted_syntax in extracted {
         // If `extracted` variable is a record field, we should rename it to `binding`,
         // otherwise we just need to replace `extracted` with `binding`.
-
         if let Some(record_pat_field) =
             extracted_syntax.ancestors().find_map(ast::RecordPatField::cast)
         {
             if let Some(name_ref) = record_pat_field.field_name() {
-                ted::replace(
+                editor.replace(
                     record_pat_field.syntax(),
-                    ast::make::record_pat_field(
-                        ast::make::name_ref(&name_ref.text()),
-                        binding.clone(),
+                    make.record_pat_field(
+                        make.name_ref(&name_ref.text()),
+                        binding.clone_for_update(),
                     )
-                    .syntax()
-                    .clone_for_update(),
+                    .syntax(),
                 );
             }
         } else {
-            ted::replace(extracted_syntax, binding.clone().syntax().clone_for_update());
+            editor.replace(extracted_syntax, binding.syntax().clone_for_update());
         }
     }
-    syntax
+    editor.add_mappings(make.finish_with_mappings());
+    let new_node = editor.finish().new_root().clone();
+    if let Some(pat) = ast::Pat::cast(new_node.clone()) {
+        pat.dedent(1.into()).syntax().clone()
+    } else {
+        new_node
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +209,53 @@ enum Foo {
 
 fn foo(opt: Option<Foo>) -> Result<u32, ()> {
     let Some(Foo::A(value) | Foo::B(value)) = opt else { return Err(()) };
+}
+    "#,
+        );
+    }
+
+    #[test]
+    fn indent_level() {
+        check_assist(
+            convert_match_to_let_else,
+            r#"
+//- minicore: option
+enum Foo {
+    A(u32),
+    B(u32),
+    C(String),
+}
+
+fn foo(opt: Option<Foo>) -> Result<u32, ()> {
+    let mut state = 2;
+    let va$0lue = match opt {
+        Some(
+            Foo::A(it)
+            | Foo::B(it)
+        ) => it,
+        _ => {
+            state = 3;
+            return Err(())
+        },
+    };
+}
+    "#,
+            r#"
+enum Foo {
+    A(u32),
+    B(u32),
+    C(String),
+}
+
+fn foo(opt: Option<Foo>) -> Result<u32, ()> {
+    let mut state = 2;
+    let Some(
+        Foo::A(value)
+        | Foo::B(value)
+    ) = opt else {
+        state = 3;
+        return Err(())
+    };
 }
     "#,
         );
@@ -487,9 +541,9 @@ fn f() {
             r#"
 fn f() {
     let Some(x) = Some(()) else {//comment
-            println!("nope");
-            return
-        };
+        println!("nope");
+        return
+    };
 }
 "#,
         );

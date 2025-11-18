@@ -529,5 +529,61 @@ LL +                 return;
 LL +             };
    |
 
-error: aborting due to 33 previous errors
+error: this could be rewritten as `let...else`
+  --> tests/ui/manual_let_else.rs:520:9
+   |
+LL | /         let value = match foo() {
+LL | |
+LL | |             Err(_) => return Err("abc"),
+LL | |             Ok(value) => value,
+LL | |         };
+   | |__________^ help: consider writing: `let Ok(value) = foo() else { return Err("abc") };`
+
+error: this could be rewritten as `let...else`
+  --> tests/ui/manual_let_else.rs:527:9
+   |
+LL | /         let v = match w {
+LL | |
+LL | |             None => return Err("abc"),
+LL | |             Some(x) => x,
+LL | |         };
+   | |__________^ help: consider writing: `let Some(v) = w else { return Err("abc") };`
+
+error: this could be rewritten as `let...else`
+  --> tests/ui/manual_let_else.rs:557:9
+   |
+LL | /         let value = if let Some(value) = unsafe { something_unsafe() } {
+LL | |
+LL | |             value
+LL | |         } else {
+LL | |             return;
+LL | |         };
+   | |__________^
+   |
+help: consider writing
+   |
+LL ~         let Some(value) = (unsafe { something_unsafe() }) else {
+LL +             return;
+LL +         };
+   |
+
+error: this could be rewritten as `let...else`
+  --> tests/ui/manual_let_else.rs:566:9
+   |
+LL | /         let value = if let Some(value) = if some_flag { None } else { Some(3) } {
+LL | |
+LL | |             value
+LL | |         } else {
+LL | |             return;
+LL | |         };
+   | |__________^
+   |
+help: consider writing
+   |
+LL ~         let Some(value) = (if some_flag { None } else { Some(3) }) else {
+LL +             return;
+LL +         };
+   |
+
+error: aborting due to 37 previous errors
 

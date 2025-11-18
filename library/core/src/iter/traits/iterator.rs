@@ -4,6 +4,7 @@ use super::super::{
     Product, Rev, Scan, Skip, SkipWhile, StepBy, Sum, Take, TakeWhile, TrustedRandomAccessNoCoerce,
     Zip, try_process,
 };
+use super::TrustedLen;
 use crate::array;
 use crate::cmp::{self, Ordering};
 use crate::num::NonZero;
@@ -22,11 +23,11 @@ fn _assert_is_dyn_compatible(_: &dyn Iterator<Item = ()>) {}
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_on_unimplemented(
     on(
-        _Self = "core::ops::range::RangeTo<Idx>",
+        Self = "core::ops::range::RangeTo<Idx>",
         note = "you might have meant to use a bounded `Range`"
     ),
     on(
-        _Self = "core::ops::range::RangeToInclusive<Idx>",
+        Self = "core::ops::range::RangeToInclusive<Idx>",
         note = "you might have meant to use a bounded `RangeInclusive`"
     ),
     label = "`{Self}` is not an iterator",
@@ -294,13 +295,39 @@ pub trait Iterator {
     #[inline]
     #[unstable(feature = "iter_advance_by", reason = "recently added", issue = "77404")]
     fn advance_by(&mut self, n: usize) -> Result<(), NonZero<usize>> {
-        for i in 0..n {
-            if self.next().is_none() {
-                // SAFETY: `i` is always less than `n`.
-                return Err(unsafe { NonZero::new_unchecked(n - i) });
+        /// Helper trait to specialize `advance_by` via `try_fold` for `Sized` iterators.
+        trait SpecAdvanceBy {
+            fn spec_advance_by(&mut self, n: usize) -> Result<(), NonZero<usize>>;
+        }
+
+        impl<I: Iterator + ?Sized> SpecAdvanceBy for I {
+            default fn spec_advance_by(&mut self, n: usize) -> Result<(), NonZero<usize>> {
+                for i in 0..n {
+                    if self.next().is_none() {
+                        // SAFETY: `i` is always less than `n`.
+                        return Err(unsafe { NonZero::new_unchecked(n - i) });
+                    }
+                }
+                Ok(())
             }
         }
-        Ok(())
+
+        impl<I: Iterator> SpecAdvanceBy for I {
+            fn spec_advance_by(&mut self, n: usize) -> Result<(), NonZero<usize>> {
+                let Some(n) = NonZero::new(n) else {
+                    return Ok(());
+                };
+
+                let res = self.try_fold(n, |n, _| NonZero::new(n.get() - 1));
+
+                match res {
+                    None => Ok(()),
+                    Some(n) => Err(n),
+                }
+            }
+        }
+
+        self.spec_advance_by(n)
     }
 
     /// Returns the `n`th element of the iterator.
@@ -781,7 +808,7 @@ pub trait Iterator {
     /// might be preferable to keep a functional style with longer iterators:
     ///
     /// ```
-    /// (0..5).flat_map(|x| x * 100 .. x * 110)
+    /// (0..5).flat_map(|x| (x * 100)..(x * 110))
     ///       .enumerate()
     ///       .filter(|&(i, x)| (i + x) % 3 == 0)
     ///       .for_each(|(i, x)| println!("{i}:{x}"));
@@ -1849,7 +1876,7 @@ pub trait Iterator {
     /// without giving up ownership of the original iterator,
     /// so you can use the original iterator afterwards.
     ///
-    /// Uses [impl<I: Iterator + ?Sized> Iterator for &mut I { type Item = I::Item; ...}](https://doc.rust-lang.org/nightly/std/iter/trait.Iterator.html#impl-Iterator-for-%26mut+I).
+    /// Uses [`impl<I: Iterator + ?Sized> Iterator for &mut I { type Item = I::Item; ...}`](https://doc.rust-lang.org/nightly/std/iter/trait.Iterator.html#impl-Iterator-for-%26mut+I).
     ///
     /// # Examples
     ///
@@ -3388,10 +3415,10 @@ pub trait Iterator {
     /// ```
     #[stable(feature = "iter_copied", since = "1.36.0")]
     #[rustc_diagnostic_item = "iter_copied"]
-    fn copied<'a, T: 'a>(self) -> Copied<Self>
+    fn copied<'a, T>(self) -> Copied<Self>
     where
+        T: Copy + 'a,
         Self: Sized + Iterator<Item = &'a T>,
-        T: Copy,
     {
         Copied::new(self)
     }
@@ -3436,10 +3463,10 @@ pub trait Iterator {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_diagnostic_item = "iter_cloned"]
-    fn cloned<'a, T: 'a>(self) -> Cloned<Self>
+    fn cloned<'a, T>(self) -> Cloned<Self>
     where
+        T: Clone + 'a,
         Self: Sized + Iterator<Item = &'a T>,
-        T: Clone,
     {
         Cloned::new(self)
     }
@@ -3790,10 +3817,7 @@ pub trait Iterator {
             }
         }
 
-        match iter_compare(self, other.into_iter(), compare(eq)) {
-            ControlFlow::Continue(ord) => ord == Ordering::Equal,
-            ControlFlow::Break(()) => false,
-        }
+        SpecIterEq::spec_iter_eq(self, other.into_iter(), compare(eq))
     }
 
     /// Determines if the elements of this [`Iterator`] are not equal to those of
@@ -4012,6 +4036,42 @@ pub trait Iterator {
     }
 }
 
+trait SpecIterEq<B: Iterator>: Iterator {
+    fn spec_iter_eq<F>(self, b: B, f: F) -> bool
+    where
+        F: FnMut(Self::Item, <B as Iterator>::Item) -> ControlFlow<()>;
+}
+
+impl<A: Iterator, B: Iterator> SpecIterEq<B> for A {
+    #[inline]
+    default fn spec_iter_eq<F>(self, b: B, f: F) -> bool
+    where
+        F: FnMut(Self::Item, <B as Iterator>::Item) -> ControlFlow<()>,
+    {
+        iter_eq(self, b, f)
+    }
+}
+
+impl<A: Iterator + TrustedLen, B: Iterator + TrustedLen> SpecIterEq<B> for A {
+    #[inline]
+    fn spec_iter_eq<F>(self, b: B, f: F) -> bool
+    where
+        F: FnMut(Self::Item, <B as Iterator>::Item) -> ControlFlow<()>,
+    {
+        // we *can't* short-circuit if:
+        match (self.size_hint(), b.size_hint()) {
+            // ... both iterators have the same length
+            ((_, Some(a)), (_, Some(b))) if a == b => {}
+            // ... or both of them are longer than `usize::MAX` (i.e. have an unknown length).
+            ((_, None), (_, None)) => {}
+            // otherwise, we can ascertain that they are unequal without actually comparing items
+            _ => return false,
+        }
+
+        iter_eq(self, b, f)
+    }
+}
+
 /// Compares two iterators element-wise using the given function.
 ///
 /// If `ControlFlow::Continue(())` is returned from the function, the comparison moves on to the next
@@ -4050,6 +4110,16 @@ where
         }),
         ControlFlow::Break(x) => x,
     }
+}
+
+#[inline]
+fn iter_eq<A, B, F>(a: A, b: B, f: F) -> bool
+where
+    A: Iterator,
+    B: Iterator,
+    F: FnMut(A::Item, B::Item) -> ControlFlow<()>,
+{
+    iter_compare(a, b, f).continue_value().is_some_and(|ord| ord == Ordering::Equal)
 }
 
 /// Implements `Iterator` for mutable references to iterators, such as those produced by [`Iterator::by_ref`].

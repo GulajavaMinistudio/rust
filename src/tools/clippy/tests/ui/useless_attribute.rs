@@ -13,7 +13,7 @@
 #[allow(unused_imports)]
 #[allow(unused_extern_crates)]
 #[macro_use]
-extern crate rustc_middle;
+extern crate regex as regex_crate;
 
 #[macro_use]
 extern crate proc_macro_derive;
@@ -145,4 +145,26 @@ pub mod unknown_namespace {
     }
     #[allow(rustc::non_glob_import_of_type_ir_inherent)]
     use some_module::SomeType;
+}
+
+// Regression test for https://github.com/rust-lang/rust-clippy/issues/15316
+pub mod redundant_imports_issue {
+    macro_rules! empty {
+        () => {};
+    }
+
+    #[expect(unused_imports)]
+    pub(crate) use empty;
+
+    empty!();
+}
+
+pub mod issue15636 {
+    pub mod f {
+        #[deprecated(since = "TBD")]
+        pub mod deprec {}
+    }
+
+    #[allow(deprecated_in_future)]
+    pub use f::deprec;
 }

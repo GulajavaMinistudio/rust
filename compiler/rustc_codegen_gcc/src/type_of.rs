@@ -217,7 +217,7 @@ impl<'tcx> LayoutGccExt<'tcx> for TyAndLayout<'tcx> {
             let ty = match *self.ty.kind() {
                 // NOTE: we cannot remove this match like in the LLVM codegen because the call
                 // to fn_ptr_backend_type handle the on-stack attribute.
-                // TODO(antoyo): find a less hackish way to hande the on-stack attribute.
+                // TODO(antoyo): find a less hackish way to handle the on-stack attribute.
                 ty::FnPtr(sig_tys, hdr) => cx
                     .fn_ptr_backend_type(cx.fn_abi_of_fn_ptr(sig_tys.with(hdr), ty::List::empty())),
                 _ => self.scalar_gcc_type_at(cx, scalar, Size::ZERO),
@@ -240,7 +240,7 @@ impl<'tcx> LayoutGccExt<'tcx> for TyAndLayout<'tcx> {
 
         // Make sure lifetimes are erased, to avoid generating distinct LLVM
         // types for Rust types that only differ in the choice of lifetimes.
-        let normal_ty = cx.tcx.erase_regions(self.ty);
+        let normal_ty = cx.tcx.erase_and_anonymize_regions(self.ty);
 
         let mut defer = None;
         let ty = if self.ty != normal_ty {

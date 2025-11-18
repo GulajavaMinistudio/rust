@@ -11,6 +11,10 @@ mod float_cmp;
 mod float_equality_without_abs;
 mod identity_op;
 mod integer_division;
+mod integer_division_remainder_used;
+mod invalid_upcast_comparisons;
+mod manual_div_ceil;
+mod manual_is_multiple_of;
 mod manual_midpoint;
 mod misrefactored_assign_op;
 mod modulo_arithmetic;
@@ -462,7 +466,7 @@ declare_clippy_lint! {
 declare_clippy_lint! {
     /// ### What it does
     /// Checks for statements of the form `(a - b) < f32::EPSILON` or
-    /// `(a - b) < f64::EPSILON`. Notes the missing `.abs()`.
+    /// `(a - b) < f64::EPSILON`. Note the missing `.abs()`.
     ///
     /// ### Why is this bad?
     /// The code without `.abs()` is more likely to have a bug.
@@ -615,7 +619,7 @@ declare_clippy_lint! {
     /// println!("{within_tolerance}"); // true
     /// ```
     ///
-    /// NB! Do not use `f64::EPSILON` - while the error margin is often called "epsilon", this is
+    /// NOTE: Do not use `f64::EPSILON` - while the error margin is often called "epsilon", this is
     /// a different use of the term that is not suitable for floating point equality comparison.
     /// Indeed, for the example above using `f64::EPSILON` as the allowed error would return `false`.
     ///
@@ -678,7 +682,7 @@ declare_clippy_lint! {
     /// println!("{within_tolerance}"); // true
     /// ```
     ///
-    /// NB! Do not use `f64::EPSILON` - while the error margin is often called "epsilon", this is
+    /// NOTE: Do not use `f64::EPSILON` - while the error margin is often called "epsilon", this is
     /// a different use of the term that is not suitable for floating point equality comparison.
     /// Indeed, for the example above using `f64::EPSILON` as the allowed error would return `false`.
     ///
@@ -830,12 +834,114 @@ declare_clippy_lint! {
     "manual implementation of `midpoint` which can overflow"
 }
 
+declare_clippy_lint! {
+    /// ### What it does
+    /// Checks for manual implementation of `.is_multiple_of()` on
+    /// unsigned integer types.
+    ///
+    /// ### Why is this bad?
+    /// `a.is_multiple_of(b)` is a clearer way to check for divisibility
+    /// of `a` by `b`. This expression can never panic.
+    ///
+    /// ### Example
+    /// ```no_run
+    /// # let (a, b) = (3u64, 4u64);
+    /// if a % b == 0 {
+    ///     println!("{a} is divisible by {b}");
+    /// }
+    /// ```
+    /// Use instead:
+    /// ```no_run
+    /// # let (a, b) = (3u64, 4u64);
+    /// if a.is_multiple_of(b) {
+    ///     println!("{a} is divisible by {b}");
+    /// }
+    /// ```
+    #[clippy::version = "1.90.0"]
+    pub MANUAL_IS_MULTIPLE_OF,
+    complexity,
+    "manual implementation of `.is_multiple_of()`"
+}
+
+declare_clippy_lint! {
+    /// ### What it does
+    /// Checks for an expression like `(x + (y - 1)) / y` which is a common manual reimplementation
+    /// of `x.div_ceil(y)`.
+    ///
+    /// ### Why is this bad?
+    /// It's simpler, clearer and more readable.
+    ///
+    /// ### Example
+    /// ```no_run
+    /// let x: i32 = 7;
+    /// let y: i32 = 4;
+    /// let div = (x + (y - 1)) / y;
+    /// ```
+    /// Use instead:
+    /// ```no_run
+    /// #![feature(int_roundings)]
+    /// let x: i32 = 7;
+    /// let y: i32 = 4;
+    /// let div = x.div_ceil(y);
+    /// ```
+    #[clippy::version = "1.83.0"]
+    pub MANUAL_DIV_CEIL,
+    complexity,
+    "manually reimplementing `div_ceil`"
+}
+
+declare_clippy_lint! {
+    /// ### What it does
+    /// Checks for comparisons where the relation is always either
+    /// true or false, but where one side has been upcast so that the comparison is
+    /// necessary. Only integer types are checked.
+    ///
+    /// ### Why is this bad?
+    /// An expression like `let x : u8 = ...; (x as u32) > 300`
+    /// will mistakenly imply that it is possible for `x` to be outside the range of
+    /// `u8`.
+    ///
+    /// ### Example
+    /// ```no_run
+    /// let x: u8 = 1;
+    /// (x as u32) > 300;
+    /// ```
+    #[clippy::version = "pre 1.29.0"]
+    pub INVALID_UPCAST_COMPARISONS,
+    pedantic,
+    "a comparison involving an upcast which is always true or false"
+}
+
+declare_clippy_lint! {
+    /// ### What it does
+    /// Checks for the usage of division (`/`) and remainder (`%`) operations
+    /// when performed on any integer types using the default `Div` and `Rem` trait implementations.
+    ///
+    /// ### Why restrict this?
+    /// In cryptographic contexts, division can result in timing sidechannel vulnerabilities,
+    /// and needs to be replaced with constant-time code instead (e.g. Barrett reduction).
+    ///
+    /// ### Example
+    /// ```no_run
+    /// let my_div = 10 / 2;
+    /// ```
+    /// Use instead:
+    /// ```no_run
+    /// let my_div = 10 >> 1;
+    /// ```
+    #[clippy::version = "1.79.0"]
+    pub INTEGER_DIVISION_REMAINDER_USED,
+    restriction,
+    "use of disallowed default division and remainder operations"
+}
+
 pub struct Operators {
     arithmetic_context: numeric_arithmetic::Context,
     verbose_bit_mask_threshold: u64,
     modulo_arithmetic_allow_comparison_to_zero: bool,
     msrv: Msrv,
 }
+
 impl Operators {
     pub fn new(conf: &'static Conf) -> Self {
         Self {
@@ -866,6 +972,7 @@ impl_lint_pass!(Operators => [
     FLOAT_EQUALITY_WITHOUT_ABS,
     IDENTITY_OP,
     INTEGER_DIVISION,
+    INTEGER_DIVISION_REMAINDER_USED,
     CMP_OWNED,
     FLOAT_CMP,
     FLOAT_CMP_CONST,
@@ -874,6 +981,9 @@ impl_lint_pass!(Operators => [
     NEEDLESS_BITWISE_BOOL,
     SELF_ASSIGNMENT,
     MANUAL_MIDPOINT,
+    MANUAL_IS_MULTIPLE_OF,
+    MANUAL_DIV_CEIL,
+    INVALID_UPCAST_COMPARISONS,
 ]);
 
 impl<'tcx> LateLintPass<'tcx> for Operators {
@@ -889,8 +999,10 @@ impl<'tcx> LateLintPass<'tcx> for Operators {
                     }
                     erasing_op::check(cx, e, op.node, lhs, rhs);
                     identity_op::check(cx, e, op.node, lhs, rhs);
+                    invalid_upcast_comparisons::check(cx, op.node, lhs, rhs, e.span);
                     needless_bitwise_bool::check(cx, e, op.node, lhs, rhs);
                     manual_midpoint::check(cx, e, op.node, lhs, rhs, self.msrv);
+                    manual_is_multiple_of::check(cx, e, op.node, lhs, rhs, self.msrv);
                 }
                 self.arithmetic_context.check_binary(cx, e, op.node, lhs, rhs);
                 bit_mask::check(cx, e, op.node, lhs, rhs);
@@ -900,6 +1012,7 @@ impl<'tcx> LateLintPass<'tcx> for Operators {
                 duration_subsec::check(cx, e, op.node, lhs, rhs);
                 float_equality_without_abs::check(cx, e, op.node, lhs, rhs);
                 integer_division::check(cx, e, op.node, lhs, rhs);
+                integer_division_remainder_used::check(cx, op.node, lhs, rhs, e.span);
                 cmp_owned::check(cx, op.node, lhs, rhs);
                 float_cmp::check(cx, e, op.node, lhs, rhs);
                 modulo_one::check(cx, e, op.node, rhs);
@@ -911,6 +1024,7 @@ impl<'tcx> LateLintPass<'tcx> for Operators {
                     rhs,
                     self.modulo_arithmetic_allow_comparison_to_zero,
                 );
+                manual_div_ceil::check(cx, e, op.node, lhs, rhs, self.msrv);
             },
             ExprKind::AssignOp(op, lhs, rhs) => {
                 let bin_op = op.node.into();
@@ -919,7 +1033,7 @@ impl<'tcx> LateLintPass<'tcx> for Operators {
                 modulo_arithmetic::check(cx, e, bin_op, lhs, rhs, false);
             },
             ExprKind::Assign(lhs, rhs, _) => {
-                assign_op_pattern::check(cx, e, lhs, rhs);
+                assign_op_pattern::check(cx, e, lhs, rhs, self.msrv);
                 self_assignment::check(cx, e, lhs, rhs);
             },
             ExprKind::Unary(op, arg) => {

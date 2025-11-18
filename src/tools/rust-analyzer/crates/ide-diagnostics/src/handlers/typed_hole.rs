@@ -1,7 +1,7 @@
 use std::ops::Not;
 
 use hir::{
-    ClosureStyle, HirDisplay, ImportPathConfig,
+    ClosureStyle, FindPathConfig, HirDisplay,
     db::ExpandDatabase,
     term_search::{TermSearchConfig, TermSearchCtx, term_search},
 };
@@ -20,7 +20,7 @@ use syntax::AstNode;
 // Diagnostic: typed-hole
 //
 // This diagnostic is triggered when an underscore expression is used in an invalid position.
-pub(crate) fn typed_hole(ctx: &DiagnosticsContext<'_>, d: &hir::TypedHole) -> Diagnostic {
+pub(crate) fn typed_hole(ctx: &DiagnosticsContext<'_>, d: &hir::TypedHole<'_>) -> Diagnostic {
     let display_range = ctx.sema.diagnostics_display_range(d.expr.map(|it| it.into()));
     let (message, fixes) = if d.expected.is_unknown() {
         ("`_` expressions may only appear on the left-hand side of an assignment".to_owned(), None)
@@ -37,10 +37,11 @@ pub(crate) fn typed_hole(ctx: &DiagnosticsContext<'_>, d: &hir::TypedHole) -> Di
     };
 
     Diagnostic::new(DiagnosticCode::RustcHardError("typed-hole"), message, display_range)
+        .stable()
         .with_fixes(fixes)
 }
 
-fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::TypedHole) -> Option<Vec<Assist>> {
+fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::TypedHole<'_>) -> Option<Vec<Assist>> {
     let db = ctx.sema.db;
     let root = db.parse_or_expand(d.expr.file_id);
     let (original_range, _) =
@@ -60,7 +61,7 @@ fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::TypedHole) -> Option<Vec<Assist>
     };
     let paths = term_search(&term_search_ctx);
 
-    let mut formatter = |_: &hir::Type| String::from("_");
+    let mut formatter = |_: &hir::Type<'_>| String::from("_");
 
     let assists: Vec<Assist> = d
         .expected
@@ -72,7 +73,7 @@ fn fixes(ctx: &DiagnosticsContext<'_>, d: &hir::TypedHole) -> Option<Vec<Assist>
             path.gen_source_code(
                 &scope,
                 &mut formatter,
-                ImportPathConfig {
+                FindPathConfig {
                     prefer_no_std: ctx.config.prefer_no_std,
                     prefer_prelude: ctx.config.prefer_prelude,
                     prefer_absolute: ctx.config.prefer_absolute,
@@ -151,7 +152,7 @@ fn main() {
 fn main() {
     let mut x = t();
     x = _;
-      //^ 💡 error: invalid `_` expression, expected type `&'static str`
+      //^ 💡 error: invalid `_` expression, expected type `&str`
     x = "";
 }
 fn t<T>() -> T { loop {} }

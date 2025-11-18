@@ -11,9 +11,9 @@ resolve_added_macro_use =
 resolve_ancestor_only =
     visibilities can only be restricted to ancestor modules
 
-resolve_anonymous_lifetime_non_gat_report_error =
-    in the trait associated type is declared without lifetime parameters, so using a borrowed type for them requires that lifetime to come from the implemented type
+resolve_anonymous_lifetime_non_gat_report_error = missing lifetime in associated type
     .label = this lifetime must come from the implemented type
+    .note = in the trait the associated type is declared without lifetime parameters, so using a borrowed type for them requires that lifetime to come from the implemented type
 
 resolve_arguments_macro_use_not_allowed = arguments to `macro_use` are not allowed here
 
@@ -40,8 +40,6 @@ resolve_attempt_to_use_non_constant_value_in_constant_without_suggestion =
 
 resolve_attributes_starting_with_rustc_are_reserved =
     attributes starting with `rustc` are reserved for use by the `rustc` compiler
-
-resolve_bad_macro_import = bad macro import
 
 resolve_binding_in_never_pattern =
     never patterns cannot contain variable bindings
@@ -107,6 +105,9 @@ resolve_consider_making_the_field_public =
 resolve_consider_marking_as_pub =
     consider marking `{$ident}` as `pub` in the imported module
 
+resolve_consider_marking_as_pub_crate =
+    in case you want to use the macro within this crate only, reduce the visibility to `pub(crate)`
+
 resolve_consider_move_macro_position =
     consider moving the definition of `{$ident}` before this call
 
@@ -119,7 +120,7 @@ resolve_const_param_in_enum_discriminant =
     const parameters may not be used in enum discriminant values
 
 resolve_const_param_in_non_trivial_anon_const =
-    const parameters may only be used as standalone arguments, i.e. `{$name}`
+    const parameters may only be used as standalone arguments here, i.e. `{$name}`
 
 resolve_constructor_private_if_any_field_private =
     a constructor is private if any of the fields is private
@@ -174,10 +175,16 @@ resolve_generic_params_from_outer_item =
     } from outer item
     .refer_to_type_directly = refer to the type directly here instead
     .suggestion = try introducing a local generic parameter here
+    .note = nested items are independent from their parent item for everything except for privacy and name resolution
 
 resolve_generic_params_from_outer_item_const = a `const` is a separate item from the item that contains it
 
 resolve_generic_params_from_outer_item_const_param = const parameter from outer item
+
+resolve_generic_params_from_outer_item_inner_item = {$is_self ->
+        [true] `Self`
+        *[false] generic parameter
+    } used in this inner {$descr}
 
 resolve_generic_params_from_outer_item_self_ty_alias = `Self` type implicitly declared here, by this `impl`
 
@@ -230,6 +237,9 @@ resolve_item_was_cfg_out = the item is gated here
 resolve_label_with_similar_name_reachable =
     a label with a similar name is reachable
 
+resolve_legacy_derive_helpers = derive helper attribute is used before it is introduced
+    .label = the attribute is introduced here
+
 resolve_lending_iterator_report_error =
     associated type `Iterator::Item` is declared without lifetime parameters, so using a borrowed type for them requires that lifetime to come from the implemented type
     .note = you can't create an `Iterator` that borrows each `Item` from itself, but you can instead create a new type that borrows your existing type and implement `Iterator` for that new type
@@ -245,16 +255,22 @@ resolve_lowercase_self =
     .suggestion = try using `Self`
 
 resolve_macro_cannot_use_as_attr =
-    `{$ident}` exists, but a declarative macro cannot be used as an attribute macro
+    `{$ident}` exists, but has no `attr` rules
 
 resolve_macro_cannot_use_as_derive =
-     `{$ident}` exists, but a declarative macro cannot be used as a derive macro
+     `{$ident}` exists, but has no `derive` rules
+
+resolve_macro_cannot_use_as_fn_like =
+    `{$ident}` exists, but has no rules for function-like invocation
 
 resolve_macro_defined_later =
     a macro with the same name exists, but it appears later
 
 resolve_macro_expanded_extern_crate_cannot_shadow_extern_arguments =
     macro-expanded `extern crate` items cannot shadow names passed with `--extern`
+
+resolve_macro_expanded_macro_exports_accessed_by_absolute_paths = macro-expanded `macro_export` macros from the current crate cannot be referred to by absolute paths
+    .note = the macro is defined here
 
 resolve_macro_expected_found =
     expected {$expected}, found {$found} `{$macro_path}`
@@ -263,6 +279,10 @@ resolve_macro_expected_found =
 resolve_macro_extern_deprecated =
     `#[macro_escape]` is a deprecated synonym for `#[macro_use]`
     .help = try an outer attribute: `#[macro_use]`
+
+resolve_macro_use_deprecated =
+    applying the `#[macro_use]` attribute to an `extern crate` item is deprecated
+    .help = remove it and import macros at use sites with a `use` item instead
 
 resolve_macro_use_extern_crate_self = `#[macro_use]` is not supported on `extern crate self`
 
@@ -335,6 +355,9 @@ resolve_param_in_ty_of_const_param =
 
 resolve_pattern_doesnt_bind_name = pattern doesn't bind `{$name}`
 
+resolve_proc_macro_derive_resolution_fallback = cannot find {$ns_descr} `{$ident}` in this scope
+    .label = names from parent modules are not accessible without an explicit import
+
 resolve_proc_macro_same_crate = can't use a procedural macro from the same crate that defines it
     .help = you can define integration tests in a directory named `tests`
 
@@ -343,6 +366,9 @@ resolve_reexport_of_crate_public =
 
 resolve_reexport_of_private =
     re-export of private `{$ident}`
+
+resolve_reexport_private_dependency =
+    {$kind} `{$name}` from private dependency '{$krate}' is re-exported
 
 resolve_relative_2018 =
     relative paths are not supported in visibilities in 2018 edition or later
@@ -432,6 +458,7 @@ resolve_undeclared_label =
 
 resolve_underscore_lifetime_is_reserved = `'_` cannot be used here
     .label = `'_` is a reserved lifetime name
+    .help = use another lifetime specifier
 
 resolve_unexpected_res_change_ty_to_const_param_sugg =
     you might have meant to write a const parameter here
@@ -460,10 +487,20 @@ resolve_unreachable_label_suggestion_use_similarly_named =
 resolve_unreachable_label_with_similar_name_exists =
     a label with a similar name exists but is unreachable
 
+resolve_unused_extern_crate = unused extern crate
+    .label = unused
+    .suggestion = remove the unused `extern crate`
+
+resolve_unused_label = unused label
+
+resolve_unused_macro_use = unused `#[macro_use]` import
+
 resolve_variable_bound_with_different_mode =
     variable `{$variable_name}` is bound inconsistently across alternatives separated by `|`
     .label = bound in different ways
     .first_binding_span = first binding
+
+resolve_variable_is_a_typo = you might have meant to use the similarly named previously used binding `{$typo}`
 
 resolve_variable_is_not_bound_in_all_patterns =
     variable `{$name}` is not bound in all patterns

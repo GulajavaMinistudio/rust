@@ -6,16 +6,22 @@ pub use salsa_macros;
 // FIXME: Rename this crate, base db is non descriptive
 mod change;
 mod input;
+pub mod target;
 
-use std::{cell::RefCell, hash::BuildHasherDefault, panic, sync::Once};
+use std::{
+    cell::RefCell,
+    hash::BuildHasherDefault,
+    panic,
+    sync::{Once, atomic::AtomicUsize},
+};
 
 pub use crate::{
     change::FileChange,
     input::{
         BuiltCrateData, BuiltDependency, Crate, CrateBuilder, CrateBuilderId, CrateDataBuilder,
         CrateDisplayName, CrateGraphBuilder, CrateName, CrateOrigin, CratesIdMap, CratesMap,
-        DependencyBuilder, Env, ExtraCrateData, LangCrateOrigin, ProcMacroPaths, ReleaseChannel,
-        SourceRoot, SourceRootId, TargetLayoutLoadResult, UniqueCrateData,
+        DependencyBuilder, Env, ExtraCrateData, LangCrateOrigin, ProcMacroLoadingError,
+        ProcMacroPaths, ReleaseChannel, SourceRoot, SourceRootId, UniqueCrateData,
     },
 };
 use dashmap::{DashMap, mapref::entry::Entry};
@@ -28,10 +34,15 @@ use syntax::{Parse, SyntaxError, ast};
 use triomphe::Arc;
 pub use vfs::{AnchoredPath, AnchoredPathBuf, FileId, VfsPath, file_set::FileSet};
 
+pub type FxIndexSet<T> = indexmap::IndexSet<T, rustc_hash::FxBuildHasher>;
+pub type FxIndexMap<K, V> =
+    indexmap::IndexMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+
 #[macro_export]
 macro_rules! impl_intern_key {
     ($id:ident, $loc:ident) => {
-        #[salsa_macros::interned(no_lifetime)]
+        #[salsa_macros::interned(no_lifetime, revisions = usize::MAX)]
+        #[derive(PartialOrd, Ord)]
         pub struct $id {
             pub loc: $loc,
         }
@@ -40,7 +51,7 @@ macro_rules! impl_intern_key {
         impl ::std::fmt::Debug for $id {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.debug_tuple(stringify!($id))
-                    .field(&format_args!("{:04x}", self.0.as_u32()))
+                    .field(&format_args!("{:04x}", self.0.index()))
                     .finish()
             }
         }
@@ -164,7 +175,8 @@ impl Files {
     }
 }
 
-#[salsa_macros::interned(no_lifetime, debug, constructor=from_span)]
+#[salsa_macros::interned(no_lifetime, debug, constructor=from_span, revisions = usize::MAX)]
+#[derive(PartialOrd, Ord)]
 pub struct EditionedFileId {
     pub editioned_file_id: span::EditionedFileId,
 }
@@ -201,6 +213,7 @@ impl EditionedFileId {
 
 #[salsa_macros::input(debug)]
 pub struct FileText {
+    #[returns(ref)]
     pub text: Arc<str>,
     pub file_id: vfs::FileId,
 }
@@ -320,13 +333,33 @@ pub trait SourceDatabase: salsa::Database {
 
     #[doc(hidden)]
     fn crates_map(&self) -> Arc<CratesMap>;
+
+    fn nonce_and_revision(&self) -> (Nonce, salsa::Revision);
+}
+
+static NEXT_NONCE: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Nonce(usize);
+
+impl Default for Nonce {
+    #[inline]
+    fn default() -> Self {
+        Nonce::new()
+    }
+}
+
+impl Nonce {
+    #[inline]
+    pub fn new() -> Nonce {
+        Nonce(NEXT_NONCE.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+    }
 }
 
 /// Crate related data shared by the whole workspace.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct CrateWorkspaceData {
-    // FIXME: Consider removing this, making HirDatabase::target_data_layout an input query
-    pub data_layout: TargetLayoutLoadResult,
+    pub target: Result<target::TargetData, target::TargetLoadError>,
     /// Toolchain version used to compile the crate.
     pub toolchain: Option<Version>,
 }
@@ -352,11 +385,11 @@ fn parse(db: &dyn RootQueryDb, file_id: EditionedFileId) -> Parse<ast::SourceFil
     let _p = tracing::info_span!("parse", ?file_id).entered();
     let (file_id, edition) = file_id.unpack(db.as_dyn_database());
     let text = db.file_text(file_id).text(db);
-    ast::SourceFile::parse(&text, edition)
+    ast::SourceFile::parse(text, edition)
 }
 
 fn parse_errors(db: &dyn RootQueryDb, file_id: EditionedFileId) -> Option<&[SyntaxError]> {
-    #[salsa_macros::tracked(return_ref)]
+    #[salsa_macros::tracked(returns(ref))]
     fn parse_errors(db: &dyn RootQueryDb, file_id: EditionedFileId) -> Option<Box<[SyntaxError]>> {
         let errors = db.parse(file_id).errors();
         match &*errors {

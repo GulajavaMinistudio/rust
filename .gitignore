@@ -48,7 +48,7 @@ no_llvm_build
 /llvm/
 /mingw-build/
 /build
-/build-rust-analyzer/
+/build-rust-analyzer
 /dist/
 /unicode-downloads
 /target
@@ -85,12 +85,14 @@ __pycache__/
 
 ## Node
 node_modules
-package-lock.json
-package.json
 /src/doc/rustc-dev-guide/mermaid.min.js
 
 ## Rustdoc GUI tests
 tests/rustdoc-gui/src/**.lock
+
+## Test dashboard
+.citool-cache/
+test-dashboard/
 
 ## direnv
 /.envrc

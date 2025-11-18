@@ -2,12 +2,11 @@
 
 #![feature(const_trait_impl)]
 
-#[const_trait]
-trait Value {
+const trait Value {
     fn value() -> u32;
 }
 
-const fn get_value<T: ~const Value>() -> u32 {
+const fn get_value<T: [const] Value>() -> u32 {
     T::value()
 }
 

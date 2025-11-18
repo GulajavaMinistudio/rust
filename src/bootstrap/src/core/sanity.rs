@@ -1,9 +1,10 @@
-//! Sanity checking performed by bootstrap before actually executing anything.
+//! Sanity checking and tool selection performed by bootstrap.
 //!
-//! This module contains the implementation of ensuring that the build
-//! environment looks reasonable before progressing. This will verify that
-//! various programs like git and python exist, along with ensuring that all C
-//! compilers for cross-compiling are found.
+//! This module ensures that the build environment is correctly set up before
+//! executing any build tasks. It verifies required programs exist (like git and
+//! cmake when needed), selects some tools based on the environment (like the
+//! Python interpreter), and validates that C compilers for cross-compiling are
+//! available.
 //!
 //! In theory if we get past this phase it's a bug if a build fails, but in
 //! practice that's likely not true!
@@ -13,14 +14,14 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::{env, fs};
 
-use crate::Build;
 #[cfg(not(test))]
 use crate::builder::Builder;
 use crate::builder::Kind;
 #[cfg(not(test))]
 use crate::core::build_steps::tool;
-use crate::core::config::Target;
+use crate::core::config::{CompilerBuiltins, Target};
 use crate::utils::exec::command;
+use crate::{Build, Subcommand};
 
 pub struct Finder {
     cache: HashMap<OsString, Option<PathBuf>>,
@@ -33,7 +34,13 @@ pub struct Finder {
 //
 // Targets can be removed from this list once they are present in the stage0 compiler (usually by updating the beta compiler of the bootstrap).
 const STAGE0_MISSING_TARGETS: &[&str] = &[
+    "aarch64-unknown-helenos",
+    "i686-unknown-helenos",
+    "x86_64-unknown-helenos",
+    "powerpc-unknown-helenos",
+    "sparc64-unknown-helenos",
     // just a dummy comment so the list doesn't get onelined
+    "riscv64gc-unknown-redox",
 ];
 
 /// Minimum version threshold for libstdc++ required when using prebuilt LLVM
@@ -107,9 +114,9 @@ pub fn check(build: &mut Build) {
 
     // Ensure that a compatible version of libstdc++ is available on the system when using `llvm.download-ci-llvm`.
     #[cfg(not(test))]
-    if !build.config.dry_run() && !build.build.is_msvc() && build.config.llvm_from_ci {
+    if !build.config.dry_run() && !build.host_target.is_msvc() && build.config.llvm_from_ci {
         let builder = Builder::new(build);
-        let libcxx_version = builder.ensure(tool::LibcxxVersionTool { target: build.build });
+        let libcxx_version = builder.ensure(tool::LibcxxVersionTool { target: build.host_target });
 
         match libcxx_version {
             tool::LibcxxVersion::Gnu(version) => {
@@ -135,6 +142,7 @@ pub fn check(build: &mut Build) {
 
     // We need cmake, but only if we're actually building LLVM or sanitizers.
     let building_llvm = !build.config.llvm_from_ci
+        && !build.config.local_rebuild
         && build.hosts.iter().any(|host| {
             build.config.llvm_enabled(*host)
                 && build
@@ -177,12 +185,12 @@ than building it.
         .or_else(|| cmd_finder.maybe_have("node"))
         .or_else(|| cmd_finder.maybe_have("nodejs"));
 
-    build.config.npm = build
+    build.config.yarn = build
         .config
-        .npm
+        .yarn
         .take()
         .map(|p| cmd_finder.must_have(p))
-        .or_else(|| cmd_finder.maybe_have("npm"));
+        .or_else(|| cmd_finder.maybe_have("yarn"));
 
     build.config.gdb = build
         .config
@@ -198,12 +206,27 @@ than building it.
         .map(|p| cmd_finder.must_have(p))
         .or_else(|| cmd_finder.maybe_have("reuse"));
 
-    let stage0_supported_target_list: HashSet<String> = crate::utils::helpers::output(
-        command(&build.config.initial_rustc).args(["--print", "target-list"]).as_command_mut(),
-    )
-    .lines()
-    .map(|s| s.to_string())
-    .collect();
+    let stage0_supported_target_list: HashSet<String> = command(&build.config.initial_rustc)
+        .args(["--print", "target-list"])
+        .run_in_dry_run()
+        .run_capture_stdout(&build)
+        .stdout()
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
+
+    // Compiler tools like `cc` and `ar` are not configured for cross-targets on certain subcommands
+    // because they are not needed.
+    //
+    // See `cc_detect::find` for more details.
+    let skip_tools_checks = build.config.dry_run()
+        || matches!(
+            build.config.cmd,
+            Subcommand::Clean { .. }
+                | Subcommand::Check { .. }
+                | Subcommand::Format { .. }
+                | Subcommand::Setup { .. }
+        );
 
     // We're gonna build some custom C code here and there, host triples
     // also build some C++ shims for LLVM so we need a C++ compiler.
@@ -220,8 +243,12 @@ than building it.
             continue;
         }
 
+        if target.contains("motor") {
+            continue;
+        }
+
         // skip check for cross-targets
-        if skip_target_sanity && target != &build.build {
+        if skip_target_sanity && target != &build.host_target {
             continue;
         }
 
@@ -268,7 +295,7 @@ than building it.
 
             if !has_target {
                 panic!(
-                    "No such target exists in the target list,\n\
+                    "{target_str}: No such target exists in the target list,\n\
                      make sure to correctly specify the location \
                      of the JSON specification file \
                      for custom targets!\n\
@@ -278,7 +305,7 @@ than building it.
             }
         }
 
-        if !build.config.dry_run() {
+        if !skip_tools_checks {
             cmd_finder.must_have(build.cc(*target));
             if let Some(ar) = build.ar(*target) {
                 cmd_finder.must_have(ar);
@@ -286,13 +313,13 @@ than building it.
         }
     }
 
-    if !build.config.dry_run() {
+    if !skip_tools_checks {
         for host in &build.hosts {
             cmd_finder.must_have(build.cxx(*host).unwrap());
 
             if build.config.llvm_enabled(*host) {
                 // Externally configured LLVM requires FileCheck to exist
-                let filecheck = build.llvm_filecheck(build.build);
+                let filecheck = build.llvm_filecheck(build.host_target);
                 if !filecheck.starts_with(&build.out)
                     && !filecheck.exists()
                     && build.config.codegen_tests
@@ -310,6 +337,24 @@ than building it.
             .entry(*target)
             .or_insert_with(|| Target::from_triple(&target.triple));
 
+        // compiler-rt c fallbacks for wasm cannot be built with gcc
+        if target.contains("wasm")
+            && (*build.config.optimized_compiler_builtins(*target)
+                != CompilerBuiltins::BuildRustOnly
+                || build.config.rust_std_features.contains("compiler-builtins-c"))
+        {
+            let cc_tool = build.cc_tool(*target);
+            if !cc_tool.is_like_clang() && !cc_tool.path().ends_with("emcc") {
+                // emcc works as well
+                panic!(
+                    "Clang is required to build C code for Wasm targets, got `{}` instead\n\
+                    this is because compiler-builtins is configured to build C source. Either \
+                    ensure Clang is used, or adjust this configuration.",
+                    cc_tool.path().display()
+                );
+            }
+        }
+
         if (target.contains("-none-") || target.contains("nvptx"))
             && build.no_std(*target) == Some(false)
         {
@@ -317,18 +362,12 @@ than building it.
         }
 
         // skip check for cross-targets
-        if skip_target_sanity && target != &build.build {
+        if skip_target_sanity && target != &build.host_target {
             continue;
         }
 
         // Make sure musl-root is valid.
         if target.contains("musl") && !target.contains("unikraft") {
-            // If this is a native target (host is also musl) and no musl-root is given,
-            // fall back to the system toolchain in /usr before giving up
-            if build.musl_root(*target).is_none() && build.config.is_host_target(*target) {
-                let target = build.config.target_config.entry(*target).or_default();
-                target.musl_root = Some("/usr".into());
-            }
             match build.musl_libdir(*target) {
                 Some(libdir) => {
                     if fs::metadata(libdir.join("libc.a")).is_err() {
@@ -348,7 +387,7 @@ than building it.
             // Cygwin. The Cygwin build does not have generators for Visual
             // Studio, so detect that here and error.
             let out =
-                command("cmake").arg("--help").run_always().run_capture_stdout(build).stdout();
+                command("cmake").arg("--help").run_in_dry_run().run_capture_stdout(&build).stdout();
             if !out.contains("Visual Studio") {
                 panic!(
                     "
@@ -365,6 +404,16 @@ $ pacman -R cmake && pacman -S mingw-w64-x86_64-cmake
 "
                 );
             }
+        }
+
+        // For testing `wasm32-wasip2`-and-beyond it's required to have
+        // `wasm-component-ld`. This is enabled by default via `tool_enabled`
+        // but if it's disabled then double-check it's present on the system.
+        if target.contains("wasip")
+            && !target.contains("wasip1")
+            && !build.tool_enabled("wasm-component-ld")
+        {
+            cmd_finder.must_have("wasm-component-ld");
         }
     }
 

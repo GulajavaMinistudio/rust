@@ -4,27 +4,26 @@ use std::{cmp, ops::Bound};
 
 use hir_def::{
     AdtId, VariantId,
-    layout::{Integer, ReprOptions, TargetDataLayout},
     signatures::{StructFlags, VariantFields},
 };
 use intern::sym;
+use rustc_abi::{Integer, ReprOptions, TargetDataLayout};
 use rustc_index::IndexVec;
 use smallvec::SmallVec;
 use triomphe::Arc;
 
 use crate::{
-    Substitution, TraitEnvironment,
+    TraitEnvironment,
     db::HirDatabase,
-    layout::{Layout, LayoutError, field_ty},
+    layout::{Layout, LayoutCx, LayoutError, field_ty},
+    next_solver::GenericArgs,
 };
 
-use super::LayoutCx;
-
-pub fn layout_of_adt_query(
-    db: &dyn HirDatabase,
+pub fn layout_of_adt_query<'db>(
+    db: &'db dyn HirDatabase,
     def: AdtId,
-    subst: Substitution,
-    trait_env: Arc<TraitEnvironment>,
+    args: GenericArgs<'db>,
+    trait_env: Arc<TraitEnvironment<'db>>,
 ) -> Result<Arc<Layout>, LayoutError> {
     let krate = trait_env.krate;
     let Ok(target) = db.target_data_layout(krate) else {
@@ -35,14 +34,14 @@ pub fn layout_of_adt_query(
     let handle_variant = |def: VariantId, var: &VariantFields| {
         var.fields()
             .iter()
-            .map(|(fd, _)| db.layout_of_ty(field_ty(db, def, fd, &subst), trait_env.clone()))
+            .map(|(fd, _)| db.layout_of_ty(field_ty(db, def, fd, &args), trait_env.clone()))
             .collect::<Result<Vec<_>, _>>()
     };
     let (variants, repr, is_special_no_niche) = match def {
         AdtId::StructId(s) => {
             let sig = db.struct_signature(s);
             let mut r = SmallVec::<[_; 1]>::new();
-            r.push(handle_variant(s.into(), &db.variant_fields(s.into()))?);
+            r.push(handle_variant(s.into(), s.fields(db))?);
             (
                 r,
                 sig.repr.unwrap_or_default(),
@@ -52,15 +51,15 @@ pub fn layout_of_adt_query(
         AdtId::UnionId(id) => {
             let data = db.union_signature(id);
             let mut r = SmallVec::new();
-            r.push(handle_variant(id.into(), &db.variant_fields(id.into()))?);
+            r.push(handle_variant(id.into(), id.fields(db))?);
             (r, data.repr.unwrap_or_default(), false)
         }
         AdtId::EnumId(e) => {
-            let variants = db.enum_variants(e);
+            let variants = e.enum_variants(db);
             let r = variants
                 .variants
                 .iter()
-                .map(|&(v, _)| handle_variant(v.into(), &db.variant_fields(v.into())))
+                .map(|&(v, _, _)| handle_variant(v.into(), v.fields(db)))
                 .collect::<Result<SmallVec<_>, _>>()?;
             (r, db.enum_signature(e).repr.unwrap_or_default(), false)
         }
@@ -82,19 +81,9 @@ pub fn layout_of_adt_query(
             |min, max| repr_discr(dl, &repr, min, max).unwrap_or((Integer::I8, false)),
             variants.iter_enumerated().filter_map(|(id, _)| {
                 let AdtId::EnumId(e) = def else { return None };
-                let d = db.const_eval_discriminant(db.enum_variants(e).variants[id.0].0).ok()?;
+                let d = db.const_eval_discriminant(e.enum_variants(db).variants[id.0].0).ok()?;
                 Some((id, d))
             }),
-            // FIXME: The current code for niche-filling relies on variant indices
-            // instead of actual discriminants, so enums with
-            // explicit discriminants (RFC #2363) would misbehave and we should disable
-            // niche optimization for them.
-            // The code that do it in rustc:
-            // repr.inhibit_enum_layout_opt() || def
-            //     .variants()
-            //     .iter_enumerated()
-            //     .any(|(i, v)| v.discr != ty::VariantDiscr::Relative(i.as_u32()))
-            repr.inhibit_enum_layout_opt(),
             !matches!(def, AdtId::EnumId(..))
                 && variants
                     .iter()
@@ -104,6 +93,15 @@ pub fn layout_of_adt_query(
         )?
     };
     Ok(Arc::new(result))
+}
+
+pub(crate) fn layout_of_adt_cycle_result<'db>(
+    _: &'db dyn HirDatabase,
+    _def: AdtId,
+    _args: GenericArgs<'db>,
+    _trait_env: Arc<TraitEnvironment<'db>>,
+) -> Result<Arc<Layout>, LayoutError> {
+    Err(LayoutError::RecursiveTypeWithoutIndirection)
 }
 
 fn layout_scalar_valid_range(db: &dyn HirDatabase, def: AdtId) -> (Bound<u128>, Bound<u128>) {
@@ -128,15 +126,6 @@ fn layout_scalar_valid_range(db: &dyn HirDatabase, def: AdtId) -> (Bound<u128>, 
         Bound::Unbounded
     };
     (get(sym::rustc_layout_scalar_valid_range_start), get(sym::rustc_layout_scalar_valid_range_end))
-}
-
-pub(crate) fn layout_of_adt_cycle_result(
-    _: &dyn HirDatabase,
-    _: AdtId,
-    _: Substitution,
-    _: Arc<TraitEnvironment>,
-) -> Result<Arc<Layout>, LayoutError> {
-    Err(LayoutError::RecursiveTypeWithoutIndirection)
 }
 
 /// Finds the appropriate Integer type and signedness for the given

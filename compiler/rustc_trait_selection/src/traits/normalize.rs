@@ -47,7 +47,7 @@ impl<'tcx> At<'_, 'tcx> {
     /// same goals in both a temporary and the shared context which negatively impacts
     /// performance as these don't share caching.
     ///
-    /// FIXME(-Znext-solver): For performance reasons, we currently reuse an existing
+    /// FIXME(-Znext-solver=no): For performance reasons, we currently reuse an existing
     /// fulfillment context in the old solver. Once we have removed the old solver, we
     /// can remove the `fulfill_cx` parameter on this function.
     fn deeply_normalize<T, E>(
@@ -73,7 +73,7 @@ impl<'tcx> At<'_, 'tcx> {
             let value = self
                 .normalize(value)
                 .into_value_registering_obligations(self.infcx, &mut *fulfill_cx);
-            let errors = fulfill_cx.select_all_or_error(self.infcx);
+            let errors = fulfill_cx.evaluate_obligations_error_on_ambiguity(self.infcx);
             let value = self.infcx.resolve_vars_if_possible(value);
             if errors.is_empty() {
                 Ok(value)
@@ -224,7 +224,7 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
             )
             .ok()
             .flatten()
-            .unwrap_or(proj.to_term(infcx.tcx));
+            .unwrap_or_else(|| proj.to_term(infcx.tcx));
 
             PlaceholderReplacer::replace_placeholders(
                 infcx,
@@ -299,12 +299,21 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
             );
         }
 
+        // We don't replace bound vars in the generic arguments of the free alias with
+        // placeholders. This doesn't cause any issues as instantiating parameters with
+        // bound variables is special-cased to rewrite the debruijn index to be higher
+        // whenever we fold through a binder.
+        //
+        // However, we do replace any escaping bound vars in the resulting goals with
+        // placeholders as the trait solver does not expect to encounter escaping bound
+        // vars in obligations.
+        //
+        // FIXME(lazy_type_alias): Check how much this actually matters for perf before
+        // stabilization. This is a bit weird and generally not how we handle binders in
+        // the compiler so ideally we'd do the same boundvar->placeholder->boundvar dance
+        // that other kinds of normalization do.
         let infcx = self.selcx.infcx;
         self.obligations.extend(
-            // FIXME(BoxyUwU):
-            // FIXME(lazy_type_alias):
-            // It seems suspicious to instantiate the predicates with arguments that might be bound vars,
-            // we might wind up instantiating one of these bound vars underneath a hrtb.
             infcx.tcx.predicates_of(free.def_id).instantiate_own(infcx.tcx, free.args).map(
                 |(mut predicate, span)| {
                     if free.has_escaping_bound_vars() {
@@ -324,10 +333,11 @@ impl<'a, 'b, 'tcx> AssocTypeNormalizer<'a, 'b, 'tcx> {
         let res = if free.kind(infcx.tcx).is_type() {
             infcx.tcx.type_of(free.def_id).instantiate(infcx.tcx, free.args).fold_with(self).into()
         } else {
-            // FIXME(mgca): once const items are actual aliases defined as equal to type system consts
-            // this should instead use that rather than evaluating.
-            super::evaluate_const(infcx, free.to_term(infcx.tcx).expect_const(), self.param_env)
-                .super_fold_with(self)
+            infcx
+                .tcx
+                .const_of_item(free.def_id)
+                .instantiate(infcx.tcx, free.args)
+                .fold_with(self)
                 .into()
         };
         self.depth -= 1;
@@ -427,51 +437,47 @@ impl<'a, 'b, 'tcx> TypeFolder<TyCtxt<'tcx>> for AssocTypeNormalizer<'a, 'b, 'tcx
             return ct;
         }
 
-        // Doing "proper" normalization of const aliases is inherently cyclic until const items
-        // are real aliases instead of having bodies. We gate proper const alias handling behind
-        // mgca to avoid breaking stable code, though this should become the "main" codepath long
-        // before mgca is stabilized.
+        let uv = match ct.kind() {
+            ty::ConstKind::Unevaluated(uv) => uv,
+            _ => return ct.super_fold_with(self),
+        };
+
+        // Note that the AssocConst and Const cases are unreachable on stable,
+        // unless a `min_generic_const_args` feature gate error has already
+        // been emitted earlier in compilation.
         //
-        // FIXME(BoxyUwU): Enabling this by default is blocked on a refactoring to how const items
-        // are represented.
-        if tcx.features().min_generic_const_args() {
-            let uv = match ct.kind() {
-                ty::ConstKind::Unevaluated(uv) => uv,
-                _ => return ct.super_fold_with(self),
-            };
-
-            let ct = match tcx.def_kind(uv.def) {
-                DefKind::AssocConst => match tcx.def_kind(tcx.parent(uv.def)) {
-                    DefKind::Trait => self.normalize_trait_projection(uv.into()),
-                    DefKind::Impl { of_trait: false } => {
-                        self.normalize_inherent_projection(uv.into())
-                    }
-                    kind => unreachable!(
-                        "unexpected `DefKind` for const alias' resolution's parent def: {:?}",
-                        kind
-                    ),
-                },
-                DefKind::Const | DefKind::AnonConst => self.normalize_free_alias(uv.into()),
-                kind => {
-                    unreachable!("unexpected `DefKind` for const alias to resolve to: {:?}", kind)
+        // That's because we can only end up with an Unevaluated ty::Const for a const item
+        // if it was marked with `#[type_const]`. Using this attribute without the mgca
+        // feature gate causes a parse error.
+        let ct = match tcx.def_kind(uv.def) {
+            DefKind::AssocConst => match tcx.def_kind(tcx.parent(uv.def)) {
+                DefKind::Trait => self.normalize_trait_projection(uv.into()).expect_const(),
+                DefKind::Impl { of_trait: false } => {
+                    self.normalize_inherent_projection(uv.into()).expect_const()
                 }
-            };
+                kind => unreachable!(
+                    "unexpected `DefKind` for const alias' resolution's parent def: {:?}",
+                    kind
+                ),
+            },
+            DefKind::Const => self.normalize_free_alias(uv.into()).expect_const(),
+            DefKind::AnonConst => {
+                let ct = ct.super_fold_with(self);
+                super::with_replaced_escaping_bound_vars(
+                    self.selcx.infcx,
+                    &mut self.universes,
+                    ct,
+                    |ct| super::evaluate_const(self.selcx.infcx, ct, self.param_env),
+                )
+            }
+            kind => {
+                unreachable!("unexpected `DefKind` for const alias to resolve to: {:?}", kind)
+            }
+        };
 
-            // We re-fold the normalized const as the `ty` field on `ConstKind::Value` may be
-            // unnormalized after const evaluation returns.
-            ct.expect_const().super_fold_with(self)
-        } else {
-            let ct = ct.super_fold_with(self);
-            return super::with_replaced_escaping_bound_vars(
-                self.selcx.infcx,
-                &mut self.universes,
-                ct,
-                |ct| super::evaluate_const(self.selcx.infcx, ct, self.param_env),
-            )
-            .super_fold_with(self);
-            // We re-fold the normalized const as the `ty` field on `ConstKind::Value` may be
-            // unnormalized after const evaluation returns.
-        }
+        // We re-fold the normalized const as the `ty` field on `ConstKind::Value` may be
+        // unnormalized after const evaluation returns.
+        ct.super_fold_with(self)
     }
 
     #[inline]

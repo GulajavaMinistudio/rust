@@ -7,8 +7,6 @@ in the crates in the doc bundle, and the second reads
 it, turns it into some in-memory structures, and
 scans them linearly to search.
 
-<!-- toc -->
-
 ## Search index format
 
 `search.js` calls this Raw, because it turns it into
@@ -469,7 +467,7 @@ want the libs team to be able to add new items without causing unrelated
 tests to fail, but standalone tests will use it more often.
 
 The `ResultsTable` and `ParsedQuery` types are specified in
-[`rustdoc.d.ts`](https://github.com/rust-lang/rust/blob/master/src/librustdoc/html/static/js/rustdoc.d.ts).
+[`rustdoc.d.ts`](https://github.com/rust-lang/rust/blob/HEAD/src/librustdoc/html/static/js/rustdoc.d.ts).
 
 For example, imagine we needed to fix a bug where a function named
 `constructor` couldn't be found. To do this, write two files:
@@ -524,3 +522,24 @@ const EXPECTED = [
   },
 ]
 ```
+
+If the [`//@ revisions`] directive is used, the JS file will
+have access to a variable called `REVISION`.
+
+```js
+const EXPECTED = [
+  // This first test targets name-based search.
+  {
+    query: "constructor",
+    others: REVISION === "has_constructor" ?
+      [
+        { path: "constructor_search", name: "constructor" },
+      ] :
+      [],
+    in_args: [],
+    returned: [],
+  },
+];
+```
+
+[`//@ revisions`]: ../tests/compiletest.md#revisions

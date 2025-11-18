@@ -5,10 +5,12 @@
 
 use std::{collections::hash_map::Entry, fmt, iter, mem};
 
+use crate::imports::insert_use::{ImportScope, ImportScopeKind};
 use crate::text_edit::{TextEdit, TextEditBuilder};
 use crate::{SnippetCap, assists::Command, syntax_helpers::tree_diff::diff};
 use base_db::AnchoredPathBuf;
 use itertools::Itertools;
+use macros::UpmapFromRaFixture;
 use nohash_hasher::IntMap;
 use rustc_hash::FxHashMap;
 use span::FileId;
@@ -19,7 +21,7 @@ use syntax::{
 };
 
 /// An annotation ID associated with an indel, to describe changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, UpmapFromRaFixture)]
 pub struct ChangeAnnotationId(u32);
 
 impl fmt::Display for ChangeAnnotationId {
@@ -366,6 +368,17 @@ impl SourceChangeBuilder {
 
     pub fn make_mut<N: AstNode>(&mut self, node: N) -> N {
         self.mutated_tree.get_or_insert_with(|| TreeMutator::new(node.syntax())).make_mut(&node)
+    }
+
+    pub fn make_import_scope_mut(&mut self, scope: ImportScope) -> ImportScope {
+        ImportScope {
+            kind: match scope.kind.clone() {
+                ImportScopeKind::File(it) => ImportScopeKind::File(self.make_mut(it)),
+                ImportScopeKind::Module(it) => ImportScopeKind::Module(self.make_mut(it)),
+                ImportScopeKind::Block(it) => ImportScopeKind::Block(self.make_mut(it)),
+            },
+            required_cfgs: scope.required_cfgs.iter().map(|it| self.make_mut(it.clone())).collect(),
+        }
     }
     /// Returns a copy of the `node`, suitable for mutation.
     ///

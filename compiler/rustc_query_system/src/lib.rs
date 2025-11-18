@@ -1,8 +1,7 @@
 // tidy-alphabetical-start
-#![allow(rustc::potential_query_instability, internal_features)]
+#![allow(internal_features)]
 #![feature(assert_matches)]
 #![feature(core_intrinsics)]
-#![feature(dropck_eyepatch)]
 #![feature(min_specialization)]
 // tidy-alphabetical-end
 

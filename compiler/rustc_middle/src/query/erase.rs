@@ -3,10 +3,14 @@ use std::intrinsics::transmute_unchecked;
 use std::mem::MaybeUninit;
 
 use rustc_span::ErrorGuaranteed;
+use rustc_span::source_map::Spanned;
 
+use crate::mir::interpret::EvalToValTreeResult;
+use crate::mir::mono::{MonoItem, NormalizationErrorInMono};
 use crate::query::CyclePlaceholder;
+use crate::traits::solve;
 use crate::ty::adjustment::CoerceUnsizedInfo;
-use crate::ty::{self, Ty};
+use crate::ty::{self, Ty, TyCtxt};
 use crate::{mir, traits};
 
 #[derive(Copy, Clone)]
@@ -152,14 +156,16 @@ impl EraseType for Result<mir::ConstAlloc<'_>, mir::interpret::ErrorHandled> {
     type Result = [u8; size_of::<Result<mir::ConstAlloc<'static>, mir::interpret::ErrorHandled>>()];
 }
 
-impl EraseType for Result<mir::ConstValue<'_>, mir::interpret::ErrorHandled> {
-    type Result = [u8; size_of::<Result<mir::ConstValue<'static>, mir::interpret::ErrorHandled>>()];
+impl EraseType for Result<mir::ConstValue, mir::interpret::ErrorHandled> {
+    type Result = [u8; size_of::<Result<mir::ConstValue, mir::interpret::ErrorHandled>>()];
 }
 
-impl EraseType for Result<Result<ty::ValTree<'_>, Ty<'_>>, mir::interpret::ErrorHandled> {
-    type Result = [u8; size_of::<
-        Result<Result<ty::ValTree<'static>, Ty<'static>>, mir::interpret::ErrorHandled>,
-    >()];
+impl EraseType for Option<(mir::ConstValue, Ty<'_>)> {
+    type Result = [u8; size_of::<Option<(mir::ConstValue, Ty<'_>)>>()];
+}
+
+impl EraseType for EvalToValTreeResult<'_> {
+    type Result = [u8; size_of::<EvalToValTreeResult<'static>>()];
 }
 
 impl EraseType for Result<&'_ ty::List<Ty<'_>>, ty::util::AlwaysRequiresDrop> {
@@ -169,6 +175,17 @@ impl EraseType for Result<&'_ ty::List<Ty<'_>>, ty::util::AlwaysRequiresDrop> {
 
 impl EraseType for Result<ty::EarlyBinder<'_, Ty<'_>>, CyclePlaceholder> {
     type Result = [u8; size_of::<Result<ty::EarlyBinder<'static, Ty<'_>>, CyclePlaceholder>>()];
+}
+
+impl EraseType
+    for Result<(&'_ [Spanned<MonoItem<'_>>], &'_ [Spanned<MonoItem<'_>>]), NormalizationErrorInMono>
+{
+    type Result = [u8; size_of::<
+        Result<
+            (&'static [Spanned<MonoItem<'static>>], &'static [Spanned<MonoItem<'static>>]),
+            NormalizationErrorInMono,
+        >,
+    >()];
 }
 
 impl<T> EraseType for Option<&'_ T> {
@@ -187,8 +204,8 @@ impl EraseType for Option<mir::DestructuredConstant<'_>> {
     type Result = [u8; size_of::<Option<mir::DestructuredConstant<'static>>>()];
 }
 
-impl EraseType for Option<ty::ImplTraitHeader<'_>> {
-    type Result = [u8; size_of::<Option<ty::ImplTraitHeader<'static>>>()];
+impl EraseType for ty::ImplTraitHeader<'_> {
+    type Result = [u8; size_of::<ty::ImplTraitHeader<'static>>()];
 }
 
 impl EraseType for Option<ty::EarlyBinder<'_, Ty<'_>>> {
@@ -207,12 +224,21 @@ impl EraseType for ty::Binder<'_, ty::FnSig<'_>> {
     type Result = [u8; size_of::<ty::Binder<'static, ty::FnSig<'static>>>()];
 }
 
+impl EraseType for ty::Binder<'_, ty::CoroutineWitnessTypes<TyCtxt<'_>>> {
+    type Result =
+        [u8; size_of::<ty::Binder<'static, ty::CoroutineWitnessTypes<TyCtxt<'static>>>>()];
+}
+
 impl EraseType for ty::Binder<'_, &'_ ty::List<Ty<'_>>> {
     type Result = [u8; size_of::<ty::Binder<'static, &'static ty::List<Ty<'static>>>>()];
 }
 
 impl<T0, T1> EraseType for (&'_ T0, &'_ T1) {
     type Result = [u8; size_of::<(&'static (), &'static ())>()];
+}
+
+impl<T0> EraseType for (solve::QueryResult<'_>, &'_ T0) {
+    type Result = [u8; size_of::<(solve::QueryResult<'static>, &'static ())>()];
 }
 
 impl<T0, T1> EraseType for (&'_ T0, &'_ [T1]) {
@@ -242,9 +268,9 @@ trivial! {
     bool,
     Option<(rustc_span::def_id::DefId, rustc_session::config::EntryFnType)>,
     Option<rustc_ast::expand::allocator::AllocatorKind>,
-    Option<rustc_attr_data_structures::ConstStability>,
-    Option<rustc_attr_data_structures::DefaultBodyStability>,
-    Option<rustc_attr_data_structures::Stability>,
+    Option<rustc_hir::ConstStability>,
+    Option<rustc_hir::DefaultBodyStability>,
+    Option<rustc_hir::Stability>,
     Option<rustc_data_structures::svh::Svh>,
     Option<rustc_hir::def::DefKind>,
     Option<rustc_hir::CoroutineKind>,
@@ -262,18 +288,18 @@ trivial! {
     Option<rustc_target::spec::PanicStrategy>,
     Option<usize>,
     Option<rustc_middle::ty::IntrinsicDef>,
+    Option<rustc_abi::Align>,
     Result<(), rustc_errors::ErrorGuaranteed>,
     Result<(), rustc_middle::traits::query::NoSolution>,
     Result<rustc_middle::traits::EvaluationResult, rustc_middle::traits::OverflowError>,
     rustc_abi::ReprOptions,
     rustc_ast::expand::allocator::AllocatorKind,
-    rustc_attr_data_structures::ConstStability,
-    rustc_attr_data_structures::DefaultBodyStability,
-    rustc_attr_data_structures::Deprecation,
-    rustc_attr_data_structures::Stability,
+    rustc_hir::DefaultBodyStability,
+    rustc_hir::attrs::Deprecation,
     rustc_data_structures::svh::Svh,
     rustc_errors::ErrorGuaranteed,
     rustc_hir::Constness,
+    rustc_hir::ConstStability,
     rustc_hir::def_id::DefId,
     rustc_hir::def_id::DefIndex,
     rustc_hir::def_id::LocalDefId,
@@ -288,14 +314,17 @@ trivial! {
     rustc_hir::LangItem,
     rustc_hir::OpaqueTyOrigin<rustc_hir::def_id::DefId>,
     rustc_hir::OwnerId,
+    rustc_hir::Stability,
     rustc_hir::Upvar,
     rustc_index::bit_set::FiniteBitSet<u32>,
+    rustc_middle::middle::deduced_param_attrs::DeducedParamAttrs,
     rustc_middle::middle::dependency_format::Linkage,
     rustc_middle::middle::exported_symbols::SymbolExportInfo,
     rustc_middle::middle::resolve_bound_vars::ObjectLifetimeDefault,
     rustc_middle::middle::resolve_bound_vars::ResolvedArg,
     rustc_middle::middle::stability::DeprecationEntry,
     rustc_middle::mir::ConstQualifs,
+    rustc_middle::mir::ConstValue,
     rustc_middle::mir::interpret::AllocId,
     rustc_middle::mir::interpret::CtfeProvenance,
     rustc_middle::mir::interpret::ErrorHandled,
@@ -307,11 +336,11 @@ trivial! {
     rustc_middle::traits::WellFormedLoc,
     rustc_middle::ty::adjustment::CoerceUnsizedInfo,
     rustc_middle::ty::AssocItem,
-    rustc_middle::ty::AssocItemContainer,
+    rustc_middle::ty::AssocContainer,
     rustc_middle::ty::Asyncness,
     rustc_middle::ty::AsyncDestructor,
     rustc_middle::ty::BoundVariableKind,
-    rustc_middle::ty::DeducedParamAttrs,
+    rustc_middle::ty::AnonConstKind,
     rustc_middle::ty::Destructor,
     rustc_middle::ty::fast_reject::SimplifiedType,
     rustc_middle::ty::ImplPolarity,
@@ -319,6 +348,7 @@ trivial! {
     rustc_middle::ty::UnusedGenericParams,
     rustc_middle::ty::util::AlwaysRequiresDrop,
     rustc_middle::ty::Visibility<rustc_span::def_id::DefId>,
+    rustc_middle::middle::codegen_fn_attrs::SanitizerFnAttrs,
     rustc_session::config::CrateType,
     rustc_session::config::EntryFnType,
     rustc_session::config::OptLevel,
@@ -356,7 +386,6 @@ tcx_lifetime! {
     rustc_middle::mir::Const,
     rustc_middle::mir::DestructuredConstant,
     rustc_middle::mir::ConstAlloc,
-    rustc_middle::mir::ConstValue,
     rustc_middle::mir::interpret::GlobalId,
     rustc_middle::mir::interpret::LitToConstInput,
     rustc_middle::mir::interpret::EvalStaticInitializerRawResult,
@@ -383,6 +412,7 @@ tcx_lifetime! {
     rustc_middle::ty::layout::FnAbiError,
     rustc_middle::ty::layout::LayoutError,
     rustc_middle::ty::ParamEnv,
+    rustc_middle::ty::TypingEnv,
     rustc_middle::ty::Predicate,
     rustc_middle::ty::SymbolName,
     rustc_middle::ty::TraitRef,

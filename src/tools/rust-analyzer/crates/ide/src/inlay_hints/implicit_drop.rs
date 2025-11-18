@@ -6,13 +6,12 @@
 //! }
 //! ```
 use hir::{
-    ChalkTyInterner, DefWithBody,
+    DefWithBody,
     db::{DefDatabase as _, HirDatabase as _},
     mir::{MirSpan, TerminatorKind},
 };
 use ide_db::{FileRange, famous_defs::FamousDefs};
 
-use span::EditionedFileId;
 use syntax::{
     ToSmolStr,
     ast::{self, AstNode},
@@ -24,8 +23,8 @@ use crate::{InlayHint, InlayHintLabel, InlayHintPosition, InlayHintsConfig, Inla
 pub(super) fn hints(
     acc: &mut Vec<InlayHint>,
     FamousDefs(sema, _): &FamousDefs<'_, '_>,
-    config: &InlayHintsConfig,
-    file_id: EditionedFileId,
+    config: &InlayHintsConfig<'_>,
+    display_target: hir::DisplayTarget,
     node: &ast::Fn,
 ) -> Option<()> {
     if !config.implicit_drop_hints {
@@ -47,7 +46,7 @@ pub(super) fn hints(
             if !place.projection.is_empty() {
                 continue; // Ignore complex cases for now
             }
-            if mir.locals[place.local].ty.adt_id(ChalkTyInterner).is_none() {
+            if mir.locals[place.local].ty.as_adt().is_none() {
                 continue; // Arguably only ADTs have significant drop impls
             }
             let Some(&binding_idx) = local_to_binding.get(place.local) else {
@@ -93,8 +92,8 @@ pub(super) fn hints(
                 },
                 MirSpan::Unknown => continue,
             };
-            let binding = &hir.bindings[binding_idx];
-            let name = binding.name.display_no_db(file_id.edition()).to_smolstr();
+            let binding = &hir[binding_idx];
+            let name = binding.name.display_no_db(display_target.edition).to_smolstr();
             if name.starts_with("<ra@") {
                 continue; // Ignore desugared variables
             }
@@ -148,7 +147,7 @@ mod tests {
         inlay_hints::tests::{DISABLED_CONFIG, check_with_config},
     };
 
-    const ONLY_DROP_CONFIG: InlayHintsConfig =
+    const ONLY_DROP_CONFIG: InlayHintsConfig<'_> =
         InlayHintsConfig { implicit_drop_hints: true, ..DISABLED_CONFIG };
 
     #[test]

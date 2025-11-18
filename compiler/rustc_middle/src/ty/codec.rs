@@ -8,7 +8,7 @@
 
 use std::hash::Hash;
 use std::intrinsics;
-use std::marker::DiscriminantKind;
+use std::marker::{DiscriminantKind, PointeeSized};
 
 use rustc_abi::{FieldIdx, VariantIdx};
 use rustc_data_structures::fx::FxHashMap;
@@ -18,7 +18,7 @@ use rustc_span::source_map::Spanned;
 use rustc_span::{Span, SpanDecoder, SpanEncoder};
 
 use crate::arena::ArenaAllocatable;
-use crate::infer::canonical::{CanonicalVarInfo, CanonicalVarInfos};
+use crate::infer::canonical::{CanonicalVarKind, CanonicalVarKinds};
 use crate::mir::interpret::{AllocId, ConstAllocation, CtfeProvenance};
 use crate::mir::mono::MonoItem;
 use crate::mir::{self};
@@ -96,7 +96,7 @@ impl<'tcx, E: TyEncoder<'tcx>> EncodableWithShorthand<'tcx, E> for ty::Predicate
 ///
 /// `Decodable` can still be implemented in cases where `Decodable` is required
 /// by a trait bound.
-pub trait RefDecodable<'tcx, D: TyDecoder<'tcx>> {
+pub trait RefDecodable<'tcx, D: TyDecoder<'tcx>>: PointeeSized {
     fn decode(d: &mut D) -> &'tcx Self;
 }
 
@@ -216,10 +216,7 @@ impl<'tcx, E: TyEncoder<'tcx>> Encodable<E> for ty::ParamEnv<'tcx> {
 #[inline]
 fn decode_arena_allocable<'tcx, D: TyDecoder<'tcx>, T: ArenaAllocatable<'tcx> + Decodable<D>>(
     decoder: &mut D,
-) -> &'tcx T
-where
-    D: TyDecoder<'tcx>,
-{
+) -> &'tcx T {
     decoder.interner().arena.alloc(Decodable::decode(decoder))
 }
 
@@ -230,10 +227,7 @@ fn decode_arena_allocable_slice<
     T: ArenaAllocatable<'tcx> + Decodable<D>,
 >(
     decoder: &mut D,
-) -> &'tcx [T]
-where
-    D: TyDecoder<'tcx>,
-{
+) -> &'tcx [T] {
     decoder.interner().arena.alloc_from_iter(<Vec<T> as Decodable<D>>::decode(decoder))
 }
 
@@ -310,11 +304,11 @@ impl<'tcx, D: TyDecoder<'tcx>> Decodable<D> for ty::Region<'tcx> {
     }
 }
 
-impl<'tcx, D: TyDecoder<'tcx>> Decodable<D> for CanonicalVarInfos<'tcx> {
+impl<'tcx, D: TyDecoder<'tcx>> Decodable<D> for CanonicalVarKinds<'tcx> {
     fn decode(decoder: &mut D) -> Self {
         let len = decoder.read_usize();
         decoder.interner().mk_canonical_var_infos_from_iter(
-            (0..len).map::<CanonicalVarInfo<'tcx>, _>(|_| Decodable::decode(decoder)),
+            (0..len).map::<CanonicalVarKind<'tcx>, _>(|_| Decodable::decode(decoder)),
         )
     }
 }
@@ -510,12 +504,9 @@ impl_decodable_via_ref! {
     &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
     &'tcx traits::ImplSource<'tcx, ()>,
     &'tcx mir::Body<'tcx>,
-    &'tcx mir::ConcreteOpaqueTypes<'tcx>,
     &'tcx ty::List<ty::BoundVariableKind>,
     &'tcx ty::List<ty::Pattern<'tcx>>,
     &'tcx ty::ListWithCachedTypeInfo<ty::Clause<'tcx>>,
-    &'tcx ty::List<FieldIdx>,
-    &'tcx ty::List<(VariantIdx, FieldIdx)>,
 }
 
 #[macro_export]
@@ -586,7 +577,7 @@ impl_arena_copy_decoder! {<'tcx>
     rustc_span::def_id::DefId,
     rustc_span::def_id::LocalDefId,
     (rustc_middle::middle::exported_symbols::ExportedSymbol<'tcx>, rustc_middle::middle::exported_symbols::SymbolExportInfo),
-    ty::DeducedParamAttrs,
+    rustc_middle::middle::deduced_param_attrs::DeducedParamAttrs,
 }
 
 #[macro_export]

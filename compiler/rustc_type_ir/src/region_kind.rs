@@ -7,7 +7,7 @@ use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_macros::{Decodable_NoContext, Encodable_NoContext, HashStable_NoContext};
 
 use self::RegionKind::*;
-use crate::{DebruijnIndex, Interner};
+use crate::{BoundVarIndexKind, Interner};
 
 rustc_index::newtype_index! {
     /// A **region** **v**ariable **ID**.
@@ -125,7 +125,7 @@ rustc_index::newtype_index! {
 /// [1]: https://smallcultfollowing.com/babysteps/blog/2013/10/29/intermingled-parameter-lists/
 /// [2]: https://smallcultfollowing.com/babysteps/blog/2013/11/04/intermingled-parameter-lists/
 /// [rustc dev guide]: https://rustc-dev-guide.rust-lang.org/traits/hrtb.html
-#[derive_where(Clone, Copy, Hash, PartialEq, Eq; I: Interner)]
+#[derive_where(Clone, Copy, Hash, PartialEq; I: Interner)]
 #[cfg_attr(feature = "nightly", derive(Encodable_NoContext, Decodable_NoContext))]
 pub enum RegionKind<I: Interner> {
     /// A region parameter; for example `'a` in `impl<'a> Trait for &'a ()`.
@@ -147,14 +147,14 @@ pub enum RegionKind<I: Interner> {
     /// Bound regions inside of types **must not** be erased, as they impact trait
     /// selection and the `TypeId` of that type. `for<'a> fn(&'a ())` and
     /// `fn(&'static ())` are different types and have to be treated as such.
-    ReBound(DebruijnIndex, I::BoundRegion),
+    ReBound(BoundVarIndexKind, I::BoundRegion),
 
     /// Late-bound function parameters are represented using a `ReBound`. When
     /// inside of a function, we convert these bound variables to placeholder
     /// parameters via `tcx.liberate_late_bound_regions`. They are then treated
     /// the same way as `ReEarlyParam` while inside of the function.
     ///
-    /// See <https://rustc-dev-guide.rust-lang.org/early-late-bound-params/early-late-bound-summary.html> for
+    /// See <https://rustc-dev-guide.rust-lang.org/early_late_parameters.html> for
     /// more info about early and late bound lifetime parameters.
     ReLateParam(I::LateParamRegion),
 
@@ -177,6 +177,8 @@ pub enum RegionKind<I: Interner> {
     ReError(I::ErrorGuaranteed),
 }
 
+impl<I: Interner> Eq for RegionKind<I> {}
+
 impl<I: Interner> fmt::Debug for RegionKind<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -193,7 +195,7 @@ impl<I: Interner> fmt::Debug for RegionKind<I> {
 
             ReVar(vid) => write!(f, "{vid:?}"),
 
-            RePlaceholder(placeholder) => write!(f, "{placeholder:?}"),
+            RePlaceholder(placeholder) => write!(f, "'{placeholder:?}"),
 
             // Use `'{erased}` as the output instead of `'erased` so that its more obviously distinct from
             // a `ReEarlyParam` named `'erased`. Technically that would print as `'erased/#IDX` so this is

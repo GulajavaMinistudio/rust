@@ -15,6 +15,7 @@
 //! report UB.
 
 use rustc_abi::Size;
+use rustc_target::spec::Os;
 
 use crate::*;
 
@@ -46,10 +47,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         // This is a horrible hack, but on MacOS and Solarish the guard page mechanism uses mmap
         // in a way we do not support. We just give it the return value it expects.
         if this.frame_in_std()
-            && matches!(&*this.tcx.sess.target.os, "macos" | "solaris" | "illumos")
+            && matches!(&this.tcx.sess.target.os, Os::MacOs | Os::Solaris | Os::Illumos)
             && (flags & map_fixed) != 0
         {
-            return interp_ok(Scalar::from_maybe_pointer(Pointer::from_addr_invalid(addr), this));
+            return interp_ok(Scalar::from_maybe_pointer(Pointer::without_provenance(addr), this));
         }
 
         let prot_read = this.eval_libc_i32("PROT_READ");
@@ -130,8 +131,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         // addr must be a multiple of the page size, but apart from that munmap is just implemented
         // as a dealloc.
-        #[expect(clippy::arithmetic_side_effects)] // PAGE_SIZE is nonzero
-        if addr.addr().bytes() % this.machine.page_size != 0 {
+        if !addr.addr().bytes().is_multiple_of(this.machine.page_size) {
             return this.set_last_error_and_return_i32(LibcError("EINVAL"));
         }
 

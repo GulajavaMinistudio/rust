@@ -8,6 +8,8 @@
 //@ min-lldb-version: 1800
 //@ compile-flags:-g -Zmir-enable-passes=-SingleUseConsts
 // SingleUseConsts shouldn't need to be disabled, see #128945
+//@ disable-gdb-pretty-printers
+//@ ignore-backends: gcc
 
 // === GDB TESTS ===================================================================================
 
@@ -24,9 +26,9 @@
 
 // NON IMMEDIATE ARGS
 // gdb-command:print a
-// gdbt-check:$4 = function_arg_initialization::BigStruct {a: 3, b: 4, c: 5, d: 6, e: 7, f: 8, g: 9, h: 10}
+// gdb-check:$4 = function_arg_initialization::BigStruct {a: 3, b: 4, c: 5, d: 6, e: 7, f: 8, g: 9, h: 10}
 // gdb-command:print b
-// gdbt-check:$5 = function_arg_initialization::BigStruct {a: 11, b: 12, c: 13, d: 14, e: 15, f: 16, g: 17, h: 18}
+// gdb-check:$5 = function_arg_initialization::BigStruct {a: 11, b: 12, c: 13, d: 14, e: 15, f: 16, g: 17, h: 18}
 // gdb-command:continue
 
 // BINDING
@@ -214,8 +216,6 @@
 
 
 #![allow(unused_variables)]
-#![feature(omit_gdb_pretty_printer_section)]
-#![omit_gdb_pretty_printer_section]
 
 fn immediate_args(a: isize, b: bool, c: f64) {
     zzz(); // #break
@@ -234,6 +234,9 @@ struct BigStruct {
 
 fn non_immediate_args(a: BigStruct, b: BigStruct) {
     zzz(); // #break
+
+    // FIXME(#128973): Needed to avoid `<optimized out>` prints before #128973 has been fixed.
+    std::hint::black_box(|| { let _ = (a, b);});
 }
 
 fn binding(a: i64, b: u64, c: f64) {

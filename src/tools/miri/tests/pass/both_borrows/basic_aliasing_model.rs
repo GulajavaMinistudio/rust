@@ -1,6 +1,8 @@
 //@revisions: stack tree
 //@[tree]compile-flags: -Zmiri-tree-borrows
 #![feature(allocator_api)]
+use std::alloc::{Layout, alloc, dealloc};
+use std::cell::Cell;
 use std::ptr;
 
 // Test various aliasing-model-related things.
@@ -12,7 +14,6 @@ fn main() {
     mut_raw_mut();
     partially_invalidate_mut();
     drop_after_sharing();
-    // direct_mut_to_const_raw();
     two_raw();
     shr_and_raw();
     disjoint_mutable_subborrows();
@@ -23,6 +24,8 @@ fn main() {
     not_unpin_not_protected();
     write_does_not_invalidate_all_aliases();
     box_into_raw_allows_interior_mutable_alias();
+    cell_inside_struct();
+    zst();
 }
 
 // Make sure that reading from an `&mut` does, like reborrowing to `&`,
@@ -260,7 +263,7 @@ fn write_does_not_invalidate_all_aliases() {
 
 fn box_into_raw_allows_interior_mutable_alias() {
     unsafe {
-        let b = Box::new(std::cell::Cell::new(42));
+        let b = Box::new(Cell::new(42));
         let raw = Box::into_raw(b);
         let c = &*raw;
         let d = raw.cast::<i32>(); // bypassing `Cell` -- only okay in Miri tests
@@ -268,5 +271,49 @@ fn box_into_raw_allows_interior_mutable_alias() {
         *d = 1;
         c.set(2);
         drop(Box::from_raw(raw));
+    }
+}
+
+fn cell_inside_struct() {
+    struct Foo {
+        field1: u32,
+        field2: Cell<u32>,
+    }
+
+    let mut root = Foo { field1: 42, field2: Cell::new(88) };
+    let a = &mut root;
+
+    // Writing to `field2`, which is interior mutable, should be allowed.
+    (*a).field2.set(10);
+
+    // Writing to `field1`, which is reserved, should also be allowed.
+    (*a).field1 = 88;
+}
+
+/// ZST reborrows on various kinds of dangling pointers are valid.
+fn zst() {
+    unsafe {
+        // Integer pointer.
+        let ptr = ptr::without_provenance_mut::<()>(15);
+        let _ref = &mut *ptr;
+
+        // Out-of-bounds pointer.
+        let mut b = Box::new(0u8);
+        let ptr = (&raw mut *b).wrapping_add(15) as *mut ();
+        let _ref = &mut *ptr;
+
+        // Deallocated pointer.
+        let ptr = &raw mut *b as *mut ();
+        drop(b);
+        let _ref = &mut *ptr;
+
+        // zero-sized protectors do not affect deallocation
+        fn with_protector(_x: &mut (), ptr: *mut u8, l: Layout) {
+            // `_x` here is strongly protected but covers zero bytes.
+            unsafe { dealloc(ptr, l) };
+        }
+        let l = Layout::from_size_align(1, 1).unwrap();
+        let ptr = alloc(l);
+        with_protector(&mut *ptr.cast::<()>(), ptr, l);
     }
 }

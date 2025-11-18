@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:25.10
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -26,6 +26,5 @@ ENV RUST_CONFIGURE_ARGS \
  --enable-sanitizers \
  --enable-profiler \
  --enable-compiler-docs
-# FIXME: Skipping cargo panic_abort_doc_tests due to https://github.com/rust-lang/rust/issues/123733
 ENV SCRIPT python3 ../x.py --stage 2 test && \
-  python3 ../x.py --stage 2 test src/tools/cargo --test-args \"--skip panic_abort_doc_tests\"
+  python3 ../x.py --stage 2 test src/tools/cargo

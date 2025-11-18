@@ -2,7 +2,8 @@
 
 use std::borrow::Cow;
 use std::fs::{
-    DirBuilder, File, FileType, OpenOptions, ReadDir, read_dir, remove_dir, remove_file, rename,
+    DirBuilder, File, FileType, OpenOptions, ReadDir, TryLockError, read_dir, remove_dir,
+    remove_file, rename,
 };
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -10,11 +11,12 @@ use std::time::SystemTime;
 
 use rustc_abi::Size;
 use rustc_data_structures::fx::FxHashMap;
+use rustc_target::spec::Os;
 
 use self::shims::time::system_time_to_duration;
-use crate::helpers::check_min_vararg_count;
 use crate::shims::files::FileHandle;
 use crate::shims::os_str::bytes_to_os_str;
+use crate::shims::sig::check_min_vararg_count;
 use crate::shims::unix::fd::{FlockOp, UnixFileDescription};
 use crate::*;
 
@@ -90,91 +92,26 @@ impl UnixFileDescription for FileHandle {
         op: FlockOp,
     ) -> InterpResult<'tcx, io::Result<()>> {
         assert!(communicate_allowed, "isolation should have prevented even opening a file");
-        cfg_match! {
-            all(target_family = "unix", not(target_os = "solaris")) => {
-                use std::os::fd::AsRawFd;
 
-                use FlockOp::*;
-                // We always use non-blocking call to prevent interpreter from being blocked
-                let (host_op, lock_nb) = match op {
-                    SharedLock { nonblocking } => (libc::LOCK_SH | libc::LOCK_NB, nonblocking),
-                    ExclusiveLock { nonblocking } => (libc::LOCK_EX | libc::LOCK_NB, nonblocking),
-                    Unlock => (libc::LOCK_UN, false),
-                };
-
-                let fd = self.file.as_raw_fd();
-                let ret = unsafe { libc::flock(fd, host_op) };
-                let res = match ret {
-                    0 => Ok(()),
-                    -1 => {
-                        let err = io::Error::last_os_error();
-                        if !lock_nb && err.kind() == io::ErrorKind::WouldBlock {
-                            throw_unsup_format!("blocking `flock` is not currently supported");
-                        }
-                        Err(err)
-                    }
-                    ret => panic!("Unexpected return value from flock: {ret}"),
-                };
-                interp_ok(res)
+        use FlockOp::*;
+        // We must not block the interpreter loop, so we always `try_lock`.
+        let (res, nonblocking) = match op {
+            SharedLock { nonblocking } => (self.file.try_lock_shared(), nonblocking),
+            ExclusiveLock { nonblocking } => (self.file.try_lock(), nonblocking),
+            Unlock => {
+                return interp_ok(self.file.unlock());
             }
-            target_family = "windows" => {
-                use std::os::windows::io::AsRawHandle;
+        };
 
-                use windows_sys::Win32::Foundation::{
-                    ERROR_IO_PENDING, ERROR_LOCK_VIOLATION, FALSE, HANDLE, TRUE,
-                };
-                use windows_sys::Win32::Storage::FileSystem::{
-                    LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, UnlockFile,
-                };
-
-                let fh = self.file.as_raw_handle() as HANDLE;
-
-                use FlockOp::*;
-                let (ret, lock_nb) = match op {
-                    SharedLock { nonblocking } | ExclusiveLock { nonblocking } => {
-                        // We always use non-blocking call to prevent interpreter from being blocked
-                        let mut flags = LOCKFILE_FAIL_IMMEDIATELY;
-                        if matches!(op, ExclusiveLock { .. }) {
-                            flags |= LOCKFILE_EXCLUSIVE_LOCK;
-                        }
-                        let ret = unsafe { LockFileEx(fh, flags, 0, !0, !0, &mut std::mem::zeroed()) };
-                        (ret, nonblocking)
-                    }
-                    Unlock => {
-                        let ret = unsafe { UnlockFile(fh, 0, 0, !0, !0) };
-                        (ret, false)
-                    }
-                };
-
-                let res = match ret {
-                    TRUE => Ok(()),
-                    FALSE => {
-                        let mut err = io::Error::last_os_error();
-                        // This only runs on Windows hosts so we can use `raw_os_error`.
-                        // We have to be careful not to forward that error code to target code.
-                        let code: u32 = err.raw_os_error().unwrap().try_into().unwrap();
-                        if matches!(code, ERROR_IO_PENDING | ERROR_LOCK_VIOLATION) {
-                            if lock_nb {
-                                // The io error mapping does not know about these error codes,
-                                // so we translate it to `WouldBlock` manually.
-                                let desc = format!("LockFileEx wouldblock error: {err}");
-                                err = io::Error::new(io::ErrorKind::WouldBlock, desc);
-                            } else {
-                                throw_unsup_format!("blocking `flock` is not currently supported");
-                            }
-                        }
-                        Err(err)
-                    }
-                    _ => panic!("Unexpected return value: {ret}"),
-                };
-                interp_ok(res)
-            }
-            _ => {
-                let _ = op;
-                throw_unsup_format!(
-                    "flock is supported only on UNIX (except Solaris) and Windows hosts"
-                );
-            }
+        match res {
+            Ok(()) => interp_ok(Ok(())),
+            Err(TryLockError::Error(err)) => interp_ok(Err(err)),
+            Err(TryLockError::WouldBlock) =>
+                if nonblocking {
+                    interp_ok(Err(ErrorKind::WouldBlock.into()))
+                } else {
+                    throw_unsup_format!("blocking `flock` is not currently supported");
+                },
         }
     }
 }
@@ -196,12 +133,12 @@ trait EvalContextExtPrivate<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let buf = this.deref_pointer_as(buf_op, this.libc_ty_layout("stat"))?;
         this.write_int_fields_named(
             &[
-                ("st_dev", 0),
+                ("st_dev", metadata.dev.into()),
                 ("st_mode", mode.try_into().unwrap()),
                 ("st_nlink", 0),
                 ("st_ino", 0),
-                ("st_uid", 0),
-                ("st_gid", 0),
+                ("st_uid", metadata.uid.into()),
+                ("st_gid", metadata.gid.into()),
                 ("st_rdev", 0),
                 ("st_atime", access_sec.into()),
                 ("st_mtime", modified_sec.into()),
@@ -213,7 +150,7 @@ trait EvalContextExtPrivate<'tcx>: crate::MiriInterpCxExt<'tcx> {
             &buf,
         )?;
 
-        if matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
+        if matches!(&this.tcx.sess.target.os, Os::MacOs | Os::FreeBsd) {
             this.write_int_fields_named(
                 &[
                     ("st_atime_nsec", access_nsec.into()),
@@ -228,7 +165,7 @@ trait EvalContextExtPrivate<'tcx>: crate::MiriInterpCxExt<'tcx> {
             )?;
         }
 
-        if matches!(&*this.tcx.sess.target.os, "solaris" | "illumos") {
+        if matches!(&this.tcx.sess.target.os, Os::Solaris | Os::Illumos) {
             let st_fstype = this.project_field_named(&buf, "st_fstype")?;
             // This is an array; write 0 into first element so that it encodes the empty string.
             this.write_int(0, &this.project_index(&st_fstype, 0)?)?;
@@ -454,7 +391,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             // (Technically we do not support *not* setting this flag, but we ignore that.)
             mirror |= o_cloexec;
         }
-        if this.tcx.sess.target.os == "linux" {
+        if this.tcx.sess.target.os == Os::Linux {
             let o_tmpfile = this.eval_libc_i32("O_TMPFILE");
             if flag & o_tmpfile == o_tmpfile {
                 // if the flag contains `O_TMPFILE` then we return a graceful error
@@ -593,7 +530,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx, Scalar> {
         let this = self.eval_context_mut();
 
-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd" | "solaris" | "illumos") {
+        if !matches!(&this.tcx.sess.target.os, Os::MacOs | Os::FreeBsd | Os::Solaris | Os::Illumos)
+        {
             panic!("`macos_fbsd_solaris_stat` should not be called on {}", this.tcx.sess.target.os);
         }
 
@@ -623,7 +561,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx, Scalar> {
         let this = self.eval_context_mut();
 
-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd" | "solaris" | "illumos") {
+        if !matches!(&this.tcx.sess.target.os, Os::MacOs | Os::FreeBsd | Os::Solaris | Os::Illumos)
+        {
             panic!(
                 "`macos_fbsd_solaris_lstat` should not be called on {}",
                 this.tcx.sess.target.os
@@ -654,7 +593,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx, Scalar> {
         let this = self.eval_context_mut();
 
-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd" | "solaris" | "illumos") {
+        if !matches!(&this.tcx.sess.target.os, Os::MacOs | Os::FreeBsd | Os::Solaris | Os::Illumos)
+        {
             panic!(
                 "`macos_fbsd_solaris_fstat` should not be called on {}",
                 this.tcx.sess.target.os
@@ -687,7 +627,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx, Scalar> {
         let this = self.eval_context_mut();
 
-        this.assert_target_os("linux", "statx");
+        this.assert_target_os(Os::Linux, "statx");
 
         let dirfd = this.read_scalar(dirfd_op)?.to_i32()?;
         let pathname_ptr = this.read_pointer(pathname_op)?;
@@ -888,7 +828,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         let this = self.eval_context_mut();
 
         #[cfg_attr(not(unix), allow(unused_variables))]
-        let mode = if matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
+        let mode = if matches!(&this.tcx.sess.target.os, Os::MacOs | Os::FreeBsd) {
             u32::from(this.read_scalar(mode_op)?.to_u16()?)
         } else {
             this.read_scalar(mode_op)?.to_u32()?
@@ -964,14 +904,11 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         }
     }
 
-    fn linux_solarish_readdir64(
-        &mut self,
-        dirent_type: &str,
-        dirp_op: &OpTy<'tcx>,
-    ) -> InterpResult<'tcx, Scalar> {
+    fn readdir64(&mut self, dirent_type: &str, dirp_op: &OpTy<'tcx>) -> InterpResult<'tcx, Scalar> {
         let this = self.eval_context_mut();
 
-        if !matches!(&*this.tcx.sess.target.os, "linux" | "solaris" | "illumos") {
+        if !matches!(&this.tcx.sess.target.os, Os::Linux | Os::Solaris | Os::Illumos | Os::FreeBsd)
+        {
             panic!("`linux_solaris_readdir64` should not be called on {}", this.tcx.sess.target.os);
         }
 
@@ -990,6 +927,13 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         let entry = match open_dir.read_dir.next() {
             Some(Ok(dir_entry)) => {
+                // If the host is a Unix system, fill in the inode number with its real value.
+                // If not, use 0 as a fallback value.
+                #[cfg(unix)]
+                let ino = std::os::unix::fs::DirEntryExt::ino(&dir_entry);
+                #[cfg(not(unix))]
+                let ino = 0u64;
+
                 // Write the directory entry into a newly allocated buffer.
                 // The name is written with write_bytes, while the rest of the
                 // dirent64 (or dirent) struct is written using write_int_fields.
@@ -1011,6 +955,15 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 //     pub d_reclen: c_ushort,
                 //     pub d_name: [c_char; 3],
                 // }
+                //
+                // On FreeBSD:
+                // pub struct dirent{
+                //     pub d_fileno: uint32_t,
+                //     pub d_reclen: uint16_t,
+                //     pub d_type: uint8_t,
+                //     pub d_namlen: uint8_t,
+                //     pub d_name: [c_char; 256]
+                // }
 
                 let mut name = dir_entry.file_name(); // not a Path as there are no separators!
                 name.push("\0"); // Add a NUL terminator
@@ -1029,31 +982,35 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     MiriMemoryKind::Runtime.into(),
                     AllocInit::Uninit,
                 )?;
-                let entry: Pointer = entry.into();
+                let entry = this.ptr_to_mplace(entry.into(), dirent_layout);
 
-                // If the host is a Unix system, fill in the inode number with its real value.
-                // If not, use 0 as a fallback value.
-                #[cfg(unix)]
-                let ino = std::os::unix::fs::DirEntryExt::ino(&dir_entry);
-                #[cfg(not(unix))]
-                let ino = 0u64;
-
-                let file_type = this.file_type_to_d_type(dir_entry.file_type())?;
+                // Write common fields
+                let ino_name =
+                    if this.tcx.sess.target.os == Os::FreeBsd { "d_fileno" } else { "d_ino" };
                 this.write_int_fields_named(
-                    &[("d_ino", ino.into()), ("d_off", 0), ("d_reclen", size.into())],
-                    &this.ptr_to_mplace(entry, dirent_layout),
+                    &[(ino_name, ino.into()), ("d_reclen", size.into())],
+                    &entry,
                 )?;
 
-                if let Some(d_type) = this
-                    .try_project_field_named(&this.ptr_to_mplace(entry, dirent_layout), "d_type")?
-                {
+                // Write "optional" fields.
+                if let Some(d_off) = this.try_project_field_named(&entry, "d_off")? {
+                    this.write_null(&d_off)?;
+                }
+
+                if let Some(d_namlen) = this.try_project_field_named(&entry, "d_namlen")? {
+                    this.write_int(name_len.strict_sub(1), &d_namlen)?;
+                }
+
+                let file_type = this.file_type_to_d_type(dir_entry.file_type())?;
+                if let Some(d_type) = this.try_project_field_named(&entry, "d_type")? {
                     this.write_int(file_type, &d_type)?;
                 }
 
-                let name_ptr = entry.wrapping_offset(Size::from_bytes(d_name_offset), this);
+                // The name is not a normal field, we already computed the offset above.
+                let name_ptr = entry.ptr().wrapping_offset(Size::from_bytes(d_name_offset), this);
                 this.write_bytes_ptr(name_ptr, name_bytes.iter().copied())?;
 
-                Some(entry)
+                Some(entry.ptr())
             }
             None => {
                 // end of stream: return NULL
@@ -1082,7 +1039,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
     ) -> InterpResult<'tcx, Scalar> {
         let this = self.eval_context_mut();
 
-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
+        if !matches!(&this.tcx.sess.target.os, Os::MacOs | Os::FreeBsd) {
             panic!("`macos_fbsd_readdir_r` should not be called on {}", this.tcx.sess.target.os);
         }
 
@@ -1150,8 +1107,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     &entry_place,
                 )?;
                 // Special fields.
-                match &*this.tcx.sess.target.os {
-                    "macos" => {
+                match this.tcx.sess.target.os {
+                    Os::MacOs => {
                         #[rustfmt::skip]
                         this.write_int_fields_named(
                             &[
@@ -1161,7 +1118,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                             &entry_place,
                         )?;
                     }
-                    "freebsd" => {
+                    Os::FreeBsd => {
                         #[rustfmt::skip]
                         this.write_int_fields_named(
                             &[
@@ -1608,6 +1565,9 @@ struct FileMetadata {
     created: Option<(u64, u32)>,
     accessed: Option<(u64, u32)>,
     modified: Option<(u64, u32)>,
+    dev: u64,
+    uid: u32,
+    gid: u32,
 }
 
 impl FileMetadata {
@@ -1665,6 +1625,21 @@ impl FileMetadata {
         let modified = extract_sec_and_nsec(metadata.modified())?;
 
         // FIXME: Provide more fields using platform specific methods.
-        interp_ok(Ok(FileMetadata { mode, size, created, accessed, modified }))
+
+        cfg_select! {
+            unix => {
+                use std::os::unix::fs::MetadataExt;
+                let dev = metadata.dev();
+                let uid = metadata.uid();
+                let gid = metadata.gid();
+            }
+            _ => {
+                let dev = 0;
+                let uid = 0;
+                let gid = 0;
+            }
+        }
+
+        interp_ok(Ok(FileMetadata { mode, size, created, accessed, modified, dev, uid, gid }))
     }
 }

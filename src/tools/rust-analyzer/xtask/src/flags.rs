@@ -42,12 +42,19 @@ xflags::xflags! {
             optional --mimalloc
             /// Use jemalloc allocator for server.
             optional --jemalloc
+            // Enable memory profiling support.
+            //
+            // **Warning:** This will produce a slower build of rust-analyzer, use only for profiling.
+            optional --enable-profiling
 
             /// Install the proc-macro server.
             optional --proc-macro-server
 
             /// build in release with debug info set to 2.
             optional --dev-rel
+
+            /// Make `never!()`, `always!()` etc. panic instead of just logging an error.
+            optional --force-always-assert
 
             /// Apply PGO optimizations
             optional --pgo pgo: PgoTrainingCrate
@@ -59,25 +66,15 @@ xflags::xflags! {
             optional --dry-run
         }
 
-        cmd rustc-pull {
-            /// rustc commit to pull.
-            optional --commit refspec: String
-        }
-
-        cmd rustc-push {
-            /// rust local path, e.g. `../rust-rust-analyzer`.
-            required --rust-path rust_path: String
-            /// rust fork name, e.g.  `matklad/rust`.
-            required --rust-fork rust_fork: String
-            /// branch name.
-            optional --branch branch: String
-        }
-
         cmd dist {
             /// Use mimalloc allocator for server
             optional --mimalloc
             /// Use jemalloc allocator for server
             optional --jemalloc
+            // Enable memory profiling support.
+            //
+            // **Warning:** This will produce a slower build of rust-analyzer, use only for profiling.
+            optional --enable-profiling
             optional --client-patch-version version: String
             /// Use cargo-zigbuild
             optional --zig
@@ -121,8 +118,6 @@ pub enum XtaskCmd {
     Install(Install),
     FuzzTests(FuzzTests),
     Release(Release),
-    RustcPull(RustcPull),
-    RustcPush(RustcPush),
     Dist(Dist),
     PublishReleaseNotes(PublishReleaseNotes),
     Metrics(Metrics),
@@ -138,8 +133,10 @@ pub struct Install {
     pub server: bool,
     pub mimalloc: bool,
     pub jemalloc: bool,
+    pub enable_profiling: bool,
     pub proc_macro_server: bool,
     pub dev_rel: bool,
+    pub force_always_assert: bool,
     pub pgo: Option<PgoTrainingCrate>,
 }
 
@@ -152,21 +149,10 @@ pub struct Release {
 }
 
 #[derive(Debug)]
-pub struct RustcPull {
-    pub commit: Option<String>,
-}
-
-#[derive(Debug)]
-pub struct RustcPush {
-    pub rust_path: String,
-    pub rust_fork: String,
-    pub branch: Option<String>,
-}
-
-#[derive(Debug)]
 pub struct Dist {
     pub mimalloc: bool,
     pub jemalloc: bool,
+    pub enable_profiling: bool,
     pub client_patch_version: Option<String>,
     pub zig: bool,
     pub pgo: Option<PgoTrainingCrate>,
@@ -304,6 +290,7 @@ pub(crate) enum Malloc {
     System,
     Mimalloc,
     Jemalloc,
+    Dhat,
 }
 
 impl Malloc {
@@ -312,6 +299,7 @@ impl Malloc {
             Malloc::System => &[][..],
             Malloc::Mimalloc => &["--features", "mimalloc"],
             Malloc::Jemalloc => &["--features", "jemalloc"],
+            Malloc::Dhat => &["--features", "dhat"],
         }
     }
 }
@@ -325,10 +313,18 @@ impl Install {
             Malloc::Mimalloc
         } else if self.jemalloc {
             Malloc::Jemalloc
+        } else if self.enable_profiling {
+            Malloc::Dhat
         } else {
             Malloc::System
         };
-        Some(ServerOpt { malloc, dev_rel: self.dev_rel, pgo: self.pgo.clone() })
+        Some(ServerOpt {
+            malloc,
+            // Profiling requires debug information.
+            dev_rel: self.dev_rel || self.enable_profiling,
+            pgo: self.pgo.clone(),
+            force_always_assert: self.force_always_assert,
+        })
     }
     pub(crate) fn proc_macro_server(&self) -> Option<ProcMacroServerOpt> {
         if !self.proc_macro_server {
@@ -350,6 +346,8 @@ impl Dist {
             Malloc::Mimalloc
         } else if self.jemalloc {
             Malloc::Jemalloc
+        } else if self.enable_profiling {
+            Malloc::Dhat
         } else {
             Malloc::System
         }

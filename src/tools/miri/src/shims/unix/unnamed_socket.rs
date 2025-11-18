@@ -7,18 +7,30 @@ use std::collections::VecDeque;
 use std::io;
 use std::io::ErrorKind;
 
+use rustc_target::spec::Os;
+
 use crate::concurrency::VClock;
 use crate::shims::files::{
-    EvalContextExt as _, FileDescription, FileDescriptionRef, WeakFileDescriptionRef,
+    EvalContextExt as _, FdId, FileDescription, FileDescriptionRef, WeakFileDescriptionRef,
 };
 use crate::shims::unix::UnixFileDescription;
-use crate::shims::unix::linux_like::epoll::{EpollReadyEvents, EvalContextExt as _};
+use crate::shims::unix::linux_like::epoll::{EpollEvents, EvalContextExt as _};
 use crate::*;
 
 /// The maximum capacity of the socketpair buffer in bytes.
 /// This number is arbitrary as the value can always
 /// be configured in the real system.
-const MAX_SOCKETPAIR_BUFFER_CAPACITY: usize = 212992;
+const MAX_SOCKETPAIR_BUFFER_CAPACITY: usize = 0x34000;
+
+#[derive(Debug, PartialEq)]
+enum AnonSocketType {
+    // Either end of the socketpair fd.
+    Socketpair,
+    // Read end of the pipe.
+    PipeRead,
+    // Write end of the pipe.
+    PipeWrite,
+}
 
 /// One end of a pair of connected unnamed sockets.
 #[derive(Debug)]
@@ -40,7 +52,10 @@ struct AnonSocket {
     /// A list of thread ids blocked because the buffer was full.
     /// Once another thread reads some bytes, these threads will be unblocked.
     blocked_write_tid: RefCell<Vec<ThreadId>>,
-    is_nonblock: bool,
+    /// Whether this fd is non-blocking or not.
+    is_nonblock: Cell<bool>,
+    // Differentiate between different AnonSocket fd types.
+    fd_type: AnonSocketType,
 }
 
 #[derive(Debug)]
@@ -63,11 +78,15 @@ impl AnonSocket {
 
 impl FileDescription for AnonSocket {
     fn name(&self) -> &'static str {
-        "socketpair"
+        match self.fd_type {
+            AnonSocketType::Socketpair => "socketpair",
+            AnonSocketType::PipeRead | AnonSocketType::PipeWrite => "pipe",
+        }
     }
 
-    fn close<'tcx>(
+    fn destroy<'tcx>(
         self,
+        _self_id: FdId,
         _communicate_allowed: bool,
         ecx: &mut MiriInterpCx<'tcx>,
     ) -> InterpResult<'tcx, io::Result<()>> {
@@ -80,7 +99,7 @@ impl FileDescription for AnonSocket {
                 }
             }
             // Notify peer fd that close has happened, since that can unblock reads and writes.
-            ecx.check_and_update_readiness(peer_fd)?;
+            ecx.update_epoll_active_events(peer_fd, /* force_edge */ false)?;
         }
         interp_ok(Ok(()))
     }
@@ -107,8 +126,76 @@ impl FileDescription for AnonSocket {
         anonsocket_write(self, ptr, len, ecx, finish)
     }
 
+    fn short_fd_operations(&self) -> bool {
+        // Pipes guarantee that sufficiently small accesses are not broken apart:
+        // <https://pubs.opengroup.org/onlinepubs/9799919799/functions/write.html#tag_17_699_08>.
+        // For now, we don't bother checking for the size, and just entirely disable
+        // short accesses on pipes.
+        matches!(self.fd_type, AnonSocketType::Socketpair)
+    }
+
     fn as_unix<'tcx>(&self, _ecx: &MiriInterpCx<'tcx>) -> &dyn UnixFileDescription {
         self
+    }
+
+    fn get_flags<'tcx>(&self, ecx: &mut MiriInterpCx<'tcx>) -> InterpResult<'tcx, Scalar> {
+        let mut flags = 0;
+
+        // Get flag for file access mode.
+        // The flag for both socketpair and pipe will remain the same even when the peer
+        // fd is closed, so we need to look at the original type of this socket, not at whether
+        // the peer socket still exists.
+        match self.fd_type {
+            AnonSocketType::Socketpair => {
+                flags |= ecx.eval_libc_i32("O_RDWR");
+            }
+            AnonSocketType::PipeRead => {
+                flags |= ecx.eval_libc_i32("O_RDONLY");
+            }
+            AnonSocketType::PipeWrite => {
+                flags |= ecx.eval_libc_i32("O_WRONLY");
+            }
+        }
+
+        // Get flag for blocking status.
+        if self.is_nonblock.get() {
+            flags |= ecx.eval_libc_i32("O_NONBLOCK");
+        }
+
+        interp_ok(Scalar::from_i32(flags))
+    }
+
+    fn set_flags<'tcx>(
+        &self,
+        mut flag: i32,
+        ecx: &mut MiriInterpCx<'tcx>,
+    ) -> InterpResult<'tcx, Scalar> {
+        // FIXME: File creation flags should be ignored.
+
+        let o_nonblock = ecx.eval_libc_i32("O_NONBLOCK");
+        let o_rdonly = ecx.eval_libc_i32("O_RDONLY");
+        let o_wronly = ecx.eval_libc_i32("O_WRONLY");
+        let o_rdwr = ecx.eval_libc_i32("O_RDWR");
+
+        // O_NONBLOCK flag can be set / unset by user.
+        if flag & o_nonblock == o_nonblock {
+            self.is_nonblock.set(true);
+            flag &= !o_nonblock;
+        } else {
+            self.is_nonblock.set(false);
+        }
+
+        // Ignore all file access mode flags.
+        flag &= !(o_rdonly | o_wronly | o_rdwr);
+
+        // Throw error if there is any unsupported flag.
+        if flag != 0 {
+            throw_unsup_format!(
+                "fcntl: only O_NONBLOCK is supported for F_SETFL on socketpairs and pipes"
+            )
+        }
+
+        interp_ok(Scalar::from_i32(0))
     }
 }
 
@@ -141,7 +228,7 @@ fn anonsocket_write<'tcx>(
     // Let's see if we can write.
     let available_space = MAX_SOCKETPAIR_BUFFER_CAPACITY.strict_sub(writebuf.borrow().buf.len());
     if available_space == 0 {
-        if self_ref.is_nonblock {
+        if self_ref.is_nonblock.get() {
             // Non-blocking socketpair with a full buffer.
             return finish.call(ecx, Err(ErrorKind::WouldBlock.into()));
         } else {
@@ -175,7 +262,7 @@ fn anonsocket_write<'tcx>(
         // Remember this clock so `read` can synchronize with us.
         ecx.release_clock(|clock| {
             writebuf.clock.join(clock);
-        });
+        })?;
         // Do full write / partial write based on the space available.
         let write_size = len.min(available_space);
         let actual_write_size = ecx.write_to_host(&mut writebuf.buf, write_size, ptr)?.unwrap();
@@ -190,9 +277,11 @@ fn anonsocket_write<'tcx>(
         for thread_id in waiting_threads {
             ecx.unblock_thread(thread_id, BlockReason::UnnamedSocket)?;
         }
-        // Notification should be provided for peer fd as it became readable.
-        // The kernel does this even if the fd was already readable before, so we follow suit.
-        ecx.check_and_update_readiness(peer_fd)?;
+        // Notify epoll waiters: we might be no longer writable, peer might now be readable.
+        // The notification to the peer seems to be always sent on Linux, even if the
+        // FD was readable before.
+        ecx.update_epoll_active_events(self_ref, /* force_edge */ false)?;
+        ecx.update_epoll_active_events(peer_fd, /* force_edge */ true)?;
 
         return finish.call(ecx, Ok(write_size));
     }
@@ -223,7 +312,7 @@ fn anonsocket_read<'tcx>(
             // Socketpair with no peer and empty buffer.
             // 0 bytes successfully read indicates end-of-file.
             return finish.call(ecx, Ok(0));
-        } else if self_ref.is_nonblock {
+        } else if self_ref.is_nonblock.get() {
             // Non-blocking socketpair with writer and empty buffer.
             // https://linux.die.net/man/2/read
             // EAGAIN or EWOULDBLOCK can be returned for socket,
@@ -261,11 +350,12 @@ fn anonsocket_read<'tcx>(
         // Synchronize with all previous writes to this buffer.
         // FIXME: this over-synchronizes; a more precise approach would be to
         // only sync with the writes whose data we will read.
-        ecx.acquire_clock(&readbuf.clock);
+        ecx.acquire_clock(&readbuf.clock)?;
 
         // Do full read / partial read based on the space available.
         // Conveniently, `read` exists on `VecDeque` and has exactly the desired behavior.
         let read_size = ecx.read_from_host(&mut readbuf.buf, len, ptr)?.unwrap();
+        let readbuf_now_empty = readbuf.buf.is_empty();
 
         // Need to drop before others can access the readbuf again.
         drop(readbuf);
@@ -284,9 +374,14 @@ fn anonsocket_read<'tcx>(
             for thread_id in waiting_threads {
                 ecx.unblock_thread(thread_id, BlockReason::UnnamedSocket)?;
             }
-            // Notify epoll waiters.
-            ecx.check_and_update_readiness(peer_fd)?;
+            // Notify epoll waiters: peer is now writable.
+            // Linux seems to always notify the peer if the read buffer is now empty.
+            // (Linux also does that if this was a "big" read, but to avoid some arbitrary
+            // threshold, we do not match that.)
+            ecx.update_epoll_active_events(peer_fd, /* force_edge */ readbuf_now_empty)?;
         };
+        // Notify epoll waiters: we might be no longer readable.
+        ecx.update_epoll_active_events(self_ref, /* force_edge */ false)?;
 
         return finish.call(ecx, Ok(read_size));
     }
@@ -294,11 +389,11 @@ fn anonsocket_read<'tcx>(
 }
 
 impl UnixFileDescription for AnonSocket {
-    fn get_epoll_ready_events<'tcx>(&self) -> InterpResult<'tcx, EpollReadyEvents> {
+    fn epoll_active_events<'tcx>(&self) -> InterpResult<'tcx, EpollEvents> {
         // We only check the status of EPOLLIN, EPOLLOUT, EPOLLHUP and EPOLLRDHUP flags.
         // If other event flags need to be supported in the future, the check should be added here.
 
-        let mut epoll_ready_events = EpollReadyEvents::new();
+        let mut epoll_ready_events = EpollEvents::new();
 
         // Check if it is readable.
         if let Some(readbuf) = &self.readbuf {
@@ -364,7 +459,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         // Interpret the flag. Every flag we recognize is "subtracted" from `flags`, so
         // if there is anything left at the end, that's an unsupported flag.
-        if this.tcx.sess.target.os == "linux" {
+        if this.tcx.sess.target.os == Os::Linux {
             // SOCK_NONBLOCK only exists on Linux.
             let sock_nonblock = this.eval_libc_i32("SOCK_NONBLOCK");
             let sock_cloexec = this.eval_libc_i32("SOCK_CLOEXEC");
@@ -407,7 +502,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             peer_lost_data: Cell::new(false),
             blocked_read_tid: RefCell::new(Vec::new()),
             blocked_write_tid: RefCell::new(Vec::new()),
-            is_nonblock: is_sock_nonblock,
+            is_nonblock: Cell::new(is_sock_nonblock),
+            fd_type: AnonSocketType::Socketpair,
         });
         let fd1 = fds.new_ref(AnonSocket {
             readbuf: Some(RefCell::new(Buffer::new())),
@@ -415,7 +511,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             peer_lost_data: Cell::new(false),
             blocked_read_tid: RefCell::new(Vec::new()),
             blocked_write_tid: RefCell::new(Vec::new()),
-            is_nonblock: is_sock_nonblock,
+            is_nonblock: Cell::new(is_sock_nonblock),
+            fd_type: AnonSocketType::Socketpair,
         });
 
         // Make the file descriptions point to each other.
@@ -475,7 +572,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             peer_lost_data: Cell::new(false),
             blocked_read_tid: RefCell::new(Vec::new()),
             blocked_write_tid: RefCell::new(Vec::new()),
-            is_nonblock,
+            is_nonblock: Cell::new(is_nonblock),
+            fd_type: AnonSocketType::PipeRead,
         });
         let fd1 = fds.new_ref(AnonSocket {
             readbuf: None,
@@ -483,7 +581,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             peer_lost_data: Cell::new(false),
             blocked_read_tid: RefCell::new(Vec::new()),
             blocked_write_tid: RefCell::new(Vec::new()),
-            is_nonblock,
+            is_nonblock: Cell::new(is_nonblock),
+            fd_type: AnonSocketType::PipeWrite,
         });
 
         // Make the file descriptions point to each other.

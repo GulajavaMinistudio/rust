@@ -1,5 +1,6 @@
 pub mod codegen_fn_attrs;
 pub mod debugger_visualizer;
+pub mod deduced_param_attrs;
 pub mod dependency_format;
 pub mod exported_symbols;
 pub mod lang_items;
@@ -12,7 +13,7 @@ pub mod lib_features {
     #[derive(HashStable, TyEncodable, TyDecodable)]
     pub enum FeatureStability {
         AcceptedSince(Symbol),
-        Unstable,
+        Unstable { old_name: Option<Symbol> },
     }
 
     #[derive(HashStable, Debug, Default)]

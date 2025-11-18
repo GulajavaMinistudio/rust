@@ -21,13 +21,14 @@
 //!     playground: &None,
 //!     heading_offset: HeadingOffset::H2,
 //! };
-//! let html = md.into_string();
+//! let mut html = String::new();
+//! md.write_into(&mut html).unwrap();
 //! // ... something using html
 //! ```
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::fmt::Write;
+use std::fmt::{self, Write};
 use std::iter::Peekable;
 use std::ops::{ControlFlow, Range};
 use std::path::PathBuf;
@@ -35,15 +36,15 @@ use std::str::{self, CharIndices};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Weak};
 
-use pulldown_cmark::{
-    BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd, html,
-};
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_errors::{Diag, DiagMessage};
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::ty::TyCtxt;
 pub(crate) use rustc_resolve::rustdoc::main_body_opts;
 use rustc_resolve::rustdoc::may_be_doc_link;
+use rustc_resolve::rustdoc::pulldown_cmark::{
+    self, BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd, html,
+};
 use rustc_span::edition::Edition;
 use rustc_span::{Span, Symbol};
 use tracing::{debug, trace};
@@ -195,7 +196,7 @@ fn slugify(c: char) -> Option<char> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Playground {
     pub crate_name: Option<Symbol>,
     pub url: String,
@@ -250,7 +251,7 @@ impl<'a, I: Iterator<Item = Event<'a>>> Iterator for CodeBlocks<'_, 'a, I> {
                     if !parse_result.rust {
                         let added_classes = parse_result.added_classes;
                         let lang_string = if let Some(lang) = parse_result.unknown.first() {
-                            format!("language-{}", lang)
+                            format!("language-{lang}")
                         } else {
                             String::new()
                         };
@@ -263,9 +264,7 @@ impl<'a, I: Iterator<Item = Event<'a>>> Iterator for CodeBlocks<'_, 'a, I> {
                                  </pre>\
                              </div>",
                                 added_classes = added_classes.join(" "),
-                                text = Escape(
-                                    original_text.strip_suffix('\n').unwrap_or(&original_text)
-                                ),
+                                text = Escape(original_text.trim_suffix('\n')),
                             )
                             .into(),
                         ));
@@ -300,11 +299,15 @@ impl<'a, I: Iterator<Item = Event<'a>>> Iterator for CodeBlocks<'_, 'a, I> {
                 crate_name: krate.map(String::from).unwrap_or_default(),
                 no_crate_inject: false,
                 insert_indent_space: true,
-                attrs: vec![],
                 args_file: PathBuf::new(),
             };
-            let doctest = doctest::DocTestBuilder::new(&test, krate, edition, false, None, None);
-            let (test, _) = doctest.generate_unique_doctest(&test, false, &opts, krate);
+            let mut builder = doctest::BuildDocTestBuilder::new(&test).edition(edition);
+            if let Some(krate) = krate {
+                builder = builder.crate_name(krate);
+            }
+            let doctest = builder.build(None);
+            let (wrapped, _) = doctest.generate_unique_doctest(&test, false, &opts, krate);
+            let test = wrapped.to_string();
             let channel = if test.contains("#![feature(") { "&amp;version=nightly" } else { "" };
 
             let test_escaped = small_url_encode(test);
@@ -316,29 +319,34 @@ impl<'a, I: Iterator<Item = Event<'a>>> Iterator for CodeBlocks<'_, 'a, I> {
             ))
         });
 
-        let tooltip = if ignore != Ignore::None {
-            highlight::Tooltip::Ignore
-        } else if compile_fail {
-            highlight::Tooltip::CompileFail
-        } else if should_panic {
-            highlight::Tooltip::ShouldPanic
-        } else if explicit_edition {
-            highlight::Tooltip::Edition(edition)
-        } else {
-            highlight::Tooltip::None
+        let tooltip = {
+            use highlight::Tooltip::*;
+
+            if ignore == Ignore::All {
+                Some(IgnoreAll)
+            } else if let Ignore::Some(platforms) = ignore {
+                Some(IgnoreSome(platforms))
+            } else if compile_fail {
+                Some(CompileFail)
+            } else if should_panic {
+                Some(ShouldPanic)
+            } else if explicit_edition {
+                Some(Edition(edition))
+            } else {
+                None
+            }
         };
 
         // insert newline to clearly separate it from the
         // previous block so we can shorten the html output
-        let mut s = String::new();
-        s.push('\n');
-
-        highlight::render_example_with_highlighting(
-            &text,
-            &mut s,
-            tooltip,
-            playground_button.as_deref(),
-            &added_classes,
+        let s = format!(
+            "\n{}",
+            highlight::render_example_with_highlighting(
+                &text,
+                tooltip.as_ref(),
+                playground_button.as_deref(),
+                &added_classes,
+            )
         );
         Some(Event::Html(s.into()))
     }
@@ -992,7 +1000,7 @@ impl<'a, 'tcx> TagIterator<'a, 'tcx> {
 
         if let Some((_, c)) = self.inner.next() {
             if c != '=' {
-                self.emit_error(format!("expected `=`, found `{}`", c));
+                self.emit_error(format!("expected `=`, found `{c}`"));
                 return None;
             }
         } else {
@@ -1322,16 +1330,13 @@ impl LangString {
 }
 
 impl<'a> Markdown<'a> {
-    pub fn into_string(self) -> String {
+    pub fn write_into(self, f: impl fmt::Write) -> fmt::Result {
         // This is actually common enough to special-case
         if self.content.is_empty() {
-            return String::new();
+            return Ok(());
         }
 
-        let mut s = String::with_capacity(self.content.len() * 3 / 2);
-        html::push_html(&mut s, self.into_iter());
-
-        s
+        html::write_html_fmt(f, self.into_iter())
     }
 
     fn into_iter(self) -> CodeBlocks<'a, 'a, impl Iterator<Item = Event<'a>>> {
@@ -1447,19 +1452,20 @@ impl MarkdownWithToc<'_> {
 
         (toc.into_toc(), s)
     }
-    pub(crate) fn into_string(self) -> String {
+
+    pub(crate) fn write_into(self, mut f: impl fmt::Write) -> fmt::Result {
         let (toc, s) = self.into_parts();
-        format!("<nav id=\"rustdoc\">{toc}</nav>{s}", toc = toc.print())
+        write!(f, "<nav id=\"rustdoc\">{toc}</nav>{s}", toc = toc.print())
     }
 }
 
 impl MarkdownItemInfo<'_> {
-    pub(crate) fn into_string(self) -> String {
+    pub(crate) fn write_into(self, mut f: impl fmt::Write) -> fmt::Result {
         let MarkdownItemInfo(md, ids) = self;
 
         // This is actually common enough to special-case
         if md.is_empty() {
-            return String::new();
+            return Ok(());
         }
         let p = Parser::new_ext(md, main_body_opts()).into_offset_iter();
 
@@ -1469,8 +1475,6 @@ impl MarkdownItemInfo<'_> {
             _ => event,
         });
 
-        let mut s = String::with_capacity(md.len() * 3 / 2);
-
         ids.handle_footnotes(|ids, existing_footnotes| {
             let p = HeadingLinks::new(p, None, ids, HeadingOffset::H1);
             let p = footnotes::Footnotes::new(p, existing_footnotes);
@@ -1478,10 +1482,8 @@ impl MarkdownItemInfo<'_> {
             let p = p.filter(|event| {
                 !matches!(event, Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph))
             });
-            html::push_html(&mut s, p);
-        });
-
-        s
+            html::write_html_fmt(&mut f, p)
+        })
     }
 }
 

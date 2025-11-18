@@ -2,6 +2,8 @@
 //!
 //! In this module, a "vector" is any `repr(simd)` type.
 
+use crate::marker::ConstParamTy;
+
 /// Inserts an element into a vector, returning the updated vector.
 ///
 /// `T` must be a vector with element type `U`, and `idx` must be `const`.
@@ -126,7 +128,41 @@ pub unsafe fn simd_shl<T>(lhs: T, rhs: T) -> T;
 #[rustc_nounwind]
 pub unsafe fn simd_shr<T>(lhs: T, rhs: T) -> T;
 
-/// "Ands" vectors elementwise.
+/// Funnel Shifts vector left elementwise, with UB on overflow.
+///
+/// Concatenates `a` and `b` elementwise (with `a` in the most significant half),
+/// creating a vector of the same length, but with each element being twice as
+/// wide. Then shift this vector left elementwise by `shift`, shifting in zeros,
+/// and extract the most significant half of each of the elements. If `a` and `b`
+/// are the same, this is equivalent to an elementwise rotate left operation.
+///
+/// `T` must be a vector of integers.
+///
+/// # Safety
+///
+/// Each element of `shift` must be less than `<int>::BITS`.
+#[rustc_intrinsic]
+#[rustc_nounwind]
+pub unsafe fn simd_funnel_shl<T>(a: T, b: T, shift: T) -> T;
+
+/// Funnel Shifts vector right elementwise, with UB on overflow.
+///
+/// Concatenates `a` and `b` elementwise (with `a` in the most significant half),
+/// creating a vector of the same length, but with each element being twice as
+/// wide. Then shift this vector right elementwise by `shift`, shifting in zeros,
+/// and extract the least significant half of each of the elements. If `a` and `b`
+/// are the same, this is equivalent to an elementwise rotate right operation.
+///
+/// `T` must be a vector of integers.
+///
+/// # Safety
+///
+/// Each element of `shift` must be less than `<int>::BITS`.
+#[rustc_intrinsic]
+#[rustc_nounwind]
+pub unsafe fn simd_funnel_shr<T>(a: T, b: T, shift: T) -> T;
+
+/// "And"s vectors elementwise.
 ///
 /// `T` must be a vector of integers.
 #[rustc_intrinsic]
@@ -343,6 +379,19 @@ pub unsafe fn simd_gather<T, U, V>(val: T, ptr: U, mask: V) -> T;
 #[rustc_nounwind]
 pub unsafe fn simd_scatter<T, U, V>(val: T, ptr: U, mask: V);
 
+/// A type for alignment options for SIMD masked load/store intrinsics.
+#[derive(Debug, ConstParamTy, PartialEq, Eq)]
+pub enum SimdAlign {
+    // These values must match the compiler's `SimdAlign` defined in
+    // `rustc_middle/src/ty/consts/int.rs`!
+    /// No alignment requirements on the pointer
+    Unaligned = 0,
+    /// The pointer must be aligned to the element type of the SIMD vector
+    Element = 1,
+    /// The pointer must be aligned to the SIMD vector type
+    Vector = 2,
+}
+
 /// Reads a vector of pointers.
 ///
 /// `T` must be a vector.
@@ -358,13 +407,12 @@ pub unsafe fn simd_scatter<T, U, V>(val: T, ptr: U, mask: V);
 /// `val`.
 ///
 /// # Safety
-/// Unmasked values in `T` must be readable as if by `<ptr>::read` (e.g. aligned to the element
-/// type).
+/// `ptr` must be aligned according to the `ALIGN` parameter, see [`SimdAlign`] for details.
 ///
 /// `mask` must only contain `0` or `!0` values.
 #[rustc_intrinsic]
 #[rustc_nounwind]
-pub unsafe fn simd_masked_load<V, U, T>(mask: V, ptr: U, val: T) -> T;
+pub unsafe fn simd_masked_load<V, U, T, const ALIGN: SimdAlign>(mask: V, ptr: U, val: T) -> T;
 
 /// Writes to a vector of pointers.
 ///
@@ -380,13 +428,12 @@ pub unsafe fn simd_masked_load<V, U, T>(mask: V, ptr: U, val: T) -> T;
 /// Otherwise if the corresponding value in `mask` is `0`, do nothing.
 ///
 /// # Safety
-/// Unmasked values in `T` must be writeable as if by `<ptr>::write` (e.g. aligned to the element
-/// type).
+/// `ptr` must be aligned according to the `ALIGN` parameter, see [`SimdAlign`] for details.
 ///
 /// `mask` must only contain `0` or `!0` values.
 #[rustc_intrinsic]
 #[rustc_nounwind]
-pub unsafe fn simd_masked_store<V, U, T>(mask: V, ptr: U, val: T);
+pub unsafe fn simd_masked_store<V, U, T, const ALIGN: SimdAlign>(mask: V, ptr: U, val: T);
 
 /// Adds two simd vectors elementwise, with saturation.
 ///
@@ -488,7 +535,7 @@ pub unsafe fn simd_reduce_max<T, U>(x: T) -> U;
 #[rustc_nounwind]
 pub unsafe fn simd_reduce_min<T, U>(x: T) -> U;
 
-/// Logical "ands" all elements together.
+/// Logical "and"s all elements together.
 ///
 /// `T` must be a vector of integers or floats.
 ///
@@ -677,6 +724,14 @@ pub unsafe fn simd_floor<T>(x: T) -> T;
 #[rustc_intrinsic]
 #[rustc_nounwind]
 pub unsafe fn simd_round<T>(x: T) -> T;
+
+/// Rounds each element to the closest integer-valued float.
+/// Ties are resolved by rounding to the number with an even least significant digit
+///
+/// `T` must be a vector of floats.
+#[rustc_intrinsic]
+#[rustc_nounwind]
+pub unsafe fn simd_round_ties_even<T>(x: T) -> T;
 
 /// Returns the integer part of each element as an integer-valued float.
 /// In other words, non-integer values are truncated towards zero.

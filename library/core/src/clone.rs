@@ -36,9 +36,20 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
+use crate::marker::{Destruct, PointeeSized};
+
 mod uninit;
 
-/// A common trait for the ability to explicitly duplicate an object.
+/// A common trait that allows explicit creation of a duplicate value.
+///
+/// Calling [`clone`] always produces a new value.
+/// However, for types that are references to other data (such as smart pointers or references),
+/// the new value may still point to the same underlying data, rather than duplicating it.
+/// See [`Clone::clone`] for more details.
+///
+/// This distinction is especially important when using `#[derive(Clone)]` on structs containing
+/// smart pointers like `Arc<Mutex<T>>` - the cloned struct will share mutable state with the
+/// original.
 ///
 /// Differs from [`Copy`] in that [`Copy`] is implicit and an inexpensive bit-wise copy, while
 /// `Clone` is always explicit and may or may not be expensive. In order to enforce
@@ -128,6 +139,34 @@ mod uninit;
 /// // Note: With the manual implementations the above line will compile.
 /// ```
 ///
+/// ## `Clone` and `PartialEq`/`Eq`
+/// `Clone` is intended for the duplication of objects. Consequently, when implementing
+/// both `Clone` and [`PartialEq`], the following property is expected to hold:
+/// ```text
+/// x == x -> x.clone() == x
+/// ```
+/// In other words, if an object compares equal to itself,
+/// its clone must also compare equal to the original.
+///
+/// For types that also implement [`Eq`] – for which `x == x` always holds –
+/// this implies that `x.clone() == x` must always be true.
+/// Standard library collections such as
+/// [`HashMap`], [`HashSet`], [`BTreeMap`], [`BTreeSet`] and [`BinaryHeap`]
+/// rely on their keys respecting this property for correct behavior.
+/// Furthermore, these collections require that cloning a key preserves the outcome of the
+/// [`Hash`] and [`Ord`] methods. Thankfully, this follows automatically from `x.clone() == x`
+/// if `Hash` and `Ord` are correctly implemented according to their own requirements.
+///
+/// When deriving both `Clone` and [`PartialEq`] using `#[derive(Clone, PartialEq)]`
+/// or when additionally deriving [`Eq`] using `#[derive(Clone, PartialEq, Eq)]`,
+/// then this property is automatically upheld – provided that it is satisfied by
+/// the underlying types.
+///
+/// Violating this property is a logic error. The behavior resulting from a logic error is not
+/// specified, but users of the trait must ensure that such logic errors do *not* result in
+/// undefined behavior. This means that `unsafe` code **must not** rely on this property
+/// being satisfied.
+///
 /// ## Additional implementors
 ///
 /// In addition to the [implementors listed below][impls],
@@ -141,13 +180,28 @@ mod uninit;
 ///   (even if the referent doesn't),
 ///   while variables captured by mutable reference never implement `Clone`.
 ///
+/// [`HashMap`]: ../../std/collections/struct.HashMap.html
+/// [`HashSet`]: ../../std/collections/struct.HashSet.html
+/// [`BTreeMap`]: ../../std/collections/struct.BTreeMap.html
+/// [`BTreeSet`]: ../../std/collections/struct.BTreeSet.html
+/// [`BinaryHeap`]: ../../std/collections/struct.BinaryHeap.html
 /// [impls]: #implementors
 #[stable(feature = "rust1", since = "1.0.0")]
 #[lang = "clone"]
 #[rustc_diagnostic_item = "Clone"]
 #[rustc_trivial_field_reads]
-pub trait Clone: Sized {
-    /// Returns a copy of the value.
+#[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+pub const trait Clone: Sized {
+    /// Returns a duplicate of the value.
+    ///
+    /// Note that what "duplicate" means varies by type:
+    /// - For most types, this creates a deep, independent copy
+    /// - For reference types like `&T`, this creates another reference to the same value
+    /// - For smart pointers like [`Arc`] or [`Rc`], this increments the reference count
+    ///   but still points to the same underlying data
+    ///
+    /// [`Arc`]: ../../std/sync/struct.Arc.html
+    /// [`Rc`]: ../../std/rc/struct.Rc.html
     ///
     /// # Examples
     ///
@@ -156,6 +210,23 @@ pub trait Clone: Sized {
     /// let hello = "Hello"; // &str implements Clone
     ///
     /// assert_eq!("Hello", hello.clone());
+    /// ```
+    ///
+    /// Example with a reference-counted type:
+    ///
+    /// ```
+    /// use std::sync::{Arc, Mutex};
+    ///
+    /// let data = Arc::new(Mutex::new(vec![1, 2, 3]));
+    /// let data_clone = data.clone(); // Creates another Arc pointing to the same Mutex
+    ///
+    /// {
+    ///     let mut lock = data.lock().unwrap();
+    ///     lock.push(4);
+    /// }
+    ///
+    /// // Changes are visible through the clone because they share the same underlying data
+    /// assert_eq!(*data_clone.lock().unwrap(), vec![1, 2, 3, 4]);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[must_use = "cloning is often expensive and is not expected to have side effects"]
@@ -171,15 +242,50 @@ pub trait Clone: Sized {
     /// allocations.
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
-    fn clone_from(&mut self, source: &Self) {
+    fn clone_from(&mut self, source: &Self)
+    where
+        Self: [const] Destruct,
+    {
         *self = source.clone()
     }
 }
 
+/// Indicates that the `Clone` implementation is identical to copying the value.
+///
+/// This is used for some optimizations in the standard library, which specializes
+/// on this trait to select faster implementations of functions such as
+/// [`clone_from_slice`](slice::clone_from_slice). It is automatically implemented
+/// when using `#[derive(Clone, Copy)]`.
+///
+/// Note that this trait does not imply that the type is `Copy`, because e.g.
+/// `core::ops::Range<i32>` could soundly implement this trait.
+///
+/// # Safety
+/// `Clone::clone` must be equivalent to copying the value, otherwise calling functions
+/// such as `slice::clone_from_slice` can have undefined behaviour.
+#[unstable(
+    feature = "trivial_clone",
+    reason = "this isn't part of any API guarantee",
+    issue = "none"
+)]
+#[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+#[lang = "trivial_clone"]
+// SAFETY:
+// It is sound to specialize on this because the `clone` implementation cannot be
+// lifetime-dependent. Therefore, if `TrivialClone` is implemented for any lifetime,
+// its invariant holds whenever `Clone` is implemented, even if the actual
+// `TrivialClone` bound would not be satisfied because of lifetime bounds.
+#[rustc_unsafe_specialization_marker]
+// If `#[derive(Clone, Clone, Copy)]` is written, there will be multiple
+// implementations of `TrivialClone`. To keep it from appearing in error
+// messages, make it a `#[marker]` trait.
+#[marker]
+pub const unsafe trait TrivialClone: [const] Clone {}
+
 /// Derive macro generating an impl of the trait `Clone`.
 #[rustc_builtin_macro]
 #[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
-#[allow_internal_unstable(core_intrinsics, derive_clone_copy)]
+#[allow_internal_unstable(core_intrinsics, derive_clone_copy, trivial_clone)]
 pub macro Clone($item:item) {
     /* compiler built-in */
 }
@@ -248,7 +354,7 @@ impl_use_cloned! {
     reason = "deriving hack, should not be public",
     issue = "none"
 )]
-pub struct AssertParamIsClone<T: Clone + ?Sized> {
+pub struct AssertParamIsClone<T: Clone + PointeeSized> {
     _field: crate::marker::PhantomData<T>,
 }
 #[doc(hidden)]
@@ -258,7 +364,7 @@ pub struct AssertParamIsClone<T: Clone + ?Sized> {
     reason = "deriving hack, should not be public",
     issue = "none"
 )]
-pub struct AssertParamIsCopy<T: Copy + ?Sized> {
+pub struct AssertParamIsCopy<T: Copy + PointeeSized> {
     _field: crate::marker::PhantomData<T>,
 }
 
@@ -495,16 +601,25 @@ unsafe impl CloneToUninit for crate::bstr::ByteStr {
 /// are implemented in `traits::SelectionContext::copy_clone_conditions()`
 /// in `rustc_trait_selection`.
 mod impls {
+    use super::TrivialClone;
+    use crate::marker::PointeeSized;
+
     macro_rules! impl_clone {
         ($($t:ty)*) => {
             $(
                 #[stable(feature = "rust1", since = "1.0.0")]
-                impl Clone for $t {
+                #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+                impl const Clone for $t {
                     #[inline(always)]
                     fn clone(&self) -> Self {
                         *self
                     }
                 }
+
+                #[doc(hidden)]
+                #[unstable(feature = "trivial_clone", issue = "none")]
+                #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+                unsafe impl const TrivialClone for $t {}
             )*
         }
     }
@@ -517,40 +632,64 @@ mod impls {
     }
 
     #[unstable(feature = "never_type", issue = "35121")]
-    impl Clone for ! {
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    impl const Clone for ! {
         #[inline]
         fn clone(&self) -> Self {
             *self
         }
     }
 
+    #[doc(hidden)]
+    #[unstable(feature = "trivial_clone", issue = "none")]
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    unsafe impl const TrivialClone for ! {}
+
     #[stable(feature = "rust1", since = "1.0.0")]
-    impl<T: ?Sized> Clone for *const T {
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    impl<T: PointeeSized> const Clone for *const T {
         #[inline(always)]
         fn clone(&self) -> Self {
             *self
         }
     }
 
+    #[doc(hidden)]
+    #[unstable(feature = "trivial_clone", issue = "none")]
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    unsafe impl<T: PointeeSized> const TrivialClone for *const T {}
+
     #[stable(feature = "rust1", since = "1.0.0")]
-    impl<T: ?Sized> Clone for *mut T {
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    impl<T: PointeeSized> const Clone for *mut T {
         #[inline(always)]
         fn clone(&self) -> Self {
             *self
         }
     }
+
+    #[doc(hidden)]
+    #[unstable(feature = "trivial_clone", issue = "none")]
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    unsafe impl<T: PointeeSized> const TrivialClone for *mut T {}
 
     /// Shared references can be cloned, but mutable references *cannot*!
     #[stable(feature = "rust1", since = "1.0.0")]
-    impl<T: ?Sized> Clone for &T {
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    impl<T: PointeeSized> const Clone for &T {
         #[inline(always)]
         #[rustc_diagnostic_item = "noop_method_clone"]
         fn clone(&self) -> Self {
-            *self
+            self
         }
     }
 
+    #[doc(hidden)]
+    #[unstable(feature = "trivial_clone", issue = "none")]
+    #[rustc_const_unstable(feature = "const_clone", issue = "142757")]
+    unsafe impl<T: PointeeSized> const TrivialClone for &T {}
+
     /// Shared references can be cloned, but mutable references *cannot*!
     #[stable(feature = "rust1", since = "1.0.0")]
-    impl<T: ?Sized> !Clone for &mut T {}
+    impl<T: PointeeSized> !Clone for &mut T {}
 }

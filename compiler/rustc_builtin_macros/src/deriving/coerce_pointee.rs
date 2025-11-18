@@ -1,5 +1,4 @@
 use ast::HasAttrs;
-use ast::ptr::P;
 use rustc_ast::mut_visit::MutVisitor;
 use rustc_ast::visit::BoundKind;
 use rustc_ast::{
@@ -30,7 +29,7 @@ pub(crate) fn expand_deriving_coerce_pointee(
     item.visit_with(&mut DetectNonGenericPointeeAttr { cx });
 
     let (name_ident, generics) = if let Annotatable::Item(aitem) = item
-        && let ItemKind::Struct(ident, struct_data, g) = &aitem.kind
+        && let ItemKind::Struct(ident, g, struct_data) = &aitem.kind
     {
         if !matches!(
             struct_data,
@@ -109,11 +108,7 @@ pub(crate) fn expand_deriving_coerce_pointee(
             cx.item(
                 span,
                 attrs.clone(),
-                ast::ItemKind::Impl(Box::new(ast::Impl {
-                    safety: ast::Safety::Default,
-                    polarity: ast::ImplPolarity::Positive,
-                    defaultness: ast::Defaultness::Final,
-                    constness: ast::Const::No,
+                ast::ItemKind::Impl(ast::Impl {
                     generics: Generics {
                         params: generics
                             .params
@@ -125,7 +120,7 @@ pub(crate) fn expand_deriving_coerce_pointee(
                                 GenericParamKind::Type { default: _ } => {
                                     cx.typaram(p.span(), p.ident, p.bounds.clone(), None)
                                 }
-                                GenericParamKind::Const { ty, kw_span: _, default: _ } => cx
+                                GenericParamKind::Const { ty, span: _, default: _ } => cx
                                     .const_param(
                                         p.span(),
                                         p.ident,
@@ -138,10 +133,16 @@ pub(crate) fn expand_deriving_coerce_pointee(
                         where_clause: generics.where_clause.clone(),
                         span: generics.span,
                     },
-                    of_trait: Some(trait_ref),
+                    of_trait: Some(Box::new(ast::TraitImplHeader {
+                        safety: ast::Safety::Default,
+                        polarity: ast::ImplPolarity::Positive,
+                        defaultness: ast::Defaultness::Final,
+                        constness: ast::Const::No,
+                        trait_ref,
+                    })),
                     self_ty: self_type.clone(),
                     items: ThinVec::new(),
-                })),
+                }),
             ),
         ));
     }
@@ -153,16 +154,18 @@ pub(crate) fn expand_deriving_coerce_pointee(
         let item = cx.item(
             span,
             attrs.clone(),
-            ast::ItemKind::Impl(Box::new(ast::Impl {
-                safety: ast::Safety::Default,
-                polarity: ast::ImplPolarity::Positive,
-                defaultness: ast::Defaultness::Final,
-                constness: ast::Const::No,
+            ast::ItemKind::Impl(ast::Impl {
                 generics,
-                of_trait: Some(trait_ref),
+                of_trait: Some(Box::new(ast::TraitImplHeader {
+                    safety: ast::Safety::Default,
+                    polarity: ast::ImplPolarity::Positive,
+                    defaultness: ast::Defaultness::Final,
+                    constness: ast::Const::No,
+                    trait_ref,
+                })),
                 self_ty: self_type.clone(),
                 items: ThinVec::new(),
-            })),
+            }),
         );
         push(Annotatable::Item(item));
     };
@@ -353,21 +356,14 @@ fn contains_maybe_sized_bound(bounds: &[GenericBound]) -> bool {
     bounds.iter().any(is_maybe_sized_bound)
 }
 
-fn path_segment_is_exact_match(path_segments: &[ast::PathSegment], syms: &[Symbol]) -> bool {
-    path_segments.iter().zip(syms).all(|(segment, &symbol)| segment.ident.name == symbol)
-}
-
 fn is_sized_marker(path: &ast::Path) -> bool {
     const CORE_UNSIZE: [Symbol; 3] = [sym::core, sym::marker, sym::Sized];
     const STD_UNSIZE: [Symbol; 3] = [sym::std, sym::marker, sym::Sized];
-    if path.segments.len() == 4 && path.is_global() {
-        path_segment_is_exact_match(&path.segments[1..], &CORE_UNSIZE)
-            || path_segment_is_exact_match(&path.segments[1..], &STD_UNSIZE)
-    } else if path.segments.len() == 3 {
-        path_segment_is_exact_match(&path.segments, &CORE_UNSIZE)
-            || path_segment_is_exact_match(&path.segments, &STD_UNSIZE)
+    let segments = || path.segments.iter().map(|segment| segment.ident.name);
+    if path.is_global() {
+        segments().skip(1).eq(CORE_UNSIZE) || segments().skip(1).eq(STD_UNSIZE)
     } else {
-        *path == sym::Sized
+        segments().eq(CORE_UNSIZE) || segments().eq(STD_UNSIZE) || *path == sym::Sized
     }
 }
 
@@ -378,11 +374,11 @@ struct TypeSubstitution<'a> {
 }
 
 impl<'a> ast::mut_visit::MutVisitor for TypeSubstitution<'a> {
-    fn visit_ty(&mut self, ty: &mut P<ast::Ty>) {
+    fn visit_ty(&mut self, ty: &mut ast::Ty) {
         if let Some(name) = ty.kind.is_simple_path()
             && name == self.from_name
         {
-            **ty = self.to_ty.clone();
+            *ty = self.to_ty.clone();
             self.rewritten = true;
         } else {
             ast::mut_visit::walk_ty(self, ty);

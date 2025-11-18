@@ -132,13 +132,17 @@ pub struct Fixture {
     pub library: bool,
     /// Actual file contents. All meta comments are stripped.
     pub text: String,
+    /// The line number in the original fixture of the beginning of this fixture.
+    pub line: usize,
 }
 
+#[derive(Debug)]
 pub struct MiniCore {
     activated_flags: Vec<String>,
     valid_flags: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct FixtureWithProjectMeta {
     pub fixture: Vec<Fixture>,
     pub mini_core: Option<MiniCore>,
@@ -149,6 +153,8 @@ pub struct FixtureWithProjectMeta {
     /// You probably don't want to manually specify this. See LLVM manual for the
     /// syntax, if you must: <https://llvm.org/docs/LangRef.html#data-layout>
     pub target_data_layout: String,
+    /// Specifies the target architecture.
+    pub target_arch: String,
 }
 
 impl FixtureWithProjectMeta {
@@ -178,37 +184,53 @@ impl FixtureWithProjectMeta {
         let mut toolchain = None;
         let mut target_data_layout =
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128".to_owned();
+        let mut target_arch = "x86_64".to_owned();
         let mut mini_core = None;
         let mut res: Vec<Fixture> = Vec::new();
         let mut proc_macro_names = vec![];
+        let mut first_row = 0;
 
         if let Some(meta) = fixture.strip_prefix("//- toolchain:") {
+            first_row += 1;
             let (meta, remain) = meta.split_once('\n').unwrap();
             toolchain = Some(meta.trim().to_owned());
             fixture = remain;
         }
 
         if let Some(meta) = fixture.strip_prefix("//- target_data_layout:") {
+            first_row += 1;
             let (meta, remain) = meta.split_once('\n').unwrap();
             meta.trim().clone_into(&mut target_data_layout);
             fixture = remain;
         }
 
+        if let Some(meta) = fixture.strip_prefix("//- target_arch:") {
+            first_row += 1;
+            let (meta, remain) = meta.split_once('\n').unwrap();
+            meta.trim().clone_into(&mut target_arch);
+            fixture = remain;
+        }
+
         if let Some(meta) = fixture.strip_prefix("//- proc_macros:") {
+            first_row += 1;
             let (meta, remain) = meta.split_once('\n').unwrap();
             proc_macro_names = meta.split(',').map(|it| it.trim().to_owned()).collect();
             fixture = remain;
         }
 
         if let Some(meta) = fixture.strip_prefix("//- minicore:") {
+            first_row += 1;
             let (meta, remain) = meta.split_once('\n').unwrap();
             mini_core = Some(MiniCore::parse(meta));
             fixture = remain;
         }
 
-        let default = if fixture.contains("//-") { None } else { Some("//- /main.rs") };
+        let default =
+            if fixture.contains("//- /") { None } else { Some((first_row - 1, "//- /main.rs")) };
 
-        for (ix, line) in default.into_iter().chain(fixture.split_inclusive('\n')).enumerate() {
+        for (ix, line) in
+            default.into_iter().chain((first_row..).zip(fixture.split_inclusive('\n')))
+        {
             if line.contains("//-") {
                 assert!(
                     line.starts_with("//-"),
@@ -219,7 +241,7 @@ impl FixtureWithProjectMeta {
             }
 
             if let Some(line) = line.strip_prefix("//-") {
-                let meta = Self::parse_meta_line(line);
+                let meta = Self::parse_meta_line(line, (ix + 1).try_into().unwrap());
                 res.push(meta);
             } else {
                 if matches!(line.strip_prefix("// "), Some(l) if l.trim().starts_with('/')) {
@@ -232,11 +254,18 @@ impl FixtureWithProjectMeta {
             }
         }
 
-        Self { fixture: res, mini_core, proc_macro_names, toolchain, target_data_layout }
+        Self {
+            fixture: res,
+            mini_core,
+            proc_macro_names,
+            toolchain,
+            target_data_layout,
+            target_arch,
+        }
     }
 
     //- /lib.rs crate:foo deps:bar,baz cfg:foo=a,bar=b env:OUTDIR=path/to,OTHER=foo
-    fn parse_meta_line(meta: &str) -> Fixture {
+    fn parse_meta_line(meta: &str, line: usize) -> Fixture {
         let meta = meta.trim();
         let mut components = meta.split_ascii_whitespace();
 
@@ -301,6 +330,7 @@ impl FixtureWithProjectMeta {
         Fixture {
             path,
             text: String::new(),
+            line,
             krate,
             deps,
             extern_prelude,
@@ -314,7 +344,7 @@ impl FixtureWithProjectMeta {
 }
 
 impl MiniCore {
-    const RAW_SOURCE: &'static str = include_str!("./minicore.rs");
+    pub const RAW_SOURCE: &'static str = include_str!("./minicore.rs");
 
     fn has_flag(&self, flag: &str) -> bool {
         self.activated_flags.iter().any(|it| it == flag)
@@ -347,8 +377,8 @@ impl MiniCore {
         res
     }
 
-    pub fn available_flags() -> impl Iterator<Item = &'static str> {
-        let lines = MiniCore::RAW_SOURCE.split_inclusive('\n');
+    pub fn available_flags(raw_source: &str) -> impl Iterator<Item = &str> {
+        let lines = raw_source.split_inclusive('\n');
         lines
             .map_while(|x| x.strip_prefix("//!"))
             .skip_while(|line| !line.contains("Available flags:"))
@@ -359,9 +389,9 @@ impl MiniCore {
     /// Strips parts of minicore.rs which are flagged by inactive flags.
     ///
     /// This is probably over-engineered to support flags dependencies.
-    pub fn source_code(mut self) -> String {
+    pub fn source_code(mut self, raw_source: &str) -> String {
         let mut buf = String::new();
-        let mut lines = MiniCore::RAW_SOURCE.split_inclusive('\n');
+        let mut lines = raw_source.split_inclusive('\n');
 
         let mut implications = Vec::new();
 
@@ -412,23 +442,39 @@ impl MiniCore {
         }
 
         let mut active_regions = Vec::new();
+        let mut inactive_regions = Vec::new();
         let mut seen_regions = Vec::new();
         for line in lines {
             let trimmed = line.trim();
             if let Some(region) = trimmed.strip_prefix("// region:") {
-                active_regions.push(region);
-                continue;
+                if let Some(region) = region.strip_prefix('!') {
+                    inactive_regions.push(region);
+                    continue;
+                } else {
+                    active_regions.push(region);
+                    continue;
+                }
             }
             if let Some(region) = trimmed.strip_prefix("// endregion:") {
-                let prev = active_regions.pop().unwrap();
+                let (prev, region) = if let Some(region) = region.strip_prefix('!') {
+                    (inactive_regions.pop().unwrap(), region)
+                } else {
+                    (active_regions.pop().unwrap(), region)
+                };
                 assert_eq!(prev, region, "unbalanced region pairs");
                 continue;
             }
 
-            let mut line_region = false;
-            if let Some(idx) = trimmed.find("// :") {
-                line_region = true;
-                active_regions.push(&trimmed[idx + "// :".len()..]);
+            let mut active_line_region = 0;
+            let mut inactive_line_region = 0;
+            if let Some(idx) = trimmed.find("// :!") {
+                let regions = trimmed[idx + "// :!".len()..].split(", ");
+                inactive_line_region += regions.clone().count();
+                inactive_regions.extend(regions);
+            } else if let Some(idx) = trimmed.find("// :") {
+                let regions = trimmed[idx + "// :".len()..].split(", ");
+                active_line_region += regions.clone().count();
+                active_regions.extend(regions);
             }
 
             let mut keep = true;
@@ -438,17 +484,29 @@ impl MiniCore {
                 seen_regions.push(region);
                 keep &= self.has_flag(region);
             }
+            for &region in &inactive_regions {
+                assert!(!region.starts_with(' '), "region marker starts with a space: {region:?}");
+                self.assert_valid_flag(region);
+                seen_regions.push(region);
+                keep &= !self.has_flag(region);
+            }
 
             if keep {
                 buf.push_str(line);
             }
-            if line_region {
-                active_regions.pop().unwrap();
+            if active_line_region > 0 {
+                active_regions.drain(active_regions.len() - active_line_region..);
+            }
+            if inactive_line_region > 0 {
+                inactive_regions.drain(inactive_regions.len() - active_line_region..);
             }
         }
 
         if !active_regions.is_empty() {
             panic!("unclosed regions: {active_regions:?} Add an `endregion` comment");
+        }
+        if !inactive_regions.is_empty() {
+            panic!("unclosed regions: {inactive_regions:?} Add an `endregion` comment");
         }
 
         for flag in &self.valid_flags {
@@ -483,6 +541,7 @@ fn parse_fixture_gets_full_meta() {
         proc_macro_names,
         toolchain,
         target_data_layout: _,
+        target_arch: _,
     } = FixtureWithProjectMeta::parse(
         r#"
 //- toolchain: nightly

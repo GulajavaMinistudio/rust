@@ -45,7 +45,6 @@ use rustc_middle::bug;
 use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::*;
-use rustc_middle::ty::layout::LayoutOf;
 use rustc_middle::ty::{self, ScalarInt, TyCtxt};
 use rustc_mir_dataflow::lattice::HasBottom;
 use rustc_mir_dataflow::value_analysis::{Map, PlaceIndex, State, TrackElem};
@@ -85,11 +84,11 @@ impl<'tcx> crate::MirPass<'tcx> for JumpThreading {
             body,
             arena,
             map: Map::new(tcx, body, Some(MAX_PLACES)),
-            loop_headers: loop_headers(body),
+            maybe_loop_headers: loops::maybe_loop_headers(body),
             opportunities: Vec::new(),
         };
 
-        for bb in body.basic_blocks.indices() {
+        for (bb, _) in traversal::preorder(body) {
             finder.start_from_switch(bb);
         }
 
@@ -101,7 +100,7 @@ impl<'tcx> crate::MirPass<'tcx> for JumpThreading {
 
         // Verify that we do not thread through a loop header.
         for to in opportunities.iter() {
-            assert!(to.chain.iter().all(|&block| !finder.loop_headers.contains(block)));
+            assert!(to.chain.iter().all(|&block| !finder.maybe_loop_headers.contains(block)));
         }
         OpportunitySet::new(body, opportunities).apply(body);
     }
@@ -125,7 +124,7 @@ struct TOFinder<'a, 'tcx> {
     ecx: InterpCx<'tcx, DummyMachine>,
     body: &'a Body<'tcx>,
     map: Map<'tcx>,
-    loop_headers: DenseBitSet<BasicBlock>,
+    maybe_loop_headers: DenseBitSet<BasicBlock>,
     /// We use an arena to avoid cloning the slices when cloning `state`.
     arena: &'a DroplessArena,
     opportunities: Vec<ThreadingOpportunity>,
@@ -191,7 +190,7 @@ impl<'a, 'tcx> TOFinder<'a, 'tcx> {
     #[instrument(level = "trace", skip(self))]
     fn start_from_switch(&mut self, bb: BasicBlock) {
         let bbdata = &self.body[bb];
-        if bbdata.is_cleanup || self.loop_headers.contains(bb) {
+        if bbdata.is_cleanup || self.maybe_loop_headers.contains(bb) {
             return;
         }
         let Some((discr, targets)) = bbdata.terminator().kind.as_switch() else { return };
@@ -236,7 +235,7 @@ impl<'a, 'tcx> TOFinder<'a, 'tcx> {
         depth: usize,
     ) {
         // Do not thread through loop headers.
-        if self.loop_headers.contains(bb) {
+        if self.maybe_loop_headers.contains(bb) {
             return;
         }
 
@@ -333,8 +332,7 @@ impl<'a, 'tcx> TOFinder<'a, 'tcx> {
         stmt: &Statement<'tcx>,
     ) -> Option<(Place<'tcx>, Option<TrackElem>)> {
         match stmt.kind {
-            StatementKind::Assign(box (place, _))
-            | StatementKind::Deinit(box place) => Some((place, None)),
+            StatementKind::Assign(box (place, _)) => Some((place, None)),
             StatementKind::SetDiscriminant { box place, variant_index: _ } => {
                 Some((place, Some(TrackElem::Discriminant)))
             }
@@ -388,7 +386,7 @@ impl<'a, 'tcx> TOFinder<'a, 'tcx> {
             lhs,
             constant,
             &mut |elem, op| match elem {
-                TrackElem::Field(idx) => self.ecx.project_field(op, idx.as_usize()).discard_err(),
+                TrackElem::Field(idx) => self.ecx.project_field(op, idx).discard_err(),
                 TrackElem::Variant(idx) => self.ecx.project_downcast(op, idx).discard_err(),
                 TrackElem::Discriminant => {
                     let variant = self.ecx.read_discriminant(op).discard_err()?;
@@ -456,7 +454,6 @@ impl<'a, 'tcx> TOFinder<'a, 'tcx> {
         match rhs {
             Rvalue::Use(operand) => self.process_operand(bb, lhs, operand, state),
             // Transfer the conditions on the copy rhs.
-            Rvalue::CopyForDeref(rhs) => self.process_operand(bb, lhs, &Operand::Copy(*rhs), state),
             Rvalue::Discriminant(rhs) => {
                 let Some(rhs) = self.map.find_discr(rhs.as_ref()) else { return };
                 state.insert_place_idx(rhs, lhs, &self.map);
@@ -832,22 +829,4 @@ fn predecessor_count(body: &Body<'_>) -> IndexVec<BasicBlock, usize> {
 enum Update {
     Incr,
     Decr,
-}
-
-/// Compute the set of loop headers in the given body. We define a loop header as a block which has
-/// at least a predecessor which it dominates. This definition is only correct for reducible CFGs.
-/// But if the CFG is already irreducible, there is no point in trying much harder.
-/// is already irreducible.
-fn loop_headers(body: &Body<'_>) -> DenseBitSet<BasicBlock> {
-    let mut loop_headers = DenseBitSet::new_empty(body.basic_blocks.len());
-    let dominators = body.basic_blocks.dominators();
-    // Only visit reachable blocks.
-    for (bb, bbdata) in traversal::preorder(body) {
-        for succ in bbdata.terminator().successors() {
-            if dominators.dominates(succ, bb) {
-                loop_headers.insert(succ);
-            }
-        }
-    }
-    loop_headers
 }

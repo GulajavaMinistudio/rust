@@ -188,14 +188,44 @@ where
             .map(|infer_ok| self.register_infer_ok_obligations(infer_ok))
     }
 
-    #[must_use]
-    pub fn select_where_possible(&self) -> Vec<E> {
-        self.engine.borrow_mut().select_where_possible(self.infcx)
+    /// Computes the least-upper-bound, or mutual supertype, of two values.
+    pub fn lub<T: ToTrace<'tcx>>(
+        &self,
+        cause: &ObligationCause<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+        expected: T,
+        actual: T,
+    ) -> Result<T, TypeError<'tcx>> {
+        self.infcx
+            .at(cause, param_env)
+            .lub(expected, actual)
+            .map(|infer_ok| self.register_infer_ok_obligations(infer_ok))
     }
 
+    /// Go over the list of pending obligations and try to evaluate them.
+    ///
+    /// For each result:
+    /// Ok: remove the obligation from the list
+    /// Ambiguous: leave the obligation in the list to be evaluated later
+    /// Err: remove the obligation from the list and return an error
+    ///
+    /// Returns a list of errors from obligations that evaluated to Err.
     #[must_use]
-    pub fn select_all_or_error(&self) -> Vec<E> {
-        self.engine.borrow_mut().select_all_or_error(self.infcx)
+    pub fn try_evaluate_obligations(&self) -> Vec<E> {
+        self.engine.borrow_mut().try_evaluate_obligations(self.infcx)
+    }
+
+    /// Evaluate all pending obligations, return error if they can't be evaluated.
+    ///
+    /// For each result:
+    /// Ok: remove the obligation from the list
+    /// Ambiguous: remove the obligation from the list and return an error
+    /// Err: remove the obligation from the list and return an error
+    ///
+    /// Returns a list of errors from obligations that evaluated to Ambiguous or Err.
+    #[must_use]
+    pub fn evaluate_obligations_error_on_ambiguity(&self) -> Vec<E> {
+        self.engine.borrow_mut().evaluate_obligations_error_on_ambiguity(self.infcx)
     }
 
     /// Returns the not-yet-processed and stalled obligations from the

@@ -292,7 +292,6 @@ impl<'tcx> Validator<'_, 'tcx> {
         match elem {
             // Recurse directly.
             ProjectionElem::ConstantIndex { .. }
-            | ProjectionElem::Subtype(_)
             | ProjectionElem::Subslice { .. }
             | ProjectionElem::UnwrapUnsafeBinder(_) => {}
 
@@ -437,9 +436,7 @@ impl<'tcx> Validator<'_, 'tcx> {
                 self.validate_operand(op)?
             }
 
-            Rvalue::Discriminant(place) | Rvalue::Len(place) => {
-                self.validate_place(place.as_ref())?
-            }
+            Rvalue::Discriminant(place) => self.validate_place(place.as_ref())?,
 
             Rvalue::ThreadLocalRef(_) => return Err(Unpromotable),
 
@@ -453,11 +450,8 @@ impl<'tcx> Validator<'_, 'tcx> {
             }
 
             Rvalue::NullaryOp(op, _) => match op {
-                NullOp::SizeOf => {}
-                NullOp::AlignOf => {}
                 NullOp::OffsetOf(_) => {}
-                NullOp::UbChecks => {}
-                NullOp::ContractChecks => {}
+                NullOp::RuntimeChecks(_) => {}
             },
 
             Rvalue::ShallowInitBox(_, _) => return Err(Unpromotable),
@@ -731,23 +725,22 @@ struct Promoter<'a, 'tcx> {
 impl<'a, 'tcx> Promoter<'a, 'tcx> {
     fn new_block(&mut self) -> BasicBlock {
         let span = self.promoted.span;
-        self.promoted.basic_blocks_mut().push(BasicBlockData {
-            statements: vec![],
-            terminator: Some(Terminator {
+        self.promoted.basic_blocks_mut().push(BasicBlockData::new(
+            Some(Terminator {
                 source_info: SourceInfo::outermost(span),
                 kind: TerminatorKind::Return,
             }),
-            is_cleanup: false,
-        })
+            false,
+        ))
     }
 
     fn assign(&mut self, dest: Local, rvalue: Rvalue<'tcx>, span: Span) {
         let last = self.promoted.basic_blocks.last_index().unwrap();
         let data = &mut self.promoted[last];
-        data.statements.push(Statement {
-            source_info: SourceInfo::outermost(span),
-            kind: StatementKind::Assign(Box::new((Place::from(dest), rvalue))),
-        });
+        data.statements.push(Statement::new(
+            SourceInfo::outermost(span),
+            StatementKind::Assign(Box::new((Place::from(dest), rvalue))),
+        ));
     }
 
     fn is_temp_kind(&self, local: Local) -> bool {
@@ -876,7 +869,8 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             let mut promoted_operand = |ty, span| {
                 promoted.span = span;
                 promoted.local_decls[RETURN_PLACE] = LocalDecl::new(ty, span);
-                let args = tcx.erase_regions(GenericArgs::identity_for_item(tcx, def));
+                let args =
+                    tcx.erase_and_anonymize_regions(GenericArgs::identity_for_item(tcx, def));
                 let uneval =
                     mir::UnevaluatedConst { def, args, promoted: Some(next_promoted_index) };
 
@@ -914,13 +908,13 @@ impl<'a, 'tcx> Promoter<'a, 'tcx> {
             assert_eq!(self.temps.push(TempState::Unpromotable), promoted_ref);
 
             let promoted_operand = promoted_operand(ref_ty, span);
-            let promoted_ref_statement = Statement {
-                source_info: statement.source_info,
-                kind: StatementKind::Assign(Box::new((
+            let promoted_ref_statement = Statement::new(
+                statement.source_info,
+                StatementKind::Assign(Box::new((
                     Place::from(promoted_ref),
                     Rvalue::Use(Operand::Constant(Box::new(promoted_operand))),
                 ))),
-            };
+            );
             self.extra_statements.push((loc, promoted_ref_statement));
 
             (
@@ -998,12 +992,11 @@ fn promote_candidates<'tcx>(
     for candidate in candidates.into_iter().rev() {
         let Location { block, statement_index } = candidate.location;
         if let StatementKind::Assign(box (place, _)) = &body[block].statements[statement_index].kind
+            && let Some(local) = place.as_local()
         {
-            if let Some(local) = place.as_local() {
-                if temps[local] == TempState::PromotedOut {
-                    // Already promoted.
-                    continue;
-                }
+            if temps[local] == TempState::PromotedOut {
+                // Already promoted.
+                continue;
             }
         }
 
@@ -1053,7 +1046,7 @@ fn promote_candidates<'tcx>(
     // Eliminate assignments to, and drops of promoted temps.
     let promoted = |index: Local| temps[index] == TempState::PromotedOut;
     for block in body.basic_blocks_mut() {
-        block.statements.retain(|statement| match &statement.kind {
+        block.retain_statements(|statement| match &statement.kind {
             StatementKind::Assign(box (place, _)) => {
                 if let Some(index) = place.as_local() {
                     !promoted(index)
@@ -1067,11 +1060,11 @@ fn promote_candidates<'tcx>(
             _ => true,
         });
         let terminator = block.terminator_mut();
-        if let TerminatorKind::Drop { place, target, .. } = &terminator.kind {
-            if let Some(index) = place.as_local() {
-                if promoted(index) {
-                    terminator.kind = TerminatorKind::Goto { target: *target };
-                }
+        if let TerminatorKind::Drop { place, target, .. } = &terminator.kind
+            && let Some(index) = place.as_local()
+        {
+            if promoted(index) {
+                terminator.kind = TerminatorKind::Goto { target: *target };
             }
         }
     }

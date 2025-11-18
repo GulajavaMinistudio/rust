@@ -1,8 +1,7 @@
 error: layout_of(A) = Layout {
            size: Size(1 bytes),
-           align: AbiAndPrefAlign {
+           align: AbiAlign {
                abi: Align(1 bytes),
-               pref: Align(4 bytes),
            },
            backend_repr: Scalar(
                Initialized {
@@ -45,9 +44,8 @@ error: layout_of(A) = Layout {
                variants: [
                    Layout {
                        size: Size(1 bytes),
-                       align: AbiAndPrefAlign {
+                       align: AbiAlign {
                            abi: Align(1 bytes),
-                           pref: Align(4 bytes),
                        },
                        backend_repr: Memory {
                            sized: true,
@@ -71,16 +69,15 @@ error: layout_of(A) = Layout {
            unadjusted_abi_align: Align(1 bytes),
            randomization_seed: $SEED,
        }
-  --> $DIR/thumb-enum.rs:18:1
+  --> $DIR/thumb-enum.rs:19:1
    |
 LL | enum A { Apple }
    | ^^^^^^
 
 error: layout_of(B) = Layout {
            size: Size(1 bytes),
-           align: AbiAndPrefAlign {
+           align: AbiAlign {
                abi: Align(1 bytes),
-               pref: Align(4 bytes),
            },
            backend_repr: Scalar(
                Initialized {
@@ -123,9 +120,8 @@ error: layout_of(B) = Layout {
                variants: [
                    Layout {
                        size: Size(1 bytes),
-                       align: AbiAndPrefAlign {
+                       align: AbiAlign {
                            abi: Align(1 bytes),
-                           pref: Align(4 bytes),
                        },
                        backend_repr: Memory {
                            sized: true,
@@ -149,16 +145,15 @@ error: layout_of(B) = Layout {
            unadjusted_abi_align: Align(1 bytes),
            randomization_seed: $SEED,
        }
-  --> $DIR/thumb-enum.rs:22:1
+  --> $DIR/thumb-enum.rs:23:1
    |
 LL | enum B { Banana = 255, }
    | ^^^^^^
 
 error: layout_of(C) = Layout {
            size: Size(2 bytes),
-           align: AbiAndPrefAlign {
+           align: AbiAlign {
                abi: Align(2 bytes),
-               pref: Align(4 bytes),
            },
            backend_repr: Scalar(
                Initialized {
@@ -201,9 +196,8 @@ error: layout_of(C) = Layout {
                variants: [
                    Layout {
                        size: Size(2 bytes),
-                       align: AbiAndPrefAlign {
+                       align: AbiAlign {
                            abi: Align(2 bytes),
-                           pref: Align(4 bytes),
                        },
                        backend_repr: Memory {
                            sized: true,
@@ -227,16 +221,15 @@ error: layout_of(C) = Layout {
            unadjusted_abi_align: Align(2 bytes),
            randomization_seed: $SEED,
        }
-  --> $DIR/thumb-enum.rs:26:1
+  --> $DIR/thumb-enum.rs:27:1
    |
 LL | enum C { Chaenomeles = 256, }
    | ^^^^^^
 
 error: layout_of(P) = Layout {
            size: Size(4 bytes),
-           align: AbiAndPrefAlign {
+           align: AbiAlign {
                abi: Align(4 bytes),
-               pref: Align(4 bytes),
            },
            backend_repr: Scalar(
                Initialized {
@@ -279,9 +272,8 @@ error: layout_of(P) = Layout {
                variants: [
                    Layout {
                        size: Size(4 bytes),
-                       align: AbiAndPrefAlign {
+                       align: AbiAlign {
                            abi: Align(4 bytes),
-                           pref: Align(4 bytes),
                        },
                        backend_repr: Memory {
                            sized: true,
@@ -305,16 +297,15 @@ error: layout_of(P) = Layout {
            unadjusted_abi_align: Align(4 bytes),
            randomization_seed: $SEED,
        }
-  --> $DIR/thumb-enum.rs:30:1
+  --> $DIR/thumb-enum.rs:31:1
    |
 LL | enum P { Peach = 0x1000_0000isize, }
    | ^^^^^^
 
 error: layout_of(T) = Layout {
            size: Size(4 bytes),
-           align: AbiAndPrefAlign {
+           align: AbiAlign {
                abi: Align(4 bytes),
-               pref: Align(4 bytes),
            },
            backend_repr: Scalar(
                Initialized {
@@ -357,9 +348,8 @@ error: layout_of(T) = Layout {
                variants: [
                    Layout {
                        size: Size(4 bytes),
-                       align: AbiAndPrefAlign {
+                       align: AbiAlign {
                            abi: Align(4 bytes),
-                           pref: Align(4 bytes),
                        },
                        backend_repr: Memory {
                            sized: true,
@@ -383,7 +373,7 @@ error: layout_of(T) = Layout {
            unadjusted_abi_align: Align(4 bytes),
            randomization_seed: $SEED,
        }
-  --> $DIR/thumb-enum.rs:36:1
+  --> $DIR/thumb-enum.rs:37:1
    |
 LL | enum T { Tangerine = TANGERINE as isize }
    | ^^^^^^

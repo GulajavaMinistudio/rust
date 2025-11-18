@@ -1,8 +1,7 @@
 //@ compile-flags: -Znext-solver
 #![feature(const_trait_impl)]
 
-#[const_trait]
-trait ConstDefaultFn: Sized {
+const trait ConstDefaultFn: Sized {
     fn b(self);
 
     fn a(self) {
@@ -23,7 +22,7 @@ impl const ConstDefaultFn for ConstImpl {
 
 const fn test() {
     NonConstImpl.a();
-    //~^ ERROR the trait bound `NonConstImpl: ~const ConstDefaultFn` is not satisfied
+    //~^ ERROR the trait bound `NonConstImpl: [const] ConstDefaultFn` is not satisfied
     ConstImpl.a();
 }
 

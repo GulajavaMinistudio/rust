@@ -8,6 +8,30 @@ parse_array_brackets_instead_of_braces = this is a block expression, not an arra
 
 parse_array_index_offset_of = array indexing not supported in offset_of
 
+parse_asm_expected_comma = expected token: `,`
+    .label = expected `,`
+
+parse_asm_expected_other = expected operand, {$is_inline_asm ->
+    [false] options
+    *[true] clobber_abi, options
+    }, or additional template string
+
+parse_asm_expected_register_class_or_explicit_register = expected register class or explicit register
+
+parse_asm_expected_string_literal = expected string literal
+    .label = not a string literal
+
+parse_asm_non_abi = at least one abi must be provided as an argument to `clobber_abi`
+
+parse_asm_requires_template = requires at least a template string argument
+
+parse_asm_sym_no_path = expected a path for argument to `sym`
+
+parse_asm_underscore_input = _ cannot be used for input operands
+
+parse_asm_unsupported_operand = the `{$symbol}` operand cannot be used with `{$macro_name}!`
+    .label = the `{$symbol}` operand is not meaningful for global-scoped inline assembly, remove it
+
 parse_assignment_else_not_allowed = <assignment> ... else {"{"} ... {"}"} is not allowed
 
 parse_associated_static_item_not_allowed = associated `static` items are not allowed
@@ -34,7 +58,7 @@ parse_async_use_order_incorrect = the order of `use` and `async` is incorrect
 parse_at_dot_dot_in_struct_pattern = `@ ..` is not supported in struct patterns
     .suggestion = bind to each field separately or, if you don't need them, just remove `{$ident} @`
 
-parse_at_in_struct_pattern = Unexpected `@` in struct pattern
+parse_at_in_struct_pattern = unexpected `@` in struct pattern
     .note = struct patterns use `field: pattern` syntax to bind to fields
     .help = consider replacing `new_name @ field_name` with `field_name: new_name` if that is what you intended
 
@@ -44,8 +68,19 @@ parse_attr_after_generic = trailing attribute after generic parameter
 parse_attr_without_generics = attribute without generic parameters
     .label = attributes are only permitted when preceding parameters
 
+parse_attribute_on_empty_type = attributes cannot be applied here
+    .label = attributes are not allowed here
+
+parse_attribute_on_generic_arg = attributes cannot be applied to generic arguments
+    .label = attributes are not allowed here
+    .suggestion = remove attribute from here
+
 parse_attribute_on_param_type = attributes cannot be applied to a function parameter's type
     .label = attributes are not allowed here
+
+parse_attribute_on_type = attributes cannot be applied to types
+    .label = attributes are not allowed here
+    .suggestion = remove attribute from here
 
 parse_bad_assoc_type_bounds = bounds on associated types do not belong here
     .label = belongs in `where` clause
@@ -87,7 +122,6 @@ parse_cannot_be_raw_lifetime = `{$ident}` cannot be a raw lifetime
 parse_catch_after_try = keyword `catch` cannot follow a `try` block
     .help = try using `match` on the result of the `try` block instead
 
-parse_cfg_attr_bad_delim = wrong `cfg_attr` delimiters
 parse_colon_as_semi = statements are terminated with a semicolon
     .suggestion = use a semicolon instead
 
@@ -154,6 +188,10 @@ parse_dotdotdot = unexpected token: `...`
 parse_dotdotdot_rest_pattern = unexpected `...`
     .label = not a valid pattern
     .suggestion = for a rest pattern, use `..` instead of `...`
+    .note = only `extern "C"` and `extern "C-unwind"` functions may have a C variable argument list
+
+parse_dotdotdot_rest_type = unexpected `...`
+    .note = only `extern "C"` and `extern "C-unwind"` functions may have a C variable argument list
 
 parse_double_colon_in_bound = expected `:` followed by trait or lifetime
     .suggestion = use single colon
@@ -275,10 +313,12 @@ parse_float_literal_unsupported_base = {$base} float literal is not supported
 parse_fn_pointer_cannot_be_async = an `fn` pointer type cannot be `async`
     .label = `async` because of this
     .suggestion = remove the `async` qualifier
+    .note = allowed qualifiers are: `unsafe` and `extern`
 
 parse_fn_pointer_cannot_be_const = an `fn` pointer type cannot be `const`
     .label = `const` because of this
     .suggestion = remove the `const` qualifier
+    .note = allowed qualifiers are: `unsafe` and `extern`
 
 parse_fn_ptr_with_generics = function pointer types may not have generic parameters
     .suggestion = consider moving the lifetime {$arity ->
@@ -322,6 +362,20 @@ parse_generics_in_path = unexpected generic arguments in path
 
 parse_help_set_edition_cargo = set `edition = "{$edition}"` in `Cargo.toml`
 parse_help_set_edition_standalone = pass `--edition {$edition}` to `rustc`
+
+parse_hidden_unicode_codepoints = unicode codepoint changing visible direction of text present in {$label}
+    .label = this {$label} contains {$count ->
+        [one] an invisible
+        *[other] invisible
+    } unicode text flow control {$count ->
+        [one] codepoint
+        *[other] codepoints
+    }
+    .note = these kind of unicode codepoints change the way text flows on applications that support them, but can cause confusion because they change the order of characters on the screen
+    .suggestion_remove = if their presence wasn't intentional, you can remove them
+    .suggestion_escape = if you want to keep them but make them visible in your source code, you can escape them
+    .no_suggestion_note_escape = if you want to keep them but make them visible in your source code, you can escape them: {$escaped}
+
 parse_if_expression_missing_condition = missing condition for `if` expression
     .condition_label = expected condition here
     .block_label = if this block is the condition of the `if` expression, then it must be followed by another block
@@ -399,11 +453,6 @@ parse_inner_doc_comment_not_permitted = expected outer doc comment
     .label_does_not_annotate_this = the inner doc comment doesn't annotate this {$item}
     .sugg_change_inner_to_outer = to annotate the {$item}, change the doc comment from inner to outer style
 
-parse_invalid_attr_unsafe = `{$name}` is not an unsafe attribute
-    .label = this is not an unsafe attribute
-    .suggestion = remove the `unsafe(...)`
-    .note = extraneous unsafe is not allowed in attributes
-
 parse_invalid_block_macro_segment = cannot use a `block` macro fragment here
     .label = the `block` fragment is within this context
     .suggestion = wrap this in another block
@@ -431,14 +480,8 @@ parse_invalid_dyn_keyword = invalid `dyn` keyword
 parse_invalid_expression_in_let_else = a `{$operator}` expression cannot be directly assigned in `let...else`
 parse_invalid_identifier_with_leading_number = identifiers cannot start with a number
 
-parse_invalid_label =
-    invalid label name `{$name}`
-
 parse_invalid_literal_suffix_on_tuple_index = suffixes on a tuple index are invalid
     .label = invalid suffix `{$suffix}`
-    .tuple_exception_line_1 = `{$suffix}` is *temporarily* accepted on tuple index fields as it was incorrectly accepted on stable for a few releases
-    .tuple_exception_line_2 = on proc macros, you'll want to use `syn::Index::from` or `proc_macro::Literal::*_unsuffixed` for code that will desugar to tuple field access
-    .tuple_exception_line_3 = see issue #60210 <https://github.com/rust-lang/rust/issues/60210> for more information
 
 parse_invalid_logical_operator = `{$incorrect}` is not a logical operator
     .note = unlike in e.g., Python and PHP, `&&` and `||` are used for logical operators
@@ -463,6 +506,8 @@ parse_invalid_unicode_escape = invalid unicode character escape
 parse_invalid_variable_declaration =
     invalid variable declaration
 
+parse_keyword_label = labels cannot use keyword names
+
 parse_keyword_lifetime =
     lifetimes cannot use keyword names
 
@@ -485,6 +530,8 @@ parse_leading_underscore_unicode_escape_label = invalid start of unicode escape
 
 parse_left_arrow_operator = unexpected token: `<-`
     .suggestion = if you meant to write a comparison against a negative value, add a space in between `<` and `-`
+
+parse_let_chain_pre_2024 = let chains are only allowed in Rust 2024 or later
 
 parse_lifetime_after_mut = lifetime must precede `mut`
     .suggestion = place the lifetime before `mut`
@@ -525,10 +572,6 @@ parse_macro_rules_missing_bang = expected `!` after `macro_rules`
 parse_macro_rules_visibility = can't qualify macro_rules invocation with `{$vis}`
     .suggestion = try exporting the macro
 
-parse_malformed_cfg_attr = malformed `cfg_attr` attribute input
-    .suggestion = missing condition and attribute
-    .note = for more information, visit <https://doc.rust-lang.org/reference/conditional-compilation.html#the-cfg_attr-attribute>
-
 parse_malformed_loop_label = malformed loop label
     .suggestion = use the correct loop label format
 
@@ -561,9 +604,6 @@ parse_maybe_recover_from_bad_type_plus =
 parse_maybe_report_ambiguous_plus =
     ambiguous `+` in a type
     .suggestion = use parentheses to disambiguate
-
-parse_meta_bad_delim = wrong meta list delimiters
-parse_meta_bad_delim_suggestion = the delimiters should be `(` and `)`
 
 parse_mismatched_closing_delimiter = mismatched closing delimiter: `{$delimiter}`
     .label_unmatched = mismatched closing delimiter
@@ -603,7 +643,7 @@ parse_missing_for_in_trait_impl = missing `for` in a trait impl
     .suggestion = add `for` here
 
 parse_missing_in_in_for_loop = missing `in` in `for` loop
-    .use_in_not_of = try using `in` here instead
+    .use_in = try using `in` here instead
     .add_in = try adding `in` here
 
 parse_missing_let_before_mut = missing keyword
@@ -709,9 +749,6 @@ parse_parentheses_with_struct_fields = invalid `struct` delimiters or `fn` call 
     .suggestion_braces_for_struct = if `{$type}` is a struct, use braces as delimiters
     .suggestion_no_fields_for_fn = if `{$type}` is a function, use the arguments directly
 
-parse_parenthesized_lifetime = parenthesized lifetime bounds are not supported
-parse_parenthesized_lifetime_suggestion = remove the parentheses
-
 parse_path_double_colon = path separator must be a double colon
     .suggestion = use a double colon instead
 
@@ -815,7 +852,6 @@ parse_switch_ref_box_order = switch the order of `ref` and `box`
     .suggestion = swap them
 
 parse_ternary_operator = Rust has no ternary operator
-    .help = use an `if-else` expression instead
 
 parse_tilde_is_not_unary_operator = `~` cannot be used as a unary operator
     .suggestion = use `!` to perform bitwise not
@@ -824,11 +860,15 @@ parse_too_many_hashes = too many `#` symbols: raw strings may be delimited by up
 
 parse_too_short_hex_escape = numeric character escape is too short
 
-parse_trailing_vert_not_allowed = a trailing `|` is not allowed in an or-pattern
-    .suggestion = remove the `{$token}`
+parse_trailing_vert_not_allowed = a trailing `{$token}` is not allowed in an or-pattern
 
 parse_trait_alias_cannot_be_auto = trait aliases cannot be `auto`
 parse_trait_alias_cannot_be_unsafe = trait aliases cannot be `unsafe`
+
+parse_trait_impl_modifier_in_inherent_impl = inherent impls cannot be {$modifier_name}
+    .because = {$modifier_name} because of this
+    .type = inherent impl for this type
+    .note = only trait implementations may be annotated with `{$modifier}`
 
 parse_transpose_dyn_or_impl = `for<...>` expected after `{$kw}`, not before
     .suggestion = move `{$kw}` before the `for<...>`
@@ -949,10 +989,6 @@ parse_unmatched_angle_brackets = {$num_extra_brackets ->
            *[other] remove extra angle brackets
         }
 
-parse_unsafe_attr_outside_unsafe = unsafe attribute used without unsafe
-    .label = usage of unsafe attribute
-parse_unsafe_attr_outside_unsafe_suggestion = wrap the attribute in `unsafe(...)`
-
 
 parse_unskipped_whitespace = whitespace symbol '{$ch}' is not skipped
     .label = {parse_unskipped_whitespace}
@@ -963,8 +999,13 @@ parse_use_empty_block_not_semi = expected { "`{}`" }, found `;`
 parse_use_eq_instead = unexpected `==`
     .suggestion = try using `=` instead
 
+parse_use_if_else = use an `if-else` expression instead
+
 parse_use_let_not_auto = write `let` instead of `auto` to introduce a new variable
 parse_use_let_not_var = write `let` instead of `var` to introduce a new variable
+
+parse_varargs_without_pattern = missing pattern for `...` argument
+    .suggestion = name the argument, or use `_` to continue ignoring it
 
 parse_visibility_not_followed_by_item = visibility `{$vis}` is not followed by an item
     .label = the visibility

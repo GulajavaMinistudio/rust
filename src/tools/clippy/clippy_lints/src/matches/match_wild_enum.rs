@@ -1,5 +1,6 @@
 use clippy_utils::diagnostics::{span_lint_and_sugg, span_lint_and_then};
-use clippy_utils::ty::is_type_diagnostic_item;
+use clippy_utils::res::MaybeDef;
+use clippy_utils::source::SpanRangeExt;
 use clippy_utils::{is_refutable, peel_hir_pat_refs, recurse_or_patterns};
 use rustc_errors::Applicability;
 use rustc_hir::def::{CtorKind, DefKind, Res};
@@ -15,8 +16,7 @@ pub(crate) fn check(cx: &LateContext<'_>, ex: &Expr<'_>, arms: &[Arm<'_>]) {
     let ty = cx.typeck_results().expr_ty(ex).peel_refs();
     let adt_def = match ty.kind() {
         ty::Adt(adt_def, _)
-            if adt_def.is_enum()
-                && !(is_type_diagnostic_item(cx, ty, sym::Option) || is_type_diagnostic_item(cx, ty, sym::Result)) =>
+            if adt_def.is_enum() && !(ty.is_diag_item(cx, sym::Option) || ty.is_diag_item(cx, sym::Result)) =>
         {
             adt_def
         },
@@ -108,7 +108,7 @@ pub(crate) fn check(cx: &LateContext<'_>, ex: &Expr<'_>, arms: &[Arm<'_>]) {
                     },
                     _,
                 ) => path_prefix.with_prefix(path.segments),
-                _ => (),
+                QPath::TypeRelative(..) => (),
             }
         });
     }
@@ -116,11 +116,12 @@ pub(crate) fn check(cx: &LateContext<'_>, ex: &Expr<'_>, arms: &[Arm<'_>]) {
     let format_suggestion = |variant: &VariantDef| {
         format!(
             "{}{}{}{}",
-            if let Some(ident) = wildcard_ident {
-                format!("{} @ ", ident.name)
-            } else {
-                String::new()
-            },
+            wildcard_ident.map_or(String::new(), |ident| {
+                ident
+                    .span
+                    .get_source_text(cx)
+                    .map_or_else(|| format!("{} @ ", ident.name), |s| format!("{s} @ "))
+            }),
             if let CommonPrefixSearcher::Path(path_prefix) = path_prefix {
                 let mut s = String::new();
                 for seg in path_prefix {
@@ -138,7 +139,7 @@ pub(crate) fn check(cx: &LateContext<'_>, ex: &Expr<'_>, arms: &[Arm<'_>]) {
                 Some(CtorKind::Fn) if variant.fields.len() == 1 => "(_)",
                 Some(CtorKind::Fn) => "(..)",
                 Some(CtorKind::Const) => "",
-                None => "{ .. }",
+                None => " { .. }",
             }
         )
     };

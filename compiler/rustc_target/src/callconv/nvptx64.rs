@@ -1,6 +1,6 @@
 use rustc_abi::{HasDataLayout, Reg, Size, TyAbiInterface};
 
-use super::{ArgAttribute, ArgAttributes, ArgExtension, CastTarget};
+use super::CastTarget;
 use crate::callconv::{ArgAbi, FnAbi, Uniform};
 
 fn classify_ret<Ty>(ret: &mut ArgAbi<'_, Ty>) {
@@ -11,7 +11,14 @@ fn classify_ret<Ty>(ret: &mut ArgAbi<'_, Ty>) {
     }
 }
 
-fn classify_arg<Ty>(arg: &mut ArgAbi<'_, Ty>) {
+fn classify_arg<'a, Ty, C>(cx: &C, arg: &mut ArgAbi<'a, Ty>)
+where
+    Ty: TyAbiInterface<'a, C> + Copy,
+{
+    if arg.layout.pass_indirectly_in_non_rustic_abis(cx) {
+        arg.make_indirect();
+        return;
+    }
     if arg.layout.is_aggregate() && arg.layout.is_sized() {
         classify_aggregate(arg)
     } else if arg.layout.size.bits() < 32 && arg.layout.is_sized() {
@@ -21,7 +28,7 @@ fn classify_arg<Ty>(arg: &mut ArgAbi<'_, Ty>) {
 
 /// the pass mode used for aggregates in arg and ret position
 fn classify_aggregate<Ty>(arg: &mut ArgAbi<'_, Ty>) {
-    let align_bytes = arg.layout.align.abi.bytes();
+    let align_bytes = arg.layout.align.bytes();
     let size = arg.layout.size;
 
     let reg = match align_bytes {
@@ -34,16 +41,10 @@ fn classify_aggregate<Ty>(arg: &mut ArgAbi<'_, Ty>) {
     };
 
     if align_bytes == size.bytes() {
-        arg.cast_to(CastTarget {
-            prefix: [Some(reg), None, None, None, None, None, None, None],
-            rest: Uniform::new(Reg::i8(), Size::from_bytes(0)),
-            attrs: ArgAttributes {
-                regular: ArgAttribute::default(),
-                arg_ext: ArgExtension::None,
-                pointee_size: Size::ZERO,
-                pointee_align: None,
-            },
-        });
+        arg.cast_to(CastTarget::prefixed(
+            [Some(reg), None, None, None, None, None, None, None],
+            Uniform::new(Reg::i8(), Size::ZERO),
+        ));
     } else {
         arg.cast_to(Uniform::new(reg, size));
     }
@@ -66,7 +67,7 @@ where
     //     "`extern \"ptx-kernel\"` doesn't allow passing types other than primitives and structs"
     // );
 
-    let align_bytes = arg.layout.align.abi.bytes();
+    let align_bytes = arg.layout.align.bytes();
 
     let unit = match align_bytes {
         1 => Reg::i8(),
@@ -78,17 +79,19 @@ where
     };
     if arg.layout.size.bytes() / align_bytes == 1 {
         // Make sure we pass the struct as array at the LLVM IR level and not as a single integer.
-        arg.cast_to(CastTarget {
-            prefix: [Some(unit), None, None, None, None, None, None, None],
-            rest: Uniform::new(unit, Size::ZERO),
-            attrs: ArgAttributes::new(),
-        });
+        arg.cast_to(CastTarget::prefixed(
+            [Some(unit), None, None, None, None, None, None, None],
+            Uniform::new(unit, Size::ZERO),
+        ));
     } else {
         arg.cast_to(Uniform::new(unit, arg.layout.size));
     }
 }
 
-pub(crate) fn compute_abi_info<Ty>(fn_abi: &mut FnAbi<'_, Ty>) {
+pub(crate) fn compute_abi_info<'a, Ty, C>(cx: &C, fn_abi: &mut FnAbi<'a, Ty>)
+where
+    Ty: TyAbiInterface<'a, C> + Copy,
+{
     if !fn_abi.ret.is_ignore() {
         classify_ret(&mut fn_abi.ret);
     }
@@ -97,7 +100,7 @@ pub(crate) fn compute_abi_info<Ty>(fn_abi: &mut FnAbi<'_, Ty>) {
         if arg.is_ignore() {
             continue;
         }
-        classify_arg(arg);
+        classify_arg(cx, arg);
     }
 }
 

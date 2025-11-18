@@ -421,7 +421,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // Not all upvars are captured by ref, so use
                         // `apply_capture_kind_on_capture_ty` to ensure that we
                         // compute the right captured type.
-                        return apply_capture_kind_on_capture_ty(
+                        apply_capture_kind_on_capture_ty(
                             self.tcx,
                             upvar_ty,
                             capture,
@@ -430,7 +430,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             } else {
                                 self.tcx.lifetimes.re_erased
                             },
-                        );
+                        )
                     },
                 ),
             );
@@ -492,7 +492,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let final_upvar_tys = self.final_upvar_tys(closure_def_id);
         debug!(?closure_hir_id, ?args, ?final_upvar_tys);
 
-        if self.tcx.features().unsized_locals() || self.tcx.features().unsized_fn_params() {
+        if self.tcx.features().unsized_fn_params() {
             for capture in
                 self.typeck_results.borrow().closure_min_captures_flattened(closure_def_id)
             {
@@ -529,7 +529,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // process any deferred resolutions.
         let deferred_call_resolutions = self.remove_deferred_call_resolutions(closure_def_id);
         for deferred_call_resolution in deferred_call_resolutions {
-            deferred_call_resolution.resolve(self);
+            deferred_call_resolution.resolve(&FnCtxt::new(self, self.param_env, closure_def_id));
         }
     }
 
@@ -902,7 +902,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 fn is_field<'a>(p: &&Projection<'a>) -> bool {
                     match p.kind {
                         ProjectionKind::Field(_, _) => true,
-                        ProjectionKind::Deref | ProjectionKind::OpaqueCast => false,
+                        ProjectionKind::Deref
+                        | ProjectionKind::OpaqueCast
+                        | ProjectionKind::UnwrapUnsafeBinder => false,
                         p @ (ProjectionKind::Subslice | ProjectionKind::Index) => {
                             bug!("ProjectionKind {:?} was unexpected", p)
                         }
@@ -1041,7 +1043,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             }
                         }
                     }
-                    lint.note("for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2021/disjoint-capture-in-closures.html>");
+                    lint.note("for more information, see <https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html>");
 
                     let diagnostic_msg = format!(
                         "add a dummy let to cause {migrated_variables_concat} to be fully captured"
@@ -1487,7 +1489,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// Notation:
     /// - Ty(place): Type of place
     /// - `(a, b)`: Represents the function parameters `base_path_ty` and `captured_by_move_projs`
-    /// respectively.
+    ///   respectively.
     /// ```ignore (illustrative)
     ///                  (Ty(w), [ &[p, x], &[c] ])
     /// //                              |
@@ -1558,7 +1560,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
 
         let is_drop_defined_for_ty = |ty: Ty<'tcx>| {
-            let drop_trait = self.tcx.require_lang_item(hir::LangItem::Drop, Some(closure_span));
+            let drop_trait = self.tcx.require_lang_item(hir::LangItem::Drop, closure_span);
             self.infcx
                 .type_implements_trait(drop_trait, [ty], self.tcx.param_env(closure_def_id))
                 .must_apply_modulo_regions()
@@ -1741,7 +1743,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn should_log_capture_analysis(&self, closure_def_id: LocalDefId) -> bool {
-        self.tcx.has_attr(closure_def_id, sym::rustc_capture_analysis)
+        self.has_rustc_attrs && self.tcx.has_attr(closure_def_id, sym::rustc_capture_analysis)
     }
 
     fn log_capture_analysis_first_pass(
@@ -2173,9 +2175,10 @@ fn restrict_precision_for_unsafe(
     (place, curr_mode)
 }
 
-/// Truncate projections so that following rules are obeyed by the captured `place`:
+/// Truncate projections so that the following rules are obeyed by the captured `place`:
 /// - No Index projections are captured, since arrays are captured completely.
-/// - No unsafe block is required to capture `place`
+/// - No unsafe block is required to capture `place`.
+///
 /// Returns the truncated place and updated capture mode.
 fn restrict_capture_precision(
     place: Place<'_>,
@@ -2197,7 +2200,8 @@ fn restrict_capture_precision(
             }
             ProjectionKind::Deref => {}
             ProjectionKind::OpaqueCast => {}
-            ProjectionKind::Field(..) => {} // ignore
+            ProjectionKind::Field(..) => {}
+            ProjectionKind::UnwrapUnsafeBinder => {}
         }
     }
 
@@ -2268,6 +2272,7 @@ fn construct_place_string<'tcx>(tcx: TyCtxt<'_>, place: &Place<'tcx>) -> String 
             ProjectionKind::Index => String::from("Index"),
             ProjectionKind::Subslice => String::from("Subslice"),
             ProjectionKind::OpaqueCast => String::from("OpaqueCast"),
+            ProjectionKind::UnwrapUnsafeBinder => String::from("UnwrapUnsafeBinder"),
         };
         if i != 0 {
             projections_str.push(',');
@@ -2383,13 +2388,11 @@ fn migration_suggestion_for_2229(
 /// let mut p = Point { x: 10, y: 10 };
 ///
 /// let c = || {
-///     p.x     += 10;
-/// // ^ E1 ^
+///     p.x += 10; // E1
 ///     // ...
 ///     // More code
 ///     // ...
 ///     p.x += 10; // E2
-/// // ^ E2 ^
 /// };
 /// ```
 /// `CaptureKind` associated with both `E1` and `E2` will be ByRef(MutBorrow),

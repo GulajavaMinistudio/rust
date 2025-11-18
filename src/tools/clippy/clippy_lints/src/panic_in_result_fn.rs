@@ -1,6 +1,6 @@
 use clippy_utils::diagnostics::span_lint_and_then;
-use clippy_utils::macros::root_macro_call_first_node;
-use clippy_utils::ty::is_type_diagnostic_item;
+use clippy_utils::macros::{is_panic, root_macro_call_first_node};
+use clippy_utils::res::MaybeDef;
 use clippy_utils::visitors::{Descend, for_each_expr};
 use clippy_utils::{is_inside_always_const_context, return_ty};
 use core::ops::ControlFlow;
@@ -56,7 +56,7 @@ impl<'tcx> LateLintPass<'tcx> for PanicInResultFn {
             return;
         }
         let owner = cx.tcx.local_def_id_to_hir_id(def_id).expect_owner();
-        if is_type_diagnostic_item(cx, return_ty(cx, owner), sym::Result) {
+        if return_ty(cx, owner).is_diag_item(cx, sym::Result) {
             lint_impl_body(cx, span, body);
         }
     }
@@ -69,10 +69,11 @@ fn lint_impl_body<'tcx>(cx: &LateContext<'tcx>, impl_span: Span, body: &'tcx hir
             return ControlFlow::Continue(Descend::Yes);
         };
         if !is_inside_always_const_context(cx.tcx, e.hir_id)
-            && matches!(
-                cx.tcx.item_name(macro_call.def_id).as_str(),
-                "panic" | "assert" | "assert_eq" | "assert_ne"
-            )
+            && (is_panic(cx, macro_call.def_id)
+                || matches!(
+                    cx.tcx.get_diagnostic_name(macro_call.def_id),
+                    Some(sym::assert_macro | sym::assert_eq_macro | sym::assert_ne_macro)
+                ))
         {
             panics.push(macro_call.span);
             ControlFlow::Continue(Descend::No)

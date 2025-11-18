@@ -10,7 +10,7 @@ pushd rust
 
 command -v rg >/dev/null 2>&1 || cargo install ripgrep
 
-rm -r tests/ui/{unsized-locals/,lto/,linkage*} || true
+rm -r tests/ui/{lto/,linkage*} || true
 for test in $(rg --files-with-matches "lto" tests/{codegen-units,ui,incremental}); do
   rm $test
 done
@@ -34,6 +34,7 @@ git checkout -- tests/ui/entry-point/auxiliary/bad_main_functions.rs
 # vendor intrinsics
 rm tests/ui/asm/x86_64/evex512-implicit-feature.rs # unimplemented AVX512 x86 vendor intrinsic
 rm tests/ui/simd/dont-invalid-bitcast-x86_64.rs # unimplemented llvm.x86.sse41.round.ps
+rm tests/ui/simd/intrinsic/generic-arithmetic-pass.rs # unimplemented simd_funnel_{shl,shr}
 
 # exotic linkages
 rm tests/incremental/hashes/function_interfaces.rs
@@ -42,8 +43,14 @@ rm -r tests/run-make/naked-symbol-visibility
 
 # variadic arguments
 rm tests/ui/abi/mir/mir_codegen_calls_variadic.rs # requires float varargs
+rm tests/ui/c-variadic/naked.rs # same
 rm tests/ui/abi/variadic-ffi.rs # requires callee side vararg support
 rm -r tests/run-make/c-link-to-rust-va-list-fn # requires callee side vararg support
+rm tests/ui/c-variadic/valid.rs # same
+rm tests/ui/c-variadic/trait-method.rs # same
+rm tests/ui/c-variadic/inherent-method.rs # same
+rm tests/ui/sanitizer/kcfi-c-variadic.rs # same
+rm tests/ui/c-variadic/same-program-multiple-abis-x86_64.rs # variadics for calling conventions other than C unsupported
 rm tests/ui/delegation/fn-header.rs
 
 # misc unimplemented things
@@ -53,9 +60,16 @@ rm -r tests/run-make/split-debuginfo # same
 rm -r tests/run-make/target-specs # i686 not supported by Cranelift
 rm -r tests/run-make/mismatching-target-triples # same
 rm tests/ui/asm/x86_64/issue-96797.rs # const and sym inline asm operands don't work entirely correctly
+rm tests/ui/asm/global-asm-mono-sym-fn.rs # same
+rm tests/ui/asm/naked-asm-mono-sym-fn.rs # same
 rm tests/ui/asm/x86_64/goto.rs # inline asm labels not supported
+rm tests/ui/asm/label-operand.rs # same
 rm tests/ui/simd/simd-bitmask-notpow2.rs # non-pow-of-2 simd vector sizes
-rm -r tests/run-make/embed-source-dwarf # embedding sources in debuginfo
+rm -r tests/run-make/used-proc-macro # used(linker) isn't supported yet
+rm tests/ui/linking/no-gc-encapsulation-symbols.rs # same
+rm tests/ui/attributes/fn-align-dyn.rs # per-function alignment not supported
+rm -r tests/ui/explicit-tail-calls # tail calls
+rm -r tests/run-make/pointer-auth-link-with-c # pointer auth
 
 # requires LTO
 rm -r tests/run-make/cdylib
@@ -67,22 +81,14 @@ rm -r tests/run-make/reachable-extern-fn-available-lto
 
 # coverage instrumentation
 rm tests/ui/consts/precise-drop-with-coverage.rs
-rm tests/ui/issues/issue-85461.rs
 rm -r tests/ui/instrument-coverage/
-
-# missing f16/f128 support
-rm tests/ui/half-open-range-patterns/half-open-range-pats-semantics.rs
-rm tests/ui/asm/aarch64/type-f16.rs
-rm tests/ui/float/conv-bits-runtime-const.rs
-rm tests/ui/consts/const-eval/float_methods.rs
-rm tests/ui/match/match-float.rs
 
 # optimization tests
 # ==================
 rm tests/ui/codegen/issue-28950.rs # depends on stack size optimizations
 rm tests/ui/codegen/init-large-type.rs # same
-rm -r tests/run-make/fmt-write-bloat/ # tests an optimization
-rm tests/ui/statics/const_generics.rs # same
+rm tests/ui/statics/const_generics.rs # tests an optimization
+rm tests/ui/linking/executable-no-mangle-strip.rs # requires --gc-sections to work for statics
 
 # backend specific tests
 # ======================
@@ -96,6 +102,7 @@ rm -r tests/run-make/llvm-location-discriminator-limit-dummy-span # same
 rm tests/ui/abi/stack-protector.rs # requires stack protector support
 rm -r tests/run-make/emit-stack-sizes # requires support for -Z emit-stack-sizes
 rm -r tests/run-make/optimization-remarks-dir # remarks are LLVM specific
+rm -r tests/ui/codegen/remark-flag-functionality.rs # same
 rm -r tests/run-make/print-to-output # requires --print relocation-models
 
 # requires asm, llvm-ir and/or llvm-bc emit support
@@ -118,18 +125,24 @@ rm tests/ui/mir/mir_raw_fat_ptr.rs # same
 rm tests/ui/consts/issue-33537.rs # same
 rm tests/ui/consts/const-mut-refs-crate.rs # same
 rm tests/ui/abi/large-byval-align.rs # exceeds implementation limit of Cranelift
-rm tests/ui/abi/simd-abi-checks-avx.rs # attempts to declare function with two different signatures
 
 # doesn't work due to the way the rustc test suite is invoked.
 # should work when using ./x.py test the way it is intended
 # ============================================================
 rm -r tests/run-make/remap-path-prefix-dwarf # requires llvm-dwarfdump
 rm -r tests/run-make/strip # same
-rm -r tests/run-make/compiler-builtins # Expects lib/rustlib/src/rust to contains the standard library source
+rm -r tests/run-make-cargo/compiler-builtins # Expects lib/rustlib/src/rust to contains the standard library source
 rm -r tests/run-make/translation # same
+rm -r tests/run-make-cargo/panic-immediate-abort-works # same
+rm -r tests/run-make-cargo/panic-immediate-abort-codegen # same
 rm -r tests/run-make/missing-unstable-trait-bound # This disables support for unstable features, but running cg_clif needs some unstable features
 rm -r tests/run-make/const-trait-stable-toolchain # same
+rm -r tests/run-make/print-request-help-stable-unstable # same
 rm -r tests/run-make/incr-add-rust-src-component
+rm tests/ui/errors/remap-path-prefix-sysroot.rs # different sysroot source path
+rm -r tests/run-make/export/extern-opt # something about rustc version mismatches
+rm -r tests/run-make/export # same
+rm -r tests/ui/compiletest-self-test/compile-flags-incremental.rs # needs compiletest compiled with panic=unwind
 
 # genuine bugs
 # ============
@@ -141,29 +154,16 @@ rm -r tests/run-make/panic-abort-eh_frame # .eh_frame emitted with panic=abort
 rm tests/ui/process/nofile-limit.rs # TODO some AArch64 linking issue
 rm tests/ui/backtrace/synchronized-panic-handler.rs # missing needs-unwind annotation
 rm tests/ui/lint/non-snake-case/lint-non-snake-case-crate.rs # same
+rm tests/ui/async-await/async-drop/async-drop-initial.rs # same (rust-lang/rust#140493)
 rm -r tests/ui/codegen/equal-pointers-unequal # make incorrect assumptions about the location of stack variables
+rm -r tests/run-make-cargo/rustdoc-scrape-examples-paths # FIXME(rust-lang/rust#145580) incr comp bug
 
-rm tests/ui/stdio-is-blocking.rs # really slow with unoptimized libstd
-rm tests/ui/intrinsics/panic-uninitialized-zeroed.rs # same
+rm tests/ui/intrinsics/panic-uninitialized-zeroed.rs # really slow with unoptimized libstd
 rm tests/ui/process/process-panic-after-fork.rs # same
 
 cp ../dist/bin/rustdoc-clif ../dist/bin/rustdoc # some tests expect bin/rustdoc to exist
 
 cat <<EOF | git apply -
-diff --git a/tests/run-make/linker-warning/rmake.rs b/tests/run-make/linker-warning/rmake.rs
-index 30387af428c..f7895b12961 100644
---- a/tests/run-make/linker-warning/rmake.rs
-+++ b/tests/run-make/linker-warning/rmake.rs
-@@ -57,7 +57,8 @@ fn main() {
-             .actual_text("(linker error)", out.stderr())
--            .normalize(r#"/rustc[^/]*/"#, "/rustc/")
-+            .normalize(r#"/tmp/rustc[^/]*/"#, "/tmp/rustc/")
-+            .normalize("libpanic_abort", "libpanic_unwind")
-             .normalize(
-                 regex::escape(run_make_support::build_root().to_str().unwrap()),
-                 "/build-root",
-             )
-             .normalize(r#""[^"]*\/symbols.o""#, "\\"/symbols.o\\"")
 diff --git a/src/tools/compiletest/src/runtest/run_make.rs b/src/tools/compiletest/src/runtest/run_make.rs
 index 073116933bd..c3e4578204d 100644
 --- a/src/tools/compiletest/src/runtest/run_make.rs
@@ -179,5 +179,5 @@ index 073116933bd..c3e4578204d 100644
 EOF
 
 echo "[TEST] rustc test suite"
-COMPILETEST_FORCE_STAGE0=1 ./x.py test --stage 0 --test-args=--no-capture tests/{codegen-units,run-make,ui,incremental}
+./x.py test --stage 0 --test-args=--no-capture tests/{codegen-units,run-make,run-make-cargo,ui,incremental}
 popd

@@ -63,12 +63,9 @@ pub(crate) fn replace_qualified_name_with_use(
     );
     let path_to_qualifier = starts_with_name_ref
         .then(|| {
-            ctx.sema.scope(original_path.syntax())?.module().find_use_path(
-                ctx.sema.db,
-                module,
-                ctx.config.insert_use.prefix_kind,
-                ctx.config.import_path_config(),
-            )
+            let mod_ = ctx.sema.scope(original_path.syntax())?.module();
+            let cfg = ctx.config.find_path_config(ctx.sema.is_nightly(mod_.krate()));
+            mod_.find_use_path(ctx.sema.db, module, ctx.config.insert_use.prefix_kind, cfg)
         })
         .flatten();
 
@@ -81,11 +78,7 @@ pub(crate) fn replace_qualified_name_with_use(
         |builder| {
             // Now that we've brought the name into scope, re-qualify all paths that could be
             // affected (that is, all paths inside the node we added the `use` to).
-            let scope = match scope {
-                ImportScope::File(it) => ImportScope::File(builder.make_mut(it)),
-                ImportScope::Module(it) => ImportScope::Module(builder.make_mut(it)),
-                ImportScope::Block(it) => ImportScope::Block(builder.make_mut(it)),
-            };
+            let scope = builder.make_import_scope_mut(scope);
             shorten_paths(scope.as_syntax_node(), &original_path);
             let path = drop_generic_args(&original_path);
             let edition = ctx
@@ -106,10 +99,10 @@ pub(crate) fn replace_qualified_name_with_use(
 
 fn drop_generic_args(path: &ast::Path) -> ast::Path {
     let path = path.clone_for_update();
-    if let Some(segment) = path.segment() {
-        if let Some(generic_args) = segment.generic_arg_list() {
-            ted::remove(generic_args.syntax());
-        }
+    if let Some(segment) = path.segment()
+        && let Some(generic_args) = segment.generic_arg_list()
+    {
+        ted::remove(generic_args.syntax());
     }
     path
 }

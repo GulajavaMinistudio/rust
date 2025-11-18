@@ -1,7 +1,5 @@
 # Using Git
 
-<!-- toc -->
-
 The Rust project uses [Git] to manage its source code. In order to
 contribute, you'll need some familiarity with its features so that your changes
 can be incorporated into the compiler.
@@ -142,7 +140,8 @@ The most common cause is that you rebased after a change and ran `git add .` wit
 `x` to update the submodules.  Alternatively, you might have run `cargo fmt` instead of `x fmt`
 and modified files in a submodule, then committed the changes.
 
-To fix it, do the following things:
+To fix it, do the following things (if you changed a submodule other than cargo,
+replace `src/tools/cargo` with the path to that submodule):
 
 1. See which commit has the accidental changes: `git log --stat -n1 src/tools/cargo`
 2. Revert the changes to that commit: `git checkout <my-commit>~ src/tools/cargo`. Type `~`
@@ -339,13 +338,13 @@ your fork with `git push --force-with-lease`.
 
 ### Keeping things up to date
 
-The above section on [Rebasing](#rebasing) is a specific
+The [above section](#rebasing) is a specific
 guide on rebasing work and dealing with merge conflicts.
 Here is some general advice about how to keep your local repo
 up-to-date with upstream changes:
 
 Using `git pull upstream master` while on your local master branch regularly
-will keep it up-to-date. You will also want to rebase your feature branches
+will keep it up-to-date. You will also want to keep your feature branches
 up-to-date as well. After pulling, you can checkout the feature branches
 and rebase them:
 
@@ -639,7 +638,7 @@ checkouts for you.
 
 Some commits contain large reformatting changes that don't otherwise change functionality. They can
 be instructed to be ignored by `git blame` through
-[`.git-blame-ignore-revs`](https://github.com/rust-lang/rust/blob/master/.git-blame-ignore-revs):
+[`.git-blame-ignore-revs`](https://github.com/rust-lang/rust/blob/HEAD/.git-blame-ignore-revs):
 
 1. Configure `git blame` to use `.git-blame-ignore-revs` as the list of commits to ignore: `git
    config blame.ignorerevsfile .git-blame-ignore-revs`

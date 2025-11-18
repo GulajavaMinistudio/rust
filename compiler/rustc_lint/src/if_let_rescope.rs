@@ -1,4 +1,4 @@
-use std::iter::repeat;
+use std::iter::repeat_n;
 use std::ops::ControlFlow;
 
 use hir::intravisit::{self, Visitor};
@@ -87,7 +87,7 @@ declare_lint! {
     rewriting in `match` is an option to preserve the semantics up to Edition 2021",
     @future_incompatible = FutureIncompatibleInfo {
         reason: FutureIncompatibilityReason::EditionSemanticsChange(Edition::Edition2024),
-        reference: "<https://doc.rust-lang.org/nightly/edition-guide/rust-2024/temporary-if-let-scope.html>",
+        reference: "<https://doc.rust-lang.org/edition-guide/rust-2024/temporary-if-let-scope.html>",
     };
 }
 
@@ -230,7 +230,7 @@ impl IfLetRescope {
                     }
                 }
             }
-            // At this point, any `if let` fragment in the cascade is definitely preceeded by `else`,
+            // At this point, any `if let` fragment in the cascade is definitely preceded by `else`,
             // so a opening bracket is mandatory before each `match`.
             add_bracket_to_match_head = true;
             if let Some(alt) = alt {
@@ -351,7 +351,7 @@ impl Subdiagnostic for IfLetRescopeRewrite {
                 .then_some(" _ => {}".chars())
                 .into_iter()
                 .flatten()
-                .chain(repeat('}').take(closing_brackets.count))
+                .chain(repeat_n('}', closing_brackets.count))
                 .collect(),
         ));
         let msg = diag.eagerly_translate(crate::fluent_generated::lint_suggestion);

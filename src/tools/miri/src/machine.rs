@@ -1,10 +1,9 @@
 //! Global machine state as well as implementation of the interpreter engine
 //! `Machine` trait.
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::Entry;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
 use std::{fmt, process};
@@ -13,10 +12,14 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rustc_abi::{Align, ExternAbi, Size};
 use rustc_apfloat::{Float, FloatConvert};
-use rustc_attr_parsing::InlineAttr;
+use rustc_ast::expand::allocator::{self, SpecialAllocatorMethod};
+use rustc_data_structures::either::Either;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 #[allow(unused)]
 use rustc_data_structures::static_assert_size;
+use rustc_hir::attrs::InlineAttr;
+use rustc_log::tracing;
+use rustc_middle::middle::codegen_fn_attrs::TargetFeatureKind;
 use rustc_middle::mir;
 use rustc_middle::query::TyCtxtAt;
 use rustc_middle::ty::layout::{
@@ -26,12 +29,17 @@ use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
 use rustc_session::config::InliningThreshold;
 use rustc_span::def_id::{CrateNum, DefId};
 use rustc_span::{Span, SpanData, Symbol};
+use rustc_symbol_mangling::mangle_internal_symbol;
 use rustc_target::callconv::FnAbi;
+use rustc_target::spec::{Arch, Os};
 
 use crate::alloc_addresses::EvalContextExt;
 use crate::concurrency::cpu_affinity::{self, CpuAffinityMask};
 use crate::concurrency::data_race::{self, NaReadType, NaWriteType};
-use crate::concurrency::{AllocDataRaceHandler, GenmcCtx, GlobalDataRaceHandler, weak_memory};
+use crate::concurrency::sync::SyncObj;
+use crate::concurrency::{
+    AllocDataRaceHandler, GenmcCtx, GenmcEvalContextExt as _, GlobalDataRaceHandler, weak_memory,
+};
 use crate::*;
 
 /// First real-time signal.
@@ -49,6 +57,75 @@ pub const SIGRTMAX: i32 = 42;
 /// base address for each evaluation would produce unbounded memory usage.
 const ADDRS_PER_ANON_GLOBAL: usize = 32;
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum AlignmentCheck {
+    /// Do not check alignment.
+    None,
+    /// Check alignment "symbolically", i.e., using only the requested alignment for an allocation and not its real base address.
+    Symbolic,
+    /// Check alignment on the actual physical integer address.
+    Int,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum RejectOpWith {
+    /// Isolated op is rejected with an abort of the machine.
+    Abort,
+
+    /// If not Abort, miri returns an error for an isolated op.
+    /// Following options determine if user should be warned about such error.
+    /// Do not print warning about rejected isolated op.
+    NoWarning,
+
+    /// Print a warning about rejected isolated op, with backtrace.
+    Warning,
+
+    /// Print a warning about rejected isolated op, without backtrace.
+    WarningWithoutBacktrace,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum IsolatedOp {
+    /// Reject an op requiring communication with the host. By
+    /// default, miri rejects the op with an abort. If not, it returns
+    /// an error code, and prints a warning about it. Warning levels
+    /// are controlled by `RejectOpWith` enum.
+    Reject(RejectOpWith),
+
+    /// Execute op requiring communication with the host, i.e. disable isolation.
+    Allow,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BacktraceStyle {
+    /// Prints a terser backtrace which ideally only contains relevant information.
+    Short,
+    /// Prints a backtrace with all possible information.
+    Full,
+    /// Prints only the frame that the error occurs in.
+    Off,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ValidationMode {
+    /// Do not perform any kind of validation.
+    No,
+    /// Validate the interior of the value, but not things behind references.
+    Shallow,
+    /// Fully recursively validate references.
+    Deep,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum FloatRoundingErrorMode {
+    /// Apply a random error (the default).
+    Random,
+    /// Don't apply any error.
+    None,
+    /// Always apply the maximum error (with a random sign).
+    Max,
+}
+
 /// Extra data stored with each stack frame
 pub struct FrameExtra<'tcx> {
     /// Extra data for the Borrow Tracker.
@@ -64,17 +141,10 @@ pub struct FrameExtra<'tcx> {
     /// we use this to register a completed event with `measureme`.
     pub timing: Option<measureme::DetachedTiming>,
 
-    /// Indicates whether a `Frame` is part of a workspace-local crate and is also not
-    /// `#[track_caller]`. We compute this once on creation and store the result, as an
-    /// optimization.
-    /// This is used by `MiriMachine::current_span` and `MiriMachine::caller_span`
-    pub is_user_relevant: bool,
-
-    /// We have a cache for the mapping from [`mir::Const`] to resulting [`AllocId`].
-    /// However, we don't want all frames to always get the same result, so we insert
-    /// an additional bit of "salt" into the cache key. This salt is fixed per-frame
-    /// so that within a call, a const will have a stable address.
-    salt: usize,
+    /// Indicates how user-relevant this frame is. `#[track_caller]` frames are never relevant.
+    /// Frames from user-relevant crates are maximally relevant; frames from other crates are less
+    /// relevant.
+    pub user_relevance: u8,
 
     /// Data race detector per-frame data.
     pub data_race: Option<data_race::FrameState>,
@@ -83,19 +153,12 @@ pub struct FrameExtra<'tcx> {
 impl<'tcx> std::fmt::Debug for FrameExtra<'tcx> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Omitting `timing`, it does not support `Debug`.
-        let FrameExtra {
-            borrow_tracker,
-            catch_unwind,
-            timing: _,
-            is_user_relevant,
-            salt,
-            data_race,
-        } = self;
+        let FrameExtra { borrow_tracker, catch_unwind, timing: _, user_relevance, data_race } =
+            self;
         f.debug_struct("FrameData")
             .field("borrow_tracker", borrow_tracker)
             .field("catch_unwind", catch_unwind)
-            .field("is_user_relevant", is_user_relevant)
-            .field("salt", salt)
+            .field("user_relevance", user_relevance)
             .field("data_race", data_race)
             .finish()
     }
@@ -103,14 +166,8 @@ impl<'tcx> std::fmt::Debug for FrameExtra<'tcx> {
 
 impl VisitProvenance for FrameExtra<'_> {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
-        let FrameExtra {
-            catch_unwind,
-            borrow_tracker,
-            timing: _,
-            is_user_relevant: _,
-            salt: _,
-            data_race: _,
-        } = self;
+        let FrameExtra { catch_unwind, borrow_tracker, timing: _, user_relevance: _, data_race: _ } =
+            self;
 
         catch_unwind.visit_provenance(visit);
         borrow_tracker.visit_provenance(visit);
@@ -130,11 +187,11 @@ pub enum MiriMemoryKind {
     WinHeap,
     /// Windows "local" memory (to be freed with `LocalFree`)
     WinLocal,
-    /// Memory for args, errno, and other parts of the machine-managed environment.
+    /// Memory for args, errno, env vars, and other parts of the machine-managed environment.
     /// This memory may leak.
     Machine,
-    /// Memory allocated by the runtime (e.g. env vars). Separate from `Machine`
-    /// because we clean it up and leak-check it.
+    /// Memory allocated by the runtime, e.g. for readdir. Separate from `Machine` because we clean
+    /// it up (or expect the user to invoke operations that clean it up) and leak-check it.
     Runtime,
     /// Globals copied from `tcx`.
     /// This memory may leak.
@@ -285,7 +342,7 @@ impl interpret::Provenance for Provenance {
     }
 
     fn fmt(ptr: &interpret::Pointer<Self>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (prov, addr) = ptr.into_parts(); // address is absolute
+        let (prov, addr) = ptr.into_raw_parts(); // offset is absolute address
         write!(f, "{:#x}", addr.bytes())?;
         if f.alternate() {
             write!(f, "{prov:#?}")?;
@@ -293,21 +350,6 @@ impl interpret::Provenance for Provenance {
             write!(f, "{prov:?}")?;
         }
         Ok(())
-    }
-
-    fn join(left: Option<Self>, right: Option<Self>) -> Option<Self> {
-        match (left, right) {
-            // If both are the *same* concrete tag, that is the result.
-            (
-                Some(Provenance::Concrete { alloc_id: left_alloc, tag: left_tag }),
-                Some(Provenance::Concrete { alloc_id: right_alloc, tag: right_tag }),
-            ) if left_alloc == right_alloc && left_tag == right_tag => left,
-            // If one side is a wildcard, the best possible outcome is that it is equal to the other
-            // one, and we use that.
-            (Some(Provenance::Wildcard), o) | (o, Some(Provenance::Wildcard)) => o,
-            // Otherwise, fall back to `None`.
-            _ => None,
-        }
     }
 }
 
@@ -343,11 +385,11 @@ pub struct AllocExtra<'tcx> {
     /// if this allocation is leakable. The backtrace is not
     /// pruned yet; that should be done before printing it.
     pub backtrace: Option<Vec<FrameInfo<'tcx>>>,
-    /// Synchronization primitives like to attach extra data to particular addresses. We store that
+    /// Synchronization objects like to attach extra data to particular addresses. We store that
     /// inside the relevant allocation, to ensure that everything is removed when the allocation is
     /// freed.
     /// This maps offsets to synchronization-primitive-specific data.
-    pub sync: FxHashMap<Size, Box<dyn Any>>,
+    pub sync_objs: BTreeMap<Size, Box<dyn SyncObj>>,
 }
 
 // We need a `Clone` impl because the machine passes `Allocation` through `Cow`...
@@ -360,7 +402,7 @@ impl<'tcx> Clone for AllocExtra<'tcx> {
 
 impl VisitProvenance for AllocExtra<'_> {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
-        let AllocExtra { borrow_tracker, data_race, backtrace: _, sync: _ } = self;
+        let AllocExtra { borrow_tracker, data_race, backtrace: _, sync_objs: _ } = self;
 
         borrow_tracker.visit_provenance(visit);
         data_race.visit_provenance(visit);
@@ -499,9 +541,6 @@ pub struct MiriMachine<'tcx> {
     /// in `sched_getaffinity`
     pub(crate) thread_cpu_affinity: FxHashMap<ThreadId, CpuAffinityMask>,
 
-    /// The state of the primitive synchronization objects.
-    pub(crate) sync: SynchronizationObjects,
-
     /// Precomputed `TyLayout`s for primitive data types that are commonly used inside Miri.
     pub(crate) layouts: PrimitiveLayouts<'tcx>,
 
@@ -522,8 +561,8 @@ pub struct MiriMachine<'tcx> {
     /// Equivalent setting as RUST_BACKTRACE on encountering an error.
     pub(crate) backtrace_style: BacktraceStyle,
 
-    /// Crates which are considered local for the purposes of error reporting.
-    pub(crate) local_crates: Vec<CrateNum>,
+    /// Crates which are considered user-relevant for the purposes of error reporting.
+    pub(crate) user_relevant_crates: Vec<CrateNum>,
 
     /// Mapping extern static names to their pointer.
     extern_statics: FxHashMap<Symbol, StrictPointer>,
@@ -532,9 +571,12 @@ pub struct MiriMachine<'tcx> {
     /// Needs to be queried by ptr_to_int, hence needs interior mutability.
     pub(crate) rng: RefCell<StdRng>,
 
+    /// The allocator used for the machine's `AllocBytes` in native-libs mode.
+    pub(crate) allocator: Option<Rc<RefCell<crate::alloc::isolated_alloc::IsolatedAlloc>>>,
+
     /// The allocation IDs to report when they are being allocated
     /// (helps for debugging memory leaks and use after free bugs).
-    tracked_alloc_ids: FxHashSet<AllocId>,
+    pub(crate) tracked_alloc_ids: FxHashSet<AllocId>,
     /// For the tracked alloc ids, also report read/write accesses.
     track_alloc_accesses: bool,
 
@@ -543,9 +585,6 @@ pub struct MiriMachine<'tcx> {
 
     /// Failure rate of compare_exchange_weak, between 0.0 and 1.0
     pub(crate) cmpxchg_weak_failure_rate: f64,
-
-    /// Corresponds to -Zmiri-mute-stdout-stderr and doesn't write the output but acts as if it succeeded.
-    pub(crate) mute_stdout_stderr: bool,
 
     /// The probability of the active thread being preempted at the end of each basic block.
     pub(crate) preemption_rate: f64,
@@ -556,10 +595,10 @@ pub struct MiriMachine<'tcx> {
     pub(crate) basic_block_count: u64,
 
     /// Handle of the optional shared object file for native functions.
-    #[cfg(unix)]
-    pub native_lib: Option<(libloading::Library, std::path::PathBuf)>,
-    #[cfg(not(unix))]
-    pub native_lib: Option<!>,
+    #[cfg(all(unix, feature = "native-lib"))]
+    pub native_lib: Vec<(libloading::Library, std::path::PathBuf)>,
+    #[cfg(not(all(unix, feature = "native-lib")))]
+    pub native_lib: Vec<!>,
 
     /// Run a garbage collector for BorTags every N basic blocks.
     pub(crate) gc_interval: u32,
@@ -581,11 +620,6 @@ pub struct MiriMachine<'tcx> {
     /// diagnostics.
     pub(crate) allocation_spans: RefCell<FxHashMap<AllocId, (Span, Option<Span>)>>,
 
-    /// Maps MIR consts to their evaluated result. We combine the const with a "salt" (`usize`)
-    /// that is fixed per stack frame; this lets us have sometimes different results for the
-    /// same const while ensuring consistent results within a single call.
-    const_cache: RefCell<FxHashMap<(mir::Const<'tcx>, usize), OpTy<'tcx>>>,
-
     /// For each allocation, an offset inside that allocation that was deemed aligned even for
     /// symbolic alignment checks. This cannot be stored in `AllocExtra` since it needs to be
     /// tracked for vtables and function allocations as well as regular allocations.
@@ -602,31 +636,36 @@ pub struct MiriMachine<'tcx> {
     pub(crate) pthread_rwlock_sanity: Cell<bool>,
     pub(crate) pthread_condvar_sanity: Cell<bool>,
 
-    /// Remembers whether we already warned about an extern type with Stacked Borrows.
-    pub(crate) sb_extern_type_warned: Cell<bool>,
-    /// Remember whether we already warned about sharing memory with a native call.
-    #[cfg(unix)]
-    pub(crate) native_call_mem_warned: Cell<bool>,
-    /// Remembers which shims have already shown the warning about erroring in isolation.
-    pub(crate) reject_in_isolation_warned: RefCell<FxHashSet<String>>,
-    /// Remembers which int2ptr casts we have already warned about.
-    pub(crate) int2ptr_warned: RefCell<FxHashSet<Span>>,
-
+    /// (Foreign) symbols that are synthesized as part of the allocator shim: the key indicates the
+    /// name of the symbol being synthesized; the value indicates whether this should invoke some
+    /// other symbol or whether this has special allocator semantics.
+    pub(crate) allocator_shim_symbols: FxHashMap<Symbol, Either<Symbol, SpecialAllocatorMethod>>,
     /// Cache for `mangle_internal_symbol`.
     pub(crate) mangle_internal_symbol_cache: FxHashMap<&'static str, String>,
 
     /// Always prefer the intrinsic fallback body over the native Miri implementation.
     pub force_intrinsic_fallback: bool,
+
+    /// Whether floating-point operations can behave non-deterministically.
+    pub float_nondet: bool,
+    /// Whether floating-point operations can have a non-deterministic rounding error.
+    pub float_rounding_error: FloatRoundingErrorMode,
+
+    /// Whether Miri artifically introduces short reads/writes on file descriptors.
+    pub short_fd_operations: bool,
 }
 
 impl<'tcx> MiriMachine<'tcx> {
+    /// Create a new MiriMachine.
+    ///
+    /// Invariant: `genmc_ctx.is_some() == config.genmc_config.is_some()`
     pub(crate) fn new(
         config: &MiriConfig,
         layout_cx: LayoutCx<'tcx>,
         genmc_ctx: Option<Rc<GenmcCtx>>,
     ) -> Self {
         let tcx = layout_cx.tcx();
-        let local_crates = helpers::get_local_crates(tcx);
+        let user_relevant_crates = Self::get_user_relevant_crates(tcx, config);
         let layouts =
             PrimitiveLayouts::new(layout_cx).expect("Couldn't get layouts of primitive types");
         let profiler = config.measureme_out.as_ref().map(|out| {
@@ -643,7 +682,7 @@ impl<'tcx> MiriMachine<'tcx> {
         });
         let rng = StdRng::seed_from_u64(config.seed.unwrap_or(0));
         let borrow_tracker = config.borrow_tracker.map(|bt| bt.instantiate_global_state(config));
-        let data_race = if config.genmc_mode {
+        let data_race = if config.genmc_config.is_some() {
             // `genmc_ctx` persists across executions, so we don't create a new one here.
             GlobalDataRaceHandler::Genmc(genmc_ctx.unwrap())
         } else if config.data_race_detector {
@@ -658,10 +697,10 @@ impl<'tcx> MiriMachine<'tcx> {
             page_size
         } else {
             let target = &tcx.sess.target;
-            match target.arch.as_ref() {
-                "wasm32" | "wasm64" => 64 * 1024, // https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
-                "aarch64" => {
-                    if target.options.vendor.as_ref() == "apple" {
+            match target.arch {
+                Arch::Wasm32 | Arch::Wasm64 => 64 * 1024, // https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
+                Arch::AArch64 => {
+                    if target.is_like_darwin {
                         // No "definitive" source, but see:
                         // https://www.wwdcnotes.com/notes/wwdc20/10214/
                         // https://github.com/ziglang/zig/issues/11308 etc.
@@ -685,15 +724,17 @@ impl<'tcx> MiriMachine<'tcx> {
         );
         let threads = ThreadManager::new(config);
         let mut thread_cpu_affinity = FxHashMap::default();
-        if matches!(&*tcx.sess.target.os, "linux" | "freebsd" | "android") {
+        if matches!(&tcx.sess.target.os, Os::Linux | Os::FreeBsd | Os::Android) {
             thread_cpu_affinity
                 .insert(threads.active_thread(), CpuAffinityMask::new(&layout_cx, config.num_cpus));
         }
+        let alloc_addresses =
+            RefCell::new(alloc_addresses::GlobalStateInner::new(config, stack_addr, tcx));
         MiriMachine {
             tcx,
             borrow_tracker,
             data_race,
-            alloc_addresses: RefCell::new(alloc_addresses::GlobalStateInner::new(config, stack_addr)),
+            alloc_addresses,
             // `env_vars` depends on a full interpreter so we cannot properly initialize it yet.
             env_vars: EnvVars::default(),
             main_fn_ret_place: None,
@@ -709,26 +750,26 @@ impl<'tcx> MiriMachine<'tcx> {
             layouts,
             threads,
             thread_cpu_affinity,
-            sync: SynchronizationObjects::default(),
             static_roots: Vec::new(),
             profiler,
             string_cache: Default::default(),
             exported_symbols_cache: FxHashMap::default(),
             backtrace_style: config.backtrace_style,
-            local_crates,
+            user_relevant_crates,
             extern_statics: FxHashMap::default(),
             rng: RefCell::new(rng),
+            allocator: (!config.native_lib.is_empty())
+                .then(|| Rc::new(RefCell::new(crate::alloc::isolated_alloc::IsolatedAlloc::new()))),
             tracked_alloc_ids: config.tracked_alloc_ids.clone(),
             track_alloc_accesses: config.track_alloc_accesses,
             check_alignment: config.check_alignment,
             cmpxchg_weak_failure_rate: config.cmpxchg_weak_failure_rate,
-            mute_stdout_stderr: config.mute_stdout_stderr,
             preemption_rate: config.preemption_rate,
             report_progress: config.report_progress,
             basic_block_count: 0,
             monotonic_clock: MonotonicClock::new(config.isolated_op == IsolatedOp::Allow),
-            #[cfg(unix)]
-            native_lib: config.native_lib.as_ref().map(|lib_file_path| {
+            #[cfg(all(unix, feature = "native-lib"))]
+            native_lib: config.native_lib.iter().map(|lib_file_path| {
                 let host_triple = rustc_session::config::host_tuple();
                 let target_triple = tcx.sess.opts.target_triple.tuple();
                 // Check if host target == the session target.
@@ -748,11 +789,11 @@ impl<'tcx> MiriMachine<'tcx> {
                     },
                     lib_file_path.clone(),
                 )
-            }),
-            #[cfg(not(unix))]
-            native_lib: config.native_lib.as_ref().map(|_| {
-                panic!("calling functions from native libraries via FFI is only supported on Unix")
-            }),
+            }).collect(),
+            #[cfg(not(all(unix, feature = "native-lib")))]
+            native_lib: config.native_lib.iter().map(|_| {
+                panic!("calling functions from native libraries via FFI is not supported in this build of Miri")
+            }).collect(),
             gc_interval: config.gc_interval,
             since_gc: 0,
             num_cpus: config.num_cpus,
@@ -761,20 +802,71 @@ impl<'tcx> MiriMachine<'tcx> {
             stack_size,
             collect_leak_backtraces: config.collect_leak_backtraces,
             allocation_spans: RefCell::new(FxHashMap::default()),
-            const_cache: RefCell::new(FxHashMap::default()),
             symbolic_alignment: RefCell::new(FxHashMap::default()),
             union_data_ranges: FxHashMap::default(),
             pthread_mutex_sanity: Cell::new(false),
             pthread_rwlock_sanity: Cell::new(false),
             pthread_condvar_sanity: Cell::new(false),
-            sb_extern_type_warned: Cell::new(false),
-            #[cfg(unix)]
-            native_call_mem_warned: Cell::new(false),
-            reject_in_isolation_warned: Default::default(),
-            int2ptr_warned: Default::default(),
+            allocator_shim_symbols: Self::allocator_shim_symbols(tcx),
             mangle_internal_symbol_cache: Default::default(),
             force_intrinsic_fallback: config.force_intrinsic_fallback,
+            float_nondet: config.float_nondet,
+            float_rounding_error: config.float_rounding_error,
+            short_fd_operations: config.short_fd_operations,
         }
+    }
+
+    fn allocator_shim_symbols(
+        tcx: TyCtxt<'tcx>,
+    ) -> FxHashMap<Symbol, Either<Symbol, SpecialAllocatorMethod>> {
+        use rustc_codegen_ssa::base::allocator_shim_contents;
+
+        // codegen uses `allocator_kind_for_codegen` here, but that's only needed to deal with
+        // dylibs which we do not support.
+        let Some(kind) = tcx.allocator_kind(()) else {
+            return Default::default();
+        };
+        let methods = allocator_shim_contents(tcx, kind);
+        let mut symbols = FxHashMap::default();
+        for method in methods {
+            let from_name = Symbol::intern(&mangle_internal_symbol(
+                tcx,
+                &allocator::global_fn_name(method.name),
+            ));
+            let to = match method.special {
+                Some(special) => Either::Right(special),
+                None =>
+                    Either::Left(Symbol::intern(&mangle_internal_symbol(
+                        tcx,
+                        &allocator::default_fn_name(method.name),
+                    ))),
+            };
+            symbols.try_insert(from_name, to).unwrap();
+        }
+        symbols
+    }
+
+    /// Retrieve the list of user-relevant crates based on MIRI_LOCAL_CRATES as set by cargo-miri,
+    /// and extra crates set in the config.
+    fn get_user_relevant_crates(tcx: TyCtxt<'_>, config: &MiriConfig) -> Vec<CrateNum> {
+        // Convert the local crate names from the passed-in config into CrateNums so that they can
+        // be looked up quickly during execution
+        let local_crate_names = std::env::var("MIRI_LOCAL_CRATES")
+            .map(|crates| crates.split(',').map(|krate| krate.to_string()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut local_crates = Vec::new();
+        for &crate_num in tcx.crates(()) {
+            let name = tcx.crate_name(crate_num);
+            let name = name.as_str();
+            if local_crate_names
+                .iter()
+                .chain(&config.user_relevant_crates)
+                .any(|local_name| local_name == name)
+            {
+                local_crates.push(crate_num);
+            }
+        }
+        local_crates
     }
 
     pub(crate) fn late_init(
@@ -799,9 +891,9 @@ impl<'tcx> MiriMachine<'tcx> {
     }
 
     /// Check whether the stack frame that this `FrameInfo` refers to is part of a local crate.
-    pub(crate) fn is_local(&self, frame: &FrameInfo<'_>) -> bool {
-        let def_id = frame.instance.def_id();
-        def_id.is_local() || self.local_crates.contains(&def_id.krate)
+    pub(crate) fn is_local(&self, instance: ty::Instance<'tcx>) -> bool {
+        let def_id = instance.def_id();
+        def_id.is_local() || self.user_relevant_crates.contains(&def_id.krate)
     }
 
     /// Called when the interpreter is going to shut down abnormally, such as due to a Ctrl-C.
@@ -840,7 +932,7 @@ impl<'tcx> MiriMachine<'tcx> {
         align: Align,
     ) -> InterpResult<'tcx, AllocExtra<'tcx>> {
         if ecx.machine.tracked_alloc_ids.contains(&id) {
-            ecx.emit_diagnostic(NonHaltingDiagnostic::CreatedAlloc(id, size, align, kind));
+            ecx.emit_diagnostic(NonHaltingDiagnostic::TrackingAlloc(id, size, align));
         }
 
         let borrow_tracker = ecx
@@ -858,7 +950,7 @@ impl<'tcx> MiriMachine<'tcx> {
                         &ecx.machine.threads,
                         size,
                         kind,
-                        ecx.machine.current_span(),
+                        ecx.machine.current_user_relevant_span(),
                     ),
                     data_race.weak_memory.then(weak_memory::AllocState::new_allocation),
                 ),
@@ -882,10 +974,15 @@ impl<'tcx> MiriMachine<'tcx> {
             ecx.machine
                 .allocation_spans
                 .borrow_mut()
-                .insert(id, (ecx.machine.current_span(), None));
+                .insert(id, (ecx.machine.current_user_relevant_span(), None));
         }
 
-        interp_ok(AllocExtra { borrow_tracker, data_race, backtrace, sync: FxHashMap::default() })
+        interp_ok(AllocExtra {
+            borrow_tracker,
+            data_race,
+            backtrace,
+            sync_objs: BTreeMap::default(),
+        })
     }
 }
 
@@ -895,7 +992,6 @@ impl VisitProvenance for MiriMachine<'_> {
         let MiriMachine {
             threads,
             thread_cpu_affinity: _,
-            sync: _,
             tls,
             env_vars,
             main_fn_ret_place,
@@ -919,13 +1015,13 @@ impl VisitProvenance for MiriMachine<'_> {
             string_cache: _,
             exported_symbols_cache: _,
             backtrace_style: _,
-            local_crates: _,
+            user_relevant_crates: _,
             rng: _,
+            allocator: _,
             tracked_alloc_ids: _,
             track_alloc_accesses: _,
             check_alignment: _,
             cmpxchg_weak_failure_rate: _,
-            mute_stdout_stderr: _,
             preemption_rate: _,
             report_progress: _,
             basic_block_count: _,
@@ -938,19 +1034,17 @@ impl VisitProvenance for MiriMachine<'_> {
             stack_size: _,
             collect_leak_backtraces: _,
             allocation_spans: _,
-            const_cache: _,
             symbolic_alignment: _,
             union_data_ranges: _,
             pthread_mutex_sanity: _,
             pthread_rwlock_sanity: _,
             pthread_condvar_sanity: _,
-            sb_extern_type_warned: _,
-            #[cfg(unix)]
-            native_call_mem_warned: _,
-            reject_in_isolation_warned: _,
-            int2ptr_warned: _,
+            allocator_shim_symbols: _,
             mangle_internal_symbol_cache: _,
             force_intrinsic_fallback: _,
+            float_nondet: _,
+            float_rounding_error: _,
+            short_fd_operations: _,
         } = self;
 
         threads.visit_provenance(visit);
@@ -1046,7 +1140,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             // What's the offset between us and the promised alignment?
             let distance = offset.bytes().wrapping_sub(promised_offset.bytes());
             // That must also be aligned.
-            if distance % align.bytes() == 0 {
+            if distance.is_multiple_of(align.bytes()) {
                 // All looking good!
                 None
             } else {
@@ -1081,7 +1175,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         ecx: &MiriInterpCx<'tcx>,
         instance: ty::Instance<'tcx>,
     ) -> InterpResult<'tcx> {
-        let attrs = ecx.tcx.codegen_fn_attrs(instance.def_id());
+        let attrs = ecx.tcx.codegen_instance_attrs(instance.def);
         if attrs
             .target_features
             .iter()
@@ -1091,7 +1185,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
                 .target_features
                 .iter()
                 .filter(|&feature| {
-                    !feature.implied && !ecx.tcx.sess.target_features.contains(&feature.name)
+                    feature.kind != TargetFeatureKind::Implied
+                        && !ecx.tcx.sess.target_features.contains(&feature.name)
                 })
                 .fold(String::new(), |mut s, feature| {
                     if !s.is_empty() {
@@ -1119,13 +1214,14 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         ecx: &mut MiriInterpCx<'tcx>,
         instance: ty::Instance<'tcx>,
         abi: &FnAbi<'tcx, Ty<'tcx>>,
-        args: &[FnArg<'tcx, Provenance>],
-        dest: &MPlaceTy<'tcx>,
+        args: &[FnArg<'tcx>],
+        dest: &PlaceTy<'tcx>,
         ret: Option<mir::BasicBlock>,
         unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx, Option<(&'tcx mir::Body<'tcx>, ty::Instance<'tcx>)>> {
         // For foreign items, try to see if we can emulate them.
         if ecx.tcx.is_foreign_item(instance.def_id()) {
+            let _trace = enter_trace_span!("emulate_foreign_item");
             // An external function call that does not have a MIR body. We either find MIR elsewhere
             // or emulate its effect.
             // This will be Ok(None) if we're emulating the intrinsic entirely within Miri (no need
@@ -1137,7 +1233,15 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             return ecx.emulate_foreign_item(link_name, abi, &args, dest, ret, unwind);
         }
 
+        if ecx.machine.data_race.as_genmc_ref().is_some()
+            && ecx.genmc_intercept_function(instance, args, dest)?
+        {
+            ecx.return_to_block(ret)?;
+            return interp_ok(None);
+        }
+
         // Otherwise, load the MIR.
+        let _trace = enter_trace_span!("load_mir");
         interp_ok(Some((ecx.load_mir(instance.def, None)?, instance)))
     }
 
@@ -1146,8 +1250,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         ecx: &mut MiriInterpCx<'tcx>,
         fn_val: DynSym,
         abi: &FnAbi<'tcx, Ty<'tcx>>,
-        args: &[FnArg<'tcx, Provenance>],
-        dest: &MPlaceTy<'tcx>,
+        args: &[FnArg<'tcx>],
+        dest: &PlaceTy<'tcx>,
         ret: Option<mir::BasicBlock>,
         unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx> {
@@ -1160,7 +1264,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         ecx: &mut MiriInterpCx<'tcx>,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx>],
-        dest: &MPlaceTy<'tcx>,
+        dest: &PlaceTy<'tcx>,
         ret: Option<mir::BasicBlock>,
         unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx, Option<ty::Instance<'tcx>>> {
@@ -1192,7 +1296,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             ExternAbi::Rust,
             &[],
             None,
-            StackPopCleanup::Goto { ret: None, unwind: mir::UnwindAction::Unreachable },
+            ReturnContinuation::Goto { ret: None, unwind: mir::UnwindAction::Unreachable },
         )?;
         interp_ok(())
     }
@@ -1220,7 +1324,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         ecx: &mut InterpCx<'tcx, Self>,
         val: ImmTy<'tcx>,
     ) -> InterpResult<'tcx, ImmTy<'tcx>> {
-        crate::math::apply_random_float_error_to_imm(ecx, val, 2 /* log2(4) */)
+        crate::math::apply_random_float_error_to_imm(ecx, val, 4)
     }
 
     #[inline(always)]
@@ -1229,13 +1333,16 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
     }
 
     #[inline(always)]
-    fn ub_checks(ecx: &InterpCx<'tcx, Self>) -> InterpResult<'tcx, bool> {
-        interp_ok(ecx.tcx.sess.ub_checks())
+    fn float_fuse_mul_add(ecx: &InterpCx<'tcx, Self>) -> bool {
+        ecx.machine.float_nondet && ecx.machine.rng.borrow_mut().random()
     }
 
     #[inline(always)]
-    fn contract_checks(ecx: &InterpCx<'tcx, Self>) -> InterpResult<'tcx, bool> {
-        interp_ok(ecx.tcx.sess.contract_checks())
+    fn runtime_checks(
+        ecx: &InterpCx<'tcx, Self>,
+        r: mir::RuntimeChecks,
+    ) -> InterpResult<'tcx, bool> {
+        interp_ok(r.value(ecx.tcx.sess))
     }
 
     #[inline(always)]
@@ -1271,7 +1378,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
                     name = ecx.tcx.def_path_str(def_id),
                     krate = ecx.tcx.crate_name(def_id.krate),
                     decl_size = extern_decl_layout.size.bytes(),
-                    decl_align = extern_decl_layout.align.abi.bytes(),
+                    decl_align = extern_decl_layout.align.bytes(),
                     shim_size = info.size.bytes(),
                     shim_align = info.align.bytes(),
                 )
@@ -1400,8 +1507,11 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         range: AllocRange,
     ) -> InterpResult<'tcx> {
         if machine.track_alloc_accesses && machine.tracked_alloc_ids.contains(&alloc_id) {
-            machine
-                .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Read));
+            machine.emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(
+                alloc_id,
+                range,
+                borrow_tracker::AccessKind::Read,
+            ));
         }
         // The order of checks is deliberate, to prefer reporting a data race over a borrow tracker error.
         match &machine.data_race {
@@ -1409,19 +1519,22 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             GlobalDataRaceHandler::Genmc(genmc_ctx) =>
                 genmc_ctx.memory_load(machine, ptr.addr(), range.size)?,
             GlobalDataRaceHandler::Vclocks(_data_race) => {
-                let AllocDataRaceHandler::Vclocks(data_race, weak_memory) = &alloc_extra.data_race
+                let _trace = enter_trace_span!(data_race::before_memory_read);
+                let AllocDataRaceHandler::Vclocks(data_race, _weak_memory) = &alloc_extra.data_race
                 else {
                     unreachable!();
                 };
-                data_race.read(alloc_id, range, NaReadType::Read, None, machine)?;
-                if let Some(weak_memory) = weak_memory {
-                    weak_memory.memory_accessed(range, machine.data_race.as_vclocks_ref().unwrap());
-                }
+                data_race.read_non_atomic(alloc_id, range, NaReadType::Read, None, machine)?;
             }
         }
         if let Some(borrow_tracker) = &alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_read(alloc_id, prov_extra, range, machine)?;
         }
+        // Check if there are any sync objects that would like to prevent reading this memory.
+        for (_offset, obj) in alloc_extra.sync_objs.range(range.start..range.end()) {
+            obj.on_access(concurrency::sync::AccessKind::Read)?;
+        }
+
         interp_ok(())
     }
 
@@ -1435,28 +1548,46 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         range: AllocRange,
     ) -> InterpResult<'tcx> {
         if machine.track_alloc_accesses && machine.tracked_alloc_ids.contains(&alloc_id) {
-            machine
-                .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Write));
+            machine.emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(
+                alloc_id,
+                range,
+                borrow_tracker::AccessKind::Write,
+            ));
         }
         match &machine.data_race {
             GlobalDataRaceHandler::None => {}
-            GlobalDataRaceHandler::Genmc(genmc_ctx) => {
-                genmc_ctx.memory_store(machine, ptr.addr(), range.size)?;
-            }
+            GlobalDataRaceHandler::Genmc(genmc_ctx) =>
+                genmc_ctx.memory_store(machine, ptr.addr(), range.size)?,
             GlobalDataRaceHandler::Vclocks(_global_state) => {
+                let _trace = enter_trace_span!(data_race::before_memory_write);
                 let AllocDataRaceHandler::Vclocks(data_race, weak_memory) =
                     &mut alloc_extra.data_race
                 else {
                     unreachable!()
                 };
-                data_race.write(alloc_id, range, NaWriteType::Write, None, machine)?;
+                data_race.write_non_atomic(alloc_id, range, NaWriteType::Write, None, machine)?;
                 if let Some(weak_memory) = weak_memory {
-                    weak_memory.memory_accessed(range, machine.data_race.as_vclocks_ref().unwrap());
+                    weak_memory
+                        .non_atomic_write(range, machine.data_race.as_vclocks_ref().unwrap());
                 }
             }
         }
         if let Some(borrow_tracker) = &mut alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_write(alloc_id, prov_extra, range, machine)?;
+        }
+        // Delete sync objects that don't like writes.
+        // Most of the time, we can just skip this.
+        if !alloc_extra.sync_objs.is_empty() {
+            let mut to_delete = vec![];
+            for (offset, obj) in alloc_extra.sync_objs.range(range.start..range.end()) {
+                obj.on_access(concurrency::sync::AccessKind::Write)?;
+                if obj.delete_on_write() {
+                    to_delete.push(*offset);
+                }
+            }
+            for offset in to_delete {
+                alloc_extra.sync_objs.remove(&offset);
+            }
         }
         interp_ok(())
     }
@@ -1478,10 +1609,11 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         match &machine.data_race {
             GlobalDataRaceHandler::None => {}
             GlobalDataRaceHandler::Genmc(genmc_ctx) =>
-                genmc_ctx.handle_dealloc(machine, ptr.addr(), size, align, kind)?,
+                genmc_ctx.handle_dealloc(machine, alloc_id, ptr.addr(), kind)?,
             GlobalDataRaceHandler::Vclocks(_global_state) => {
+                let _trace = enter_trace_span!(data_race::before_memory_deallocation);
                 let data_race = alloc_extra.data_race.as_vclocks_mut().unwrap();
-                data_race.write(
+                data_race.write_non_atomic(
                     alloc_id,
                     alloc_range(Size::ZERO, size),
                     NaWriteType::Deallocate,
@@ -1493,9 +1625,14 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if let Some(borrow_tracker) = &mut alloc_extra.borrow_tracker {
             borrow_tracker.before_memory_deallocation(alloc_id, prove_extra, size, machine)?;
         }
+        // Check if there are any sync objects that would like to prevent freeing this memory.
+        for obj in alloc_extra.sync_objs.values() {
+            obj.on_access(concurrency::sync::AccessKind::Dealloc)?;
+        }
+
         if let Some((_, deallocated_at)) = machine.allocation_spans.borrow_mut().get_mut(&alloc_id)
         {
-            *deallocated_at = Some(machine.current_span());
+            *deallocated_at = Some(machine.current_user_relevant_span());
         }
         machine.free_alloc_id(alloc_id, size, align, kind);
         interp_ok(())
@@ -1573,8 +1710,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             borrow_tracker: borrow_tracker.map(|bt| bt.borrow_mut().new_frame()),
             catch_unwind: None,
             timing,
-            is_user_relevant: ecx.machine.is_user_relevant(&frame),
-            salt: ecx.machine.rng.borrow_mut().random_range(0..ADDRS_PER_ANON_GLOBAL),
+            user_relevance: ecx.machine.user_relevance(&frame),
             data_race: ecx
                 .machine
                 .data_race
@@ -1602,7 +1738,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         ecx.machine.since_gc += 1;
         // Possibly report our progress. This will point at the terminator we are about to execute.
         if let Some(report_progress) = ecx.machine.report_progress {
-            if ecx.machine.basic_block_count % u64::from(report_progress) == 0 {
+            if ecx.machine.basic_block_count.is_multiple_of(u64::from(report_progress)) {
                 ecx.emit_diagnostic(NonHaltingDiagnostic::ProgressReport {
                     block_count: ecx.machine.basic_block_count,
                 });
@@ -1630,23 +1766,34 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
 
     #[inline(always)]
     fn after_stack_push(ecx: &mut InterpCx<'tcx, Self>) -> InterpResult<'tcx> {
-        if ecx.frame().extra.is_user_relevant {
-            // We just pushed a local frame, so we know that the topmost local frame is the topmost
-            // frame. If we push a non-local frame, there's no need to do anything.
+        if ecx.frame().extra.user_relevance >= ecx.active_thread_ref().current_user_relevance() {
+            // We just pushed a frame that's at least as relevant as the so-far most relevant frame.
+            // That means we are now the most relevant frame.
             let stack_len = ecx.active_thread_stack().len();
             ecx.active_thread_mut().set_top_user_relevant_frame(stack_len - 1);
         }
         interp_ok(())
     }
 
-    fn before_stack_pop(
-        ecx: &InterpCx<'tcx, Self>,
-        frame: &Frame<'tcx, Self::Provenance, Self::FrameExtra>,
-    ) -> InterpResult<'tcx> {
+    fn before_stack_pop(ecx: &mut InterpCx<'tcx, Self>) -> InterpResult<'tcx> {
+        let frame = ecx.frame();
         // We want this *before* the return value copy, because the return place itself is protected
-        // until we do `end_call` here.
+        // until we do `on_stack_pop` here, and we need to un-protect it to copy the return value.
         if ecx.machine.borrow_tracker.is_some() {
             ecx.on_stack_pop(frame)?;
+        }
+        if ecx
+            .active_thread_ref()
+            .top_user_relevant_frame()
+            .expect("there should always be a most relevant frame for a non-empty stack")
+            == ecx.frame_idx()
+        {
+            // We are popping the most relevant frame. We have no clue what the next relevant frame
+            // below that is, so we recompute that.
+            // (If this ever becomes a bottleneck, we could have `push` store the previous
+            // user-relevant frame and restore that here.)
+            // We have to skip the frame that is just being popped.
+            ecx.active_thread_mut().recompute_top_user_relevant_frame(/* skip */ 1);
         }
         // tracing-tree can autoamtically annotate scope changes, but it gets very confused by our
         // concurrency and what it prints is just plain wrong. So we print our own information
@@ -1661,15 +1808,8 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         frame: Frame<'tcx, Provenance, FrameExtra<'tcx>>,
         unwinding: bool,
     ) -> InterpResult<'tcx, ReturnAction> {
-        if frame.extra.is_user_relevant {
-            // All that we store is whether or not the frame we just removed is local, so now we
-            // have no idea where the next topmost local frame is. So we recompute it.
-            // (If this ever becomes a bottleneck, we could have `push` store the previous
-            // user-relevant frame and restore that here.)
-            ecx.active_thread_mut().recompute_top_user_relevant_frame();
-        }
         let res = {
-            // Move `frame`` into a sub-scope so we control when it will be dropped.
+            // Move `frame` into a sub-scope so we control when it will be dropped.
             let mut frame = frame;
             let timing = frame.extra.timing.take();
             let res = ecx.handle_stack_pop_unwind(frame.extra, unwinding);
@@ -1692,6 +1832,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         local: mir::Local,
     ) -> InterpResult<'tcx> {
         if let Some(data_race) = &frame.extra.data_race {
+            let _trace = enter_trace_span!(data_race::after_local_read);
             data_race.local_read(local, &ecx.machine);
         }
         interp_ok(())
@@ -1703,6 +1844,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         storage_live: bool,
     ) -> InterpResult<'tcx> {
         if let Some(data_race) = &ecx.frame().extra.data_race {
+            let _trace = enter_trace_span!(data_race::after_local_write);
             data_race.local_write(local, storage_live, &ecx.machine);
         }
         interp_ok(())
@@ -1725,6 +1867,7 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         if let Some(data_race) =
             &machine.threads.active_thread_stack().last().unwrap().extra.data_race
         {
+            let _trace = enter_trace_span!(data_race::after_local_moved_to_memory);
             data_race.local_moved_to_memory(
                 local,
                 alloc_info.data_race.as_vclocks_mut().unwrap(),
@@ -1732,33 +1875,6 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             );
         }
         interp_ok(())
-    }
-
-    fn eval_mir_constant<F>(
-        ecx: &InterpCx<'tcx, Self>,
-        val: mir::Const<'tcx>,
-        span: Span,
-        layout: Option<TyAndLayout<'tcx>>,
-        eval: F,
-    ) -> InterpResult<'tcx, OpTy<'tcx>>
-    where
-        F: Fn(
-            &InterpCx<'tcx, Self>,
-            mir::Const<'tcx>,
-            Span,
-            Option<TyAndLayout<'tcx>>,
-        ) -> InterpResult<'tcx, OpTy<'tcx>>,
-    {
-        let frame = ecx.active_thread_stack().last().unwrap();
-        let mut cache = ecx.machine.const_cache.borrow_mut();
-        match cache.entry((val, frame.extra.salt)) {
-            Entry::Vacant(ve) => {
-                let op = eval(ecx, val, span, layout)?;
-                ve.insert(op.clone());
-                interp_ok(op)
-            }
-            Entry::Occupied(oe) => interp_ok(oe.get().clone()),
-        }
     }
 
     fn get_global_alloc_salt(
@@ -1781,12 +1897,12 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
             let is_generic = instance
                 .args
                 .into_iter()
-                .any(|kind| !matches!(kind.unpack(), ty::GenericArgKind::Lifetime(_)));
+                .any(|arg| !matches!(arg.kind(), ty::GenericArgKind::Lifetime(_)));
             let can_be_inlined = matches!(
                 ecx.tcx.sess.opts.unstable_opts.cross_crate_inline_threshold,
                 InliningThreshold::Always
             ) || !matches!(
-                ecx.tcx.codegen_fn_attrs(instance.def_id()).inline,
+                ecx.tcx.codegen_instance_attrs(instance.def).inline,
                 InlineAttr::Never
             );
             !is_generic && !can_be_inlined
@@ -1808,6 +1924,28 @@ impl<'tcx> Machine<'tcx> for MiriMachine<'tcx> {
         compute_range: impl FnOnce() -> RangeSet,
     ) -> Cow<'e, RangeSet> {
         Cow::Borrowed(ecx.machine.union_data_ranges.entry(ty).or_insert_with(compute_range))
+    }
+
+    fn get_default_alloc_params(&self) -> <Self::Bytes as AllocBytes>::AllocParams {
+        use crate::alloc::MiriAllocParams;
+
+        match &self.allocator {
+            Some(alloc) => MiriAllocParams::Isolated(alloc.clone()),
+            None => MiriAllocParams::Global,
+        }
+    }
+
+    fn enter_trace_span(span: impl FnOnce() -> tracing::Span) -> impl EnteredTraceSpan {
+        #[cfg(feature = "tracing")]
+        {
+            span().entered()
+        }
+        #[cfg(not(feature = "tracing"))]
+        #[expect(clippy::unused_unit)]
+        {
+            let _ = span; // so we avoid the "unused variable" warning
+            ()
+        }
     }
 }
 

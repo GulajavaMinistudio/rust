@@ -13,6 +13,12 @@ const RUST_PROJECT_CONTEXT_NAME = "inRustProject";
 export interface RustAnalyzerExtensionApi {
     // FIXME: this should be non-optional
     readonly client?: lc.LanguageClient;
+
+    // Allows adding a configuration override from another extension.
+    // `extensionId` is used to only merge configuration override from present
+    // extensions. `configuration` is map of rust-analyzer-specific setting
+    // overrides, e.g., `{"cargo.cfgs": ["foo", "bar"]}`.
+    addConfiguration(extensionId: string, configuration: Record<string, unknown>): Promise<void>;
 }
 
 export async function deactivate() {
@@ -167,7 +173,7 @@ function createCommands(): Record<string, CommandFactory> {
         viewCrateGraph: { enabled: commands.viewCrateGraph },
         viewFullCrateGraph: { enabled: commands.viewFullCrateGraph },
         expandMacro: { enabled: commands.expandMacro },
-        run: { enabled: commands.run },
+        run: { enabled: (ctx) => (mode?: "cursor") => commands.run(ctx, mode)() },
         copyRunCommandLine: { enabled: commands.copyRunCommandLine },
         debug: { enabled: commands.debug },
         newDebugConfig: { enabled: commands.newDebugConfig },

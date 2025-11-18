@@ -1,11 +1,9 @@
 # The HIR
 
-<!-- toc -->
-
 The HIR – "High-Level Intermediate Representation" – is the primary IR used
 in most of rustc. It is a compiler-friendly representation of the abstract
 syntax tree (AST) that is generated after parsing, macro expansion, and name
-resolution (see [Lowering](./ast-lowering.html) for how the HIR is created).
+resolution (see [Lowering](./hir/lowering.md) for how the HIR is created).
 Many parts of HIR resemble Rust surface syntax quite closely, with
 the exception that some of Rust's expression forms have been desugared away.
 For example, `for` loops are converted into a `loop` and do not appear in
@@ -104,7 +102,7 @@ These identifiers can be converted into one another through the `TyCtxt`.
 
 [`DefId`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/def_id/struct.DefId.html
 [`LocalDefId`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/def_id/struct.LocalDefId.html
-[`HirId`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/hir_id/struct.HirId.html
+[`HirId`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/struct.HirId.html
 [`BodyId`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/hir/struct.BodyId.html
 [Node]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/hir/enum.Node.html
 [`CrateNum`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_hir/def_id/struct.CrateNum.html

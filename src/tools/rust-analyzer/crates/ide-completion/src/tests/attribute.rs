@@ -30,7 +30,10 @@ pub struct Foo(#[m$0] i32);
             at deprecated
             at derive                                  macro derive
             at derive(…)
+            at diagnostic::do_not_recommend
+            at diagnostic::on_unimplemented
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -83,6 +86,7 @@ struct Foo;
             at deprecated
             at derive(…)
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -156,6 +160,7 @@ fn attr_on_source_file() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -187,6 +192,7 @@ fn attr_on_module() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -210,6 +216,7 @@ fn attr_on_module() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -236,6 +243,7 @@ fn attr_on_macro_rules() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -262,6 +270,7 @@ fn attr_on_macro_def() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -286,6 +295,7 @@ fn attr_on_extern_crate() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -311,6 +321,7 @@ fn attr_on_use() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -335,6 +346,7 @@ fn attr_on_type_alias() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -366,6 +378,7 @@ struct Foo;
             at derive(…)
             at derive_const macro derive_const
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -394,6 +407,7 @@ fn attr_on_enum() {
             at deprecated
             at derive(…)
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -420,6 +434,7 @@ fn attr_on_const() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -444,6 +459,7 @@ fn attr_on_static() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -472,12 +488,13 @@ fn attr_on_trait() {
             at cfg_attr(…)
             at deny(…)
             at deprecated
+            at diagnostic::on_unimplemented
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
             at forbid(…)
-            at must_use
             at must_use
             at no_mangle
             at warn(…)
@@ -498,7 +515,9 @@ fn attr_on_impl() {
             at cfg_attr(…)
             at deny(…)
             at deprecated
+            at diagnostic::do_not_recommend
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -519,6 +538,7 @@ fn attr_on_impl() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -528,6 +548,78 @@ fn attr_on_impl() {
             at warn(…)
             kw crate::
             kw self::
+        "#]],
+    );
+}
+
+#[test]
+fn attr_with_qualifier() {
+    check(
+        r#"#[diagnostic::$0] impl () {}"#,
+        expect![[r#"
+            at allow(…)
+            at automatically_derived
+            at cfg(…)
+            at cfg_attr(…)
+            at deny(…)
+            at deprecated
+            at do_not_recommend
+            at doc = "…"
+            at doc = include_str!("…")
+            at doc(alias = "…")
+            at doc(hidden)
+            at expect(…)
+            at forbid(…)
+            at must_use
+            at no_mangle
+            at warn(…)
+        "#]],
+    );
+    check(
+        r#"#[diagnostic::$0] trait Foo {}"#,
+        expect![[r#"
+            at allow(…)
+            at cfg(…)
+            at cfg_attr(…)
+            at deny(…)
+            at deprecated
+            at doc = "…"
+            at doc = include_str!("…")
+            at doc(alias = "…")
+            at doc(hidden)
+            at expect(…)
+            at forbid(…)
+            at must_use
+            at no_mangle
+            at on_unimplemented
+            at warn(…)
+        "#]],
+    );
+}
+
+#[test]
+fn attr_diagnostic_on_unimplemented() {
+    check(
+        r#"#[diagnostic::on_unimplemented($0)] trait Foo {}"#,
+        expect![[r#"
+            ba label = "…"
+            ba message = "…"
+            ba note = "…"
+        "#]],
+    );
+    check(
+        r#"#[diagnostic::on_unimplemented(message = "foo", $0)] trait Foo {}"#,
+        expect![[r#"
+            ba label = "…"
+            ba note = "…"
+        "#]],
+    );
+    check(
+        r#"#[diagnostic::on_unimplemented(note = "foo", $0)] trait Foo {}"#,
+        expect![[r#"
+            ba label = "…"
+            ba message = "…"
+            ba note = "…"
         "#]],
     );
 }
@@ -543,6 +635,7 @@ fn attr_on_extern_block() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -564,6 +657,7 @@ fn attr_on_extern_block() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -609,6 +703,7 @@ fn attr_on_fn() {
             at deny(…)
             at deprecated
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -618,7 +713,6 @@ fn attr_on_fn() {
             at inline
             at link_name = "…"
             at link_section = "…"
-            at must_use
             at must_use
             at no_mangle
             at panic_handler
@@ -649,7 +743,10 @@ fn attr_in_source_file_end() {
             at deny(…)
             at deprecated
             at derive(…)
+            at diagnostic::do_not_recommend
+            at diagnostic::on_unimplemented
             at doc = "…"
+            at doc = include_str!("…")
             at doc(alias = "…")
             at doc(hidden)
             at expect(…)
@@ -741,7 +838,10 @@ mod cfg {
 #[cfg($0)]
 "#,
             expect![[r#"
+                ba all
+                ba any
                 ba dbg
+                ba not
                 ba opt_level
                 ba test
                 ba true
@@ -753,7 +853,74 @@ mod cfg {
 #[cfg(b$0)]
 "#,
             expect![[r#"
+                ba all
+                ba any
                 ba dbg
+                ba not
+                ba opt_level
+                ba test
+                ba true
+            "#]],
+        );
+    }
+
+    #[test]
+    fn inside_cfg_attr() {
+        check(
+            r#"
+//- /main.rs cfg:test,dbg=false,opt_level=2
+#[cfg_attr($0)]
+"#,
+            expect![[r#"
+                ba all
+                ba any
+                ba dbg
+                ba not
+                ba opt_level
+                ba test
+                ba true
+            "#]],
+        );
+        check(
+            r#"
+//- /main.rs cfg:test,dbg=false,opt_level=2
+#[cfg_attr(b$0)]
+"#,
+            expect![[r#"
+                ba all
+                ba any
+                ba dbg
+                ba not
+                ba opt_level
+                ba test
+                ba true
+            "#]],
+        );
+        check(
+            r#"
+//- /main.rs cfg:test,dbg=false,opt_level=2
+#[cfg_attr($0, allow(deprecated))]
+"#,
+            expect![[r#"
+                ba all
+                ba any
+                ba dbg
+                ba not
+                ba opt_level
+                ba test
+                ba true
+            "#]],
+        );
+        check(
+            r#"
+//- /main.rs cfg:test,dbg=false,opt_level=2
+#[cfg_attr(b$0, allow(deprecated))]
+"#,
+            expect![[r#"
+                ba all
+                ba any
+                ba dbg
+                ba not
                 ba opt_level
                 ba test
                 ba true
@@ -776,6 +943,20 @@ mod cfg {
                 ba big
                 ba little
             "#]],
+        );
+    }
+
+    #[test]
+    fn inside_conditional() {
+        check_edit(
+            "all",
+            r#"
+//- /main.rs cfg:test,dbg=false,opt_level=2
+#[cfg($0)]
+"#,
+            r#"
+#[cfg(all($0))]
+"#,
         );
     }
 }
@@ -804,6 +985,7 @@ mod derive {
             expect![[r#"
                 de Clone              macro Clone
                 de Clone, Copy
+                de Debug              macro Debug
                 de Default          macro Default
                 de PartialEq      macro PartialEq
                 de PartialEq, Eq
@@ -826,6 +1008,7 @@ mod derive {
             expect![[r#"
                 de Clone     macro Clone
                 de Clone, Copy
+                de Debug     macro Debug
                 de Default macro Default
                 de Eq
                 de Eq, PartialOrd, Ord
@@ -847,6 +1030,7 @@ mod derive {
             expect![[r#"
                 de Clone     macro Clone
                 de Clone, Copy
+                de Debug     macro Debug
                 de Default macro Default
                 de Eq
                 de Eq, PartialOrd, Ord
@@ -868,6 +1052,7 @@ mod derive {
             expect![[r#"
                 de Clone     macro Clone
                 de Clone, Copy
+                de Debug     macro Debug
                 de Default macro Default
                 de PartialOrd
                 de PartialOrd, Ord

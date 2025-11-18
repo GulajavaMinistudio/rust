@@ -2,15 +2,15 @@
 
 #![feature(const_trait_impl, min_specialization, rustc_attrs)]
 
+use std::fmt::Debug;
+
 #[rustc_specialization_trait]
-#[const_trait]
-pub unsafe trait Sup {
+pub const unsafe trait Sup {
     fn foo() -> u32;
 }
 
 #[rustc_specialization_trait]
-#[const_trait]
-pub unsafe trait Sub: ~const Sup {}
+pub const unsafe trait Sub: [const] Sup {}
 
 unsafe impl const Sup for u8 {
     default fn foo() -> u32 {
@@ -26,24 +26,23 @@ unsafe impl const Sup for () {
 
 unsafe impl const Sub for () {}
 
-#[const_trait]
-pub trait A {
+pub const trait A {
     fn a() -> u32;
 }
 
-impl<T: ~const Default> const A for T {
+impl<T: [const] Debug> const A for T {
     default fn a() -> u32 {
         2
     }
 }
 
-impl<T: ~const Default + ~const Sup> const A for T {
+impl<T: [const] Debug + [const] Sup> const A for T {
     default fn a() -> u32 {
         3
     }
 }
 
-impl<T: ~const Default + ~const Sub> const A for T {
+impl<T: [const] Debug + [const] Sub> const A for T {
     fn a() -> u32 {
         T::foo()
     }

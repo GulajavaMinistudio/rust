@@ -5,7 +5,7 @@ use rustc_middle::traits::ObligationCause;
 use rustc_middle::traits::solve::Goal;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::{
-    self, BottomUpFolder, OpaqueHiddenType, OpaqueTypeKey, Ty, TyCtxt, TypeFoldable,
+    self, BottomUpFolder, OpaqueTypeKey, ProvisionalHiddenType, Ty, TyCtxt, TypeFoldable,
     TypeVisitableExt,
 };
 use rustc_span::Span;
@@ -199,7 +199,7 @@ impl<'tcx> InferCtxt<'tcx> {
     pub fn register_hidden_type_in_storage(
         &self,
         opaque_type_key: OpaqueTypeKey<'tcx>,
-        hidden_ty: OpaqueHiddenType<'tcx>,
+        hidden_ty: ProvisionalHiddenType<'tcx>,
     ) -> Option<Ty<'tcx>> {
         self.inner.borrow_mut().opaque_types().register(opaque_type_key, hidden_ty)
     }
@@ -237,7 +237,7 @@ impl<'tcx> InferCtxt<'tcx> {
                     .inner
                     .borrow_mut()
                     .opaque_types()
-                    .register(opaque_type_key, OpaqueHiddenType { ty: hidden_ty, span });
+                    .register(opaque_type_key, ProvisionalHiddenType { ty: hidden_ty, span });
                 if let Some(prev) = prev {
                     goals.extend(
                         self.at(&ObligationCause::dummy_with_span(span), param_env)
@@ -253,7 +253,7 @@ impl<'tcx> InferCtxt<'tcx> {
                     .inner
                     .borrow_mut()
                     .opaque_types()
-                    .register(opaque_type_key, OpaqueHiddenType { ty: hidden_ty, span });
+                    .register(opaque_type_key, ProvisionalHiddenType { ty: hidden_ty, span });
 
                 // We either equate the new hidden type with the previous entry or with the type
                 // inferred by HIR typeck.
@@ -262,9 +262,7 @@ impl<'tcx> InferCtxt<'tcx> {
                         .type_of_opaque_hir_typeck(opaque_type_key.def_id)
                         .instantiate(self.tcx, opaque_type_key.args);
                     let actual = ty::fold_regions(tcx, actual, |re, _dbi| match re.kind() {
-                        ty::ReErased => {
-                            self.next_region_var(RegionVariableOrigin::MiscVariable(span))
-                        }
+                        ty::ReErased => self.next_region_var(RegionVariableOrigin::Misc(span)),
                         _ => re,
                     });
                     actual

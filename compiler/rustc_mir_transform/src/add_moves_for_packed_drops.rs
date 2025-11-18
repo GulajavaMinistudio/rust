@@ -51,7 +51,7 @@ impl<'tcx> crate::MirPass<'tcx> for AddMovesForPackedDrops {
 
             match terminator.kind {
                 TerminatorKind::Drop { place, .. }
-                    if util::is_disaligned(tcx, body, typing_env, place) =>
+                    if util::place_unalignment(tcx, body, typing_env, place).is_some() =>
                 {
                     add_move_for_packed_drop(
                         tcx,
@@ -93,11 +93,11 @@ fn add_move_for_packed_drop<'tcx>(
     let ty = place.ty(body, tcx).ty;
     let temp = patch.new_temp(ty, source_info.span);
 
-    let storage_dead_block = patch.new_block(BasicBlockData {
-        statements: vec![Statement { source_info, kind: StatementKind::StorageDead(temp) }],
-        terminator: Some(Terminator { source_info, kind: TerminatorKind::Goto { target } }),
+    let storage_dead_block = patch.new_block(BasicBlockData::new_stmts(
+        vec![Statement::new(source_info, StatementKind::StorageDead(temp))],
+        Some(Terminator { source_info, kind: TerminatorKind::Goto { target } }),
         is_cleanup,
-    });
+    ));
 
     patch.add_statement(loc, StatementKind::StorageLive(temp));
     patch.add_assign(loc, Place::from(temp), Rvalue::Use(Operand::Move(*place)));

@@ -9,6 +9,7 @@
 // unblock the tree.
 //@ only-64bit
 //@ min-cdb-version: 10.0.26100.2161
+//@ ignore-backends: gcc
 
 // Tests the visualizations for `NonZero<T>`, `Wrapping<T>` and
 // `Atomic{Bool,I8,I16,I32,I64,Isize,U8,U16,U32,U64,Usize}` located in `libcore.natvis`.
@@ -201,6 +202,8 @@
 // gdb-command:print nz_usize
 // gdb-check:[...]$12 = 122
 
+// gdb-command:print/x nz_i8
+// gdb-check:[...]$13 = 0xb
 
 
 // === LLDB TESTS ==================================================================================

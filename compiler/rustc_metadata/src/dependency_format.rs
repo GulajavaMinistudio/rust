@@ -61,11 +61,13 @@ use rustc_session::config::CrateType;
 use rustc_session::cstore::CrateDepKind;
 use rustc_session::cstore::LinkagePreference::{self, RequireDynamic, RequireStatic};
 use rustc_span::sym;
+use rustc_target::spec::PanicStrategy;
 use tracing::info;
 
 use crate::creader::CStore;
 use crate::errors::{
-    BadPanicStrategy, CrateDepMultiple, IncompatiblePanicInDropStrategy, LibRequired,
+    BadPanicStrategy, CrateDepMultiple, IncompatiblePanicInDropStrategy,
+    IncompatibleWithImmediateAbort, IncompatibleWithImmediateAbortCore, LibRequired,
     NonStaticCrateDep, RequiredPanicStrategy, RlibRequired, RustcDriverHelp, RustcLibRequired,
     TwoPanicRuntimes,
 };
@@ -314,7 +316,7 @@ fn add_library(
                     crate_name: tcx.crate_name(cnum),
                     non_static_deps: unavailable_as_static
                         .drain(..)
-                        .map(|cnum| NonStaticCrateDep { crate_name: tcx.crate_name(cnum) })
+                        .map(|cnum| NonStaticCrateDep { crate_name_: tcx.crate_name(cnum) })
                         .collect(),
                     rustc_driver_help: linking_to_rustc_driver.then_some(RustcDriverHelp),
                 });
@@ -370,15 +372,15 @@ fn attempt_static(tcx: TyCtxt<'_>, unavailable: &mut Vec<CrateNum>) -> Option<De
     Some(ret)
 }
 
-// Given a list of how to link upstream dependencies so far, ensure that an
-// injected dependency is activated. This will not do anything if one was
-// transitively included already (e.g., via a dylib or explicitly so).
-//
-// If an injected dependency was not found then we're guaranteed the
-// metadata::creader module has injected that dependency (not listed as
-// a required dependency) in one of the session's field. If this field is not
-// set then this compilation doesn't actually need the dependency and we can
-// also skip this step entirely.
+/// Given a list of how to link upstream dependencies so far, ensure that an
+/// injected dependency is activated. This will not do anything if one was
+/// transitively included already (e.g., via a dylib or explicitly so).
+///
+/// If an injected dependency was not found then we're guaranteed the
+/// metadata::creader module has injected that dependency (not listed as
+/// a required dependency) in one of the session's field. If this field is not
+/// set then this compilation doesn't actually need the dependency and we can
+/// also skip this step entirely.
 fn activate_injected_dep(
     injected: Option<CrateNum>,
     list: &mut DependencyList,
@@ -402,15 +404,43 @@ fn activate_injected_dep(
 /// there's only going to be one panic runtime in the output.
 fn verify_ok(tcx: TyCtxt<'_>, list: &DependencyList) {
     let sess = &tcx.sess;
+    let list: Vec<_> = list
+        .iter_enumerated()
+        .filter_map(
+            |(cnum, linkage)| if *linkage == Linkage::NotLinked { None } else { Some(cnum) },
+        )
+        .collect();
     if list.is_empty() {
         return;
     }
-    let mut panic_runtime = None;
-    for (cnum, linkage) in list.iter_enumerated() {
-        if let Linkage::NotLinked = *linkage {
-            continue;
-        }
+    let desired_strategy = sess.panic_strategy();
 
+    // If we are panic=immediate-abort, make sure everything in the dependency tree has also been
+    // compiled with immediate-abort.
+    if list
+        .iter()
+        .any(|cnum| tcx.required_panic_strategy(*cnum) == Some(PanicStrategy::ImmediateAbort))
+    {
+        let mut invalid_crates = Vec::new();
+        for cnum in list.iter().copied() {
+            if tcx.required_panic_strategy(cnum) != Some(PanicStrategy::ImmediateAbort) {
+                invalid_crates.push(cnum);
+                // If core is incompatible, it's very likely that we'd emit an error for every
+                // sysroot crate, so instead of doing that emit a single fatal error that suggests
+                // using build-std.
+                if tcx.crate_name(cnum) == sym::core {
+                    sess.dcx().emit_fatal(IncompatibleWithImmediateAbortCore);
+                }
+            }
+        }
+        for cnum in invalid_crates {
+            sess.dcx()
+                .emit_err(IncompatibleWithImmediateAbort { crate_name: tcx.crate_name(cnum) });
+        }
+    }
+
+    let mut panic_runtime = None;
+    for cnum in list.iter().copied() {
         if tcx.is_panic_runtime(cnum) {
             if let Some((prev, _)) = panic_runtime {
                 let prev_name = tcx.crate_name(prev);
@@ -430,8 +460,6 @@ fn verify_ok(tcx: TyCtxt<'_>, list: &DependencyList) {
     // only one, but we perform validation here that all the panic strategy
     // compilation modes for the whole DAG are valid.
     if let Some((runtime_cnum, found_strategy)) = panic_runtime {
-        let desired_strategy = sess.panic_strategy();
-
         // First up, validate that our selected panic runtime is indeed exactly
         // our same strategy.
         if found_strategy != desired_strategy {
@@ -445,10 +473,7 @@ fn verify_ok(tcx: TyCtxt<'_>, list: &DependencyList) {
         // strategy. If the dep isn't linked, we ignore it, and if our strategy
         // is abort then it's compatible with everything. Otherwise all crates'
         // panic strategy must match our own.
-        for (cnum, linkage) in list.iter_enumerated() {
-            if let Linkage::NotLinked = *linkage {
-                continue;
-            }
+        for cnum in list.iter().copied() {
             if cnum == runtime_cnum || tcx.is_compiler_builtins(cnum) {
                 continue;
             }

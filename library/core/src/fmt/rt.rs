@@ -10,28 +10,6 @@ use super::*;
 use crate::hint::unreachable_unchecked;
 use crate::ptr::NonNull;
 
-#[lang = "format_placeholder"]
-#[derive(Copy, Clone)]
-pub struct Placeholder {
-    pub position: usize,
-    pub flags: u32,
-    pub precision: Count,
-    pub width: Count,
-}
-
-/// Used by [width](https://doc.rust-lang.org/std/fmt/#width)
-/// and [precision](https://doc.rust-lang.org/std/fmt/#precision) specifiers.
-#[lang = "format_count"]
-#[derive(Copy, Clone)]
-pub enum Count {
-    /// Specified with a literal number, stores the value
-    Is(u16),
-    /// Specified using `$` and `*` syntaxes, stores the index into `args`
-    Param(usize),
-    /// Not specified
-    Implied,
-}
-
 #[derive(Copy, Clone)]
 enum ArgumentType<'a> {
     Placeholder {
@@ -56,6 +34,7 @@ enum ArgumentType<'a> {
 ///   precision and width.
 #[lang = "format_argument"]
 #[derive(Copy, Clone)]
+#[repr(align(2))] // To ensure pointers to this struct always have their lowest bit cleared.
 pub struct Argument<'a> {
     ty: ArgumentType<'a>,
 }
@@ -182,91 +161,5 @@ impl Argument<'_> {
             ArgumentType::Count(count) => Some(count),
             ArgumentType::Placeholder { .. } => None,
         }
-    }
-
-    /// Used by `format_args` when all arguments are gone after inlining,
-    /// when using `&[]` would incorrectly allow for a bigger lifetime.
-    ///
-    /// This fails without format argument inlining, and that shouldn't be different
-    /// when the argument is inlined:
-    ///
-    /// ```compile_fail,E0716
-    /// let f = format_args!("{}", "a");
-    /// println!("{f}");
-    /// ```
-    #[inline]
-    pub const fn none() -> [Self; 0] {
-        []
-    }
-}
-
-/// This struct represents the unsafety of constructing an `Arguments`.
-/// It exists, rather than an unsafe function, in order to simplify the expansion
-/// of `format_args!(..)` and reduce the scope of the `unsafe` block.
-#[lang = "format_unsafe_arg"]
-pub struct UnsafeArg {
-    _private: (),
-}
-
-impl UnsafeArg {
-    /// See documentation where `UnsafeArg` is required to know when it is safe to
-    /// create and use `UnsafeArg`.
-    #[inline]
-    pub const unsafe fn new() -> Self {
-        Self { _private: () }
-    }
-}
-
-/// Used by the format_args!() macro to create a fmt::Arguments object.
-#[doc(hidden)]
-#[unstable(feature = "fmt_internals", issue = "none")]
-#[rustc_diagnostic_item = "FmtArgumentsNew"]
-impl<'a> Arguments<'a> {
-    #[inline]
-    pub const fn new_const<const N: usize>(pieces: &'a [&'static str; N]) -> Self {
-        const { assert!(N <= 1) };
-        Arguments { pieces, fmt: None, args: &[] }
-    }
-
-    /// When using the format_args!() macro, this function is used to generate the
-    /// Arguments structure.
-    ///
-    /// This function should _not_ be const, to make sure we don't accept
-    /// format_args!() and panic!() with arguments in const, even when not evaluated:
-    ///
-    /// ```compile_fail,E0015
-    /// const _: () = if false { panic!("a {}", "a") };
-    /// ```
-    #[inline]
-    pub fn new_v1<const P: usize, const A: usize>(
-        pieces: &'a [&'static str; P],
-        args: &'a [rt::Argument<'a>; A],
-    ) -> Arguments<'a> {
-        const { assert!(P >= A && P <= A + 1, "invalid args") }
-        Arguments { pieces, fmt: None, args }
-    }
-
-    /// Specifies nonstandard formatting parameters.
-    ///
-    /// An `rt::UnsafeArg` is required because the following invariants must be held
-    /// in order for this function to be safe:
-    /// 1. The `pieces` slice must be at least as long as `fmt`.
-    /// 2. Every `rt::Placeholder::position` value within `fmt` must be a valid index of `args`.
-    /// 3. Every `rt::Count::Param` within `fmt` must contain a valid index of `args`.
-    ///
-    /// This function should _not_ be const, to make sure we don't accept
-    /// format_args!() and panic!() with arguments in const, even when not evaluated:
-    ///
-    /// ```compile_fail,E0015
-    /// const _: () = if false { panic!("a {:1}", "a") };
-    /// ```
-    #[inline]
-    pub fn new_v1_formatted(
-        pieces: &'a [&'static str],
-        args: &'a [rt::Argument<'a>],
-        fmt: &'a [rt::Placeholder],
-        _unsafe_arg: rt::UnsafeArg,
-    ) -> Arguments<'a> {
-        Arguments { pieces, fmt: Some(fmt), args }
     }
 }

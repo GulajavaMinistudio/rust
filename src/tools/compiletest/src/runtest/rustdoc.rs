@@ -1,17 +1,17 @@
 use std::process::Command;
 
-use super::{TestCx, remove_and_create_dir_all};
+use super::{DocKind, TestCx, remove_and_create_dir_all};
 
 impl TestCx<'_> {
     pub(super) fn run_rustdoc_test(&self) {
-        assert!(self.revision.is_none(), "revisions not relevant here");
+        assert!(self.revision.is_none(), "revisions not supported in this test suite");
 
         let out_dir = self.output_base_dir();
         remove_and_create_dir_all(&out_dir).unwrap_or_else(|e| {
             panic!("failed to remove and recreate output directory `{out_dir}`: {e}")
         });
 
-        let proc_res = self.document(&out_dir, &self.testpaths);
+        let proc_res = self.document(&out_dir, DocKind::Html);
         if !proc_res.status.success() {
             self.fatal_proc_rec("rustdoc failed!", &proc_res);
         }
@@ -28,8 +28,8 @@ impl TestCx<'_> {
             }
             let res = self.run_command_to_procres(&mut cmd);
             if !res.status.success() {
-                self.fatal_proc_rec_with_ctx("htmldocck failed!", &res, |mut this| {
-                    this.compare_to_default_rustdoc(&out_dir)
+                self.fatal_proc_rec_general("htmldocck failed!", None, &res, || {
+                    self.compare_to_default_rustdoc(&out_dir);
                 });
             }
         }

@@ -1,12 +1,12 @@
 use std::any::Any;
-use std::ops::{Div, Mul};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::{env, fmt, io};
+use std::{env, io};
 
 use rand::{RngCore, rng};
+use rustc_ast::NodeId;
 use rustc_data_structures::base_n::{CASE_INSENSITIVE, ToBaseN};
 use rustc_data_structures::flock;
 use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
@@ -18,10 +18,13 @@ use rustc_errors::emitter::{
     DynEmitter, HumanEmitter, HumanReadableErrorType, OutputTheme, stderr_destination,
 };
 use rustc_errors::json::JsonEmitter;
+use rustc_errors::timings::TimingSectionHandler;
+use rustc_errors::translation::Translator;
 use rustc_errors::{
     Diag, DiagCtxt, DiagCtxtHandle, DiagMessage, Diagnostic, ErrorGuaranteed, FatalAbort,
-    FluentBundle, LazyFallbackBundle, TerminalUrl, fallback_fluent_bundle,
+    LintEmitter, TerminalUrl, fallback_fluent_bundle,
 };
+use rustc_hir::limit::Limit;
 use rustc_macros::HashStable_Generic;
 pub use rustc_span::def_id::StableCrateId;
 use rustc_span::edition::Edition;
@@ -29,7 +32,7 @@ use rustc_span::source_map::{FilePathMapping, SourceMap};
 use rustc_span::{FileNameDisplayPreference, RealFileName, Span, Symbol};
 use rustc_target::asm::InlineAsmArch;
 use rustc_target::spec::{
-    CodeModel, DebuginfoKind, PanicStrategy, RelocModel, RelroLevel, SanitizerSet,
+    Arch, CodeModel, DebuginfoKind, Os, PanicStrategy, RelocModel, RelroLevel, SanitizerSet,
     SmallDataThresholdSupport, SplitDebuginfo, StackProtector, SymbolVisibility, Target,
     TargetTuple, TlsModel, apple,
 };
@@ -37,11 +40,12 @@ use rustc_target::spec::{
 use crate::code_stats::CodeStats;
 pub use crate::code_stats::{DataTypeKind, FieldInfo, FieldKind, SizeKind, VariantInfo};
 use crate::config::{
-    self, CoverageLevel, CrateType, DebugInfo, ErrorOutputType, FunctionReturn, Input,
-    InstrumentCoverage, OptLevel, OutFileName, OutputType, RemapPathScopeComponents,
+    self, CoverageLevel, CoverageOptions, CrateType, DebugInfo, ErrorOutputType, FunctionReturn,
+    Input, InstrumentCoverage, OptLevel, OutFileName, OutputType, RemapPathScopeComponents,
     SwitchWithOptPath,
 };
 use crate::filesearch::FileSearch;
+use crate::lint::LintId;
 use crate::parse::{ParseSess, add_feature_diagnostics};
 use crate::search_paths::SearchPath;
 use crate::{errors, filesearch, lint};
@@ -56,64 +60,6 @@ pub enum CtfeBacktrace {
     Capture,
     /// Capture a backtrace at the point the error is created and immediately print it out.
     Immediate,
-}
-
-/// New-type wrapper around `usize` for representing limits. Ensures that comparisons against
-/// limits are consistent throughout the compiler.
-#[derive(Clone, Copy, Debug, HashStable_Generic)]
-pub struct Limit(pub usize);
-
-impl Limit {
-    /// Create a new limit from a `usize`.
-    pub fn new(value: usize) -> Self {
-        Limit(value)
-    }
-
-    /// Create a new unlimited limit.
-    pub fn unlimited() -> Self {
-        Limit(usize::MAX)
-    }
-
-    /// Check that `value` is within the limit. Ensures that the same comparisons are used
-    /// throughout the compiler, as mismatches can cause ICEs, see #72540.
-    #[inline]
-    pub fn value_within_limit(&self, value: usize) -> bool {
-        value <= self.0
-    }
-}
-
-impl From<usize> for Limit {
-    fn from(value: usize) -> Self {
-        Self::new(value)
-    }
-}
-
-impl fmt::Display for Limit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Div<usize> for Limit {
-    type Output = Limit;
-
-    fn div(self, rhs: usize) -> Self::Output {
-        Limit::new(self.0 / rhs)
-    }
-}
-
-impl Mul<usize> for Limit {
-    type Output = Limit;
-
-    fn mul(self, rhs: usize) -> Self::Output {
-        Limit::new(self.0 * rhs)
-    }
-}
-
-impl rustc_errors::IntoDiagArg for Limit {
-    fn into_diag_arg(self, _: &mut Option<std::path::PathBuf>) -> rustc_errors::DiagArgValue {
-        self.to_string().into_diag_arg(&mut None)
-    }
 }
 
 #[derive(Clone, Copy, Debug, HashStable_Generic)]
@@ -137,7 +83,10 @@ pub struct CompilerIO {
     pub temps_dir: Option<PathBuf>,
 }
 
-pub trait LintStoreMarker: Any + DynSync + DynSend {}
+pub trait DynLintStore: Any + DynSync + DynSend {
+    /// Provides a way to access lint groups without depending on `rustc_lint`
+    fn lint_groups_iter(&self) -> Box<dyn Iterator<Item = LintGroup> + '_>;
+}
 
 /// Represents the data associated with a compilation
 /// session for a single crate.
@@ -147,7 +96,6 @@ pub struct Session {
     pub opts: config::Options,
     pub target_tlib_path: Arc<SearchPath>,
     pub psess: ParseSess,
-    pub sysroot: PathBuf,
     /// Input, input file path and output file path to this compilation process.
     pub io: CompilerIO,
 
@@ -156,11 +104,14 @@ pub struct Session {
     /// Used by `-Z self-profile`.
     pub prof: SelfProfilerRef,
 
+    /// Used to emit section timings events (enabled by `--json=timings`).
+    pub timings: TimingSectionHandler,
+
     /// Data about code being compiled, gathered during compilation.
     pub code_stats: CodeStats,
 
     /// This only ever stores a `LintStore` but we don't want a dependency on that type here.
-    pub lint_store: Option<Arc<dyn LintStoreMarker>>,
+    pub lint_store: Option<Arc<dyn DynLintStore>>,
 
     /// Cap lint level specified by a driver specifically.
     pub driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
@@ -197,12 +148,6 @@ pub struct Session {
     /// None signifies that this is not tracked.
     pub using_internal_features: &'static AtomicBool,
 
-    /// All commandline args used to invoke the compiler, with @file args fully expanded.
-    /// This will only be used within debug info, e.g. in the pdb file on windows
-    /// This is mainly useful for other tools that reads that debuginfo to figure out
-    /// how to call the compiler with the same arguments.
-    pub expanded_args: Vec<String>,
-
     target_filesearch: FileSearch,
     host_filesearch: FileSearch,
 
@@ -215,11 +160,18 @@ pub struct Session {
     pub invocation_temp: Option<String>,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub enum MetadataKind {
-    None,
-    Uncompressed,
-    Compressed,
+impl LintEmitter for &'_ Session {
+    type Id = NodeId;
+
+    fn emit_node_span_lint(
+        self,
+        lint: &'static rustc_lint_defs::Lint,
+        node_id: Self::Id,
+        span: impl Into<rustc_errors::MultiSpan>,
+        decorator: impl for<'a> rustc_errors::LintDiagnostic<'a, ()> + DynSend + 'static,
+    ) {
+        self.psess.buffer_lint(lint, span, node_id, decorator);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -241,6 +193,12 @@ impl CodegenUnits {
             CodegenUnits::Default(n) => n,
         }
     }
+}
+
+pub struct LintGroup {
+    pub name: &'static str,
+    pub lints: Vec<LintId>,
+    pub is_externally_loaded: bool,
 }
 
 impl Session {
@@ -316,6 +274,7 @@ impl Session {
             || self.opts.unstable_opts.query_dep_graph
             || self.opts.unstable_opts.dump_mir.is_some()
             || self.opts.unstable_opts.unpretty.is_some()
+            || self.prof.is_args_recording_enabled()
             || self.opts.output_types.contains_key(&OutputType::Mir)
             || std::env::var_os("RUSTC_LOG").is_some()
         {
@@ -356,23 +315,15 @@ impl Session {
             && self.opts.unstable_opts.coverage_options.level >= CoverageLevel::Condition
     }
 
-    pub fn instrument_coverage_mcdc(&self) -> bool {
-        self.instrument_coverage()
-            && self.opts.unstable_opts.coverage_options.level >= CoverageLevel::Mcdc
-    }
-
-    /// True if `-Zcoverage-options=no-mir-spans` was passed.
-    pub fn coverage_no_mir_spans(&self) -> bool {
-        self.opts.unstable_opts.coverage_options.no_mir_spans
-    }
-
-    /// True if `-Zcoverage-options=discard-all-spans-in-codegen` was passed.
-    pub fn coverage_discard_all_spans_in_codegen(&self) -> bool {
-        self.opts.unstable_opts.coverage_options.discard_all_spans_in_codegen
+    /// Provides direct access to the `CoverageOptions` struct, so that
+    /// individual flags for debugging/testing coverage instrumetation don't
+    /// need separate accessors.
+    pub fn coverage_options(&self) -> &CoverageOptions {
+        &self.opts.unstable_opts.coverage_options
     }
 
     pub fn is_sanitizer_cfi_enabled(&self) -> bool {
-        self.opts.unstable_opts.sanitizer.contains(SanitizerSet::CFI)
+        self.sanitizers().contains(SanitizerSet::CFI)
     }
 
     pub fn is_sanitizer_cfi_canonical_jump_tables_disabled(&self) -> bool {
@@ -396,7 +347,7 @@ impl Session {
     }
 
     pub fn is_sanitizer_kcfi_enabled(&self) -> bool {
-        self.opts.unstable_opts.sanitizer.contains(SanitizerSet::KCFI)
+        self.sanitizers().contains(SanitizerSet::KCFI)
     }
 
     pub fn is_split_lto_unit_enabled(&self) -> bool {
@@ -431,7 +382,7 @@ impl Session {
     }
 
     pub fn is_wasi_reactor(&self) -> bool {
-        self.target.options.os == "wasi"
+        self.target.options.os == Os::Wasi
             && matches!(
                 self.opts.unstable_opts.wasi_exec_model,
                 Some(config::WasiExecModel::Reactor)
@@ -458,13 +409,11 @@ impl Session {
     /// directories are also returned, for example if `--sysroot` is used but tools are missing
     /// (#125246): we also add the bin directories to the sysroot where rustc is located.
     pub fn get_tools_search_paths(&self, self_contained: bool) -> Vec<PathBuf> {
-        let bin_path = filesearch::make_target_bin_path(&self.sysroot, config::host_tuple());
-        let fallback_sysroot_paths = filesearch::sysroot_candidates()
-            .into_iter()
-            // Ignore sysroot candidate if it was the same as the sysroot path we just used.
-            .filter(|sysroot| *sysroot != self.sysroot)
+        let search_paths = self
+            .opts
+            .sysroot
+            .all_paths()
             .map(|sysroot| filesearch::make_target_bin_path(&sysroot, config::host_tuple()));
-        let search_paths = std::iter::once(bin_path).chain(fallback_sysroot_paths);
 
         if self_contained {
             // The self-contained tools are expected to be e.g. in `bin/self-contained` in the
@@ -578,7 +527,7 @@ impl Session {
         // AddressSanitizer and KernelAddressSanitizer uses lifetimes to detect use after scope bugs.
         // MemorySanitizer uses lifetimes to detect use of uninitialized stack variables.
         // HWAddressSanitizer will use lifetimes to detect use after scope bugs in the future.
-        || self.opts.unstable_opts.sanitizer.intersects(SanitizerSet::ADDRESS | SanitizerSet::KERNELADDRESS | SanitizerSet::MEMORY | SanitizerSet::HWADDRESS)
+        || self.sanitizers().intersects(SanitizerSet::ADDRESS | SanitizerSet::KERNELADDRESS | SanitizerSet::MEMORY | SanitizerSet::HWADDRESS)
     }
 
     pub fn diagnostic_width(&self) -> usize {
@@ -606,6 +555,13 @@ impl Session {
             ("", "")
         } else {
             (&*self.target.staticlib_prefix, &*self.target.staticlib_suffix)
+        }
+    }
+
+    pub fn lint_groups_iter(&self) -> Box<dyn Iterator<Item = LintGroup> + '_> {
+        match self.lint_store {
+            Some(ref lint_store) => lint_store.lint_groups_iter(),
+            None => Box::new(std::iter::empty()),
         }
     }
 }
@@ -781,8 +737,16 @@ impl Session {
 
     pub fn must_emit_unwind_tables(&self) -> bool {
         // This is used to control the emission of the `uwtable` attribute on
-        // LLVM functions.
+        // LLVM functions. The `uwtable` attribute according to LLVM is:
         //
+        //     This attribute indicates that the ABI being targeted requires that an
+        //     unwind table entry be produced for this function even if we can show
+        //     that no exceptions passes by it. This is normally the case for the
+        //     ELF x86-64 abi, but it can be disabled for some compilation units.
+        //
+        // Typically when we're compiling with `-C panic=abort` we don't need
+        // `uwtable` because we can't generate any exceptions! But note that
+        // some targets require unwind tables to generate backtraces.
         // Unwind tables are needed when compiling with `-C panic=unwind`, but
         // LLVM won't omit unwind tables unless the function is also marked as
         // `nounwind`, so users are allowed to disable `uwtable` emission.
@@ -801,9 +765,11 @@ impl Session {
         // Otherwise, we can defer to the `-C force-unwind-tables=<yes/no>`
         // value, if it is provided, or disable them, if not.
         self.target.requires_uwtable
-            || self.opts.cg.force_unwind_tables.unwrap_or(
-                self.panic_strategy() == PanicStrategy::Unwind || self.target.default_uwtable,
-            )
+            || self
+                .opts
+                .cg
+                .force_unwind_tables
+                .unwrap_or(self.panic_strategy().unwinds() || self.target.default_uwtable)
     }
 
     /// Returns the number of query threads that should be used for this
@@ -948,6 +914,10 @@ impl Session {
             min
         }
     }
+
+    pub fn sanitizers(&self) -> SanitizerSet {
+        return self.opts.unstable_opts.sanitizer | self.target.options.default_sanitizers;
+    }
 }
 
 // JUSTIFICATION: part of session construction
@@ -955,8 +925,7 @@ impl Session {
 fn default_emitter(
     sopts: &config::Options,
     source_map: Arc<SourceMap>,
-    bundle: Option<Arc<FluentBundle>>,
-    fallback_bundle: LazyFallbackBundle,
+    translator: Translator,
 ) -> Box<DynEmitter> {
     let macro_backtrace = sopts.unstable_opts.macro_backtrace;
     let track_diagnostics = sopts.unstable_opts.track_diagnostics;
@@ -977,48 +946,49 @@ fn default_emitter(
     let source_map = if sopts.unstable_opts.link_only { None } else { Some(source_map) };
 
     match sopts.error_format {
-        config::ErrorOutputType::HumanReadable { kind, color_config } => {
-            let short = kind.short();
-
-            if let HumanReadableErrorType::AnnotateSnippet = kind {
-                let emitter = AnnotateSnippetEmitter::new(
-                    source_map,
-                    bundle,
-                    fallback_bundle,
-                    short,
-                    macro_backtrace,
-                );
+        config::ErrorOutputType::HumanReadable { kind, color_config } => match kind {
+            HumanReadableErrorType::AnnotateSnippet { short, unicode } => {
+                let emitter =
+                    AnnotateSnippetEmitter::new(stderr_destination(color_config), translator)
+                        .sm(source_map)
+                        .short_message(short)
+                        .diagnostic_width(sopts.diagnostic_width)
+                        .macro_backtrace(macro_backtrace)
+                        .track_diagnostics(track_diagnostics)
+                        .terminal_url(terminal_url)
+                        .theme(if unicode { OutputTheme::Unicode } else { OutputTheme::Ascii })
+                        .ignored_directories_in_source_blocks(
+                            sopts
+                                .unstable_opts
+                                .ignore_directory_in_diagnostics_source_blocks
+                                .clone(),
+                        );
                 Box::new(emitter.ui_testing(sopts.unstable_opts.ui_testing))
-            } else {
-                let emitter = HumanEmitter::new(stderr_destination(color_config), fallback_bundle)
-                    .fluent_bundle(bundle)
+            }
+            HumanReadableErrorType::Default { short } => {
+                let emitter = HumanEmitter::new(stderr_destination(color_config), translator)
                     .sm(source_map)
                     .short_message(short)
                     .diagnostic_width(sopts.diagnostic_width)
                     .macro_backtrace(macro_backtrace)
                     .track_diagnostics(track_diagnostics)
                     .terminal_url(terminal_url)
-                    .theme(if let HumanReadableErrorType::Unicode = kind {
-                        OutputTheme::Unicode
-                    } else {
-                        OutputTheme::Ascii
-                    })
+                    .theme(OutputTheme::Ascii)
                     .ignored_directories_in_source_blocks(
                         sopts.unstable_opts.ignore_directory_in_diagnostics_source_blocks.clone(),
                     );
                 Box::new(emitter.ui_testing(sopts.unstable_opts.ui_testing))
             }
-        }
+        },
         config::ErrorOutputType::Json { pretty, json_rendered, color_config } => Box::new(
             JsonEmitter::new(
                 Box::new(io::BufWriter::new(io::stderr())),
                 source_map,
-                fallback_bundle,
+                translator,
                 pretty,
                 json_rendered,
                 color_config,
             )
-            .fluent_bundle(bundle)
             .ui_testing(sopts.unstable_opts.ui_testing)
             .ignored_directories_in_source_blocks(
                 sopts.unstable_opts.ignore_directory_in_diagnostics_source_blocks.clone(),
@@ -1037,16 +1007,14 @@ fn default_emitter(
 pub fn build_session(
     sopts: config::Options,
     io: CompilerIO,
-    bundle: Option<Arc<rustc_errors::FluentBundle>>,
+    fluent_bundle: Option<Arc<rustc_errors::FluentBundle>>,
     registry: rustc_errors::registry::Registry,
     fluent_resources: Vec<&'static str>,
     driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
     target: Target,
-    sysroot: PathBuf,
     cfg_version: &'static str,
     ice_file: Option<PathBuf>,
     using_internal_features: &'static AtomicBool,
-    expanded_args: Vec<String>,
 ) -> Session {
     // FIXME: This is not general enough to make the warning lint completely override
     // normal diagnostic warnings, since the warning lint can also be denied and changed
@@ -1059,12 +1027,15 @@ pub fn build_session(
     let cap_lints_allow = sopts.lint_cap.is_some_and(|cap| cap == lint::Allow);
     let can_emit_warnings = !(warnings_allow || cap_lints_allow);
 
-    let fallback_bundle = fallback_fluent_bundle(
-        fluent_resources,
-        sopts.unstable_opts.translate_directionality_markers,
-    );
+    let translator = Translator {
+        fluent_bundle,
+        fallback_fluent_bundle: fallback_fluent_bundle(
+            fluent_resources,
+            sopts.unstable_opts.translate_directionality_markers,
+        ),
+    };
     let source_map = rustc_span::source_map::get_source_map().unwrap();
-    let emitter = default_emitter(&sopts, Arc::clone(&source_map), bundle, fallback_bundle);
+    let emitter = default_emitter(&sopts, Arc::clone(&source_map), translator);
 
     let mut dcx = DiagCtxt::new(emitter)
         .with_flags(sopts.unstable_opts.dcx_flags(can_emit_warnings))
@@ -1074,7 +1045,7 @@ pub fn build_session(
     }
 
     let host_triple = TargetTuple::from_tuple(config::host_tuple());
-    let (host, target_warnings) = Target::search(&host_triple, &sysroot)
+    let (host, target_warnings) = Target::search(&host_triple, sopts.sysroot.path())
         .unwrap_or_else(|e| dcx.handle().fatal(format!("Error loading host specification: {e}")));
     for warning in target_warnings.warning_messages() {
         dcx.handle().warn(warning)
@@ -1107,13 +1078,14 @@ pub fn build_session(
     let host_triple = config::host_tuple();
     let target_triple = sopts.target_triple.tuple();
     // FIXME use host sysroot?
-    let host_tlib_path = Arc::new(SearchPath::from_sysroot_and_triple(&sysroot, host_triple));
+    let host_tlib_path =
+        Arc::new(SearchPath::from_sysroot_and_triple(sopts.sysroot.path(), host_triple));
     let target_tlib_path = if host_triple == target_triple {
         // Use the same `SearchPath` if host and target triple are identical to avoid unnecessary
         // rescanning of the target lib path and an unnecessary allocation.
         Arc::clone(&host_tlib_path)
     } else {
-        Arc::new(SearchPath::from_sysroot_and_triple(&sysroot, target_triple))
+        Arc::new(SearchPath::from_sysroot_and_triple(sopts.sysroot.path(), target_triple))
     };
 
     let prof = SelfProfilerRef::new(
@@ -1127,7 +1099,7 @@ pub fn build_session(
         _ => CtfeBacktrace::Disabled,
     });
 
-    let asm_arch = if target.allow_asm { InlineAsmArch::from_str(&target.arch).ok() } else { None };
+    let asm_arch = if target.allow_asm { InlineAsmArch::from_arch(&target.arch) } else { None };
     let target_filesearch =
         filesearch::FileSearch::new(&sopts.search_paths, &target_tlib_path, &target);
     let host_filesearch = filesearch::FileSearch::new(&sopts.search_paths, &host_tlib_path, &host);
@@ -1137,16 +1109,18 @@ pub fn build_session(
         .as_ref()
         .map(|_| rng().next_u32().to_base_fixed_len(CASE_INSENSITIVE).to_string());
 
+    let timings = TimingSectionHandler::new(sopts.json_timings);
+
     let sess = Session {
         target,
         host,
         opts: sopts,
         target_tlib_path,
         psess,
-        sysroot,
         io,
         incr_comp_session: RwLock::new(IncrCompSession::NotInitialized),
         prof,
+        timings,
         code_stats: Default::default(),
         lint_store: None,
         driver_lint_caps,
@@ -1157,7 +1131,6 @@ pub fn build_session(
         unstable_target_features: Default::default(),
         cfg_version,
         using_internal_features,
-        expanded_args,
         target_filesearch,
         host_filesearch,
         invocation_temp,
@@ -1216,7 +1189,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     let mut unsupported_sanitizers = sess.opts.unstable_opts.sanitizer - supported_sanitizers;
     // Niche: if `fixed-x18`, or effectively switching on `reserved-x18` flag, is enabled
     // we should allow Shadow Call Stack sanitizer.
-    if sess.opts.unstable_opts.fixed_x18 && sess.target.arch == "aarch64" {
+    if sess.opts.unstable_opts.fixed_x18 && sess.target.arch == Arch::AArch64 {
         unsupported_sanitizers -= SanitizerSet::SHADOWCALLSTACK;
     }
     match unsupported_sanitizers.into_iter().count() {
@@ -1256,7 +1229,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     }
 
     // KCFI requires panic=abort
-    if sess.is_sanitizer_kcfi_enabled() && sess.panic_strategy() != PanicStrategy::Abort {
+    if sess.is_sanitizer_kcfi_enabled() && sess.panic_strategy().unwinds() {
         sess.dcx().emit_err(errors::SanitizerKcfiRequiresPanicAbort);
     }
 
@@ -1327,7 +1300,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         }
     }
 
-    if sess.opts.unstable_opts.branch_protection.is_some() && sess.target.arch != "aarch64" {
+    if sess.opts.unstable_opts.branch_protection.is_some() && sess.target.arch != Arch::AArch64 {
         sess.dcx().emit_err(errors::BranchProtectionRequiresAArch64);
     }
 
@@ -1363,16 +1336,22 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         sess.dcx().emit_err(errors::InstrumentationNotSupported { us: "XRay".to_string() });
     }
 
-    if let Some(flavor) = sess.opts.cg.linker_flavor {
-        if let Some(compatible_list) = sess.target.linker_flavor.check_compatibility(flavor) {
-            let flavor = flavor.desc();
-            sess.dcx().emit_err(errors::IncompatibleLinkerFlavor { flavor, compatible_list });
-        }
+    if let Some(flavor) = sess.opts.cg.linker_flavor
+        && let Some(compatible_list) = sess.target.linker_flavor.check_compatibility(flavor)
+    {
+        let flavor = flavor.desc();
+        sess.dcx().emit_err(errors::IncompatibleLinkerFlavor { flavor, compatible_list });
     }
 
     if sess.opts.unstable_opts.function_return != FunctionReturn::default() {
-        if sess.target.arch != "x86" && sess.target.arch != "x86_64" {
+        if !matches!(sess.target.arch, Arch::X86 | Arch::X86_64) {
             sess.dcx().emit_err(errors::FunctionReturnRequiresX86OrX8664);
+        }
+    }
+
+    if sess.opts.unstable_opts.indirect_branch_cs_prefix {
+        if !matches!(sess.target.arch, Arch::X86 | Arch::X86_64) {
+            sess.dcx().emit_err(errors::IndirectBranchCsPrefixRequiresX86OrX8664);
         }
     }
 
@@ -1380,12 +1359,12 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
         if regparm > 3 {
             sess.dcx().emit_err(errors::UnsupportedRegparm { regparm });
         }
-        if sess.target.arch != "x86" {
+        if sess.target.arch != Arch::X86 {
             sess.dcx().emit_err(errors::UnsupportedRegparmArch);
         }
     }
     if sess.opts.unstable_opts.reg_struct_return {
-        if sess.target.arch != "x86" {
+        if sess.target.arch != Arch::X86 {
             sess.dcx().emit_err(errors::UnsupportedRegStructReturnArch);
         }
     }
@@ -1407,7 +1386,7 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     }
 
     if sess.opts.cg.soft_float {
-        if sess.target.arch == "arm" {
+        if sess.target.arch == Arch::Arm {
             sess.dcx().emit_warn(errors::SoftFloatDeprecated);
         } else {
             // All `use_softfp` does is the equivalent of `-mfloat-abi` in GCC/clang, which only exists on ARM targets.
@@ -1504,26 +1483,26 @@ impl EarlyDiagCtxt {
 fn mk_emitter(output: ErrorOutputType) -> Box<DynEmitter> {
     // FIXME(#100717): early errors aren't translated at the moment, so this is fine, but it will
     // need to reference every crate that might emit an early error for translation to work.
-    let fallback_bundle =
-        fallback_fluent_bundle(vec![rustc_errors::DEFAULT_LOCALE_RESOURCE], false);
+    let translator =
+        Translator::with_fallback_bundle(vec![rustc_errors::DEFAULT_LOCALE_RESOURCE], false);
     let emitter: Box<DynEmitter> = match output {
-        config::ErrorOutputType::HumanReadable { kind, color_config } => {
-            let short = kind.short();
-            Box::new(
-                HumanEmitter::new(stderr_destination(color_config), fallback_bundle)
-                    .theme(if let HumanReadableErrorType::Unicode = kind {
-                        OutputTheme::Unicode
-                    } else {
-                        OutputTheme::Ascii
-                    })
+        config::ErrorOutputType::HumanReadable { kind, color_config } => match kind {
+            HumanReadableErrorType::AnnotateSnippet { short, unicode } => Box::new(
+                AnnotateSnippetEmitter::new(stderr_destination(color_config), translator)
+                    .theme(if unicode { OutputTheme::Unicode } else { OutputTheme::Ascii })
                     .short_message(short),
-            )
-        }
+            ),
+            HumanReadableErrorType::Default { short } => Box::new(
+                HumanEmitter::new(stderr_destination(color_config), translator)
+                    .theme(OutputTheme::Ascii)
+                    .short_message(short),
+            ),
+        },
         config::ErrorOutputType::Json { pretty, json_rendered, color_config } => {
             Box::new(JsonEmitter::new(
                 Box::new(io::BufWriter::new(io::stderr())),
                 Some(Arc::new(SourceMap::new(FilePathMapping::empty()))),
-                fallback_bundle,
+                translator,
                 pretty,
                 json_rendered,
                 color_config,
@@ -1553,7 +1532,7 @@ impl RemapFileNameExt for rustc_span::FileName {
             "one and only one scope should be passed to for_scope"
         );
         if sess.opts.unstable_opts.remap_path_scope.contains(scope) {
-            self.prefer_remapped_unconditionaly()
+            self.prefer_remapped_unconditionally()
         } else {
             self.prefer_local()
         }

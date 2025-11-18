@@ -10,12 +10,10 @@ use std::process::{self, Command};
 
 use anstream::println;
 
-#[allow(clippy::ignored_unit_patterns)]
 fn show_help() {
     println!("{}", help_message());
 }
 
-#[allow(clippy::ignored_unit_patterns)]
 fn show_version() {
     let version_info = rustc_tools_util::get_version_info!();
     println!("{version_info}");
@@ -107,7 +105,7 @@ impl ClippyCmd {
     }
 
     fn into_std_cmd(self) -> Command {
-        let mut cmd = Command::new(env::var("CARGO").unwrap_or("cargo".into()));
+        let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
         let clippy_args: String = self
             .clippy_args
             .iter()

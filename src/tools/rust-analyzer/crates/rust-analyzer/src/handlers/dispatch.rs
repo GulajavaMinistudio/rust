@@ -141,7 +141,7 @@ impl RequestDispatcher<'_> {
                 Result: Serialize,
             > + 'static,
     {
-        if !self.global_state.vfs_done {
+        if !self.global_state.vfs_done || self.global_state.incomplete_crate_graph {
             if let Some(lsp_server::Request { id, .. }) =
                 self.req.take_if(|it| it.method == R::METHOD)
             {
@@ -349,11 +349,11 @@ where
             let mut message = "request handler panicked".to_owned();
             if let Some(panic_message) = panic_message {
                 message.push_str(": ");
-                message.push_str(panic_message)
+                message.push_str(panic_message);
             } else if let Ok(cancelled) = panic.downcast::<Cancelled>() {
                 tracing::error!("Cancellation propagated out of salsa! This is a bug");
                 return Err(HandlerCancelledError::Inner(*cancelled));
-            }
+            };
 
             Ok(lsp_server::Response::new_err(
                 id,
@@ -433,10 +433,10 @@ impl NotificationDispatcher<'_> {
     }
 
     pub(crate) fn finish(&mut self) {
-        if let Some(not) = &self.not {
-            if !not.method.starts_with("$/") {
-                tracing::error!("unhandled notification: {:?}", not);
-            }
+        if let Some(not) = &self.not
+            && !not.method.starts_with("$/")
+        {
+            tracing::error!("unhandled notification: {:?}", not);
         }
     }
 }

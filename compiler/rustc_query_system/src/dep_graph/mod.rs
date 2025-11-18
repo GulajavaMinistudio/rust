@@ -63,7 +63,7 @@ pub trait DepContext: Copy {
         self,
         dep_node: DepNode,
         prev_index: SerializedDepNodeIndex,
-        frame: Option<&MarkFrame<'_>>,
+        frame: &MarkFrame<'_>,
     ) -> bool {
         let cb = self.dep_kind_info(dep_node.kind);
         if let Some(f) = cb.force_from_dep_node {
@@ -88,6 +88,8 @@ pub trait DepContext: Copy {
             f(self, dep_node)
         }
     }
+
+    fn with_reduced_queries<T>(self, _: impl FnOnce() -> T) -> T;
 }
 
 pub trait Deps: DynSync {

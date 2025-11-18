@@ -40,12 +40,13 @@ pub(crate) fn offset(
     })?;
     let col = TextSize::from(line_col.col);
     let clamped_len = col.min(line_range.len());
-    if clamped_len < col {
-        tracing::error!(
-            "Position {line_col:?} column exceeds line length {}, clamping it",
-            u32::from(line_range.len()),
-        );
-    }
+    // FIXME: The cause for this is likely our request retrying. Commented out as this log is just too chatty and very easy to trigger.
+    // if clamped_len < col {
+    //     tracing::error!(
+    //         "Position {line_col:?} column exceeds line length {}, clamping it",
+    //         u32::from(line_range.len()),
+    //     );
+    // }
     Ok(line_range.start() + clamped_len)
 }
 
@@ -103,6 +104,7 @@ pub(crate) fn file_range_uri(
 
 pub(crate) fn assist_kind(kind: lsp_types::CodeActionKind) -> Option<AssistKind> {
     let assist_kind = match &kind {
+        k if k == &lsp_types::CodeActionKind::EMPTY => AssistKind::Generate,
         k if k == &lsp_types::CodeActionKind::QUICKFIX => AssistKind::QuickFix,
         k if k == &lsp_types::CodeActionKind::REFACTOR => AssistKind::Refactor,
         k if k == &lsp_types::CodeActionKind::REFACTOR_EXTRACT => AssistKind::RefactorExtract,

@@ -16,7 +16,6 @@ const OPTIONAL_COMPONENTS: &[&str] = &[
     "mips",
     "powerpc",
     "systemz",
-    "jsbackend",
     "webassembly",
     "msp430",
     "sparc",
@@ -106,6 +105,10 @@ fn output(cmd: &mut Command) -> String {
 }
 
 fn main() {
+    if cfg!(feature = "check_only") {
+        return;
+    }
+
     for component in REQUIRED_COMPONENTS.iter().chain(OPTIONAL_COMPONENTS.iter()) {
         println!("cargo:rustc-check-cfg=cfg(llvm_component,values(\"{component}\"))");
     }
@@ -167,6 +170,16 @@ fn main() {
     let cxxflags = output(&mut cmd);
     let mut cfg = cc::Build::new();
     cfg.warnings(false);
+
+    // Prevent critical warnings when we're compiling from rust-lang/rust CI,
+    // except on MSVC, as the compiler throws warnings that are only reported
+    // for this platform. See https://github.com/rust-lang/rust/pull/145031#issuecomment-3162677202.
+    // Moreover, LLVM generally guarantees warning-freedom only when building with Clang, as other
+    // compilers have too many false positives. This is typically the case for MSVC, which throws
+    // many false-positive warnings. We keep it excluded, for these reasons.
+    if std::env::var_os("CI").is_some() && !target.contains("msvc") {
+        cfg.warnings_into_errors(true);
+    }
     for flag in cxxflags.split_whitespace() {
         // Ignore flags like `-m64` when we're doing a cross build
         if is_crossed && flag.starts_with("-m") {
@@ -184,7 +197,7 @@ fn main() {
 
         // Include path contains host directory, replace it with target
         if is_crossed && flag.starts_with("-I") {
-            cfg.flag(&flag.replace(&host, &target));
+            cfg.flag(flag.replace(&host, &target));
             continue;
         }
 
@@ -212,7 +225,6 @@ fn main() {
     rerun_if_changed_anything_in_dir(Path::new("llvm-wrapper"));
     cfg.file("llvm-wrapper/PassWrapper.cpp")
         .file("llvm-wrapper/RustWrapper.cpp")
-        .file("llvm-wrapper/ArchiveWrapper.cpp")
         .file("llvm-wrapper/CoverageMappingWrapper.cpp")
         .file("llvm-wrapper/SymbolWrapper.cpp")
         .file("llvm-wrapper/Linker.cpp")
@@ -228,10 +240,10 @@ fn main() {
     let mut cmd = Command::new(&llvm_config);
     cmd.arg(llvm_link_arg).arg("--libs");
 
-    // Don't link system libs if cross-compiling unless targeting Windows.
+    // Don't link system libs if cross-compiling unless targeting Windows from Windows host.
     // On Windows system DLLs aren't linked directly, instead import libraries are used.
     // These import libraries are independent of the host.
-    if !is_crossed || target.contains("windows") {
+    if !is_crossed || target.contains("windows") && host.contains("windows") {
         cmd.arg("--system-libs");
     }
 
@@ -241,7 +253,10 @@ fn main() {
         println!("cargo:rustc-link-lib=kstat");
     }
 
-    if (target.starts_with("arm") && !target.contains("freebsd")) && !target.contains("ohos")
+    if (target.starts_with("arm")
+        && !target.starts_with("arm64")
+        && !target.contains("freebsd")
+        && !target.contains("ohos"))
         || target.starts_with("mips-")
         || target.starts_with("mipsel-")
         || target.starts_with("powerpc-")
@@ -255,6 +270,7 @@ fn main() {
     } else if target.contains("haiku")
         || target.contains("darwin")
         || (is_crossed && (target.contains("dragonfly") || target.contains("solaris")))
+        || target.contains("cygwin")
     {
         println!("cargo:rustc-link-lib=z");
     } else if target.contains("netbsd") {

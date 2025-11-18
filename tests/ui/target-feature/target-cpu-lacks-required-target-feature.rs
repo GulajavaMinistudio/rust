@@ -3,11 +3,13 @@
 //@ compile-flags: -Ctarget-cpu=pentium
 // For now this is just a warning.
 //@ build-pass
+//@ ignore-backends: gcc
+//@ add-minicore
 
-#![feature(no_core, lang_items)]
+#![feature(no_core)]
 #![no_core]
 
-#[lang = "sized"]
-pub trait Sized {}
+extern crate minicore;
+use minicore::*;
 
 //~? WARN target feature `sse2` must be enabled to ensure that the ABI of the current target can be implemented correctly

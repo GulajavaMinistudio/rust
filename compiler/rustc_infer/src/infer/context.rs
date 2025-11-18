@@ -1,4 +1,4 @@
-///! Definition of `InferCtxtLike` from the librarified type layer.
+//! Definition of `InferCtxtLike` from the librarified type layer.
 use rustc_hir::def_id::DefId;
 use rustc_middle::traits::ObligationCause;
 use rustc_middle::ty::relate::RelateResult;
@@ -59,6 +59,10 @@ impl<'tcx> rustc_type_ir::InferCtxtLike for InferCtxt<'tcx> {
         self.root_var(var)
     }
 
+    fn sub_unification_table_root_var(&self, var: ty::TyVid) -> ty::TyVid {
+        self.sub_unification_table_root_var(var)
+    }
+
     fn root_const_var(&self, var: ty::ConstVid) -> ty::ConstVid {
         self.root_const_var(var)
     }
@@ -89,8 +93,59 @@ impl<'tcx> rustc_type_ir::InferCtxtLike for InferCtxt<'tcx> {
         self.inner.borrow_mut().unwrap_region_constraints().opportunistic_resolve_var(self.tcx, vid)
     }
 
+    fn is_changed_arg(&self, arg: ty::GenericArg<'tcx>) -> bool {
+        match arg.kind() {
+            ty::GenericArgKind::Lifetime(_) => {
+                // Lifetimes should not change affect trait selection.
+                false
+            }
+            ty::GenericArgKind::Type(ty) => {
+                if let ty::Infer(infer_ty) = *ty.kind() {
+                    match infer_ty {
+                        ty::InferTy::TyVar(vid) => {
+                            !self.probe_ty_var(vid).is_err_and(|_| self.root_var(vid) == vid)
+                        }
+                        ty::InferTy::IntVar(vid) => {
+                            let mut inner = self.inner.borrow_mut();
+                            !matches!(
+                                inner.int_unification_table().probe_value(vid),
+                                ty::IntVarValue::Unknown
+                                    if inner.int_unification_table().find(vid) == vid
+                            )
+                        }
+                        ty::InferTy::FloatVar(vid) => {
+                            let mut inner = self.inner.borrow_mut();
+                            !matches!(
+                                inner.float_unification_table().probe_value(vid),
+                                ty::FloatVarValue::Unknown
+                                    if inner.float_unification_table().find(vid) == vid
+                            )
+                        }
+                        ty::InferTy::FreshTy(_)
+                        | ty::InferTy::FreshIntTy(_)
+                        | ty::InferTy::FreshFloatTy(_) => true,
+                    }
+                } else {
+                    true
+                }
+            }
+            ty::GenericArgKind::Const(ct) => {
+                if let ty::ConstKind::Infer(infer_ct) = ct.kind() {
+                    match infer_ct {
+                        ty::InferConst::Var(vid) => !self
+                            .probe_const_var(vid)
+                            .is_err_and(|_| self.root_const_var(vid) == vid),
+                        ty::InferConst::Fresh(_) => true,
+                    }
+                } else {
+                    true
+                }
+            }
+        }
+    }
+
     fn next_region_infer(&self) -> ty::Region<'tcx> {
-        self.next_region_var(RegionVariableOrigin::MiscVariable(DUMMY_SP))
+        self.next_region_var(RegionVariableOrigin::Misc(DUMMY_SP))
     }
 
     fn next_ty_infer(&self) -> Ty<'tcx> {
@@ -126,6 +181,10 @@ impl<'tcx> rustc_type_ir::InferCtxtLike for InferCtxt<'tcx> {
 
     fn equate_ty_vids_raw(&self, a: ty::TyVid, b: ty::TyVid) {
         self.inner.borrow_mut().type_variables().equate(a, b);
+    }
+
+    fn sub_unify_ty_vids_raw(&self, a: ty::TyVid, b: ty::TyVid) {
+        self.sub_unify_ty_vids_raw(a, b);
     }
 
     fn equate_int_vids_raw(&self, a: ty::IntVid, b: ty::IntVid) {
@@ -214,7 +273,7 @@ impl<'tcx> rustc_type_ir::InferCtxtLike for InferCtxt<'tcx> {
     }
 
     fn register_ty_outlives(&self, ty: Ty<'tcx>, r: ty::Region<'tcx>, span: Span) {
-        self.register_region_obligation_with_cause(ty, r, &ObligationCause::dummy_with_span(span));
+        self.register_type_outlives_constraint(ty, r, &ObligationCause::dummy_with_span(span));
     }
 
     type OpaqueTypeStorageEntries = OpaqueTypeStorageEntries;
@@ -243,6 +302,9 @@ impl<'tcx> rustc_type_ir::InferCtxtLike for InferCtxt<'tcx> {
             .map(|(k, h)| (k, h.ty))
             .collect()
     }
+    fn opaques_with_sub_unified_hidden_type(&self, ty: ty::TyVid) -> Vec<ty::AliasTy<'tcx>> {
+        self.opaques_with_sub_unified_hidden_type(ty)
+    }
 
     fn register_hidden_type_in_storage(
         &self,
@@ -252,7 +314,7 @@ impl<'tcx> rustc_type_ir::InferCtxtLike for InferCtxt<'tcx> {
     ) -> Option<Ty<'tcx>> {
         self.register_hidden_type_in_storage(
             opaque_type_key,
-            ty::OpaqueHiddenType { span, ty: hidden_ty },
+            ty::ProvisionalHiddenType { span, ty: hidden_ty },
         )
     }
     fn add_duplicate_opaque_type(
@@ -264,7 +326,7 @@ impl<'tcx> rustc_type_ir::InferCtxtLike for InferCtxt<'tcx> {
         self.inner
             .borrow_mut()
             .opaque_types()
-            .add_duplicate(opaque_type_key, ty::OpaqueHiddenType { span, ty: hidden_ty })
+            .add_duplicate(opaque_type_key, ty::ProvisionalHiddenType { span, ty: hidden_ty })
     }
 
     fn reset_opaque_types(&self) {

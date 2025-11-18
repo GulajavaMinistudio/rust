@@ -225,6 +225,9 @@ impl SsaVisitor<'_, '_> {
 
 impl<'tcx> Visitor<'tcx> for SsaVisitor<'_, 'tcx> {
     fn visit_local(&mut self, local: Local, ctxt: PlaceContext, loc: Location) {
+        if ctxt.may_observe_address() {
+            self.borrowed_locals.insert(local);
+        }
         match ctxt {
             PlaceContext::MutatingUse(MutatingUseContext::Projection)
             | PlaceContext::NonMutatingUse(NonMutatingUseContext::Projection) => bug!(),
@@ -237,7 +240,6 @@ impl<'tcx> Visitor<'tcx> for SsaVisitor<'_, 'tcx> {
             PlaceContext::NonMutatingUse(
                 NonMutatingUseContext::SharedBorrow | NonMutatingUseContext::FakeBorrow,
             ) => {
-                self.borrowed_locals.insert(local);
                 self.check_dominates(local, loc);
                 self.direct_uses[local] += 1;
             }
@@ -295,9 +297,7 @@ fn compute_copy_classes(ssa: &mut SsaLocals, body: &Body<'_>) {
     let mut copies = IndexVec::from_fn_n(|l| l, body.local_decls.len());
 
     for (local, rvalue, _) in ssa.assignments(body) {
-        let (Rvalue::Use(Operand::Copy(place) | Operand::Move(place))
-        | Rvalue::CopyForDeref(place)) = rvalue
-        else {
+        let Rvalue::Use(Operand::Copy(place) | Operand::Move(place)) = rvalue else {
             continue;
         };
 
@@ -317,6 +317,15 @@ fn compute_copy_classes(ssa: &mut SsaLocals, body: &Body<'_>) {
         // We visit in `assignment_order`, ie. reverse post-order, so `rhs` has been
         // visited before `local`, and we just have to copy the representing local.
         let head = copies[rhs];
+
+        // When propagating from `head` to `local` we need to ensure that changes to the address
+        // are not observable, so at most one the locals involved can be borrowed. Additionally, we
+        // need to ensure that the definition of `head` dominates all uses of `local`. When `local`
+        // is borrowed, there might exist an indirect use of `local` that isn't dominated by the
+        // definition, so we have to reject copy propagation.
+        if ssa.borrowed_locals().contains(local) {
+            continue;
+        }
 
         if local == RETURN_PLACE {
             // `_0` is special, we cannot rename it. Instead, rename the class of `rhs` to

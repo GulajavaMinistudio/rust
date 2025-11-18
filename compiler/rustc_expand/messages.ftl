@@ -1,25 +1,9 @@
-expand_arg_not_attributes =
-    second argument must be `attributes`
-
-expand_attr_no_arguments =
-    attribute must have either one or two arguments
-
-expand_attribute_meta_item =
-    attribute must be a meta item, not a literal
-
-expand_attribute_single_word =
-    attribute must only be a single word
-
 expand_attributes_on_expressions_experimental =
     attributes on expressions are experimental
     .help_outer_doc = `///` is used for outer documentation comments; for a plain comment, use `//`
     .help_inner_doc = `//!` is used for inner documentation comments; for a plain comment, use `//` by removing the `!` or inserting a space in between them: `// !`
 
-expand_attributes_wrong_form =
-    attribute must be of form: `attributes(foo, bar)`
-
-expand_cannot_be_name_of_macro =
-    `{$trait_ident}` cannot be a name of {$macro_type} macro
+expand_cfg_attr_no_attributes = `#[cfg_attr]` does not expand to any attributes
 
 expand_collapse_debuginfo_illegal =
     illegal value for attribute #[collapse_debuginfo(no|external|yes)]
@@ -62,16 +46,17 @@ expand_feature_not_allowed =
 expand_feature_removed =
     feature has been removed
     .label = feature has been removed
+    .note = removed in {$removed_rustc_version}{$pull_note}
     .reason = {$reason}
+
+expand_file_modules_in_proc_macro_input_are_unstable =
+    file modules in proc macro input are unstable
 
 expand_glob_delegation_outside_impls =
     glob delegation is only supported in impls
 
 expand_glob_delegation_traitless_qpath =
     qualified path without a trait in glob delegation
-
-expand_helper_attribute_name_invalid =
-    `{$name}` cannot be a name of derive helper attribute
 
 expand_incomplete_parse =
     macro expansion ignores {$descr} and any tokens following
@@ -90,10 +75,17 @@ expand_invalid_fragment_specifier =
     invalid fragment specifier `{$fragment}`
     .help = {$help}
 
+expand_macro_args_bad_delim = `{$rule_kw}` rule argument matchers require parentheses
+expand_macro_args_bad_delim_sugg = the delimiters should be `(` and `)`
+
 expand_macro_body_stability =
     macros cannot have body stability attributes
     .label = invalid body stability attribute
     .label2 = body stability attribute affects this macro
+
+expand_macro_call_unused_doc_comment = unused doc comment
+    .label = rustdoc does not generate documentation for macro invocations
+    .help = to document an item produced by a macro, the macro must produce the documentation as part of its expansion
 
 expand_macro_const_stability =
     macros cannot have const stability attributes
@@ -108,11 +100,15 @@ expand_malformed_feature_attribute =
 
 expand_meta_var_dif_seq_matchers = {$msg}
 
-expand_meta_var_expr_unrecognized_var =
-    variable `{$key}` is not recognized in meta-variable expression
+expand_metavar_still_repeating = variable `{$ident}` is still repeating at this depth
+    .label = expected repetition
+
+expand_metavariable_wrong_operator = meta-variable repeats with different Kleene operator
+    .binder_label = expected repetition
+    .occurrence_label = conflicting repetition
 
 expand_missing_fragment_specifier = missing fragment specifier
-    .note = fragment specifiers must be specified in the 2024 edition
+    .note = fragment specifiers must be provided
     .suggestion_add_fragspec = try adding a specifier here
     .valid = {$valid}
 
@@ -125,8 +121,9 @@ expand_module_file_not_found =
     .note = if there is a `mod {$name}` elsewhere in the crate already, import it with `use crate::...` instead
 
 expand_module_in_block =
-    cannot declare a non-inline module inside a block unless it has a path attribute
-    .note = maybe `use` the module `{$name}` instead of redeclaring it
+    cannot declare a file module inside a block unless it has a path attribute
+    .help = maybe `use` the module `{$name}` instead of redeclaring it
+    .note = file modules are usually placed outside of blocks, at the top level of the file
 
 expand_module_multiple_candidates =
     file for module `{$name}` found at both "{$default_path}" and "{$secondary_path}"
@@ -135,14 +132,37 @@ expand_module_multiple_candidates =
 expand_must_repeat_once =
     this must repeat at least once
 
-expand_non_inline_modules_in_proc_macro_input_are_unstable =
-    non-inline modules in proc macro input are unstable
+expand_mve_extra_tokens =
+    unexpected trailing tokens
+    .label = for this metavariable expression
+    .range = the `{$name}` metavariable expression takes between {$min_or_exact_args} and {$max_args} arguments
+    .exact = the `{$name}` metavariable expression takes {$min_or_exact_args ->
+        [zero] no arguments
+        [one] a single argument
+        *[other] {$min_or_exact_args} arguments
+    }
+    .suggestion = try removing {$extra_count ->
+        [one] this token
+        *[other] these tokens
+    }
 
-expand_not_a_meta_item =
-    not a meta item
+expand_mve_missing_paren =
+    expected `(`
+    .label = for this this metavariable expression
+    .unexpected = unexpected token
+    .note = metavariable expressions use function-like parentheses syntax
+    .suggestion = try adding parentheses
 
-expand_only_one_word =
-    must only be one word
+expand_mve_unrecognized_expr =
+    unrecognized metavariable expression
+    .label = not a valid metavariable expression
+    .note = valid metavariable expressions are {$valid_expr_list}
+
+expand_mve_unrecognized_var =
+    variable `{$key}` is not recognized in meta-variable expression
+
+expand_or_patterns_back_compat = the meaning of the `pat` fragment specifier is changing in Rust 2021, which may affect this macro
+    .suggestion = use pat_param to preserve semantics
 
 expand_proc_macro_back_compat = using an old version of `{$crate_name}`
     .note = older versions of the `{$crate_name}` crate no longer compile; please update to `{$crate_name}` v{$fixed_version}, or switch to one of the `{$crate_name}` alternatives
@@ -173,11 +193,18 @@ expand_resolve_relative_path =
 
 expand_trace_macro = trace_macro
 
+expand_trailing_semi_macro = trailing semicolon in macro used in expression position
+    .note1 = macro invocations at the end of a block are treated as expressions
+    .note2 = to ignore the value produced by the macro, add a semicolon after the invocation of `{$name}`
+
+expand_unknown_macro_variable = unknown macro variable `{$name}`
+
 expand_unsupported_key_value =
     key-value macro attributes are not supported
 
-expand_var_still_repeating =
-    variable `{$ident}` is still repeating at this depth
+expand_unused_builtin_attribute = unused attribute `{$attr_name}`
+    .note = the built-in attribute `{$attr_name}` will be ignored, since it's applied to the macro invocation `{$macro_name}`
+    .suggestion = remove the attribute
 
 expand_wrong_fragment_kind =
     non-{$kind} macro in {$kind} position: {$name}

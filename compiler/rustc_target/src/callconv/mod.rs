@@ -1,13 +1,13 @@
-use std::str::FromStr;
 use std::{fmt, iter};
 
 use rustc_abi::{
-    AddressSpace, Align, BackendRepr, ExternAbi, HasDataLayout, Primitive, Reg, RegKind, Scalar,
-    Size, TyAbiInterface, TyAndLayout,
+    AddressSpace, Align, BackendRepr, CanonAbi, ExternAbi, HasDataLayout, Primitive, Reg, RegKind,
+    Scalar, Size, TyAbiInterface, TyAndLayout,
 };
 use rustc_macros::HashStable_Generic;
 
-use crate::spec::{HasTargetSpec, HasWasmCAbiOpt, HasX86AbiOpt, RustcAbi, WasmCAbi};
+pub use crate::spec::AbiMap;
+use crate::spec::{Arch, HasTargetSpec, HasX86AbiOpt};
 
 mod aarch64;
 mod amdgpu;
@@ -113,12 +113,14 @@ mod attr_impl {
     pub struct ArgAttribute(u8);
     bitflags::bitflags! {
         impl ArgAttribute: u8 {
-            const NoAlias   = 1 << 1;
-            const NoCapture = 1 << 2;
-            const NonNull   = 1 << 3;
-            const ReadOnly  = 1 << 4;
-            const InReg     = 1 << 5;
-            const NoUndef = 1 << 6;
+            const CapturesNone     = 0b111;
+            const CapturesAddress  = 0b110;
+            const CapturesReadOnly = 0b100;
+            const NoAlias  = 1 << 3;
+            const NonNull  = 1 << 4;
+            const ReadOnly = 1 << 5;
+            const InReg    = 1 << 6;
+            const NoUndef  = 1 << 7;
         }
     }
     rustc_data_structures::external_bitflags_debug! { ArgAttribute }
@@ -197,6 +199,17 @@ impl ArgAttributes {
     }
 }
 
+impl From<ArgAttribute> for ArgAttributes {
+    fn from(value: ArgAttribute) -> Self {
+        Self {
+            regular: value,
+            arg_ext: ArgExtension::None,
+            pointee_size: Size::ZERO,
+            pointee_align: None,
+        }
+    }
+}
+
 /// An argument passed entirely registers with the
 /// same kind (e.g., HFA / HVA on PPC64 and AArch64).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
@@ -251,6 +264,9 @@ impl Uniform {
 #[derive(Clone, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
 pub struct CastTarget {
     pub prefix: [Option<Reg>; 8],
+    /// The offset of `rest` from the start of the value. Currently only implemented for a `Reg`
+    /// pair created by the `offset_pair` method.
+    pub rest_offset: Option<Size>,
     pub rest: Uniform,
     pub attrs: ArgAttributes,
 }
@@ -263,42 +279,45 @@ impl From<Reg> for CastTarget {
 
 impl From<Uniform> for CastTarget {
     fn from(uniform: Uniform) -> CastTarget {
-        CastTarget {
-            prefix: [None; 8],
-            rest: uniform,
-            attrs: ArgAttributes {
-                regular: ArgAttribute::default(),
-                arg_ext: ArgExtension::None,
-                pointee_size: Size::ZERO,
-                pointee_align: None,
-            },
-        }
+        Self::prefixed([None; 8], uniform)
     }
 }
 
 impl CastTarget {
-    pub fn pair(a: Reg, b: Reg) -> CastTarget {
-        CastTarget {
+    pub fn prefixed(prefix: [Option<Reg>; 8], rest: Uniform) -> Self {
+        Self { prefix, rest_offset: None, rest, attrs: ArgAttributes::new() }
+    }
+
+    pub fn offset_pair(a: Reg, offset_from_start: Size, b: Reg) -> Self {
+        Self {
             prefix: [Some(a), None, None, None, None, None, None, None],
-            rest: Uniform::from(b),
-            attrs: ArgAttributes {
-                regular: ArgAttribute::default(),
-                arg_ext: ArgExtension::None,
-                pointee_size: Size::ZERO,
-                pointee_align: None,
-            },
+            rest_offset: Some(offset_from_start),
+            rest: b.into(),
+            attrs: ArgAttributes::new(),
         }
+    }
+
+    pub fn with_attrs(mut self, attrs: ArgAttributes) -> Self {
+        self.attrs = attrs;
+        self
+    }
+
+    pub fn pair(a: Reg, b: Reg) -> CastTarget {
+        Self::prefixed([Some(a), None, None, None, None, None, None, None], Uniform::from(b))
     }
 
     /// When you only access the range containing valid data, you can use this unaligned size;
     /// otherwise, use the safer `size` method.
     pub fn unaligned_size<C: HasDataLayout>(&self, _cx: &C) -> Size {
         // Prefix arguments are passed in specific designated registers
-        let prefix_size = self
-            .prefix
-            .iter()
-            .filter_map(|x| x.map(|reg| reg.size))
-            .fold(Size::ZERO, |acc, size| acc + size);
+        let prefix_size = if let Some(offset_from_start) = self.rest_offset {
+            offset_from_start
+        } else {
+            self.prefix
+                .iter()
+                .filter_map(|x| x.map(|reg| reg.size))
+                .fold(Size::ZERO, |acc, size| acc + size)
+        };
         // Remaining arguments are passed in chunks of the unit size
         let rest_size =
             self.rest.unit.size * self.rest.total.bytes().div_ceil(self.rest.unit.size.bytes());
@@ -314,7 +333,7 @@ impl CastTarget {
         self.prefix
             .iter()
             .filter_map(|x| x.map(|reg| reg.align(cx)))
-            .fold(cx.data_layout().aggregate_align.abi.max(self.rest.align(cx)), |acc, align| {
+            .fold(cx.data_layout().aggregate_align.max(self.rest.align(cx)), |acc, align| {
                 acc.max(align)
             })
     }
@@ -322,9 +341,22 @@ impl CastTarget {
     /// Checks if these two `CastTarget` are equal enough to be considered "the same for all
     /// function call ABIs".
     pub fn eq_abi(&self, other: &Self) -> bool {
-        let CastTarget { prefix: prefix_l, rest: rest_l, attrs: attrs_l } = self;
-        let CastTarget { prefix: prefix_r, rest: rest_r, attrs: attrs_r } = other;
-        prefix_l == prefix_r && rest_l == rest_r && attrs_l.eq_abi(attrs_r)
+        let CastTarget {
+            prefix: prefix_l,
+            rest_offset: rest_offset_l,
+            rest: rest_l,
+            attrs: attrs_l,
+        } = self;
+        let CastTarget {
+            prefix: prefix_r,
+            rest_offset: rest_offset_r,
+            rest: rest_r,
+            attrs: attrs_r,
+        } = other;
+        prefix_l == prefix_r
+            && rest_offset_l == rest_offset_r
+            && rest_l == rest_r
+            && attrs_l.eq_abi(attrs_r)
     }
 }
 
@@ -369,11 +401,11 @@ impl<'a, Ty> ArgAbi<'a, Ty> {
         let mut attrs = ArgAttributes::new();
 
         // For non-immediate arguments the callee gets its own copy of
-        // the value on the stack, so there are no aliases. It's also
-        // program-invisible so can't possibly capture
+        // the value on the stack, so there are no aliases. The function
+        // can capture the address of the argument, but not the provenance.
         attrs
             .set(ArgAttribute::NoAlias)
-            .set(ArgAttribute::NoCapture)
+            .set(ArgAttribute::CapturesAddress)
             .set(ArgAttribute::NonNull)
             .set(ArgAttribute::NoUndef);
         attrs.pointee_size = layout.size;
@@ -465,18 +497,16 @@ impl<'a, Ty> ArgAbi<'a, Ty> {
 
     pub fn extend_integer_width_to(&mut self, bits: u64) {
         // Only integers have signedness
-        if let BackendRepr::Scalar(scalar) = self.layout.backend_repr {
-            if let Primitive::Int(i, signed) = scalar.primitive() {
-                if i.size().bits() < bits {
-                    if let PassMode::Direct(ref mut attrs) = self.mode {
-                        if signed {
-                            attrs.ext(ArgExtension::Sext)
-                        } else {
-                            attrs.ext(ArgExtension::Zext)
-                        };
-                    }
-                }
-            }
+        if let BackendRepr::Scalar(scalar) = self.layout.backend_repr
+            && let Primitive::Int(i, signed) = scalar.primitive()
+            && i.size().bits() < bits
+            && let PassMode::Direct(ref mut attrs) = self.mode
+        {
+            if signed {
+                attrs.ext(ArgExtension::Sext)
+            } else {
+                attrs.ext(ArgExtension::Zext)
+            };
         }
     }
 
@@ -529,41 +559,6 @@ impl<'a, Ty> ArgAbi<'a, Ty> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
-pub enum Conv {
-    // General language calling conventions, for which every target
-    // should have its own backend (e.g. LLVM) support.
-    C,
-    Rust,
-
-    Cold,
-    PreserveMost,
-    PreserveAll,
-
-    // Target-specific calling conventions.
-    ArmAapcs,
-    CCmseNonSecureCall,
-    CCmseNonSecureEntry,
-
-    Msp430Intr,
-
-    GpuKernel,
-
-    X86Fastcall,
-    X86Intr,
-    X86Stdcall,
-    X86ThisCall,
-    X86VectorCall,
-
-    X86_64SysV,
-    X86_64Win64,
-
-    AvrInterrupt,
-    AvrNonBlockingInterrupt,
-
-    RiscvInterrupt { kind: RiscvInterruptKind },
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
 pub enum RiscvInterruptKind {
     Machine,
     Supervisor,
@@ -583,6 +578,7 @@ impl RiscvInterruptKind {
 ///
 /// The signature represented by this type may not match the MIR function signature.
 /// Certain attributes, like `#[track_caller]` can introduce additional arguments, which are present in [`FnAbi`], but not in `FnSig`.
+/// The std::offload module also adds an addition dyn_ptr argument to the GpuKernel ABI.
 /// While this difference is rarely relevant, it should still be kept in mind.
 ///
 /// I will do my best to describe this structure, but these
@@ -604,7 +600,7 @@ pub struct FnAbi<'a, Ty> {
     /// This can be used to know whether an argument is variadic or not.
     pub fixed_count: u32,
     /// The calling convention of this function.
-    pub conv: Conv,
+    pub conv: CanonAbi,
     /// Indicates if an unwind may happen across a call to this function.
     pub can_unwind: bool,
 }
@@ -628,7 +624,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
     pub fn adjust_for_foreign_abi<C>(&mut self, cx: &C, abi: ExternAbi)
     where
         Ty: TyAbiInterface<'a, C> + Copy,
-        C: HasDataLayout + HasTargetSpec + HasWasmCAbiOpt + HasX86AbiOpt,
+        C: HasDataLayout + HasTargetSpec + HasX86AbiOpt,
     {
         if abi == ExternAbi::X86Interrupt {
             if let Some(arg) = self.args.first_mut() {
@@ -638,8 +634,8 @@ impl<'a, Ty> FnAbi<'a, Ty> {
         }
 
         let spec = cx.target_spec();
-        match &spec.arch[..] {
-            "x86" => {
+        match &spec.arch {
+            Arch::X86 => {
                 let (flavor, regparm) = match abi {
                     ExternAbi::Fastcall { .. } | ExternAbi::Vectorcall { .. } => {
                         (x86::Flavor::FastcallOrVectorcall, None)
@@ -657,7 +653,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
                     x86::compute_abi_info(cx, self, opts);
                 }
             }
-            "x86_64" => match abi {
+            Arch::X86_64 => match abi {
                 ExternAbi::SysV64 { .. } => x86_64::compute_abi_info(cx, self),
                 ExternAbi::Win64 { .. } | ExternAbi::Vectorcall { .. } => {
                     x86_win64::compute_abi_info(cx, self)
@@ -670,7 +666,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
                     }
                 }
             },
-            "aarch64" | "arm64ec" => {
+            Arch::AArch64 | Arch::Arm64EC => {
                 let kind = if cx.target_spec().is_like_darwin {
                     aarch64::AbiKind::DarwinPCS
                 } else if cx.target_spec().is_like_windows {
@@ -680,41 +676,35 @@ impl<'a, Ty> FnAbi<'a, Ty> {
                 };
                 aarch64::compute_abi_info(cx, self, kind)
             }
-            "amdgpu" => amdgpu::compute_abi_info(cx, self),
-            "arm" => arm::compute_abi_info(cx, self),
-            "avr" => avr::compute_abi_info(self),
-            "loongarch64" => loongarch::compute_abi_info(cx, self),
-            "m68k" => m68k::compute_abi_info(self),
-            "csky" => csky::compute_abi_info(self),
-            "mips" | "mips32r6" => mips::compute_abi_info(cx, self),
-            "mips64" | "mips64r6" => mips64::compute_abi_info(cx, self),
-            "powerpc" => powerpc::compute_abi_info(cx, self),
-            "powerpc64" => powerpc64::compute_abi_info(cx, self),
-            "s390x" => s390x::compute_abi_info(cx, self),
-            "msp430" => msp430::compute_abi_info(self),
-            "sparc" => sparc::compute_abi_info(cx, self),
-            "sparc64" => sparc64::compute_abi_info(cx, self),
-            "nvptx64" => {
-                let abi = cx.target_spec().adjust_abi(abi, self.c_variadic);
+            Arch::AmdGpu => amdgpu::compute_abi_info(cx, self),
+            Arch::Arm => arm::compute_abi_info(cx, self),
+            Arch::Avr => avr::compute_abi_info(cx, self),
+            Arch::LoongArch32 | Arch::LoongArch64 => loongarch::compute_abi_info(cx, self),
+            Arch::M68k => m68k::compute_abi_info(cx, self),
+            Arch::CSky => csky::compute_abi_info(cx, self),
+            Arch::Mips | Arch::Mips32r6 => mips::compute_abi_info(cx, self),
+            Arch::Mips64 | Arch::Mips64r6 => mips64::compute_abi_info(cx, self),
+            Arch::PowerPC => powerpc::compute_abi_info(cx, self),
+            Arch::PowerPC64 => powerpc64::compute_abi_info(cx, self),
+            Arch::S390x => s390x::compute_abi_info(cx, self),
+            Arch::Msp430 => msp430::compute_abi_info(cx, self),
+            Arch::Sparc => sparc::compute_abi_info(cx, self),
+            Arch::Sparc64 => sparc64::compute_abi_info(cx, self),
+            Arch::Nvptx64 => {
                 if abi == ExternAbi::PtxKernel || abi == ExternAbi::GpuKernel {
                     nvptx64::compute_ptx_kernel_abi_info(cx, self)
                 } else {
-                    nvptx64::compute_abi_info(self)
+                    nvptx64::compute_abi_info(cx, self)
                 }
             }
-            "hexagon" => hexagon::compute_abi_info(self),
-            "xtensa" => xtensa::compute_abi_info(cx, self),
-            "riscv32" | "riscv64" => riscv::compute_abi_info(cx, self),
-            "wasm32" => {
-                if spec.os == "unknown" && matches!(cx.wasm_c_abi_opt(), WasmCAbi::Legacy { .. }) {
-                    wasm::compute_wasm_abi_info(self)
-                } else {
-                    wasm::compute_c_abi_info(cx, self)
-                }
+            Arch::Hexagon => hexagon::compute_abi_info(cx, self),
+            Arch::Xtensa => xtensa::compute_abi_info(cx, self),
+            Arch::RiscV32 | Arch::RiscV64 => riscv::compute_abi_info(cx, self),
+            Arch::Wasm32 | Arch::Wasm64 => wasm::compute_abi_info(cx, self),
+            Arch::Bpf => bpf::compute_abi_info(cx, self),
+            arch @ (Arch::PowerPC64LE | Arch::SpirV | Arch::Other(_)) => {
+                panic!("no lowering implemented for {arch}")
             }
-            "wasm64" => wasm::compute_c_abi_info(cx, self),
-            "bpf" => bpf::compute_abi_info(self),
-            arch => panic!("no lowering implemented for {arch}"),
         }
     }
 
@@ -724,30 +714,13 @@ impl<'a, Ty> FnAbi<'a, Ty> {
         C: HasDataLayout + HasTargetSpec,
     {
         let spec = cx.target_spec();
-        match &*spec.arch {
-            "x86" => x86::compute_rust_abi_info(cx, self),
-            "riscv32" | "riscv64" => riscv::compute_rust_abi_info(cx, self),
-            "loongarch64" => loongarch::compute_rust_abi_info(cx, self),
-            "aarch64" => aarch64::compute_rust_abi_info(cx, self),
+        match &spec.arch {
+            Arch::X86 => x86::compute_rust_abi_info(cx, self),
+            Arch::RiscV32 | Arch::RiscV64 => riscv::compute_rust_abi_info(cx, self),
+            Arch::LoongArch32 | Arch::LoongArch64 => loongarch::compute_rust_abi_info(cx, self),
+            Arch::AArch64 => aarch64::compute_rust_abi_info(cx, self),
+            Arch::Bpf => bpf::compute_rust_abi_info(self),
             _ => {}
-        };
-
-        // Decides whether we can pass the given SIMD argument via `PassMode::Direct`.
-        // May only return `true` if the target will always pass those arguments the same way,
-        // no matter what the user does with `-Ctarget-feature`! In other words, whatever
-        // target features are required to pass a SIMD value in registers must be listed in
-        // the `abi_required_features` for the current target and ABI.
-        let can_pass_simd_directly = |arg: &ArgAbi<'_, Ty>| match &*spec.arch {
-            // On x86, if we have SSE2 (which we have by default for x86_64), we can always pass up
-            // to 128-bit-sized vectors.
-            "x86" if spec.rustc_abi == Some(RustcAbi::X86Sse2) => arg.layout.size.bits() <= 128,
-            "x86_64" if spec.rustc_abi != Some(RustcAbi::X86Softfloat) => {
-                // FIXME once https://github.com/bytecodealliance/wasmtime/issues/10254 is fixed
-                // accept vectors up to 128bit rather than vectors of exactly 128bit.
-                arg.layout.size.bits() == 128
-            }
-            // So far, we haven't implemented this logic for any other target.
-            _ => false,
         };
 
         for (arg_idx, arg) in self
@@ -764,7 +737,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
             }
 
             if arg_idx.is_none()
-                && arg.layout.size > Primitive::Pointer(AddressSpace::DATA).size(cx) * 2
+                && arg.layout.size > Primitive::Pointer(AddressSpace::ZERO).size(cx) * 2
                 && !matches!(arg.layout.backend_repr, BackendRepr::SimdVector { .. })
             {
                 // Return values larger than 2 registers using a return area
@@ -823,7 +796,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
 
                     let size = arg.layout.size;
                     if arg.layout.is_sized()
-                        && size <= Primitive::Pointer(AddressSpace::DATA).size(cx)
+                        && size <= Primitive::Pointer(AddressSpace::ZERO).size(cx)
                     {
                         // We want to pass small aggregates as immediates, but using
                         // an LLVM aggregate type for this leads to bad optimizations,
@@ -849,48 +822,16 @@ impl<'a, Ty> FnAbi<'a, Ty> {
                     // target feature sets. Some more information about this
                     // issue can be found in #44367.
                     //
-                    // Note that the intrinsic ABI is exempt here as those are not
-                    // real functions anyway, and the backend expects very specific types.
-                    if spec.simd_types_indirect && !can_pass_simd_directly(arg) {
+                    // We *could* do better in some cases, e.g. on x86_64 targets where SSE2 is
+                    // required. However, it turns out that that makes LLVM worse at optimizing this
+                    // code, so we pass things indirectly even there. See #139029 for more on that.
+                    if spec.simd_types_indirect {
                         arg.make_indirect();
                     }
                 }
 
                 _ => {}
             }
-        }
-    }
-}
-
-impl FromStr for Conv {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "C" => Ok(Conv::C),
-            "Rust" => Ok(Conv::Rust),
-            "RustCold" => Ok(Conv::Rust),
-            "ArmAapcs" => Ok(Conv::ArmAapcs),
-            "CCmseNonSecureCall" => Ok(Conv::CCmseNonSecureCall),
-            "CCmseNonSecureEntry" => Ok(Conv::CCmseNonSecureEntry),
-            "Msp430Intr" => Ok(Conv::Msp430Intr),
-            "X86Fastcall" => Ok(Conv::X86Fastcall),
-            "X86Intr" => Ok(Conv::X86Intr),
-            "X86Stdcall" => Ok(Conv::X86Stdcall),
-            "X86ThisCall" => Ok(Conv::X86ThisCall),
-            "X86VectorCall" => Ok(Conv::X86VectorCall),
-            "X86_64SysV" => Ok(Conv::X86_64SysV),
-            "X86_64Win64" => Ok(Conv::X86_64Win64),
-            "GpuKernel" => Ok(Conv::GpuKernel),
-            "AvrInterrupt" => Ok(Conv::AvrInterrupt),
-            "AvrNonBlockingInterrupt" => Ok(Conv::AvrNonBlockingInterrupt),
-            "RiscvInterrupt(machine)" => {
-                Ok(Conv::RiscvInterrupt { kind: RiscvInterruptKind::Machine })
-            }
-            "RiscvInterrupt(supervisor)" => {
-                Ok(Conv::RiscvInterrupt { kind: RiscvInterruptKind::Supervisor })
-            }
-            _ => Err(format!("'{s}' is not a valid value for entry function call convention.")),
         }
     }
 }

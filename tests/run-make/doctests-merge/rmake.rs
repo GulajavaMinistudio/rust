@@ -1,3 +1,5 @@
+//@ ignore-cross-compile (needs to run doctests)
+
 use std::path::Path;
 
 use run_make_support::{cwd, diff, rustc, rustdoc};
@@ -18,6 +20,8 @@ fn test_and_compare(input_file: &str, stdout_file: &str, edition: &str, dep: &Pa
         .expected_file(stdout_file)
         .actual_text("output", output.stdout_utf8())
         .normalize(r#"finished in \d+\.\d+s"#, "finished in $$TIME")
+        .normalize(r#"ran in \d+\.\d+s"#, "ran in $$TIME")
+        .normalize(r#"compilation took \d+\.\d+s"#, "compilation took $$TIME")
         .run();
 }
 

@@ -12,10 +12,11 @@ use rustc_hashes::Hash128;
 use rustc_hir as hir;
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId};
+use rustc_hir::limit::Limit;
 use rustc_index::bit_set::GrowableBitSet;
 use rustc_macros::{HashStable, TyDecodable, TyEncodable, extension};
-use rustc_session::Limit;
 use rustc_span::sym;
+use rustc_type_ir::solve::SizedTraitKind;
 use smallvec::{SmallVec, smallvec};
 use tracing::{debug, instrument};
 
@@ -23,15 +24,16 @@ use super::TypingEnv;
 use crate::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use crate::mir;
 use crate::query::Providers;
+use crate::traits::ObligationCause;
 use crate::ty::layout::{FloatExt, IntegerExt};
 use crate::ty::{
     self, Asyncness, FallibleTypeFolder, GenericArgKind, GenericArgsRef, Ty, TyCtxt, TypeFoldable,
-    TypeFolder, TypeSuperFoldable, TypeVisitableExt, Upcast, fold_regions,
+    TypeFolder, TypeSuperFoldable, TypeVisitableExt, Upcast,
 };
 
 #[derive(Copy, Clone, Debug)]
 pub struct Discr<'tcx> {
-    /// Bit representation of the discriminant (e.g., `-128i8` is `0xFF_u128`).
+    /// Bit representation of the discriminant (e.g., `-1i8` is `0xFF_u128`).
     pub val: u128,
     pub ty: Ty<'tcx>,
 }
@@ -130,10 +132,9 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Creates a hash of the type `Ty` which will be the same no matter what crate
     /// context it's calculated within. This is used by the `type_id` intrinsic.
     pub fn type_id_hash(self, ty: Ty<'tcx>) -> Hash128 {
-        // We want the type_id be independent of the types free regions, so we
-        // erase them. The erase_regions() call will also anonymize bound
-        // regions, which is desirable too.
-        let ty = self.erase_regions(ty);
+        // We don't have region information, so we erase all free regions. Equal types
+        // must have the same `TypeId`, so we must anonymize all bound regions as well.
+        let ty = self.erase_and_anonymize_regions(ty);
 
         self.with_stable_hashing_context(|mut hcx| {
             let mut hasher = StableHasher::new();
@@ -216,7 +217,12 @@ impl<'tcx> TyCtxt<'tcx> {
         typing_env: ty::TypingEnv<'tcx>,
     ) -> Ty<'tcx> {
         let tcx = self;
-        tcx.struct_tail_raw(ty, |ty| tcx.normalize_erasing_regions(typing_env, ty), || {})
+        tcx.struct_tail_raw(
+            ty,
+            &ObligationCause::dummy(),
+            |ty| tcx.normalize_erasing_regions(typing_env, ty),
+            || {},
+        )
     }
 
     /// Returns true if a type has metadata.
@@ -248,6 +254,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn struct_tail_raw(
         self,
         mut ty: Ty<'tcx>,
+        cause: &ObligationCause<'tcx>,
         mut normalize: impl FnMut(Ty<'tcx>) -> Ty<'tcx>,
         // This is currently used to allow us to walk a ValTree
         // in lockstep with the type in order to get the ValTree branch that
@@ -261,9 +268,11 @@ impl<'tcx> TyCtxt<'tcx> {
                     Limit(0) => Limit(2),
                     limit => limit * 2,
                 };
-                let reported = self
-                    .dcx()
-                    .emit_err(crate::error::RecursionLimitReached { ty, suggested_limit });
+                let reported = self.dcx().emit_err(crate::error::RecursionLimitReached {
+                    span: cause.span,
+                    ty,
+                    suggested_limit,
+                });
                 return Ty::new_error(self, reported);
             }
             match *ty.kind() {
@@ -465,7 +474,7 @@ impl<'tcx> TyCtxt<'tcx> {
             dtor_candidate = Some(impl_did);
         }
 
-        Some(ty::AsyncDestructor { impl_did: dtor_candidate? })
+        Some(ty::AsyncDestructor { impl_did: dtor_candidate?.into() })
     }
 
     /// Returns the set of types that are required to be alive in
@@ -516,8 +525,8 @@ impl<'tcx> TyCtxt<'tcx> {
         let item_args = ty::GenericArgs::identity_for_item(self, def.did());
 
         let result = iter::zip(item_args, impl_args)
-            .filter(|&(_, k)| {
-                match k.unpack() {
+            .filter(|&(_, arg)| {
+                match arg.kind() {
                     GenericArgKind::Lifetime(region) => match region.kind() {
                         ty::ReEarlyParam(ebr) => {
                             !impl_generics.region_param(ebr, self).pure_wrt_drop
@@ -554,7 +563,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let mut seen = GrowableBitSet::default();
         let mut seen_late = FxHashSet::default();
         for arg in args {
-            match arg.unpack() {
+            match arg.kind() {
                 GenericArgKind::Lifetime(lt) => match (ignore_regions, lt.kind()) {
                     (CheckRegions::FromFunction, ty::ReBound(di, reg)) => {
                         if !seen_late.insert((di, reg)) {
@@ -598,9 +607,9 @@ impl<'tcx> TyCtxt<'tcx> {
     /// have the same `DefKind`.
     ///
     /// Note that closures have a `DefId`, but the closure *expression* also has a
-    // `HirId` that is located within the context where the closure appears (and, sadly,
-    // a corresponding `NodeId`, since those are not yet phased out). The parent of
-    // the closure's `DefId` will also be the context where it appears.
+    /// `HirId` that is located within the context where the closure appears (and, sadly,
+    /// a corresponding `NodeId`, since those are not yet phased out). The parent of
+    /// the closure's `DefId` will also be the context where it appears.
     pub fn is_closure_like(self, def_id: DefId) -> bool {
         matches!(self.def_kind(def_id), DefKind::Closure)
     }
@@ -608,10 +617,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Returns `true` if `def_id` refers to a definition that does not have its own
     /// type-checking context, i.e. closure, coroutine or inline const.
     pub fn is_typeck_child(self, def_id: DefId) -> bool {
-        matches!(
-            self.def_kind(def_id),
-            DefKind::Closure | DefKind::InlineConst | DefKind::SyntheticCoroutineBody
-        )
+        self.def_kind(def_id).is_typeck_child()
     }
 
     /// Returns `true` if `def_id` refers to a trait (i.e., `trait Foo { ... }`).
@@ -737,40 +743,6 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
-    /// Return the set of types that should be taken into account when checking
-    /// trait bounds on a coroutine's internal state. This properly replaces
-    /// `ReErased` with new existential bound lifetimes.
-    pub fn coroutine_hidden_types(
-        self,
-        def_id: DefId,
-    ) -> ty::EarlyBinder<'tcx, ty::Binder<'tcx, &'tcx ty::List<Ty<'tcx>>>> {
-        let coroutine_layout = self.mir_coroutine_witnesses(def_id);
-        let mut vars = vec![];
-        let bound_tys = self.mk_type_list_from_iter(
-            coroutine_layout
-                .as_ref()
-                .map_or_else(|| [].iter(), |l| l.field_tys.iter())
-                .filter(|decl| !decl.ignore_for_traits)
-                .map(|decl| {
-                    let ty = fold_regions(self, decl.ty, |re, debruijn| {
-                        assert_eq!(re, self.lifetimes.re_erased);
-                        let var = ty::BoundVar::from_usize(vars.len());
-                        vars.push(ty::BoundVariableKind::Region(ty::BoundRegionKind::Anon));
-                        ty::Region::new_bound(
-                            self,
-                            debruijn,
-                            ty::BoundRegion { var, kind: ty::BoundRegionKind::Anon },
-                        )
-                    });
-                    ty
-                }),
-        );
-        ty::EarlyBinder::bind(ty::Binder::bind_with_vars(
-            bound_tys,
-            self.mk_bound_variable_kinds(&vars),
-        ))
-    }
-
     /// Expands the given impl trait type, stopping if the type is recursive.
     #[instrument(skip(self), level = "debug", ret)]
     pub fn try_expand_impl_trait_type(
@@ -801,6 +773,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn def_kind_descr(self, def_kind: DefKind, def_id: DefId) -> &'static str {
         match def_kind {
             DefKind::AssocFn if self.associated_item(def_id).is_method() => "method",
+            DefKind::AssocTy if self.opt_rpitit_info(def_id).is_some() => "opaque type",
             DefKind::Closure if let Some(coroutine_kind) = self.coroutine_kind(def_id) => {
                 match coroutine_kind {
                     hir::CoroutineKind::Desugared(
@@ -1084,9 +1057,11 @@ impl<'tcx> TypeFolder<TyCtxt<'tcx>> for FreeAliasTypeExpander<'tcx> {
         }
 
         self.depth += 1;
-        ensure_sufficient_stack(|| {
+        let ty = ensure_sufficient_stack(|| {
             self.tcx.type_of(alias.def_id).instantiate(self.tcx, alias.args).fold_with(self)
-        })
+        });
+        self.depth -= 1;
+        ty
     }
 
     fn fold_const(&mut self, ct: ty::Const<'tcx>) -> ty::Const<'tcx> {
@@ -1166,7 +1141,8 @@ impl<'tcx> Ty<'tcx> {
     /// strange rules like `<T as Foo<'static>>::Bar: Sized` that
     /// actually carry lifetime requirements.
     pub fn is_sized(self, tcx: TyCtxt<'tcx>, typing_env: ty::TypingEnv<'tcx>) -> bool {
-        self.is_trivially_sized(tcx) || tcx.is_sized_raw(typing_env.as_query_input(self))
+        self.has_trivial_sizedness(tcx, SizedTraitKind::Sized)
+            || tcx.is_sized_raw(typing_env.as_query_input(self))
     }
 
     /// Checks whether values of this type `T` implement the `Freeze`
@@ -1338,7 +1314,7 @@ impl<'tcx> Ty<'tcx> {
                 debug_assert!(!typing_env.param_env.has_infer());
                 let query_ty = tcx
                     .try_normalize_erasing_regions(typing_env, query_ty)
-                    .unwrap_or_else(|_| tcx.erase_regions(query_ty));
+                    .unwrap_or_else(|_| tcx.erase_and_anonymize_regions(query_ty));
 
                 tcx.needs_drop_raw(typing_env.as_query_input(query_ty))
             }
@@ -1375,7 +1351,7 @@ impl<'tcx> Ty<'tcx> {
                 debug_assert!(!typing_env.has_infer());
                 let query_ty = tcx
                     .try_normalize_erasing_regions(typing_env, query_ty)
-                    .unwrap_or_else(|_| tcx.erase_regions(query_ty));
+                    .unwrap_or_else(|_| tcx.erase_and_anonymize_regions(query_ty));
 
                 tcx.needs_async_drop_raw(typing_env.as_query_input(query_ty))
             }
@@ -1404,10 +1380,12 @@ impl<'tcx> Ty<'tcx> {
                     _ => self,
                 };
 
-                // FIXME(#86868): We should be canonicalizing, or else moving this to a method of inference
-                // context, or *something* like that, but for now just avoid passing inference
-                // variables to queries that can't cope with them. Instead, conservatively
-                // return "true" (may change drop order).
+                // FIXME
+                // We should be canonicalizing, or else moving this to a method of inference
+                // context, or *something* like that,
+                // but for now just avoid passing inference variables
+                // to queries that can't cope with them.
+                // Instead, conservatively return "true" (may change drop order).
                 if query_ty.has_infer() {
                     return true;
                 }
@@ -1712,7 +1690,7 @@ pub fn intrinsic_raw(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<ty::Intrinsi
             _ => true,
         };
         Some(ty::IntrinsicDef {
-            name: tcx.item_name(def_id.into()),
+            name: tcx.item_name(def_id),
             must_be_overridden,
             const_stable: tcx.has_attr(def_id, sym::rustc_intrinsic_const_stable_indirect),
         })

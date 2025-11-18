@@ -3,12 +3,17 @@
 use core::ascii::EscapeDefault;
 
 use crate::fmt::{self, Write};
-#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(target_arch = "loongarch64", target_feature = "lsx")
+)))]
 use crate::intrinsics::const_eval_select;
 use crate::{ascii, iter, ops};
 
 impl [u8] {
     /// Checks if all bytes in this slice are within the ASCII range.
+    ///
+    /// An empty slice returns `true`.
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
     #[rustc_const_stable(feature = "const_slice_is_ascii", since = "1.74.0")]
     #[must_use]
@@ -52,7 +57,7 @@ impl [u8] {
     /// Same as `to_ascii_lowercase(a) == to_ascii_lowercase(b)`,
     /// but without allocating and copying temporaries.
     #[stable(feature = "ascii_methods_on_intrinsics", since = "1.23.0")]
-    #[rustc_const_unstable(feature = "const_eq_ignore_ascii_case", issue = "131719")]
+    #[rustc_const_stable(feature = "const_eq_ignore_ascii_case", since = "1.89.0")]
     #[must_use]
     #[inline]
     pub const fn eq_ignore_ascii_case(&self, other: &[u8]) -> bool {
@@ -128,7 +133,6 @@ impl [u8] {
     /// # Examples
     ///
     /// ```
-    ///
     /// let s = b"0\t\r\n'\"\\\x9d";
     /// let escaped = s.escape_ascii().to_string();
     /// assert_eq!(escaped, "0\\t\\r\\n\\'\\\"\\\\\\x9d");
@@ -309,7 +313,7 @@ impl<'a> fmt::Display for EscapeAscii<'a> {
 
             if let Some(&b) = bytes.first() {
                 // guaranteed to be non-empty, better to write it as a str
-                f.write_str(ascii::escape_default(b).as_str())?;
+                fmt::Display::fmt(&ascii::escape_default(b), f)?;
                 bytes = &bytes[1..];
             }
         }
@@ -358,7 +362,10 @@ pub const fn is_ascii_simple(mut bytes: &[u8]) -> bool {
 ///
 /// If any of these loads produces something for which `contains_nonascii`
 /// (above) returns true, then we know the answer is false.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(target_arch = "loongarch64", target_feature = "lsx")
+)))]
 #[inline]
 #[rustc_allow_const_fn_unstable(const_eval_select)] // fallback impl has same behavior
 const fn is_ascii(s: &[u8]) -> bool {
@@ -456,12 +463,15 @@ const fn is_ascii(s: &[u8]) -> bool {
     )
 }
 
-/// ASCII test optimized to use the `pmovmskb` instruction available on `x86-64`
-/// platforms.
+/// ASCII test optimized to use the `pmovmskb` instruction on `x86-64` and the
+/// `vmskltz.b` instruction on `loongarch64`.
 ///
 /// Other platforms are not likely to benefit from this code structure, so they
 /// use SWAR techniques to test for ASCII in `usize`-sized chunks.
-#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(target_arch = "loongarch64", target_feature = "lsx")
+))]
 #[inline]
 const fn is_ascii(bytes: &[u8]) -> bool {
     // Process chunks of 32 bytes at a time in the fast path to enable

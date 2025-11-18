@@ -47,7 +47,7 @@ impl fmt::Display for CfgAtom {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(test, derive(derive_arbitrary::Arbitrary))]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub enum CfgExpr {
     Invalid,
     Atom(CfgAtom),
@@ -66,6 +66,11 @@ impl CfgExpr {
     #[cfg(feature = "tt")]
     pub fn parse<S: Copy>(tt: &tt::TopSubtree<S>) -> CfgExpr {
         next_cfg_expr(&mut tt.iter()).unwrap_or(CfgExpr::Invalid)
+    }
+
+    #[cfg(feature = "tt")]
+    pub fn parse_from_iter<S: Copy>(tt: &mut tt::iter::TtIter<'_, S>) -> CfgExpr {
+        next_cfg_expr(tt).unwrap_or(CfgExpr::Invalid)
     }
 
     /// Fold the cfg by querying all basic `Atom` and `KeyValue` predicates.
@@ -96,7 +101,14 @@ fn next_cfg_expr<S: Copy>(it: &mut tt::iter::TtIter<'_, S>) -> Option<CfgExpr> {
     };
 
     let ret = match it.peek() {
-        Some(TtElement::Leaf(tt::Leaf::Punct(punct))) if punct.char == '=' => {
+        Some(TtElement::Leaf(tt::Leaf::Punct(punct)))
+            // Don't consume on e.g. `=>`.
+            if punct.char == '='
+                && (punct.spacing == tt::Spacing::Alone
+                    || it.remaining().flat_tokens().get(1).is_none_or(|peek2| {
+                        !matches!(peek2, tt::TokenTree::Leaf(tt::Leaf::Punct(_)))
+                    })) =>
+        {
             match it.remaining().flat_tokens().get(1) {
                 Some(tt::TokenTree::Leaf(tt::Leaf::Literal(literal))) => {
                     it.next();
@@ -122,10 +134,10 @@ fn next_cfg_expr<S: Copy>(it: &mut tt::iter::TtIter<'_, S>) -> Option<CfgExpr> {
     };
 
     // Eat comma separator
-    if let Some(TtElement::Leaf(tt::Leaf::Punct(punct))) = it.peek() {
-        if punct.char == ',' {
-            it.next();
-        }
+    if let Some(TtElement::Leaf(tt::Leaf::Punct(punct))) = it.peek()
+        && punct.char == ','
+    {
+        it.next();
     }
     Some(ret)
 }

@@ -8,9 +8,6 @@
     rustc::untranslatable_diagnostic
 )]
 
-// Some "regular" crates we want to share with rustc
-extern crate tracing;
-
 // The rustc crates we need
 extern crate rustc_abi;
 extern crate rustc_data_structures;
@@ -19,31 +16,31 @@ extern crate rustc_hir;
 extern crate rustc_hir_analysis;
 extern crate rustc_interface;
 extern crate rustc_log;
-extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
 
-use std::env::{self, VarError};
-use std::num::NonZero;
+mod log;
+
+use std::env;
+use std::num::{NonZero, NonZeroI32};
 use std::ops::Range;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-use std::sync::{Arc, Once};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use miri::{
     BacktraceStyle, BorrowTrackerMethod, GenmcConfig, GenmcCtx, MiriConfig, MiriEntryFnType,
-    ProvenanceMode, RetagFields, ValidationMode,
+    ProvenanceMode, TreeBorrowsParams, ValidationMode, run_genmc_mode,
 };
 use rustc_abi::ExternAbi;
-use rustc_data_structures::sync;
+use rustc_data_structures::sync::{self, DynSync};
 use rustc_driver::Compilation;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_hir::{self as hir, Node};
 use rustc_hir_analysis::check::check_function_signature;
 use rustc_interface::interface::Config;
+use rustc_log::tracing::debug;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::middle::exported_symbols::{
     ExportedSymbol, SymbolExportInfo, SymbolExportKind, SymbolExportLevel,
@@ -51,18 +48,15 @@ use rustc_middle::middle::exported_symbols::{
 use rustc_middle::query::LocalCrate;
 use rustc_middle::traits::{ObligationCause, ObligationCauseCode};
 use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_middle::util::Providers;
+use rustc_session::EarlyDiagCtxt;
 use rustc_session::config::{CrateType, ErrorOutputType, OptLevel};
-use rustc_session::search_paths::PathKind;
-use rustc_session::{CtfeBacktrace, EarlyDiagCtxt};
 use rustc_span::def_id::DefId;
-use tracing::debug;
+
+use crate::log::setup::{deinit_loggers, init_early_loggers, init_late_loggers};
 
 struct MiriCompilerCalls {
     miri_config: Option<MiriConfig>,
     many_seeds: Option<ManySeedsConfig>,
-    /// Settings for using GenMC with Miri.
-    genmc_config: Option<GenmcConfig>,
 }
 
 struct ManySeedsConfig {
@@ -71,12 +65,8 @@ struct ManySeedsConfig {
 }
 
 impl MiriCompilerCalls {
-    fn new(
-        miri_config: MiriConfig,
-        many_seeds: Option<ManySeedsConfig>,
-        genmc_config: Option<GenmcConfig>,
-    ) -> Self {
-        Self { miri_config: Some(miri_config), many_seeds, genmc_config }
+    fn new(miri_config: MiriConfig, many_seeds: Option<ManySeedsConfig>) -> Self {
+        Self { miri_config: Some(miri_config), many_seeds }
     }
 }
 
@@ -85,7 +75,7 @@ fn entry_fn(tcx: TyCtxt<'_>) -> (DefId, MiriEntryFnType) {
         return (def_id, MiriEntryFnType::Rustc(entry_type));
     }
     // Look for a symbol in the local crate named `miri_start`, and treat that as the entry point.
-    let sym = tcx.exported_symbols(LOCAL_CRATE).iter().find_map(|(sym, _)| {
+    let sym = tcx.exported_non_generic_symbols(LOCAL_CRATE).iter().find_map(|(sym, _)| {
         if sym.symbol_name_for_local_instance(tcx).name == "miri_start" { Some(sym) } else { None }
     });
     if let Some(ExportedSymbol::NonGeneric(id)) = sym {
@@ -130,40 +120,62 @@ fn entry_fn(tcx: TyCtxt<'_>) -> (DefId, MiriEntryFnType) {
     }
 }
 
-impl rustc_driver::Callbacks for MiriCompilerCalls {
-    fn config(&mut self, config: &mut Config) {
-        config.override_queries = Some(|_, providers| {
-            providers.extern_queries.used_crate_source = |tcx, cnum| {
-                let mut providers = Providers::default();
-                rustc_metadata::provide(&mut providers);
-                let mut crate_source = (providers.extern_queries.used_crate_source)(tcx, cnum);
-                // HACK: rustc will emit "crate ... required to be available in rlib format, but
-                // was not found in this form" errors once we use `tcx.dependency_formats()` if
-                // there's no rlib provided, so setting a dummy path here to workaround those errors.
-                Arc::make_mut(&mut crate_source).rlib = Some((PathBuf::new(), PathKind::All));
-                crate_source
-            };
-        });
+fn run_many_seeds(
+    many_seeds: ManySeedsConfig,
+    eval_entry_once: impl Fn(u64) -> Result<(), NonZeroI32> + DynSync,
+) -> Result<(), NonZeroI32> {
+    let exit_code =
+        sync::IntoDynSyncSend(AtomicU32::new(rustc_driver::EXIT_SUCCESS.cast_unsigned()));
+    let num_failed = sync::IntoDynSyncSend(AtomicU32::new(0));
+    sync::par_for_each_in(many_seeds.seeds.clone(), |&seed| {
+        if let Err(return_code) = eval_entry_once(seed.into()) {
+            eprintln!("FAILING SEED: {seed}");
+            if !many_seeds.keep_going {
+                // `abort_if_errors` would unwind but would not actually stop miri, since
+                // `par_for_each` waits for the rest of the threads to finish.
+                exit(return_code.get());
+            }
+            // Preserve the "maximum" return code (when interpreted as `u32`), to make
+            // the result order-independent and to make it 0 only if all executions were 0.
+            exit_code.fetch_max(return_code.get().cast_unsigned(), Ordering::Relaxed);
+            num_failed.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    let num_failed = num_failed.0.into_inner();
+    let exit_code = exit_code.0.into_inner().cast_signed();
+    if num_failed > 0 {
+        eprintln!("{num_failed}/{total} SEEDS FAILED", total = many_seeds.seeds.count());
+        Err(NonZeroI32::new(exit_code).unwrap())
+    } else {
+        assert!(exit_code == 0);
+        Ok(())
     }
+}
 
+impl rustc_driver::Callbacks for MiriCompilerCalls {
     fn after_analysis<'tcx>(
         &mut self,
         _: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        if tcx.sess.dcx().has_errors_or_delayed_bugs().is_some() {
-            tcx.dcx().fatal("miri cannot be run on programs that fail compilation");
-        }
+        // Compilation is done, interpretation is starting. Deal with diagnostics from the
+        // compilation part. We cannot call `sess.finish_diagnostics()` as then "aborting due to
+        // previous errors" gets printed twice.
+        tcx.dcx().emit_stashed_diagnostics();
+        tcx.dcx().abort_if_errors();
+        tcx.dcx().flush_delayed();
 
-        let early_dcx = EarlyDiagCtxt::new(tcx.sess.opts.error_format);
-        init_late_loggers(&early_dcx, tcx);
+        // Miri is taking over. Start logging.
+        init_late_loggers(&EarlyDiagCtxt::new(tcx.sess.opts.error_format), tcx);
+
+        // Find the entry point.
         if !tcx.crate_types().contains(&CrateType::Executable) {
             tcx.dcx().fatal("miri only makes sense on bin crates");
         }
-
         let (entry_def_id, entry_type) = entry_fn(tcx);
-        let mut config = self.miri_config.take().expect("after_analysis must only be called once");
 
+        // Obtain and complete the Miri configuration.
+        let mut config = self.miri_config.take().expect("after_analysis must only be called once");
         // Add filename to `miri` arguments.
         config.args.insert(0, tcx.sess.io.input.filestem().to_string());
 
@@ -172,6 +184,7 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
             env::set_current_dir(cwd).unwrap();
         }
 
+        // Emit warnings for some unusual configurations.
         if tcx.sess.opts.optimize != OptLevel::No {
             tcx.dcx().warn("Miri does not support optimizations: the opt-level is ignored. The only effect \
                     of selecting a Cargo profile that enables optimizations (such as --release) is to apply \
@@ -186,52 +199,29 @@ impl rustc_driver::Callbacks for MiriCompilerCalls {
                     optimizations is usually marginal at best.");
         }
 
-        if let Some(genmc_config) = &self.genmc_config {
-            let _genmc_ctx = Rc::new(GenmcCtx::new(&config, genmc_config));
-
-            todo!("GenMC mode not yet implemented");
-        };
-
-        if let Some(many_seeds) = self.many_seeds.take() {
+        // Invoke the interpreter.
+        let res = if config.genmc_config.is_some() {
+            assert!(self.many_seeds.is_none());
+            run_genmc_mode(tcx, &config, |genmc_ctx: Rc<GenmcCtx>| {
+                miri::eval_entry(tcx, entry_def_id, entry_type, &config, Some(genmc_ctx))
+            })
+        } else if let Some(many_seeds) = self.many_seeds.take() {
             assert!(config.seed.is_none());
-            let exit_code = sync::IntoDynSyncSend(AtomicI32::new(rustc_driver::EXIT_SUCCESS));
-            let num_failed = sync::IntoDynSyncSend(AtomicU32::new(0));
-            sync::par_for_each_in(many_seeds.seeds.clone(), |seed| {
+            run_many_seeds(many_seeds, |seed| {
                 let mut config = config.clone();
-                config.seed = Some((*seed).into());
+                config.seed = Some(seed);
                 eprintln!("Trying seed: {seed}");
-                let return_code = miri::eval_entry(
-                    tcx,
-                    entry_def_id,
-                    entry_type,
-                    &config,
-                    /* genmc_ctx */ None,
-                )
-                .unwrap_or(rustc_driver::EXIT_FAILURE);
-                if return_code != rustc_driver::EXIT_SUCCESS {
-                    eprintln!("FAILING SEED: {seed}");
-                    if !many_seeds.keep_going {
-                        // `abort_if_errors` would actually not stop, since `par_for_each` waits for the
-                        // rest of the to finish, so we just exit immediately.
-                        std::process::exit(return_code);
-                    }
-                    exit_code.store(return_code, Ordering::Relaxed);
-                    num_failed.fetch_add(1, Ordering::Relaxed);
-                }
-            });
-            let num_failed = num_failed.0.into_inner();
-            if num_failed > 0 {
-                eprintln!("{num_failed}/{total} SEEDS FAILED", total = many_seeds.seeds.count());
-            }
-            std::process::exit(exit_code.0.into_inner());
+                miri::eval_entry(tcx, entry_def_id, entry_type, &config, /* genmc_ctx */ None)
+            })
         } else {
-            let return_code = miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
-                .unwrap_or_else(|| {
-                    tcx.dcx().abort_if_errors();
-                    rustc_driver::EXIT_FAILURE
-                });
-
-            std::process::exit(return_code);
+            miri::eval_entry(tcx, entry_def_id, entry_type, &config, None)
+        };
+        // Process interpreter result.
+        if let Err(return_code) = res {
+            tcx.dcx().abort_if_errors();
+            exit(return_code.get());
+        } else {
+            exit(rustc_driver::EXIT_SUCCESS);
         }
 
         // Unreachable.
@@ -246,13 +236,27 @@ impl rustc_driver::Callbacks for MiriBeRustCompilerCalls {
     #[allow(rustc::potential_query_instability)] // rustc_codegen_ssa (where this code is copied from) also allows this lint
     fn config(&mut self, config: &mut Config) {
         if config.opts.prints.is_empty() && self.target_crate {
+            #[allow(rustc::bad_opt_access)] // tcx does not exist yet
+            {
+                let any_crate_types = !config.opts.crate_types.is_empty();
+                // Avoid warnings about unsupported crate types.
+                config
+                    .opts
+                    .crate_types
+                    .retain(|&c| c == CrateType::Executable || c == CrateType::Rlib);
+                if any_crate_types {
+                    // Assert that we didn't remove all crate types if any crate type was passed on
+                    // the cli. Otherwise we might silently change what kind of crate we are building.
+                    assert!(!config.opts.crate_types.is_empty());
+                }
+            }
+
             // Queries overridden here affect the data stored in `rmeta` files of dependencies,
             // which will be used later in non-`MIRI_BE_RUSTC` mode.
             config.override_queries = Some(|_, local_providers| {
-                // `exported_symbols` and `reachable_non_generics` provided by rustc always returns
-                // an empty result if `tcx.sess.opts.output_types.should_codegen()` is false.
-                // In addition we need to add #[used] symbols to exported_symbols for `lookup_link_section`.
-                local_providers.exported_symbols = |tcx, LocalCrate| {
+                // We need to add #[used] symbols to exported_symbols for `lookup_link_section`.
+                // FIXME handle this somehow in rustc itself to avoid this hack.
+                local_providers.exported_non_generic_symbols = |tcx, LocalCrate| {
                     let reachable_set = tcx.with_stable_hashing_context(|hcx| {
                         tcx.reachable_set(()).to_sorted(&hcx, true)
                     });
@@ -281,7 +285,9 @@ impl rustc_driver::Callbacks for MiriBeRustCompilerCalls {
                             }
                             let codegen_fn_attrs = tcx.codegen_fn_attrs(local_def_id);
                             if codegen_fn_attrs.contains_extern_indicator()
-                                || codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::USED)
+                                || codegen_fn_attrs
+                                    .flags
+                                    .contains(CodegenFnAttrFlags::USED_COMPILER)
                                 || codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::USED_LINKER)
                             {
                                 Some((
@@ -293,6 +299,7 @@ impl rustc_driver::Callbacks for MiriBeRustCompilerCalls {
                                         level: SymbolExportLevel::C,
                                         kind: SymbolExportKind::Text,
                                         used: false,
+                                        rustc_std_internal_symbol: false,
                                     },
                                 ))
                             } else {
@@ -324,83 +331,41 @@ impl rustc_driver::Callbacks for MiriBeRustCompilerCalls {
     }
 }
 
-fn show_error(msg: &impl std::fmt::Display) -> ! {
+fn exit(exit_code: i32) -> ! {
+    // Drop the tracing guard before exiting, so tracing calls are flushed correctly.
+    deinit_loggers();
+    // Make sure the supervisor knows about the exit code.
+    #[cfg(all(unix, feature = "native-lib"))]
+    miri::native_lib::register_retcode_sv(exit_code);
+    // Actually exit.
+    std::process::exit(exit_code);
+}
+
+fn fatal_error_(msg: &impl std::fmt::Display) -> ! {
     eprintln!("fatal error: {msg}");
-    std::process::exit(1)
+    exit(1)
 }
 
-macro_rules! show_error {
-    ($($tt:tt)*) => { show_error(&format_args!($($tt)*)) };
+macro_rules! fatal_error {
+    ($($tt:tt)*) => { $crate::fatal_error_(&format_args!($($tt)*)) };
 }
-
-fn rustc_logger_config() -> rustc_log::LoggerConfig {
-    // Start with the usual env vars.
-    let mut cfg = rustc_log::LoggerConfig::from_env("RUSTC_LOG");
-
-    // Overwrite if MIRI_LOG is set.
-    if let Ok(var) = env::var("MIRI_LOG") {
-        // MIRI_LOG serves as default for RUSTC_LOG, if that is not set.
-        if matches!(cfg.filter, Err(VarError::NotPresent)) {
-            // We try to be a bit clever here: if `MIRI_LOG` is just a single level
-            // used for everything, we only apply it to the parts of rustc that are
-            // CTFE-related. Otherwise, we use it verbatim for `RUSTC_LOG`.
-            // This way, if you set `MIRI_LOG=trace`, you get only the right parts of
-            // rustc traced, but you can also do `MIRI_LOG=miri=trace,rustc_const_eval::interpret=debug`.
-            if tracing::Level::from_str(&var).is_ok() {
-                cfg.filter = Ok(format!(
-                    "rustc_middle::mir::interpret={var},rustc_const_eval::interpret={var},miri={var}"
-                ));
-            } else {
-                cfg.filter = Ok(var);
-            }
-        }
-    }
-
-    cfg
-}
-
-/// The global logger can only be set once per process, so track
-/// whether that already happened.
-static LOGGER_INITED: Once = Once::new();
-
-fn init_early_loggers(early_dcx: &EarlyDiagCtxt) {
-    // We only initialize `rustc` if the env var is set (so the user asked for it).
-    // If it is not set, we avoid initializing now so that we can initialize later with our custom
-    // settings, and *not* log anything for what happens before `miri` starts interpreting.
-    if env::var_os("RUSTC_LOG").is_some() {
-        LOGGER_INITED.call_once(|| {
-            rustc_driver::init_logger(early_dcx, rustc_logger_config());
-        });
-    }
-}
-
-fn init_late_loggers(early_dcx: &EarlyDiagCtxt, tcx: TyCtxt<'_>) {
-    // If the logger is not yet initialized, initialize it.
-    LOGGER_INITED.call_once(|| {
-        rustc_driver::init_logger(early_dcx, rustc_logger_config());
-    });
-
-    // If `MIRI_BACKTRACE` is set and `RUSTC_CTFE_BACKTRACE` is not, set `RUSTC_CTFE_BACKTRACE`.
-    // Do this late, so we ideally only apply this to Miri's errors.
-    if let Some(val) = env::var_os("MIRI_BACKTRACE") {
-        let ctfe_backtrace = match &*val.to_string_lossy() {
-            "immediate" => CtfeBacktrace::Immediate,
-            "0" => CtfeBacktrace::Disabled,
-            _ => CtfeBacktrace::Capture,
-        };
-        *tcx.sess.ctfe_backtrace.borrow_mut() = ctfe_backtrace;
-    }
-}
+#[allow(unused)] // use depends on cfg
+use fatal_error;
 
 /// Execute a compiler with the given CLI arguments and callbacks.
 fn run_compiler_and_exit(
     args: &[String],
     callbacks: &mut (dyn rustc_driver::Callbacks + Send),
 ) -> ! {
-    // Invoke compiler, and handle return code.
+    // Install the ctrlc handler that sets `rustc_const_eval::CTRL_C_RECEIVED`, even if
+    // MIRI_BE_RUSTC is set. We do this late so that when `native_lib::init_sv` is called,
+    // there are no other threads.
+    rustc_driver::install_ctrlc_handler();
+
+    // Invoke compiler, catch any unwinding panics and handle return code.
     let exit_code =
         rustc_driver::catch_with_exit_code(move || rustc_driver::run_compiler(args, callbacks));
-    std::process::exit(exit_code)
+    exit(exit_code)
 }
 
 /// Parses a comma separated list of `T` from the given string:
@@ -459,7 +424,7 @@ fn jemalloc_magic() {
     // linking, so we need to explicitly depend on the function.
     #[cfg(target_os = "macos")]
     {
-        extern "C" {
+        unsafe extern "C" {
             fn _rjem_je_zone_register();
         }
 
@@ -480,10 +445,6 @@ fn main() {
 
     let args = rustc_driver::catch_fatal_errors(|| rustc_driver::args::raw_args(&early_dcx))
         .unwrap_or_else(|_| std::process::exit(rustc_driver::EXIT_FAILURE));
-
-    // Install the ctrlc handler that sets `rustc_const_eval::CTRL_C_RECEIVED`, even if
-    // MIRI_BE_RUSTC is set.
-    rustc_driver::install_ctrlc_handler();
 
     // If the environment asks us to actually be rustc, then do that.
     if let Some(crate_kind) = env::var_os("MIRI_BE_RUSTC") {
@@ -526,7 +487,6 @@ fn main() {
     let mut many_seeds_keep_going = false;
     let mut miri_config = MiriConfig::default();
     miri_config.env = env_snapshot;
-    let mut genmc_config = None;
 
     let mut rustc_args = vec![];
     let mut after_dashdash = false;
@@ -552,8 +512,20 @@ fn main() {
         } else if arg == "-Zmiri-disable-stacked-borrows" {
             miri_config.borrow_tracker = None;
         } else if arg == "-Zmiri-tree-borrows" {
-            miri_config.borrow_tracker = Some(BorrowTrackerMethod::TreeBorrows);
-            miri_config.provenance_mode = ProvenanceMode::Strict;
+            miri_config.borrow_tracker =
+                Some(BorrowTrackerMethod::TreeBorrows(TreeBorrowsParams {
+                    precise_interior_mut: true,
+                }));
+        } else if arg == "-Zmiri-tree-borrows-no-precise-interior-mut" {
+            match &mut miri_config.borrow_tracker {
+                Some(BorrowTrackerMethod::TreeBorrows(params)) => {
+                    params.precise_interior_mut = false;
+                }
+                _ =>
+                    fatal_error!(
+                        "`-Zmiri-tree-borrows` is required before `-Zmiri-tree-borrows-no-precise-interior-mut`"
+                    ),
+            };
         } else if arg == "-Zmiri-disable-data-race-detector" {
             miri_config.data_race_detector = false;
             miri_config.weak_memory_emulation = false;
@@ -577,7 +549,7 @@ fn main() {
                 "warn-nobacktrace" =>
                     miri::IsolatedOp::Reject(miri::RejectOpWith::WarningWithoutBacktrace),
                 _ =>
-                    show_error!(
+                    fatal_error!(
                         "-Zmiri-isolation-error must be `abort`, `hide`, `warn`, or `warn-nobacktrace`"
                     ),
             };
@@ -586,6 +558,14 @@ fn main() {
             miri_config.collect_leak_backtraces = false;
         } else if arg == "-Zmiri-force-intrinsic-fallback" {
             miri_config.force_intrinsic_fallback = true;
+        } else if arg == "-Zmiri-deterministic-floats" {
+            miri_config.float_nondet = false;
+        } else if arg == "-Zmiri-no-extra-rounding-error" {
+            miri_config.float_rounding_error = miri::FloatRoundingErrorMode::None;
+        } else if arg == "-Zmiri-max-extra-rounding-error" {
+            miri_config.float_rounding_error = miri::FloatRoundingErrorMode::Max;
+        } else if arg == "-Zmiri-no-short-fd-operations" {
+            miri_config.short_fd_operations = false;
         } else if arg == "-Zmiri-strict-provenance" {
             miri_config.provenance_mode = ProvenanceMode::Strict;
         } else if arg == "-Zmiri-permissive-provenance" {
@@ -593,7 +573,10 @@ fn main() {
         } else if arg == "-Zmiri-mute-stdout-stderr" {
             miri_config.mute_stdout_stderr = true;
         } else if arg == "-Zmiri-retag-fields" {
-            miri_config.retag_fields = RetagFields::Yes;
+            eprintln!(
+                "warning: `-Zmiri-retag-fields` is a NOP and will be removed in a future version of Miri.\n\
+                Field retagging has been on-by-default for a long time."
+            );
         } else if arg == "-Zmiri-fixed-schedule" {
             miri_config.fixed_scheduling = true;
         } else if arg == "-Zmiri-deterministic-concurrency" {
@@ -601,21 +584,14 @@ fn main() {
             miri_config.address_reuse_cross_thread_rate = 0.0;
             miri_config.cmpxchg_weak_failure_rate = 0.0;
             miri_config.weak_memory_emulation = false;
-        } else if let Some(retag_fields) = arg.strip_prefix("-Zmiri-retag-fields=") {
-            miri_config.retag_fields = match retag_fields {
-                "all" => RetagFields::Yes,
-                "none" => RetagFields::No,
-                "scalar" => RetagFields::OnlyScalar,
-                _ => show_error!("`-Zmiri-retag-fields` can only be `all`, `none`, or `scalar`"),
-            };
         } else if let Some(param) = arg.strip_prefix("-Zmiri-seed=") {
             let seed = param.parse::<u64>().unwrap_or_else(|_| {
-                show_error!("-Zmiri-seed must be an integer that fits into u64")
+                fatal_error!("-Zmiri-seed must be an integer that fits into u64")
             });
             miri_config.seed = Some(seed);
         } else if let Some(param) = arg.strip_prefix("-Zmiri-many-seeds=") {
             let range = parse_range(param).unwrap_or_else(|err| {
-                show_error!(
+                fatal_error!(
                     "-Zmiri-many-seeds requires a range in the form `from..to` or `..to`: {err}"
                 )
             });
@@ -625,58 +601,58 @@ fn main() {
         } else if arg == "-Zmiri-many-seeds-keep-going" {
             many_seeds_keep_going = true;
         } else if let Some(trimmed_arg) = arg.strip_prefix("-Zmiri-genmc") {
-            // FIXME(GenMC): Currently, GenMC mode is incompatible with aliasing model checking.
-            miri_config.borrow_tracker = None;
-            GenmcConfig::parse_arg(&mut genmc_config, trimmed_arg);
+            if let Err(msg) = GenmcConfig::parse_arg(&mut miri_config.genmc_config, trimmed_arg) {
+                fatal_error!("{msg}");
+            }
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-forward=") {
             miri_config.forwarded_env_vars.push(param.to_owned());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-env-set=") {
             let Some((name, value)) = param.split_once('=') else {
-                show_error!("-Zmiri-env-set requires an argument of the form <name>=<value>");
+                fatal_error!("-Zmiri-env-set requires an argument of the form <name>=<value>");
             };
             miri_config.set_env_vars.insert(name.to_owned(), value.to_owned());
         } else if let Some(param) = arg.strip_prefix("-Zmiri-track-pointer-tag=") {
             let ids: Vec<u64> = parse_comma_list(param).unwrap_or_else(|err| {
-                show_error!("-Zmiri-track-pointer-tag requires a comma separated list of valid `u64` arguments: {err}")
+                fatal_error!("-Zmiri-track-pointer-tag requires a comma separated list of valid `u64` arguments: {err}")
             });
             for id in ids.into_iter().map(miri::BorTag::new) {
                 if let Some(id) = id {
                     miri_config.tracked_pointer_tags.insert(id);
                 } else {
-                    show_error!("-Zmiri-track-pointer-tag requires nonzero arguments");
+                    fatal_error!("-Zmiri-track-pointer-tag requires nonzero arguments");
                 }
             }
         } else if let Some(param) = arg.strip_prefix("-Zmiri-track-alloc-id=") {
             let ids = parse_comma_list::<NonZero<u64>>(param).unwrap_or_else(|err| {
-                show_error!("-Zmiri-track-alloc-id requires a comma separated list of valid non-zero `u64` arguments: {err}")
+                fatal_error!("-Zmiri-track-alloc-id requires a comma separated list of valid non-zero `u64` arguments: {err}")
             });
             miri_config.tracked_alloc_ids.extend(ids.into_iter().map(miri::AllocId));
         } else if arg == "-Zmiri-track-alloc-accesses" {
             miri_config.track_alloc_accesses = true;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-address-reuse-rate=") {
             miri_config.address_reuse_rate = parse_rate(param)
-                .unwrap_or_else(|err| show_error!("-Zmiri-address-reuse-rate {err}"));
+                .unwrap_or_else(|err| fatal_error!("-Zmiri-address-reuse-rate {err}"));
         } else if let Some(param) = arg.strip_prefix("-Zmiri-address-reuse-cross-thread-rate=") {
             miri_config.address_reuse_cross_thread_rate = parse_rate(param)
-                .unwrap_or_else(|err| show_error!("-Zmiri-address-reuse-cross-thread-rate {err}"));
+                .unwrap_or_else(|err| fatal_error!("-Zmiri-address-reuse-cross-thread-rate {err}"));
         } else if let Some(param) = arg.strip_prefix("-Zmiri-compare-exchange-weak-failure-rate=") {
             miri_config.cmpxchg_weak_failure_rate = parse_rate(param).unwrap_or_else(|err| {
-                show_error!("-Zmiri-compare-exchange-weak-failure-rate {err}")
+                fatal_error!("-Zmiri-compare-exchange-weak-failure-rate {err}")
             });
         } else if let Some(param) = arg.strip_prefix("-Zmiri-preemption-rate=") {
-            miri_config.preemption_rate =
-                parse_rate(param).unwrap_or_else(|err| show_error!("-Zmiri-preemption-rate {err}"));
+            miri_config.preemption_rate = parse_rate(param)
+                .unwrap_or_else(|err| fatal_error!("-Zmiri-preemption-rate {err}"));
         } else if arg == "-Zmiri-report-progress" {
             // This makes it take a few seconds between progress reports on my laptop.
             miri_config.report_progress = Some(1_000_000);
         } else if let Some(param) = arg.strip_prefix("-Zmiri-report-progress=") {
             let interval = param.parse::<u32>().unwrap_or_else(|err| {
-                show_error!("-Zmiri-report-progress requires a `u32`: {}", err)
+                fatal_error!("-Zmiri-report-progress requires a `u32`: {}", err)
             });
             miri_config.report_progress = Some(interval);
         } else if let Some(param) = arg.strip_prefix("-Zmiri-provenance-gc=") {
             let interval = param.parse::<u32>().unwrap_or_else(|err| {
-                show_error!("-Zmiri-provenance-gc requires a `u32`: {}", err)
+                fatal_error!("-Zmiri-provenance-gc requires a `u32`: {}", err)
             });
             miri_config.gc_interval = interval;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-measureme=") {
@@ -686,60 +662,61 @@ fn main() {
                 "0" => BacktraceStyle::Off,
                 "1" => BacktraceStyle::Short,
                 "full" => BacktraceStyle::Full,
-                _ => show_error!("-Zmiri-backtrace may only be 0, 1, or full"),
+                _ => fatal_error!("-Zmiri-backtrace may only be 0, 1, or full"),
             };
         } else if let Some(param) = arg.strip_prefix("-Zmiri-native-lib=") {
             let filename = param.to_string();
-            if std::path::Path::new(&filename).exists() {
-                if let Some(other_filename) = miri_config.native_lib {
-                    show_error!("-Zmiri-native-lib is already set to {}", other_filename.display());
+            let file_path = std::path::Path::new(&filename);
+            if file_path.exists() {
+                // For directories, nonrecursively add all normal files inside
+                if let Ok(dir) = file_path.read_dir() {
+                    for lib in dir.filter_map(|res| res.ok()) {
+                        if lib.file_type().unwrap().is_file() {
+                            miri_config.native_lib.push(lib.path().to_owned());
+                        }
+                    }
+                } else {
+                    miri_config.native_lib.push(filename.into());
                 }
-                miri_config.native_lib = Some(filename.into());
             } else {
-                show_error!("-Zmiri-native-lib `{}` does not exist", filename);
+                fatal_error!("-Zmiri-native-lib `{}` does not exist", filename);
             }
+        } else if arg == "-Zmiri-native-lib-enable-tracing" {
+            miri_config.native_lib_enable_tracing = true;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-num-cpus=") {
             let num_cpus = param
                 .parse::<u32>()
-                .unwrap_or_else(|err| show_error!("-Zmiri-num-cpus requires a `u32`: {}", err));
+                .unwrap_or_else(|err| fatal_error!("-Zmiri-num-cpus requires a `u32`: {}", err));
             if !(1..=miri::MAX_CPUS).contains(&usize::try_from(num_cpus).unwrap()) {
-                show_error!("-Zmiri-num-cpus must be in the range 1..={}", miri::MAX_CPUS);
+                fatal_error!("-Zmiri-num-cpus must be in the range 1..={}", miri::MAX_CPUS);
             }
             miri_config.num_cpus = num_cpus;
         } else if let Some(param) = arg.strip_prefix("-Zmiri-force-page-size=") {
             let page_size = param.parse::<u64>().unwrap_or_else(|err| {
-                show_error!("-Zmiri-force-page-size requires a `u64`: {}", err)
+                fatal_error!("-Zmiri-force-page-size requires a `u64`: {}", err)
             });
             // Convert from kilobytes to bytes.
             let page_size = if page_size.is_power_of_two() {
                 page_size * 1024
             } else {
-                show_error!("-Zmiri-force-page-size requires a power of 2: {page_size}");
+                fatal_error!("-Zmiri-force-page-size requires a power of 2: {page_size}");
             };
             miri_config.page_size = Some(page_size);
+        } else if let Some(param) = arg.strip_prefix("-Zmiri-user-relevant-crates=") {
+            miri_config.user_relevant_crates.extend(param.split(',').map(|s| s.to_owned()));
         } else {
             // Forward to rustc.
             rustc_args.push(arg);
         }
     }
-    // Tree Borrows implies strict provenance, and is not compatible with native calls.
-    if matches!(miri_config.borrow_tracker, Some(BorrowTrackerMethod::TreeBorrows)) {
-        if miri_config.provenance_mode != ProvenanceMode::Strict {
-            show_error!(
-                "Tree Borrows does not support integer-to-pointer casts, and hence requires strict provenance"
-            );
-        }
-        if miri_config.native_lib.is_some() {
-            show_error!("Tree Borrows is not compatible with calling native functions");
-        }
-    }
+
     // Native calls and strict provenance are not compatible.
-    if miri_config.native_lib.is_some() && miri_config.provenance_mode == ProvenanceMode::Strict {
-        show_error!("strict provenance is not compatible with calling native functions");
+    if !miri_config.native_lib.is_empty() && miri_config.provenance_mode == ProvenanceMode::Strict {
+        fatal_error!("strict provenance is not compatible with calling native functions");
     }
     // You can set either one seed or many.
     if many_seeds.is_some() && miri_config.seed.is_some() {
-        show_error!("Only one of `-Zmiri-seed` and `-Zmiri-many-seeds can be set");
+        fatal_error!("Only one of `-Zmiri-seed` and `-Zmiri-many-seeds can be set");
     }
 
     // Ensure we have parallelism for many-seeds mode.
@@ -751,24 +728,30 @@ fn main() {
     let many_seeds =
         many_seeds.map(|seeds| ManySeedsConfig { seeds, keep_going: many_seeds_keep_going });
 
-    // Validate settings for data race detection and GenMC mode.
-    assert_eq!(genmc_config.is_some(), miri_config.genmc_mode);
-    if genmc_config.is_some() {
-        if !miri_config.data_race_detector {
-            show_error!("Cannot disable data race detection in GenMC mode (currently)");
-        } else if !miri_config.weak_memory_emulation {
-            show_error!("Cannot disable weak memory emulation in GenMC mode");
-        }
-    } else if miri_config.weak_memory_emulation && !miri_config.data_race_detector {
-        show_error!(
+    if miri_config.weak_memory_emulation && !miri_config.data_race_detector {
+        fatal_error!(
             "Weak memory emulation cannot be enabled when the data race detector is disabled"
         );
     };
 
+    // Validate GenMC settings.
+    if miri_config.genmc_config.is_some()
+        && let Err(err) = GenmcConfig::validate(&mut miri_config)
+    {
+        fatal_error!("Invalid settings: {err}");
+    }
+
     debug!("rustc arguments: {:?}", rustc_args);
     debug!("crate arguments: {:?}", miri_config.args);
-    run_compiler_and_exit(
-        &rustc_args,
-        &mut MiriCompilerCalls::new(miri_config, many_seeds, genmc_config),
-    )
+    if !miri_config.native_lib.is_empty() && miri_config.native_lib_enable_tracing {
+        // SAFETY: No other threads are running
+        #[cfg(all(unix, feature = "native-lib"))]
+        if unsafe { miri::native_lib::init_sv() }.is_err() {
+            eprintln!(
+                "warning: The native-lib tracer could not be started. Is this an x86 Linux system, and does Miri have permissions to ptrace?\n\
+                Falling back to non-tracing native-lib mode."
+            );
+        }
+    }
+    run_compiler_and_exit(&rustc_args, &mut MiriCompilerCalls::new(miri_config, many_seeds))
 }

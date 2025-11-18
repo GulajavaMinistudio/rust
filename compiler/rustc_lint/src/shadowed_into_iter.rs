@@ -32,7 +32,7 @@ declare_lint! {
     "detects calling `into_iter` on arrays in Rust 2015 and 2018",
     @future_incompatible = FutureIncompatibleInfo {
         reason: FutureIncompatibilityReason::EditionSemanticsChange(Edition::Edition2021),
-        reference: "<https://doc.rust-lang.org/nightly/edition-guide/rust-2021/IntoIterator-for-arrays.html>",
+        reference: "<https://doc.rust-lang.org/edition-guide/rust-2021/IntoIterator-for-arrays.html>",
     };
 }
 
@@ -61,7 +61,7 @@ declare_lint! {
     "detects calling `into_iter` on boxed slices in Rust 2015, 2018, and 2021",
     @future_incompatible = FutureIncompatibleInfo {
         reason: FutureIncompatibilityReason::EditionSemanticsChange(Edition::Edition2024),
-        reference: "<https://doc.rust-lang.org/nightly/edition-guide/rust-2024/intoiterator-box-slice.html>"
+        reference: "<https://doc.rust-lang.org/edition-guide/rust-2024/intoiterator-box-slice.html>"
     };
 }
 
@@ -132,8 +132,8 @@ impl<'tcx> LateLintPass<'tcx> for ShadowedIntoIter {
             && let hir::ExprKind::Match(arg, [_], hir::MatchSource::ForLoopDesugar) =
                 &parent_expr.kind
             && let hir::ExprKind::Call(path, [_]) = &arg.kind
-            && let hir::ExprKind::Path(hir::QPath::LangItem(hir::LangItem::IntoIterIntoIter, ..)) =
-                &path.kind
+            && let hir::ExprKind::Path(qpath) = path.kind
+            && cx.tcx.qpath_is_lang_item(qpath, LangItem::IntoIterIntoIter)
         {
             Some(ShadowedIntoIterDiagSub::RemoveIntoIter {
                 span: receiver_arg.span.shrink_to_hi().to(expr.span.shrink_to_hi()),

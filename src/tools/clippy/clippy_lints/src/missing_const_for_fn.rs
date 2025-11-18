@@ -7,7 +7,7 @@ use rustc_abi::ExternAbi;
 use rustc_errors::Applicability;
 use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_hir::intravisit::FnKind;
-use rustc_hir::{self as hir, Body, Constness, FnDecl, GenericParamKind};
+use rustc_hir::{self as hir, Body, Constness, FnDecl, GenericParamKind, OwnerId};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty;
 use rustc_session::impl_lint_pass;
@@ -125,7 +125,7 @@ impl<'tcx> LateLintPass<'tcx> for MissingConstForFn {
                 }
             },
             FnKind::Method(_, sig, ..) => {
-                if already_const(sig.header) || trait_ref_of_method(cx, def_id).is_some() {
+                if already_const(sig.header) || trait_ref_of_method(cx, OwnerId { def_id }).is_some() {
                     return;
                 }
             },
@@ -155,16 +155,26 @@ impl<'tcx> LateLintPass<'tcx> for MissingConstForFn {
             return;
         }
 
-        let mir = cx.tcx.mir_drops_elaborated_and_const_checked(def_id);
+        let mir = cx.tcx.optimized_mir(def_id);
 
-        if let Ok(()) = is_min_const_fn(cx, &mir.borrow(), self.msrv)
-            && let hir::Node::Item(hir::Item { vis_span, .. }) | hir::Node::ImplItem(hir::ImplItem { vis_span, .. }) =
-                cx.tcx.hir_node_by_def_id(def_id)
+        if let Ok(()) = is_min_const_fn(cx, mir, self.msrv)
+            && let node = cx.tcx.hir_node_by_def_id(def_id)
+            && let Some((item_span, vis_span_opt)) = match node {
+                hir::Node::Item(item) => Some((item.span, Some(item.vis_span))),
+                hir::Node::ImplItem(impl_item) => Some((impl_item.span, impl_item.vis_span())),
+                _ => None,
+            }
         {
-            let suggestion = if vis_span.is_empty() { "const " } else { " const" };
+            let (sugg_span, suggestion) = if let Some(vis_span) = vis_span_opt
+                && !vis_span.is_empty()
+            {
+                (vis_span.shrink_to_hi(), " const")
+            } else {
+                (item_span.shrink_to_lo(), "const ")
+            };
             span_lint_and_then(cx, MISSING_CONST_FOR_FN, span, "this could be a `const fn`", |diag| {
                 diag.span_suggestion_verbose(
-                    vis_span.shrink_to_hi(),
+                    sugg_span,
                     "make the function `const`",
                     suggestion,
                     Applicability::MachineApplicable,

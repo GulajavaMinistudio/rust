@@ -1,10 +1,8 @@
+use either::Either;
 use ide_db::syntax_helpers::suggest_name;
-use syntax::{
-    ast::{self, AstNode, make},
-    ted,
-};
+use syntax::ast::{self, AstNode, syntax_factory::SyntaxFactory};
 
-use crate::{AssistContext, AssistId, Assists};
+use crate::{AssistContext, AssistId, Assists, utils::cover_let_chain};
 
 // Assist: replace_is_some_with_if_let_some
 //
@@ -27,9 +25,10 @@ pub(crate) fn replace_is_method_with_if_let_method(
     acc: &mut Assists,
     ctx: &AssistContext<'_>,
 ) -> Option<()> {
-    let if_expr = ctx.find_node_at_offset::<ast::IfExpr>()?;
+    let has_cond = ctx.find_node_at_offset::<Either<ast::IfExpr, ast::WhileExpr>>()?;
 
-    let cond = if_expr.condition()?;
+    let cond = either::for_both!(&has_cond, it => it.condition())?;
+    let cond = cover_let_chain(cond, ctx.selection_trimmed())?;
     let call_expr = match cond {
         ast::Expr::MethodCallExpr(call) => call,
         _ => return None,
@@ -41,7 +40,7 @@ pub(crate) fn replace_is_method_with_if_let_method(
             let receiver = call_expr.receiver()?;
 
             let mut name_generator = suggest_name::NameGenerator::new_from_scope_locals(
-                ctx.sema.scope(if_expr.syntax()),
+                ctx.sema.scope(has_cond.syntax()),
             );
             let var_name = if let ast::Expr::PathExpr(path_expr) = receiver.clone() {
                 name_generator.suggest_name(&path_expr.path()?.to_string())
@@ -50,9 +49,9 @@ pub(crate) fn replace_is_method_with_if_let_method(
             };
 
             let (assist_id, message, text) = if name_ref.text() == "is_some" {
-                ("replace_is_some_with_if_let_some", "Replace `is_some` with `if let Some`", "Some")
+                ("replace_is_some_with_if_let_some", "Replace `is_some` with `let Some`", "Some")
             } else {
-                ("replace_is_ok_with_if_let_ok", "Replace `is_ok` with `if let Ok`", "Ok")
+                ("replace_is_ok_with_if_let_ok", "Replace `is_ok` with `let Ok`", "Ok")
             };
 
             acc.add(
@@ -60,21 +59,24 @@ pub(crate) fn replace_is_method_with_if_let_method(
                 message,
                 call_expr.syntax().text_range(),
                 |edit| {
-                    let call_expr = edit.make_mut(call_expr);
+                    let make = SyntaxFactory::with_mappings();
+                    let mut editor = edit.make_editor(call_expr.syntax());
 
-                    let var_pat = make::ident_pat(false, false, make::name(&var_name));
-                    let pat = make::tuple_struct_pat(make::ext::ident_path(text), [var_pat.into()]);
-                    let let_expr = make::expr_let(pat.into(), receiver).clone_for_update();
+                    let var_pat = make.ident_pat(false, false, make.name(&var_name));
+                    let pat = make.tuple_struct_pat(make.ident_path(text), [var_pat.into()]);
+                    let let_expr = make.expr_let(pat.into(), receiver);
 
-                    if let Some(cap) = ctx.config.snippet_cap {
-                        if let Some(ast::Pat::TupleStructPat(pat)) = let_expr.pat() {
-                            if let Some(first_var) = pat.fields().next() {
-                                edit.add_placeholder_snippet(cap, first_var);
-                            }
-                        }
+                    if let Some(cap) = ctx.config.snippet_cap
+                        && let Some(ast::Pat::TupleStructPat(pat)) = let_expr.pat()
+                        && let Some(first_var) = pat.fields().next()
+                    {
+                        let placeholder = edit.make_placeholder_snippet(cap);
+                        editor.add_annotation(first_var.syntax(), placeholder);
                     }
 
-                    ted::replace(call_expr.syntax(), let_expr.syntax());
+                    editor.replace(call_expr.syntax(), let_expr.syntax());
+                    editor.add_mappings(make.finish_with_mappings());
+                    edit.add_file_edits(ctx.vfs_file_id(), editor);
                 },
             )
         }
@@ -187,6 +189,97 @@ fn main() {
 fn main() {
     let x = Ok(1);
     if x.is_e$0rr() {}
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn replace_is_some_with_if_let_some_in_let_chain() {
+        check_assist(
+            replace_is_method_with_if_let_method,
+            r#"
+fn main() {
+    let x = Some(1);
+    let cond = true;
+    if cond && x.is_som$0e() {}
+}
+"#,
+            r#"
+fn main() {
+    let x = Some(1);
+    let cond = true;
+    if cond && let Some(${0:x1}) = x {}
+}
+"#,
+        );
+
+        check_assist(
+            replace_is_method_with_if_let_method,
+            r#"
+fn main() {
+    let x = Some(1);
+    let cond = true;
+    if x.is_som$0e() && cond {}
+}
+"#,
+            r#"
+fn main() {
+    let x = Some(1);
+    let cond = true;
+    if let Some(${0:x1}) = x && cond {}
+}
+"#,
+        );
+
+        check_assist(
+            replace_is_method_with_if_let_method,
+            r#"
+fn main() {
+    let x = Some(1);
+    let cond = true;
+    if cond && x.is_som$0e() && cond {}
+}
+"#,
+            r#"
+fn main() {
+    let x = Some(1);
+    let cond = true;
+    if cond && let Some(${0:x1}) = x && cond {}
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn replace_is_some_with_while_let_some() {
+        check_assist(
+            replace_is_method_with_if_let_method,
+            r#"
+fn main() {
+    let mut x = Some(1);
+    while x.is_som$0e() { x = None }
+}
+"#,
+            r#"
+fn main() {
+    let mut x = Some(1);
+    while let Some(${0:x1}) = x { x = None }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn replace_is_some_with_if_let_some_not_applicable_after_l_curly() {
+        check_assist_not_applicable(
+            replace_is_method_with_if_let_method,
+            r#"
+fn main() {
+    let x = Some(1);
+    if x.is_some() {
+        ()$0
+    }
 }
 "#,
         );

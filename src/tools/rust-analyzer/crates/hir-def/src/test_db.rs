@@ -3,11 +3,11 @@
 use std::{fmt, panic, sync::Mutex};
 
 use base_db::{
-    Crate, CrateGraphBuilder, CratesMap, FileSourceRootInput, FileText, RootQueryDb,
+    Crate, CrateGraphBuilder, CratesMap, FileSourceRootInput, FileText, Nonce, RootQueryDb,
     SourceDatabase, SourceRoot, SourceRootId, SourceRootInput,
 };
 use hir_expand::{InFile, files::FilePosition};
-use salsa::{AsDynDatabase, Durability};
+use salsa::Durability;
 use span::FileId;
 use syntax::{AstNode, algo, ast};
 use triomphe::Arc;
@@ -15,26 +15,36 @@ use triomphe::Arc;
 use crate::{
     LocalModuleId, Lookup, ModuleDefId, ModuleId,
     db::DefDatabase,
-    nameres::{DefMap, ModuleSource},
+    nameres::{DefMap, ModuleSource, block_def_map, crate_def_map},
     src::HasSource,
 };
 
 #[salsa_macros::db]
-#[derive(Clone)]
 pub(crate) struct TestDB {
     storage: salsa::Storage<Self>,
     files: Arc<base_db::Files>,
     crates_map: Arc<CratesMap>,
     events: Arc<Mutex<Option<Vec<salsa::Event>>>>,
+    nonce: Nonce,
 }
 
 impl Default for TestDB {
     fn default() -> Self {
+        let events = <Arc<Mutex<Option<Vec<salsa::Event>>>>>::default();
         let mut this = Self {
-            storage: Default::default(),
-            events: Default::default(),
+            storage: salsa::Storage::new(Some(Box::new({
+                let events = events.clone();
+                move |event| {
+                    let mut events = events.lock().unwrap();
+                    if let Some(events) = &mut *events {
+                        events.push(event);
+                    }
+                }
+            }))),
+            events,
             files: Default::default(),
             crates_map: Default::default(),
+            nonce: Nonce::new(),
         };
         this.set_expand_proc_attr_macros_with_durability(true, Durability::HIGH);
         // This needs to be here otherwise `CrateGraphBuilder` panics.
@@ -44,16 +54,20 @@ impl Default for TestDB {
     }
 }
 
-#[salsa_macros::db]
-impl salsa::Database for TestDB {
-    fn salsa_event(&self, event: &dyn std::ops::Fn() -> salsa::Event) {
-        let mut events = self.events.lock().unwrap();
-        if let Some(events) = &mut *events {
-            let event = event();
-            events.push(event);
+impl Clone for TestDB {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            files: self.files.clone(),
+            crates_map: self.crates_map.clone(),
+            events: self.events.clone(),
+            nonce: Nonce::new(),
         }
     }
 }
+
+#[salsa_macros::db]
+impl salsa::Database for TestDB {}
 
 impl fmt::Debug for TestDB {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -116,6 +130,10 @@ impl SourceDatabase for TestDB {
     fn crates_map(&self) -> Arc<CratesMap> {
         self.crates_map.clone()
     }
+
+    fn nonce_and_revision(&self) -> (Nonce, salsa::Revision) {
+        (self.nonce, salsa::plumbing::ZalsaDatabase::zalsa(self).current_revision())
+    }
 }
 
 impl TestDB {
@@ -133,7 +151,7 @@ impl TestDB {
 
     pub(crate) fn module_for_file(&self, file_id: FileId) -> ModuleId {
         for &krate in self.relevant_crates(file_id).iter() {
-            let crate_def_map = self.crate_def_map(krate);
+            let crate_def_map = crate_def_map(self, krate);
             for (local_id, data) in crate_def_map.modules() {
                 if data.origin.file_id().map(|file_id| file_id.file_id(self)) == Some(file_id) {
                     return crate_def_map.module_id(local_id);
@@ -146,16 +164,16 @@ impl TestDB {
     pub(crate) fn module_at_position(&self, position: FilePosition) -> ModuleId {
         let file_module = self.module_for_file(position.file_id.file_id(self));
         let mut def_map = file_module.def_map(self);
-        let module = self.mod_at_position(&def_map, position);
+        let module = self.mod_at_position(def_map, position);
 
-        def_map = match self.block_at_position(&def_map, position) {
+        def_map = match self.block_at_position(def_map, position) {
             Some(it) => it,
             None => return def_map.module_id(module),
         };
         loop {
-            let new_map = self.block_at_position(&def_map, position);
+            let new_map = self.block_at_position(def_map, position);
             match new_map {
-                Some(new_block) if !Arc::ptr_eq(&new_block, &def_map) => {
+                Some(new_block) if !std::ptr::eq(&new_block, &def_map) => {
                     def_map = new_block;
                 }
                 _ => {
@@ -206,7 +224,7 @@ impl TestDB {
         res
     }
 
-    fn block_at_position(&self, def_map: &DefMap, position: FilePosition) -> Option<Arc<DefMap>> {
+    fn block_at_position(&self, def_map: &DefMap, position: FilePosition) -> Option<&DefMap> {
         // Find the smallest (innermost) function in `def_map` containing the cursor.
         let mut size = None;
         let mut fn_def = None;
@@ -263,7 +281,7 @@ impl TestDB {
             let mut containing_blocks =
                 scopes.scope_chain(Some(scope)).filter_map(|scope| scopes.block(scope));
 
-            if let Some(block) = containing_blocks.next().map(|block| self.block_def_map(block)) {
+            if let Some(block) = containing_blocks.next().map(|block| block_def_map(self, block)) {
                 return Some(block);
             }
         }
@@ -285,8 +303,7 @@ impl TestDB {
                 // This is pretty horrible, but `Debug` is the only way to inspect
                 // QueryDescriptor at the moment.
                 salsa::EventKind::WillExecute { database_key } => {
-                    let ingredient = self
-                        .as_dyn_database()
+                    let ingredient = (self as &dyn salsa::Database)
                         .ingredient_debug_name(database_key.ingredient_index());
                     Some(ingredient.to_string())
                 }

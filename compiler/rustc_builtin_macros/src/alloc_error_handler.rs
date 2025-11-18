@@ -1,4 +1,4 @@
-use rustc_ast::ptr::P;
+use rustc_ast::expand::allocator::{ALLOC_ERROR_HANDLER, global_fn_name};
 use rustc_ast::{
     self as ast, Fn, FnHeader, FnSig, Generics, ItemKind, Safety, Stmt, StmtKind, TyKind,
 };
@@ -43,10 +43,10 @@ pub(crate) fn expand(
 
     // Generate anonymous constant serving as container for the allocator methods.
     let const_ty = ecx.ty(sig_span, TyKind::Tup(ThinVec::new()));
-    let const_body = ecx.expr_block(ecx.block(span, stmts));
+    let const_body = ast::ConstItemRhs::Body(ecx.expr_block(ecx.block(span, stmts)));
     let const_item = ecx.item_const(span, Ident::new(kw::Underscore, span), const_ty, const_body);
     let const_item = if is_stmt {
-        Annotatable::Stmt(P(ecx.stmt_item(span, const_item)))
+        Annotatable::Stmt(Box::new(ecx.stmt_item(span, const_item)))
     } else {
         Annotatable::Item(const_item)
     };
@@ -56,14 +56,14 @@ pub(crate) fn expand(
 }
 
 // #[rustc_std_internal_symbol]
-// unsafe fn __rg_oom(size: usize, align: usize) -> ! {
+// unsafe fn __rust_alloc_error_handler(size: usize, align: usize) -> ! {
 //     handler(core::alloc::Layout::from_size_align_unchecked(size, align))
 // }
 fn generate_handler(cx: &ExtCtxt<'_>, handler: Ident, span: Span, sig_span: Span) -> Stmt {
     let usize = cx.path_ident(span, Ident::new(sym::usize, span));
     let ty_usize = cx.ty_path(usize);
-    let size = Ident::from_str_and_span("size", span);
-    let align = Ident::from_str_and_span("align", span);
+    let size = Ident::new(sym::size, span);
+    let align = Ident::new(sym::align, span);
 
     let layout_new = cx.std_path(&[sym::alloc, sym::Layout, sym::from_size_align_unchecked]);
     let layout_new = cx.expr_path(cx.path(span, layout_new));
@@ -85,7 +85,7 @@ fn generate_handler(cx: &ExtCtxt<'_>, handler: Ident, span: Span, sig_span: Span
     let kind = ItemKind::Fn(Box::new(Fn {
         defaultness: ast::Defaultness::Final,
         sig,
-        ident: Ident::from_str_and_span("__rg_oom", span),
+        ident: Ident::from_str_and_span(&global_fn_name(ALLOC_ERROR_HANDLER), span),
         generics: Generics::default(),
         contract: None,
         body,

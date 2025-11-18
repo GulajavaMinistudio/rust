@@ -24,11 +24,9 @@ pub fn setup(
     let ask_user = !only_setup;
     let print_sysroot = only_setup && has_arg_flag("--print-sysroot"); // whether we just print the sysroot path
     let show_setup = only_setup && !print_sysroot;
-    if !only_setup {
-        if let Some(sysroot) = std::env::var_os("MIRI_SYSROOT") {
-            // Skip setup step if MIRI_SYSROOT is explicitly set, *unless* we are `cargo miri setup`.
-            return sysroot.into();
-        }
+    if !only_setup && let Some(sysroot) = std::env::var_os("MIRI_SYSROOT") {
+        // Skip setup step if MIRI_SYSROOT is explicitly set, *unless* we are `cargo miri setup`.
+        return sysroot.into();
     }
 
     // Determine where the rust sources are located.  The env var trumps auto-detection.
@@ -85,7 +83,7 @@ pub fn setup(
         SysrootConfig::NoStd
     } else {
         SysrootConfig::WithStd {
-            std_features: ["panic_unwind", "backtrace"].into_iter().map(Into::into).collect(),
+            std_features: ["panic-unwind", "backtrace"].into_iter().map(Into::into).collect(),
         }
     };
     let cargo_cmd = {
@@ -162,7 +160,7 @@ pub fn setup(
 
     // Do the build.
     let status = SysrootBuilder::new(&sysroot_dir, target)
-        .build_mode(BuildMode::Check)
+        .build_mode(BuildMode::Build) // not a real build, since we use dummy codegen
         .rustc_version(rustc_version.clone())
         .sysroot_config(sysroot_config)
         .rustflags(rustflags)

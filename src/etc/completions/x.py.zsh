@@ -17,12 +17,12 @@ _x.py() {
     _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -31,7 +31,6 @@ _x.py() {
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -47,10 +46,12 @@ _x.py() {
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::paths -- paths for the subcommand:_files' \
@@ -68,12 +69,12 @@ _x.py() {
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -82,7 +83,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -90,6 +90,7 @@ _arguments "${_arguments_options[@]}" : \
 '*--reproducible-artifact=[Additional reproducible artifacts that should be added to the reproducible artifacts archive]:REPRODUCIBLE_ARTIFACT:_default' \
 '*--set=[override options in bootstrap.toml]:section.option=value:' \
 '--ci=[Make bootstrap to behave as it'\''s running on the CI environment or not]:bool:(true false)' \
+'--timings[Pass \`--timings\` to Cargo to get crate build timings]' \
 '*-v[use verbose output (-vv for very verbose)]' \
 '*--verbose[use verbose output (-vv for very verbose)]' \
 '-i[use incremental compilation]' \
@@ -98,10 +99,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -111,12 +114,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -125,7 +128,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -134,6 +136,7 @@ _arguments "${_arguments_options[@]}" : \
 '*--set=[override options in bootstrap.toml]:section.option=value:' \
 '--ci=[Make bootstrap to behave as it'\''s running on the CI environment or not]:bool:(true false)' \
 '--all-targets[Check all targets]' \
+'--timings[Pass \`--timings\` to Cargo to get crate build timings]' \
 '*-v[use verbose output (-vv for very verbose)]' \
 '*--verbose[use verbose output (-vv for very verbose)]' \
 '-i[use incremental compilation]' \
@@ -142,10 +145,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -159,12 +164,12 @@ _arguments "${_arguments_options[@]}" : \
 '*-F+[clippy lints to forbid]:LINT:_default' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -173,7 +178,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -192,10 +196,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -205,12 +211,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -219,7 +225,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -235,10 +240,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -248,12 +255,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -262,7 +269,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -280,10 +286,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -293,12 +301,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -307,7 +315,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -325,10 +332,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -338,18 +347,19 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '*--test-args=[extra arguments to be passed for the test tool being used (e.g. libtest, compiletest or rustdoc)]:ARGS:_default' \
 '*--compiletest-rustc-args=[extra options to pass the compiler when running compiletest tests]:ARGS:_default' \
-'--extra-checks=[comma-separated list of other files types to check (accepts py, py\:lint, py\:fmt, shell)]:EXTRA_CHECKS:_default' \
+'--extra-checks=[comma-separated list of other files types to check (accepts py, py\:lint, py\:fmt, shell, cpp, cpp\:fmt, js, js\:lint, js\:typecheck, spellcheck)]:EXTRA_CHECKS:_default' \
 '--compare-mode=[mode describing what file the actual ui output will be compared to]:COMPARE MODE:_default' \
 '--pass=[force {check,build,run}-pass tests to this mode]:check | build | run:_default' \
 '--run=[whether to execute run-* tests]:auto | always | never:_default' \
+'--test-codegen-backend=[Use a different codegen backend when running tests]:TEST_CODEGEN_BACKEND:_default' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -358,7 +368,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -374,6 +383,7 @@ _arguments "${_arguments_options[@]}" : \
 '--only-modified[only run tests that result has been changed]' \
 '--rustfix-coverage[enable this to generate a Rustfix coverage file, which is saved in \`/<build_base>/rustfix_missing_coverage.txt\`]' \
 '--no-capture[don'\''t capture stdout/stderr of tests]' \
+'--bypass-ignore-backends[Ignore \`//@ ignore-backends\` directives]' \
 '*-v[use verbose output (-vv for very verbose)]' \
 '*--verbose[use verbose output (-vv for very verbose)]' \
 '-i[use incremental compilation]' \
@@ -382,10 +392,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -396,12 +408,12 @@ _arguments "${_arguments_options[@]}" : \
 '*--test-args=[extra arguments to be passed for the test tool being used (e.g. libtest, compiletest or rustdoc)]:ARGS:_default' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -410,7 +422,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -429,10 +440,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -443,12 +456,12 @@ _arguments "${_arguments_options[@]}" : \
 '*--test-args=[]:TEST_ARGS:_default' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -457,7 +470,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -473,10 +485,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -487,12 +501,12 @@ _arguments "${_arguments_options[@]}" : \
 '--stage=[Clean a specific stage without touching other artifacts. By default, every stage is cleaned if this option is not used]:N:_default' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
 '*--keep-stage-std=[stage(s) of the standard library to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -500,7 +514,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -517,10 +530,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -530,12 +545,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -544,7 +559,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -560,10 +574,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -573,12 +589,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -587,7 +603,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -603,10 +618,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -617,12 +634,12 @@ _arguments "${_arguments_options[@]}" : \
 '*--args=[arguments for the tool]:ARGS:_default' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -631,7 +648,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -647,10 +663,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -660,12 +678,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -674,7 +692,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -690,57 +707,15 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::profile -- Either the profile for `bootstrap.toml` or another setup action. May be omitted to set up interactively:_files' \
-'*::paths -- paths for the subcommand:_files' \
-&& ret=0
-;;
-(suggest)
-_arguments "${_arguments_options[@]}" : \
-'--config=[TOML configuration file for build]:FILE:_files' \
-'--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
-'--host=[host targets to build]:HOST:' \
-'--target=[target targets to build]:TARGET:' \
-'*--exclude=[build paths to exclude]:PATH:_files' \
-'*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
-'--on-fail=[command to run on failure]:CMD:_cmdstring' \
-'--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
-'*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
-'*--keep-stage-std=[stage(s) of the standard library to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
-'--src=[path to the root of the rust checkout]:DIR:_files -/' \
-'-j+[number of jobs to run in parallel]:JOBS:' \
-'--jobs=[number of jobs to run in parallel]:JOBS:' \
-'--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
-'--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
-'--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
-'--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
-'--llvm-profile-use=[use PGO profile for LLVM build]:PROFILE:_files' \
-'*--reproducible-artifact=[Additional reproducible artifacts that should be added to the reproducible artifacts archive]:REPRODUCIBLE_ARTIFACT:_default' \
-'*--set=[override options in bootstrap.toml]:section.option=value:' \
-'--ci=[Make bootstrap to behave as it'\''s running on the CI environment or not]:bool:(true false)' \
-'--run[run suggested tests]' \
-'*-v[use verbose output (-vv for very verbose)]' \
-'*--verbose[use verbose output (-vv for very verbose)]' \
-'-i[use incremental compilation]' \
-'--incremental[use incremental compilation]' \
-'--include-default-paths[include default paths in addition to the provided ones]' \
-'--dry-run[dry run; don'\''t build anything]' \
-'--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
-'--json-output[use message-format=json]' \
-'--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
-'--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
-'--enable-bolt-settings[Enable BOLT link flags]' \
-'--skip-stage0-validation[Skip stage0 compiler validation]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
 && ret=0
 ;;
@@ -749,12 +724,12 @@ _arguments "${_arguments_options[@]}" : \
 '*--sync=[Additional \`Cargo.toml\` to sync and vendor]:SYNC:_files' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -763,7 +738,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -780,10 +754,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -793,12 +769,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -807,7 +783,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -823,10 +798,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::paths -- paths for the subcommand:_files' \
@@ -849,11 +826,11 @@ _arguments "${_arguments_options[@]}" : \
 '*--profiles=[Select the profiles that should be benchmarked]:PROFILES:(Check Debug Doc Opt Clippy)' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -862,7 +839,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -878,10 +854,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -895,11 +873,11 @@ _arguments "${_arguments_options[@]}" : \
 '*--profiles=[Select the profiles that should be benchmarked]:PROFILES:(Check Debug Doc Opt Clippy)' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -908,7 +886,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -924,10 +901,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -941,11 +920,11 @@ _arguments "${_arguments_options[@]}" : \
 '*--profiles=[Select the profiles that should be benchmarked]:PROFILES:(Check Debug Doc Opt Clippy)' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -954,7 +933,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -970,10 +948,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::paths -- paths for the subcommand:_files' \
@@ -987,11 +967,11 @@ _arguments "${_arguments_options[@]}" : \
 '*--profiles=[Select the profiles that should be benchmarked]:PROFILES:(Check Debug Doc Opt Clippy)' \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -1000,7 +980,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -1016,10 +995,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':benchmark-id -- Identifier to associate benchmark results with:_default' \
@@ -1030,12 +1011,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--config=[TOML configuration file for build]:FILE:_files' \
 '--build-dir=[Build directory, overrides \`build.build-dir\` in \`bootstrap.toml\`]:DIR:_files -/' \
-'--build=[build target of the stage0 compiler]:BUILD:' \
+'--build=[host target of the stage0 compiler]:BUILD:' \
 '--host=[host targets to build]:HOST:' \
 '--target=[target targets to build]:TARGET:' \
 '*--exclude=[build paths to exclude]:PATH:_files' \
 '*--skip=[build paths to skip]:PATH:_files' \
-'--rustc-error-format=[]:RUSTC_ERROR_FORMAT:' \
+'--rustc-error-format=[rustc error format]:RUSTC_ERROR_FORMAT:' \
 '--on-fail=[command to run on failure]:CMD:_cmdstring' \
 '--stage=[stage to build (indicates compiler to use/test, e.g., stage 0 uses the bootstrap compiler, stage 1 the stage 0 rustc artifacts, etc.)]:N:' \
 '*--keep-stage=[stage(s) to keep without recompiling (pass multiple times to keep e.g., both stages 0 and 1)]:N:' \
@@ -1044,7 +1025,6 @@ _arguments "${_arguments_options[@]}" : \
 '-j+[number of jobs to run in parallel]:JOBS:' \
 '--jobs=[number of jobs to run in parallel]:JOBS:' \
 '--warnings=[if value is deny, will deny warnings if value is warn, will emit warnings otherwise, use the default configured behaviour]:deny|warn:(deny warn default)' \
-'--error-format=[rustc error format]:FORMAT:' \
 '--color=[whether to use color in cargo and rustc output]:STYLE:(always never auto)' \
 '--rust-profile-generate=[generate PGO profile with rustc build]:PROFILE:_files' \
 '--rust-profile-use=[use PGO profile for rustc build]:PROFILE:_files' \
@@ -1060,10 +1040,12 @@ _arguments "${_arguments_options[@]}" : \
 '--dry-run[dry run; don'\''t build anything]' \
 '--dump-bootstrap-shims[Indicates whether to dump the work done from bootstrap shims]' \
 '--json-output[use message-format=json]' \
+'--compile-time-deps[only build proc-macros and build scripts (for rust-analyzer)]' \
 '--bypass-bootstrap-lock[Bootstrap uses this value to decide whether it should bypass locking the build process. This is rarely needed (e.g., compiling the std library for different targets in parallel)]' \
 '--llvm-profile-generate[generate PGO profile with llvm built for rustc]' \
 '--enable-bolt-settings[Enable BOLT link flags]' \
 '--skip-stage0-validation[Skip stage0 compiler validation]' \
+'--skip-std-check-if-no-download-rustc[Skip checking the standard library if \`rust.download-rustc\` isn'\''t available. This is mostly for RA as building the stage1 compiler to check the library tree on each code change might be too much for some computers]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':base -- The name of the base artifact to be compared:_default' \
@@ -1097,7 +1079,6 @@ _x.py_commands() {
 'install:Install distribution artifacts' \
 'run:Run tools contained in this repository' \
 'setup:Set up the environment for development' \
-'suggest:Suggest a subset of tests to run, based on modified files' \
 'vendor:Vendor dependencies' \
 'perf:Perform profiling and benchmarking of the compiler using \`rustc-perf\`' \
     )
@@ -1203,11 +1184,6 @@ _x.py__run_commands() {
 _x.py__setup_commands() {
     local commands; commands=()
     _describe -t commands 'x.py setup commands' commands "$@"
-}
-(( $+functions[_x.py__suggest_commands] )) ||
-_x.py__suggest_commands() {
-    local commands; commands=()
-    _describe -t commands 'x.py suggest commands' commands "$@"
 }
 (( $+functions[_x.py__test_commands] )) ||
 _x.py__test_commands() {

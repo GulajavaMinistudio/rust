@@ -1,11 +1,13 @@
 //! Ensure ABI-incompatible features cannot be enabled via `#[target_feature]`.
 //@ compile-flags: --target=riscv32e-unknown-none-elf --crate-type=lib
 //@ needs-llvm-components: riscv
-#![feature(no_core, lang_items, riscv_target_feature)]
+//@ ignore-backends: gcc
+//@ add-minicore
+#![feature(no_core, riscv_target_feature)]
 #![no_core]
 
-#[lang = "sized"]
-pub trait Sized {}
+extern crate minicore;
+use minicore::*;
 
 #[target_feature(enable = "d")]
 //~^ERROR: cannot be enabled with

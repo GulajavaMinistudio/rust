@@ -2,8 +2,8 @@
 use crate::{
     AstNode, NodeOrToken, SyntaxKind, SyntaxNode, SyntaxToken,
     ast::{
-        self, HasArgList, HasGenericArgs, HasGenericParams, HasLoopBody, HasName, HasTypeBounds,
-        HasVisibility, RangeItem, make,
+        self, HasArgList, HasAttrs, HasGenericArgs, HasGenericParams, HasLoopBody, HasName,
+        HasTypeBounds, HasVisibility, RangeItem, make,
     },
     syntax_editor::SyntaxMappingBuilder,
 };
@@ -107,8 +107,13 @@ impl SyntaxFactory {
         ast
     }
 
-    pub fn use_(&self, visibility: Option<ast::Visibility>, use_tree: ast::UseTree) -> ast::Use {
-        make::use_(visibility, use_tree).clone_for_update()
+    pub fn use_(
+        &self,
+        attrs: impl IntoIterator<Item = ast::Attr>,
+        visibility: Option<ast::Visibility>,
+        use_tree: ast::UseTree,
+    ) -> ast::Use {
+        make::use_(attrs, visibility, use_tree).clone_for_update()
     }
 
     pub fn use_tree(
@@ -440,6 +445,19 @@ impl SyntaxFactory {
         ast
     }
 
+    pub fn expr_assignment(&self, lhs: ast::Expr, rhs: ast::Expr) -> ast::BinExpr {
+        let ast = make::expr_assignment(lhs.clone(), rhs.clone()).clone_for_update();
+
+        if let Some(mut mapping) = self.mappings() {
+            let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_node(lhs.syntax().clone(), ast.lhs().unwrap().syntax().clone());
+            builder.map_node(rhs.syntax().clone(), ast.rhs().unwrap().syntax().clone());
+            builder.finish(&mut mapping);
+        }
+
+        ast
+    }
+
     pub fn expr_bin(&self, lhs: ast::Expr, op: ast::BinaryOp, rhs: ast::Expr) -> ast::BinExpr {
         let ast::Expr::BinExpr(ast) =
             make::expr_bin_op(lhs.clone(), op, rhs.clone()).clone_for_update()
@@ -585,6 +603,18 @@ impl SyntaxFactory {
         ast
     }
 
+    pub fn expr_underscore(&self) -> ast::UnderscoreExpr {
+        let ast::Expr::UnderscoreExpr(ast) = make::ext::expr_underscore().clone_for_update() else {
+            unreachable!()
+        };
+
+        if let Some(mut mapping) = self.mappings() {
+            SyntaxMappingBuilder::new(ast.syntax().clone()).finish(&mut mapping);
+        }
+
+        ast
+    }
+
     pub fn expr_if(
         &self,
         condition: ast::Expr,
@@ -608,6 +638,20 @@ impl SyntaxFactory {
                     ast.else_branch().unwrap().syntax().clone(),
                 );
             }
+            builder.finish(&mut mapping);
+        }
+
+        ast
+    }
+
+    pub fn expr_loop(&self, body: ast::BlockExpr) -> ast::LoopExpr {
+        let ast::Expr::LoopExpr(ast) = make::expr_loop(body.clone()).clone_for_update() else {
+            unreachable!()
+        };
+
+        if let Some(mut mapping) = self.mappings() {
+            let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_node(body.syntax().clone(), ast.loop_body().unwrap().syntax().clone());
             builder.finish(&mut mapping);
         }
 
@@ -815,16 +859,20 @@ impl SyntaxFactory {
 
     pub fn item_const(
         &self,
+        attrs: impl IntoIterator<Item = ast::Attr>,
         visibility: Option<ast::Visibility>,
         name: ast::Name,
         ty: ast::Type,
         expr: ast::Expr,
     ) -> ast::Const {
-        let ast = make::item_const(visibility.clone(), name.clone(), ty.clone(), expr.clone())
-            .clone_for_update();
+        let (attrs, attrs_input) = iterator_input(attrs);
+        let ast =
+            make::item_const(attrs, visibility.clone(), name.clone(), ty.clone(), expr.clone())
+                .clone_for_update();
 
         if let Some(mut mapping) = self.mappings() {
             let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_children(attrs_input, ast.attrs().map(|attr| attr.syntax().clone()));
             if let Some(visibility) = visibility {
                 builder.map_node(
                     visibility.syntax().clone(),
@@ -911,6 +959,24 @@ impl SyntaxFactory {
             builder.finish(&mut mapping);
         }
 
+        ast
+    }
+
+    pub fn record_expr(
+        &self,
+        path: ast::Path,
+        fields: ast::RecordExprFieldList,
+    ) -> ast::RecordExpr {
+        let ast = make::record_expr(path.clone(), fields.clone()).clone_for_update();
+        if let Some(mut mapping) = self.mappings() {
+            let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_node(path.syntax().clone(), ast.path().unwrap().syntax().clone());
+            builder.map_node(
+                fields.syntax().clone(),
+                ast.record_expr_field_list().unwrap().syntax().clone(),
+            );
+            builder.finish(&mut mapping);
+        }
         ast
     }
 
@@ -1024,6 +1090,7 @@ impl SyntaxFactory {
 
     pub fn item_enum(
         &self,
+        attrs: impl IntoIterator<Item = ast::Attr>,
         visibility: Option<ast::Visibility>,
         name: ast::Name,
         generic_param_list: Option<ast::GenericParamList>,
@@ -1031,6 +1098,7 @@ impl SyntaxFactory {
         variant_list: ast::VariantList,
     ) -> ast::Enum {
         let ast = make::enum_(
+            attrs,
             visibility.clone(),
             name.clone(),
             generic_param_list.clone(),
@@ -1139,6 +1207,7 @@ impl SyntaxFactory {
 
     pub fn fn_(
         &self,
+        attrs: impl IntoIterator<Item = ast::Attr>,
         visibility: Option<ast::Visibility>,
         fn_name: ast::Name,
         type_params: Option<ast::GenericParamList>,
@@ -1151,7 +1220,9 @@ impl SyntaxFactory {
         is_unsafe: bool,
         is_gen: bool,
     ) -> ast::Fn {
+        let (attrs, input) = iterator_input(attrs);
         let ast = make::fn_(
+            attrs,
             visibility.clone(),
             fn_name.clone(),
             type_params.clone(),
@@ -1167,6 +1238,7 @@ impl SyntaxFactory {
 
         if let Some(mut mapping) = self.mappings() {
             let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_children(input, ast.attrs().map(|attr| attr.syntax().clone()));
 
             if let Some(visibility) = visibility {
                 builder.map_node(
@@ -1194,6 +1266,43 @@ impl SyntaxFactory {
                     .map_node(ret_type.syntax().clone(), ast.ret_type().unwrap().syntax().clone());
             }
 
+            builder.finish(&mut mapping);
+        }
+
+        ast
+    }
+
+    pub fn attr_outer(&self, meta: ast::Meta) -> ast::Attr {
+        let ast = make::attr_outer(meta.clone()).clone_for_update();
+
+        if let Some(mut mapping) = self.mappings() {
+            let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_node(meta.syntax().clone(), ast.meta().unwrap().syntax().clone());
+            builder.finish(&mut mapping);
+        }
+
+        ast
+    }
+
+    pub fn attr_inner(&self, meta: ast::Meta) -> ast::Attr {
+        let ast = make::attr_inner(meta.clone()).clone_for_update();
+
+        if let Some(mut mapping) = self.mappings() {
+            let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_node(meta.syntax().clone(), ast.meta().unwrap().syntax().clone());
+            builder.finish(&mut mapping);
+        }
+
+        ast
+    }
+
+    pub fn meta_token_tree(&self, path: ast::Path, tt: ast::TokenTree) -> ast::Meta {
+        let ast = make::meta_token_tree(path.clone(), tt.clone()).clone_for_update();
+
+        if let Some(mut mapping) = self.mappings() {
+            let mut builder = SyntaxMappingBuilder::new(ast.syntax().clone());
+            builder.map_node(path.syntax().clone(), ast.path().unwrap().syntax().clone());
+            builder.map_node(tt.syntax().clone(), ast.token_tree().unwrap().syntax().clone());
             builder.finish(&mut mapping);
         }
 
@@ -1229,6 +1338,10 @@ impl SyntaxFactory {
 
     pub fn whitespace(&self, text: &str) -> SyntaxToken {
         make::tokens::whitespace(text)
+    }
+
+    pub fn ident(&self, text: &str) -> SyntaxToken {
+        make::tokens::ident(text)
     }
 }
 

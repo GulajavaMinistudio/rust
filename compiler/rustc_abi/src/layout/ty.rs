@@ -5,8 +5,8 @@ use rustc_data_structures::intern::Interned;
 use rustc_macros::HashStable_Generic;
 
 use crate::{
-    AbiAndPrefAlign, Align, BackendRepr, FieldsShape, Float, HasDataLayout, LayoutData, Niche,
-    PointeeInfo, Primitive, Scalar, Size, TargetDataLayout, Variants,
+    AbiAlign, Align, BackendRepr, FieldsShape, Float, HasDataLayout, LayoutData, Niche,
+    PointeeInfo, Primitive, Size, Variants,
 };
 
 // Explicitly import `Float` to avoid ambiguity with `Primitive::Float`.
@@ -39,6 +39,13 @@ rustc_index::newtype_index! {
     pub struct FieldIdx {}
 }
 
+impl FieldIdx {
+    /// The second field, at index 1.
+    ///
+    /// For use alongside [`FieldIdx::ZERO`], particularly with scalar pairs.
+    pub const ONE: FieldIdx = FieldIdx::from_u32(1);
+}
+
 rustc_index::newtype_index! {
     /// The *source-order* index of a variant in a type.
     ///
@@ -64,7 +71,7 @@ pub struct Layout<'a>(pub Interned<'a, LayoutData<FieldIdx, VariantIdx>>);
 
 impl<'a> fmt::Debug for Layout<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // See comment on `<LayoutS as Debug>::fmt` above.
+        // See comment on `<LayoutData as Debug>::fmt` above.
         self.0.0.fmt(f)
     }
 }
@@ -93,7 +100,7 @@ impl<'a> Layout<'a> {
         self.0.0.largest_niche
     }
 
-    pub fn align(self) -> AbiAndPrefAlign {
+    pub fn align(self) -> AbiAlign {
         self.0.0.align
     }
 
@@ -107,16 +114,6 @@ impl<'a> Layout<'a> {
 
     pub fn unadjusted_abi_align(self) -> Align {
         self.0.0.unadjusted_abi_align
-    }
-
-    /// Whether the layout is from a type that implements [`std::marker::PointerLike`].
-    ///
-    /// Currently, that means that the type is pointer-sized, pointer-aligned,
-    /// and has a initialized (non-union), scalar ABI.
-    pub fn is_pointer_like(self, data_layout: &TargetDataLayout) -> bool {
-        self.size() == data_layout.pointer_size
-            && self.align().abi == data_layout.pointer_align.abi
-            && matches!(self.backend_repr(), BackendRepr::Scalar(Scalar::Initialized { .. }))
     }
 }
 
@@ -175,6 +172,8 @@ pub trait TyAbiInterface<'a, C>: Sized + std::fmt::Debug {
     fn is_tuple(this: TyAndLayout<'a, Self>) -> bool;
     fn is_unit(this: TyAndLayout<'a, Self>) -> bool;
     fn is_transparent(this: TyAndLayout<'a, Self>) -> bool;
+    /// See [`TyAndLayout::pass_indirectly_in_non_rustic_abis`] for details.
+    fn is_pass_indirectly_in_non_rustic_abis_flag_set(this: TyAndLayout<'a, Self>) -> bool;
 }
 
 impl<'a, Ty> TyAndLayout<'a, Ty> {
@@ -272,9 +271,33 @@ impl<'a, Ty> TyAndLayout<'a, Ty> {
         Ty::is_transparent(self)
     }
 
+    /// If this method returns `true`, then this type should always have a `PassMode` of
+    /// `Indirect { on_stack: false, .. }` when being used as the argument type of a function with a
+    /// non-Rustic ABI (this is true for structs annotated with the
+    /// `#[rustc_pass_indirectly_in_non_rustic_abis]` attribute).
+    ///
+    /// This is used to replicate some of the behaviour of C array-to-pointer decay; however unlike
+    /// C any changes the caller makes to the passed value will not be reflected in the callee, so
+    /// the attribute is only useful for types where observing the value in the caller after the
+    /// function call isn't allowed (a.k.a. `va_list`).
+    ///
+    /// This function handles transparent types automatically.
+    pub fn pass_indirectly_in_non_rustic_abis<C>(mut self, cx: &C) -> bool
+    where
+        Ty: TyAbiInterface<'a, C> + Copy,
+    {
+        while self.is_transparent()
+            && let Some((_, field)) = self.non_1zst_field(cx)
+        {
+            self = field;
+        }
+
+        Ty::is_pass_indirectly_in_non_rustic_abis_flag_set(self)
+    }
+
     /// Finds the one field that is not a 1-ZST.
     /// Returns `None` if there are multiple non-1-ZST fields or only 1-ZST-fields.
-    pub fn non_1zst_field<C>(&self, cx: &C) -> Option<(usize, Self)>
+    pub fn non_1zst_field<C>(&self, cx: &C) -> Option<(FieldIdx, Self)>
     where
         Ty: TyAbiInterface<'a, C> + Copy,
     {
@@ -288,7 +311,7 @@ impl<'a, Ty> TyAndLayout<'a, Ty> {
                 // More than one non-1-ZST field.
                 return None;
             }
-            found = Some((field_idx, field));
+            found = Some((FieldIdx::from_usize(field_idx), field));
         }
         found
     }

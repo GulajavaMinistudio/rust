@@ -4,7 +4,7 @@ use ide_db::{
     FileId, RootDatabase, base_db::Crate, helpers::pick_best_token,
     syntax_helpers::prettify_macro_expansion,
 };
-use span::{Edition, SpanMap, SyntaxContext, TextRange, TextSize};
+use span::{SpanMap, SyntaxContext, TextRange, TextSize};
 use stdx::format_to;
 use syntax::{AstNode, NodeOrToken, SyntaxKind, SyntaxNode, T, ast, ted};
 
@@ -26,8 +26,9 @@ pub struct ExpandedMacro {
 // ![Expand Macro Recursively](https://user-images.githubusercontent.com/48062697/113020648-b3973180-917a-11eb-84a9-ecb921293dc5.gif)
 pub(crate) fn expand_macro(db: &RootDatabase, position: FilePosition) -> Option<ExpandedMacro> {
     let sema = Semantics::new(db);
-    let file = sema.parse_guess_edition(position.file_id);
-    let krate = sema.file_to_module_def(position.file_id)?.krate().into();
+    let file_id = sema.attach_first_edition(position.file_id)?;
+    let file = sema.parse(file_id);
+    let krate = sema.file_to_module_def(file_id.file_id(db))?.krate().into();
 
     let tok = pick_best_token(file.syntax().token_at_offset(position.offset), |kind| match kind {
         SyntaxKind::IDENT => 1,
@@ -86,56 +87,55 @@ pub(crate) fn expand_macro(db: &RootDatabase, position: FilePosition) -> Option<
         return derive;
     }
 
-    let mut anc = tok.parent_ancestors();
-    let mut span_map = SpanMap::empty();
-    let mut error = String::new();
-    let (name, expanded, kind) = loop {
-        let node = anc.next()?;
+    let syntax_token = sema.descend_into_macros_exact(tok);
+    'tokens: for syntax_token in syntax_token {
+        let mut anc = syntax_token.parent_ancestors();
+        let mut span_map = SpanMap::empty();
+        let mut error = String::new();
+        let (name, expanded, kind) = loop {
+            let Some(node) = anc.next() else {
+                continue 'tokens;
+            };
 
-        if let Some(item) = ast::Item::cast(node.clone()) {
-            if let Some(def) = sema.resolve_attr_macro_call(&item) {
+            if let Some(item) = ast::Item::cast(node.clone())
+                && let Some(def) = sema.resolve_attr_macro_call(&item)
+            {
                 break (
-                    def.name(db)
-                        .display(
-                            db,
-                            sema.attach_first_edition(position.file_id)
-                                .map(|it| it.edition(db))
-                                .unwrap_or(Edition::CURRENT),
-                        )
-                        .to_string(),
+                    def.name(db).display(db, file_id.edition(db)).to_string(),
                     expand_macro_recur(&sema, &item, &mut error, &mut span_map, TextSize::new(0))?,
                     SyntaxKind::MACRO_ITEMS,
                 );
             }
-        }
-        if let Some(mac) = ast::MacroCall::cast(node) {
-            let mut name = mac.path()?.segment()?.name_ref()?.to_string();
-            name.push('!');
-            let syntax_kind =
-                mac.syntax().parent().map(|it| it.kind()).unwrap_or(SyntaxKind::MACRO_ITEMS);
-            break (
-                name,
-                expand_macro_recur(
-                    &sema,
-                    &ast::Item::MacroCall(mac),
-                    &mut error,
-                    &mut span_map,
-                    TextSize::new(0),
-                )?,
-                syntax_kind,
-            );
-        }
-    };
+            if let Some(mac) = ast::MacroCall::cast(node) {
+                let mut name = mac.path()?.segment()?.name_ref()?.to_string();
+                name.push('!');
+                let syntax_kind =
+                    mac.syntax().parent().map(|it| it.kind()).unwrap_or(SyntaxKind::MACRO_ITEMS);
+                break (
+                    name,
+                    expand_macro_recur(
+                        &sema,
+                        &ast::Item::MacroCall(mac),
+                        &mut error,
+                        &mut span_map,
+                        TextSize::new(0),
+                    )?,
+                    syntax_kind,
+                );
+            }
+        };
 
-    // FIXME:
-    // macro expansion may lose all white space information
-    // But we hope someday we can use ra_fmt for that
-    let mut expansion = format(db, kind, position.file_id, expanded, &span_map, krate);
+        // FIXME:
+        // macro expansion may lose all white space information
+        // But we hope someday we can use ra_fmt for that
+        let mut expansion = format(db, kind, position.file_id, expanded, &span_map, krate);
 
-    if !error.is_empty() {
-        expansion.insert_str(0, &format!("Expansion had errors:{error}\n\n"));
+        if !error.is_empty() {
+            expansion.insert_str(0, &format!("Expansion had errors:{error}\n\n"));
+        }
+        return Some(ExpandedMacro { name, expansion });
     }
-    Some(ExpandedMacro { name, expansion })
+    None
 }
 
 fn expand_macro_recur(
@@ -146,10 +146,11 @@ fn expand_macro_recur(
     offset_in_original_node: TextSize,
 ) -> Option<SyntaxNode> {
     let ExpandResult { value: expanded, err } = match macro_call {
-        item @ ast::Item::MacroCall(macro_call) => {
-            sema.expand_attr_macro(item).or_else(|| sema.expand_allowed_builtins(macro_call))?
-        }
-        item => sema.expand_attr_macro(item)?,
+        item @ ast::Item::MacroCall(macro_call) => sema
+            .expand_attr_macro(item)
+            .map(|it| it.map(|it| it.value))
+            .or_else(|| sema.expand_allowed_builtins(macro_call))?,
+        item => sema.expand_attr_macro(item)?.map(|it| it.value),
     };
     let expanded = expanded.clone_for_update();
     if let Some(err) = err {
@@ -716,6 +717,151 @@ __log!(written:%; "Test"$0);
             expect![[r#"
                 __log!
             "#]],
+        );
+    }
+
+    #[test]
+    fn assoc_call() {
+        check(
+            r#"
+macro_rules! mac {
+    () => { fn assoc() {} }
+}
+impl () {
+    mac$0!();
+}
+    "#,
+            expect![[r#"
+                mac!
+                fn assoc(){}"#]],
+        );
+    }
+
+    #[test]
+    fn eager() {
+        check(
+            r#"
+//- minicore: concat
+macro_rules! my_concat {
+    ($head:expr, $($tail:tt)*) => { concat!($head, $($tail)*) };
+}
+
+
+fn test() {
+    _ = my_concat!(
+        conc$0at!("<", ">"),
+        "hi",
+    );
+}
+    "#,
+            expect![[r#"
+                concat!
+                "<>""#]],
+        );
+    }
+
+    #[test]
+    fn in_included() {
+        check(
+            r#"
+//- minicore: include
+//- /main.rs crate:main
+include!("./included.rs");
+//- /included.rs
+macro_rules! foo {
+    () => { fn item() {} };
+}
+foo$0!();
+"#,
+            expect![[r#"
+                foo!
+                fn item(){}"#]],
+        );
+    }
+
+    #[test]
+    fn include() {
+        check(
+            r#"
+//- minicore: include
+//- /main.rs crate:main
+include$0!("./included.rs");
+//- /included.rs
+macro_rules! foo {
+    () => { fn item() {} };
+}
+foo();
+"#,
+            expect![[r#"
+                include!
+                macro_rules! foo {
+                    () => {
+                        fn item(){}
+
+                    };
+                }
+                foo();"#]],
+        );
+    }
+
+    #[test]
+    fn works_in_sig() {
+        check(
+            r#"
+macro_rules! foo {
+    () => { u32 };
+}
+fn foo() -> foo$0!() {
+    42
+}
+"#,
+            expect![[r#"
+                foo!
+                u32"#]],
+        );
+        check(
+            r#"
+macro_rules! foo {
+    () => { u32 };
+}
+fn foo(_: foo$0!() ) {}
+"#,
+            expect![[r#"
+                foo!
+                u32"#]],
+        );
+    }
+
+    #[test]
+    fn works_in_generics() {
+        check(
+            r#"
+trait Trait {}
+macro_rules! foo {
+    () => { Trait };
+}
+impl<const C: foo$0!()> Trait for () {}
+"#,
+            expect![[r#"
+                foo!
+                Trait"#]],
+        );
+    }
+
+    #[test]
+    fn works_in_fields() {
+        check(
+            r#"
+macro_rules! foo {
+    () => { u32 };
+}
+struct S {
+    field: foo$0!(),
+}
+"#,
+            expect![[r#"
+                foo!
+                u32"#]],
         );
     }
 }

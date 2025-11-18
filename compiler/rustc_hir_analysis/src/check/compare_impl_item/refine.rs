@@ -164,7 +164,7 @@ pub(crate) fn check_refining_return_position_impl_trait_in_trait<'tcx>(
         param_env,
         trait_m_sig.inputs_and_output,
     ));
-    if !ocx.select_all_or_error().is_empty() {
+    if !ocx.evaluate_obligations_error_on_ambiguity().is_empty() {
         tcx.dcx().delayed_bug("encountered errors when checking RPITIT refinement (selection)");
         return;
     }
@@ -427,7 +427,7 @@ fn report_mismatched_rpitit_captures<'tcx>(
     };
 
     trait_captured_args
-        .sort_by_cached_key(|arg| !matches!(arg.unpack(), ty::GenericArgKind::Lifetime(_)));
+        .sort_by_cached_key(|arg| !matches!(arg.kind(), ty::GenericArgKind::Lifetime(_)));
     let suggestion = format!("use<{}>", trait_captured_args.iter().join(", "));
 
     tcx.emit_node_span_lint(

@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::fmt;
 
 use askama::Template;
 use rustc_data_structures::fx::FxHashSet;
@@ -12,6 +13,7 @@ use super::{Context, ItemSection, item_ty_to_section};
 use crate::clean;
 use crate::formats::Impl;
 use crate::formats::item_type::ItemType;
+use crate::html::format::{print_path, print_type};
 use crate::html::markdown::{IdMap, MarkdownWithToc};
 use crate::html::render::print_item::compare_names;
 
@@ -126,7 +128,7 @@ pub(crate) mod filters {
     use askama::filters::Safe;
 
     use crate::html::escape::EscapeBodyTextWithWbr;
-    pub(crate) fn wrapped<T>(v: T) -> askama::Result<Safe<impl Display>>
+    pub(crate) fn wrapped<T, V: askama::Values>(v: T, _: V) -> askama::Result<Safe<impl Display>>
     where
         T: Display,
     {
@@ -135,7 +137,11 @@ pub(crate) mod filters {
     }
 }
 
-pub(super) fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut String) {
+pub(super) fn print_sidebar(
+    cx: &Context<'_>,
+    it: &clean::Item,
+    mut buffer: impl fmt::Write,
+) -> fmt::Result {
     let mut ids = IdMap::new();
     let mut blocks: Vec<LinkBlock<'_>> = docblock_toc(cx, it, &mut ids).into_iter().collect();
     let deref_id_map = cx.deref_id_map.borrow();
@@ -195,7 +201,8 @@ pub(super) fn print_sidebar(cx: &Context<'_>, it: &clean::Item, buffer: &mut Str
         blocks,
         path,
     };
-    sidebar.render_into(buffer).unwrap();
+    sidebar.render_into(&mut buffer)?;
+    Ok(())
 }
 
 fn get_struct_fields_name<'a>(fields: &'a [clean::Item]) -> Vec<Link<'a>> {
@@ -535,7 +542,7 @@ fn sidebar_deref_methods<'a>(
                 .iter()
                 .filter(|i| {
                     i.inner_impl().trait_.is_none()
-                        && real_target.is_doc_subtype_of(&i.inner_impl().for_, &c)
+                        && real_target.is_doc_subtype_of(&i.inner_impl().for_, c)
                 })
                 .flat_map(|i| get_methods(i.inner_impl(), true, used_links, deref_mut, cx.tcx()))
                 .collect::<Vec<_>>();
@@ -552,8 +559,8 @@ fn sidebar_deref_methods<'a>(
                 };
                 let title = format!(
                     "Methods from {:#}<Target={:#}>",
-                    impl_.inner_impl().trait_.as_ref().unwrap().print(cx),
-                    real_target.print(cx),
+                    print_path(impl_.inner_impl().trait_.as_ref().unwrap(), cx),
+                    print_type(real_target, cx),
                 );
                 // We want links' order to be reproducible so we don't use unstable sort.
                 ret.sort();
@@ -593,7 +600,7 @@ fn sidebar_enum<'a>(
     deref_id_map: &'a DefIdMap<String>,
 ) {
     let mut variants = e
-        .variants()
+        .non_stripped_variants()
         .filter_map(|v| v.name)
         .map(|name| Link::new(format!("variant.{name}"), name.to_string()))
         .collect::<Vec<_>>();
@@ -684,7 +691,7 @@ fn sidebar_render_assoc_items(
                     ty::ImplPolarity::Positive | ty::ImplPolarity::Reservation => "",
                     ty::ImplPolarity::Negative => "!",
                 };
-                let generated = Link::new(encoded, format!("{prefix}{:#}", trait_.print(cx)));
+                let generated = Link::new(encoded, format!("{prefix}{:#}", print_path(trait_, cx)));
                 if links.insert(generated.clone()) { Some(generated) } else { None }
             })
             .collect::<Vec<Link<'static>>>();

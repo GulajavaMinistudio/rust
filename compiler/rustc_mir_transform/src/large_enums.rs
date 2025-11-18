@@ -126,8 +126,6 @@ impl<'tcx> crate::MirPass<'tcx> for EnumSizeOpt {
                     Rvalue::Cast(CastKind::PtrToPtr, Operand::Copy(src), src_cast_ty),
                 )));
 
-                let deinit_old = StatementKind::Deinit(Box::new(dst));
-
                 let copy_bytes = StatementKind::Intrinsic(Box::new(
                     NonDivergingIntrinsic::CopyNonOverlapping(CopyNonOverlapping {
                         src: Operand::Copy(src_cast_place),
@@ -148,7 +146,6 @@ impl<'tcx> crate::MirPass<'tcx> for EnumSizeOpt {
                     dst_cast,
                     src_ptr,
                     src_cast,
-                    deinit_old,
                     copy_bytes,
                     store_dead,
                 ];
@@ -156,7 +153,7 @@ impl<'tcx> crate::MirPass<'tcx> for EnumSizeOpt {
                     patch.add_statement(location, stmt);
                 }
 
-                st.make_nop();
+                st.make_nop(true);
             }
         }
 
@@ -241,6 +238,7 @@ impl EnumSizeOpt {
             data,
             tcx.data_layout.ptr_sized_integer().align(&tcx.data_layout).abi,
             Mutability::Not,
+            (),
         );
         let alloc = tcx.reserve_and_set_memory_alloc(tcx.mk_const_alloc(alloc));
         Some((*adt_def, num_discrs, *alloc_cache.entry(ty).or_insert(alloc)))

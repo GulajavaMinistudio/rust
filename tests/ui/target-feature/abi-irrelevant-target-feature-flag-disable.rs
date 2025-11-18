@@ -5,10 +5,12 @@
 //@ needs-llvm-components: x86
 //@ compile-flags: -Ctarget-feature=-x87
 //@ build-pass
-#![feature(no_core, lang_items)]
+//@ ignore-backends: gcc
+//@ add-minicore
+#![feature(no_core)]
 #![no_core]
 
-#[lang = "sized"]
-pub trait Sized {}
+extern crate minicore;
+use minicore::*;
 
 //~? WARN unstable feature specified for `-Ctarget-feature`: `x87`

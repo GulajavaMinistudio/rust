@@ -1,8 +1,7 @@
 use ide_db::assists::AssistId;
 use syntax::{
-    AstNode, T,
-    ast::{self, make},
-    ted,
+    AstNode, SyntaxToken, T,
+    ast::{self, syntax_factory::SyntaxFactory},
 };
 
 use crate::{AssistContext, Assists};
@@ -37,11 +36,10 @@ pub(crate) fn toggle_macro_delimiter(acc: &mut Assists, ctx: &AssistContext<'_>)
         RCur,
     }
 
-    let makro = ctx.find_node_at_offset::<ast::MacroCall>()?.clone_for_update();
-    let makro_text_range = makro.syntax().text_range();
+    let makro = ctx.find_node_at_offset::<ast::MacroCall>()?;
 
     let cursor_offset = ctx.offset();
-    let semicolon = makro.semicolon_token();
+    let semicolon = macro_semicolon(&makro);
     let token_tree = makro.token_tree()?;
 
     let ltoken = token_tree.left_delimiter_token()?;
@@ -71,26 +69,38 @@ pub(crate) fn toggle_macro_delimiter(acc: &mut Assists, ctx: &AssistContext<'_>)
         },
         token_tree.syntax().text_range(),
         |builder| {
+            let make = SyntaxFactory::with_mappings();
+            let mut editor = builder.make_editor(makro.syntax());
+
             match token {
                 MacroDelims::LPar | MacroDelims::RPar => {
-                    ted::replace(ltoken, make::token(T!['{']));
-                    ted::replace(rtoken, make::token(T!['}']));
+                    editor.replace(ltoken, make.token(T!['{']));
+                    editor.replace(rtoken, make.token(T!['}']));
                     if let Some(sc) = semicolon {
-                        ted::remove(sc);
+                        editor.delete(sc);
                     }
                 }
                 MacroDelims::LBra | MacroDelims::RBra => {
-                    ted::replace(ltoken, make::token(T!['(']));
-                    ted::replace(rtoken, make::token(T![')']));
+                    editor.replace(ltoken, make.token(T!['(']));
+                    editor.replace(rtoken, make.token(T![')']));
                 }
                 MacroDelims::LCur | MacroDelims::RCur => {
-                    ted::replace(ltoken, make::token(T!['[']));
-                    ted::replace(rtoken, make::token(T![']']));
+                    editor.replace(ltoken, make.token(T!['[']));
+                    editor.replace(rtoken, make.token(T![']']));
                 }
             }
-            builder.replace(makro_text_range, makro.syntax().text());
+            editor.add_mappings(make.finish_with_mappings());
+            builder.add_file_edits(ctx.vfs_file_id(), editor);
         },
     )
+}
+
+fn macro_semicolon(makro: &ast::MacroCall) -> Option<SyntaxToken> {
+    makro.semicolon_token().or_else(|| {
+        let macro_expr = ast::MacroExpr::cast(makro.syntax().parent()?)?;
+        let expr_stmt = ast::ExprStmt::cast(macro_expr.syntax().parent()?)?;
+        expr_stmt.semicolon_token()
+    })
 }
 
 #[cfg(test)]
@@ -117,7 +127,29 @@ macro_rules! sth {
 
 sth!{ }
             "#,
-        )
+        );
+
+        check_assist(
+            toggle_macro_delimiter,
+            r#"
+macro_rules! sth {
+    () => {};
+}
+
+fn foo() {
+    sth!$0( );
+}
+            "#,
+            r#"
+macro_rules! sth {
+    () => {};
+}
+
+fn foo() {
+    sth!{ }
+}
+            "#,
+        );
     }
 
     #[test]

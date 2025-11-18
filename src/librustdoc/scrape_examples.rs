@@ -18,7 +18,6 @@ use rustc_span::edition::Edition;
 use rustc_span::{BytePos, FileName, SourceFile};
 use tracing::{debug, trace, warn};
 
-use crate::formats::renderer::FormatRenderer;
 use crate::html::render::Context;
 use crate::{clean, config, formats};
 
@@ -274,9 +273,11 @@ pub(crate) fn run(
     bin_crate: bool,
 ) {
     let inner = move || -> Result<(), String> {
+        let emit_dep_info = renderopts.dep_info().is_some();
         // Generates source files for examples
         renderopts.no_emit_shared = true;
-        let (cx, _) = Context::init(krate, renderopts, cache, tcx).map_err(|e| e.to_string())?;
+        let (cx, _) = Context::init(krate, renderopts, cache, tcx, Default::default())
+            .map_err(|e| e.to_string())?;
 
         // Collect CrateIds corresponding to provided target crates
         // If two different versions of the crate in the dependency tree, then examples will be
@@ -320,6 +321,10 @@ pub(crate) fn run(
         calls.encode(&mut encoder);
         encoder.finish().map_err(|(_path, e)| e.to_string())?;
 
+        if emit_dep_info {
+            rustc_interface::passes::write_dep_info(tcx);
+        }
+
         Ok(())
     };
 
@@ -333,9 +338,11 @@ pub(crate) fn run(
 pub(crate) fn load_call_locations(
     with_examples: Vec<String>,
     dcx: DiagCtxtHandle<'_>,
+    loaded_paths: &mut Vec<PathBuf>,
 ) -> AllCallLocations {
     let mut all_calls: AllCallLocations = FxIndexMap::default();
     for path in with_examples {
+        loaded_paths.push(path.clone().into());
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(e) => dcx.fatal(format!("failed to load examples: {e}")),

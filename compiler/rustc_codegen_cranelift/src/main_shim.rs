@@ -93,7 +93,7 @@ pub(crate) fn maybe_create_entry_wrapper(
             let arg_argv = bcx.append_block_param(block, m.target_config().pointer_type());
             let arg_sigpipe = bcx.ins().iconst(types::I8, sigpipe as i64);
 
-            let main_func_ref = m.declare_func_in_func(main_func_id, &mut bcx.func);
+            let main_func_ref = m.declare_func_in_func(main_func_id, bcx.func);
 
             let result = if ignore_lang_start_wrapper {
                 // ignoring #[lang = "start"] as we are running in the jit
@@ -101,7 +101,7 @@ pub(crate) fn maybe_create_entry_wrapper(
                 let call_inst = bcx.ins().call(main_func_ref, &[]);
                 let call_results = bcx.func.dfg.inst_results(call_inst).to_owned();
 
-                let termination_trait = tcx.require_lang_item(LangItem::Termination, None);
+                let termination_trait = tcx.require_lang_item(LangItem::Termination, DUMMY_SP);
                 let report = tcx
                     .associated_items(termination_trait)
                     .find_by_ident_and_kind(
@@ -123,7 +123,7 @@ pub(crate) fn maybe_create_entry_wrapper(
                 let report_sig = get_function_sig(tcx, m.target_config().default_call_conv, report);
                 let report_func_id =
                     m.declare_function(report_name, Linkage::Import, &report_sig).unwrap();
-                let report_func_ref = m.declare_func_in_func(report_func_id, &mut bcx.func);
+                let report_func_ref = m.declare_func_in_func(report_func_id, bcx.func);
 
                 // FIXME do proper abi handling instead of expecting the pass mode to be identical
                 // for returns and arguments.
@@ -136,7 +136,7 @@ pub(crate) fn maybe_create_entry_wrapper(
                 }
             } else {
                 // Regular main fn invoked via start lang item.
-                let start_def_id = tcx.require_lang_item(LangItem::Start, None);
+                let start_def_id = tcx.require_lang_item(LangItem::Start, DUMMY_SP);
                 let start_instance = Instance::expect_resolve(
                     tcx,
                     ty::TypingEnv::fully_monomorphized(),
@@ -148,7 +148,7 @@ pub(crate) fn maybe_create_entry_wrapper(
 
                 let main_val = bcx.ins().func_addr(m.target_config().pointer_type(), main_func_ref);
 
-                let func_ref = m.declare_func_in_func(start_func_id, &mut bcx.func);
+                let func_ref = m.declare_func_in_func(start_func_id, bcx.func);
                 let call_inst =
                     bcx.ins().call(func_ref, &[main_val, arg_argc, arg_argv, arg_sigpipe]);
                 bcx.inst_results(call_inst)[0]

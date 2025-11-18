@@ -1,6 +1,6 @@
 use std::ops::ControlFlow;
 
-use rustc_infer::infer::RegionObligation;
+use rustc_infer::infer::TypeOutlivesConstraint;
 use rustc_infer::infer::canonical::CanonicalQueryInput;
 use rustc_infer::traits::query::OutlivesBound;
 use rustc_infer::traits::query::type_op::ImpliedOutlivesBounds;
@@ -55,6 +55,12 @@ pub fn compute_implied_outlives_bounds_inner<'tcx>(
     span: Span,
     disable_implied_bounds_hack: bool,
 ) -> Result<Vec<OutlivesBound<'tcx>>, NoSolution> {
+    // Inside mir borrowck, each computation starts with an empty list.
+    assert!(
+        ocx.infcx.inner.borrow().region_obligations().is_empty(),
+        "compute_implied_outlives_bounds assumes region obligations are empty before starting"
+    );
+
     let normalize_ty = |ty| -> Result<_, NoSolution> {
         // We must normalize the type so we can compute the right outlives components.
         // for example, if we have some constrained param type like `T: Trait<Out = U>`,
@@ -110,6 +116,7 @@ pub fn compute_implied_outlives_bounds_inner<'tcx>(
                 | ty::PredicateKind::ConstEquate(..)
                 | ty::PredicateKind::Ambiguous
                 | ty::PredicateKind::NormalizesTo(..)
+                | ty::PredicateKind::Clause(ty::ClauseKind::UnstableFeature(_))
                 | ty::PredicateKind::AliasRelate(..) => {}
 
                 // We need to search through *all* WellFormed predicates
@@ -141,8 +148,8 @@ pub fn compute_implied_outlives_bounds_inner<'tcx>(
         && !ocx.infcx.tcx.sess.opts.unstable_opts.no_implied_bounds_compat
         && ty.visit_with(&mut ContainsBevyParamSet { tcx: ocx.infcx.tcx }).is_break()
     {
-        for RegionObligation { sup_type, sub_region, .. } in
-            ocx.infcx.take_registered_region_obligations()
+        for TypeOutlivesConstraint { sup_type, sub_region, .. } in
+            ocx.infcx.clone_registered_region_obligations()
         {
             let mut components = smallvec![];
             push_outlives_components(ocx.infcx.tcx, sup_type, &mut components);

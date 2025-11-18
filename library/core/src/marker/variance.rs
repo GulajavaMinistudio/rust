@@ -2,6 +2,7 @@
 
 use super::PhantomData;
 use crate::any::type_name;
+use crate::clone::TrivialClone;
 use crate::cmp::Ordering;
 use crate::fmt;
 use crate::hash::{Hash, Hasher};
@@ -18,7 +19,7 @@ macro_rules! phantom_type {
         pub struct $name:ident <$t:ident> ($($inner:tt)*);
     )*) => {$(
         $(#[$attr])*
-        pub struct $name<$t>($($inner)*) where T: ?Sized;
+        pub struct $name<$t>($($inner)*) where $t: ?Sized;
 
         impl<T> $name<T>
             where T: ?Sized
@@ -59,6 +60,9 @@ macro_rules! phantom_type {
         }
 
         impl<T> Copy for $name<T> where T: ?Sized {}
+
+        #[doc(hidden)]
+        unsafe impl<T> TrivialClone for $name<T> where T: ?Sized {}
 
         impl<T> PartialEq for $name<T>
             where T: ?Sized
@@ -131,6 +135,8 @@ phantom_lifetime! {
     ///
     /// [1]: https://doc.rust-lang.org/stable/reference/subtyping.html#variance
     ///
+    /// Note: If `'a` is otherwise contravariant or invariant, the resulting type is invariant.
+    ///
     /// ## Layout
     ///
     /// For all `'a`, the following are guaranteed:
@@ -145,6 +151,8 @@ phantom_lifetime! {
     /// more information.
     ///
     /// [1]: https://doc.rust-lang.org/stable/reference/subtyping.html#variance
+    ///
+    /// Note: If `'a` is otherwise covariant or invariant, the resulting type is invariant.
     ///
     /// ## Layout
     ///
@@ -180,6 +188,8 @@ phantom_type! {
     ///
     /// [1]: https://doc.rust-lang.org/stable/reference/subtyping.html#variance
     ///
+    /// Note: If `T` is otherwise contravariant or invariant, the resulting type is invariant.
+    ///
     /// ## Layout
     ///
     /// For all `T`, the following are guaranteed:
@@ -195,6 +205,8 @@ phantom_type! {
     /// reference][1] for more information.
     ///
     /// [1]: https://doc.rust-lang.org/stable/reference/subtyping.html#variance
+    ///
+    /// Note: If `T` is otherwise covariant or invariant, the resulting type is invariant.
     ///
     /// ## Layout
     ///

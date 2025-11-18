@@ -227,7 +227,7 @@ impl dyn Any {
             // SAFETY: just checked whether we are pointing to the correct type, and we can rely on
             // that check for memory safety because we have implemented Any for all types; no other
             // impls can exist as they would conflict with our impl.
-            unsafe { Some(self.downcast_ref_unchecked()) }
+            unsafe { Some(self.downcast_unchecked_ref()) }
         } else {
             None
         }
@@ -263,7 +263,7 @@ impl dyn Any {
             // SAFETY: just checked whether we are pointing to the correct type, and we can rely on
             // that check for memory safety because we have implemented Any for all types; no other
             // impls can exist as they would conflict with our impl.
-            unsafe { Some(self.downcast_mut_unchecked()) }
+            unsafe { Some(self.downcast_unchecked_mut()) }
         } else {
             None
         }
@@ -281,7 +281,7 @@ impl dyn Any {
     /// let x: Box<dyn Any> = Box::new(1_usize);
     ///
     /// unsafe {
-    ///     assert_eq!(*x.downcast_ref_unchecked::<usize>(), 1);
+    ///     assert_eq!(*x.downcast_unchecked_ref::<usize>(), 1);
     /// }
     /// ```
     ///
@@ -291,7 +291,7 @@ impl dyn Any {
     /// with the incorrect type is *undefined behavior*.
     #[unstable(feature = "downcast_unchecked", issue = "90850")]
     #[inline]
-    pub unsafe fn downcast_ref_unchecked<T: Any>(&self) -> &T {
+    pub unsafe fn downcast_unchecked_ref<T: Any>(&self) -> &T {
         debug_assert!(self.is::<T>());
         // SAFETY: caller guarantees that T is the correct type
         unsafe { &*(self as *const dyn Any as *const T) }
@@ -309,7 +309,7 @@ impl dyn Any {
     /// let mut x: Box<dyn Any> = Box::new(1_usize);
     ///
     /// unsafe {
-    ///     *x.downcast_mut_unchecked::<usize>() += 1;
+    ///     *x.downcast_unchecked_mut::<usize>() += 1;
     /// }
     ///
     /// assert_eq!(*x.downcast_ref::<usize>().unwrap(), 2);
@@ -321,7 +321,7 @@ impl dyn Any {
     /// with the incorrect type is *undefined behavior*.
     #[unstable(feature = "downcast_unchecked", issue = "90850")]
     #[inline]
-    pub unsafe fn downcast_mut_unchecked<T: Any>(&mut self) -> &mut T {
+    pub unsafe fn downcast_unchecked_mut<T: Any>(&mut self) -> &mut T {
         debug_assert!(self.is::<T>());
         // SAFETY: caller guarantees that T is the correct type
         unsafe { &mut *(self as *mut dyn Any as *mut T) }
@@ -417,7 +417,7 @@ impl dyn Any + Send {
     /// let x: Box<dyn Any> = Box::new(1_usize);
     ///
     /// unsafe {
-    ///     assert_eq!(*x.downcast_ref_unchecked::<usize>(), 1);
+    ///     assert_eq!(*x.downcast_unchecked_ref::<usize>(), 1);
     /// }
     /// ```
     ///
@@ -427,9 +427,9 @@ impl dyn Any + Send {
     /// with the incorrect type is *undefined behavior*.
     #[unstable(feature = "downcast_unchecked", issue = "90850")]
     #[inline]
-    pub unsafe fn downcast_ref_unchecked<T: Any>(&self) -> &T {
+    pub unsafe fn downcast_unchecked_ref<T: Any>(&self) -> &T {
         // SAFETY: guaranteed by caller
-        unsafe { <dyn Any>::downcast_ref_unchecked::<T>(self) }
+        unsafe { <dyn Any>::downcast_unchecked_ref::<T>(self) }
     }
 
     /// Forwards to the method defined on the type `dyn Any`.
@@ -444,7 +444,7 @@ impl dyn Any + Send {
     /// let mut x: Box<dyn Any> = Box::new(1_usize);
     ///
     /// unsafe {
-    ///     *x.downcast_mut_unchecked::<usize>() += 1;
+    ///     *x.downcast_unchecked_mut::<usize>() += 1;
     /// }
     ///
     /// assert_eq!(*x.downcast_ref::<usize>().unwrap(), 2);
@@ -456,9 +456,9 @@ impl dyn Any + Send {
     /// with the incorrect type is *undefined behavior*.
     #[unstable(feature = "downcast_unchecked", issue = "90850")]
     #[inline]
-    pub unsafe fn downcast_mut_unchecked<T: Any>(&mut self) -> &mut T {
+    pub unsafe fn downcast_unchecked_mut<T: Any>(&mut self) -> &mut T {
         // SAFETY: guaranteed by caller
-        unsafe { <dyn Any>::downcast_mut_unchecked::<T>(self) }
+        unsafe { <dyn Any>::downcast_unchecked_mut::<T>(self) }
     }
 }
 
@@ -551,7 +551,7 @@ impl dyn Any + Send + Sync {
     /// let x: Box<dyn Any> = Box::new(1_usize);
     ///
     /// unsafe {
-    ///     assert_eq!(*x.downcast_ref_unchecked::<usize>(), 1);
+    ///     assert_eq!(*x.downcast_unchecked_ref::<usize>(), 1);
     /// }
     /// ```
     /// # Safety
@@ -560,9 +560,9 @@ impl dyn Any + Send + Sync {
     /// with the incorrect type is *undefined behavior*.
     #[unstable(feature = "downcast_unchecked", issue = "90850")]
     #[inline]
-    pub unsafe fn downcast_ref_unchecked<T: Any>(&self) -> &T {
+    pub unsafe fn downcast_unchecked_ref<T: Any>(&self) -> &T {
         // SAFETY: guaranteed by caller
-        unsafe { <dyn Any>::downcast_ref_unchecked::<T>(self) }
+        unsafe { <dyn Any>::downcast_unchecked_ref::<T>(self) }
     }
 
     /// Forwards to the method defined on the type `Any`.
@@ -577,7 +577,7 @@ impl dyn Any + Send + Sync {
     /// let mut x: Box<dyn Any> = Box::new(1_usize);
     ///
     /// unsafe {
-    ///     *x.downcast_mut_unchecked::<usize>() += 1;
+    ///     *x.downcast_unchecked_mut::<usize>() += 1;
     /// }
     ///
     /// assert_eq!(*x.downcast_ref::<usize>().unwrap(), 2);
@@ -588,9 +588,9 @@ impl dyn Any + Send + Sync {
     /// with the incorrect type is *undefined behavior*.
     #[unstable(feature = "downcast_unchecked", issue = "90850")]
     #[inline]
-    pub unsafe fn downcast_mut_unchecked<T: Any>(&mut self) -> &mut T {
+    pub unsafe fn downcast_unchecked_mut<T: Any>(&mut self) -> &mut T {
         // SAFETY: guaranteed by caller
-        unsafe { <dyn Any>::downcast_mut_unchecked::<T>(self) }
+        unsafe { <dyn Any>::downcast_unchecked_mut::<T>(self) }
     }
 }
 
@@ -610,6 +610,15 @@ impl dyn Any + Send + Sync {
 /// While `TypeId` implements `Hash`, `PartialOrd`, and `Ord`, it is worth
 /// noting that the hashes and ordering will vary between Rust releases. Beware
 /// of relying on them inside of your code!
+///
+/// # Layout
+///
+/// Like other [`Rust`-representation][repr-rust] types, `TypeId`'s size and layout are unstable.
+/// In particular, this means that you cannot rely on the size and layout of `TypeId` remaining the
+/// same between Rust releases; they are subject to change without prior notice between Rust
+/// releases.
+///
+/// [repr-rust]: https://doc.rust-lang.org/reference/type-layout.html#r-layout.repr.rust.unspecified
 ///
 /// # Danger of Improper Variance
 ///
@@ -705,21 +714,55 @@ impl dyn Any + Send + Sync {
 ///     std::mem::forget(fake_one_ring);
 /// }
 /// ```
-#[derive(Clone, Copy, Eq, PartialOrd, Ord)]
+#[derive(Copy, PartialOrd, Ord)]
+#[derive_const(Clone, Eq)]
 #[stable(feature = "rust1", since = "1.0.0")]
+#[lang = "type_id"]
 pub struct TypeId {
-    // We avoid using `u128` because that imposes higher alignment requirements on many platforms.
-    // See issue #115620 for more information.
-    t: (u64, u64),
-    #[cfg(feature = "debug_typeid")]
-    name: &'static str,
+    /// This needs to be an array of pointers, since there is provenance
+    /// in the first array field. This provenance knows exactly which type
+    /// the TypeId actually is, allowing CTFE and miri to operate based off it.
+    /// At runtime all the pointers in the array contain bits of the hash, making
+    /// the entire `TypeId` actually just be a `u128` hash of the type.
+    pub(crate) data: [*const (); 16 / size_of::<*const ()>()],
 }
 
+// SAFETY: the raw pointer is always an integer
 #[stable(feature = "rust1", since = "1.0.0")]
-impl PartialEq for TypeId {
+unsafe impl Send for TypeId {}
+// SAFETY: the raw pointer is always an integer
+#[stable(feature = "rust1", since = "1.0.0")]
+unsafe impl Sync for TypeId {}
+
+#[stable(feature = "rust1", since = "1.0.0")]
+#[rustc_const_unstable(feature = "const_cmp", issue = "143800")]
+impl const PartialEq for TypeId {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.t == other.t
+        #[cfg(miri)]
+        return crate::intrinsics::type_id_eq(*self, *other);
+        #[cfg(not(miri))]
+        {
+            let this = self;
+            crate::intrinsics::const_eval_select!(
+                @capture { this: &TypeId, other: &TypeId } -> bool:
+                if const {
+                    crate::intrinsics::type_id_eq(*this, *other)
+                } else {
+                    // Ideally we would just invoke `type_id_eq` unconditionally here,
+                    // but since we do not MIR inline intrinsics, because backends
+                    // may want to override them (and miri does!), MIR opts do not
+                    // clean up this call sufficiently for LLVM to turn repeated calls
+                    // of `TypeId` comparisons against one specific `TypeId` into
+                    // a lookup table.
+                    // SAFETY: We know that at runtime none of the bits have provenance and all bits
+                    // are initialized. So we can just convert the whole thing to a `u128` and compare that.
+                    unsafe {
+                        crate::mem::transmute::<_, u128>(*this) == crate::mem::transmute::<_, u128>(*other)
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -740,21 +783,21 @@ impl TypeId {
     /// ```
     #[must_use]
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_unstable(feature = "const_type_id", issue = "77125")]
+    #[rustc_const_stable(feature = "const_type_id", since = "1.91.0")]
     pub const fn of<T: ?Sized + 'static>() -> TypeId {
-        let t: u128 = intrinsics::type_id::<T>();
-        let t1 = (t >> 64) as u64;
-        let t2 = t as u64;
-
-        TypeId {
-            t: (t1, t2),
-            #[cfg(feature = "debug_typeid")]
-            name: type_name::<T>(),
-        }
+        const { intrinsics::type_id::<T>() }
     }
 
     fn as_u128(self) -> u128 {
-        u128::from(self.t.0) << 64 | u128::from(self.t.1)
+        let mut bytes = [0; 16];
+
+        // This is a provenance-stripping memcpy.
+        for (i, chunk) in self.data.iter().copied().enumerate() {
+            let chunk = chunk.addr().to_ne_bytes();
+            let start = i * chunk.len();
+            bytes[start..(start + chunk.len())].copy_from_slice(&chunk);
+        }
+        u128::from_ne_bytes(bytes)
     }
 }
 
@@ -774,22 +817,19 @@ impl hash::Hash for TypeId {
         // - It is correct to do so -- only hashing a subset of `self` is still
         //   compatible with an `Eq` implementation that considers the entire
         //   value, as ours does.
-        self.t.1.hash(state);
+        let data =
+        // SAFETY: The `offset` stays in-bounds, it just moves the pointer to the 2nd half of the `TypeId`.
+        // Only the first ptr-sized chunk ever has provenance, so that second half is always
+        // fine to read at integer type.
+            unsafe { crate::ptr::read_unaligned(self.data.as_ptr().cast::<u64>().offset(1)) };
+        data.hash(state);
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Debug for TypeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        #[cfg(feature = "debug_typeid")]
-        {
-            write!(f, "TypeId({:#034x} = {})", self.as_u128(), self.name)?;
-        }
-        #[cfg(not(feature = "debug_typeid"))]
-        {
-            write!(f, "TypeId({:#034x})", self.as_u128())?;
-        }
-        Ok(())
+        write!(f, "TypeId({:#034x})", self.as_u128())
     }
 }
 
@@ -805,9 +845,9 @@ impl fmt::Debug for TypeId {
 ///
 /// The returned string must not be considered to be a unique identifier of a
 /// type as multiple types may map to the same type name. Similarly, there is no
-/// guarantee that all parts of a type will appear in the returned string: for
-/// example, lifetime specifiers are currently not included. In addition, the
-/// output may change between versions of the compiler.
+/// guarantee that all parts of a type will appear in the returned string. In
+/// addition, the output may change between versions of the compiler. For
+/// example, lifetime specifiers were omitted in some earlier versions.
 ///
 /// The current implementation uses the same infrastructure as compiler
 /// diagnostics and debuginfo, but this is not guaranteed.
@@ -824,7 +864,7 @@ impl fmt::Debug for TypeId {
 #[stable(feature = "type_name", since = "1.38.0")]
 #[rustc_const_unstable(feature = "const_type_name", issue = "63084")]
 pub const fn type_name<T: ?Sized>() -> &'static str {
-    intrinsics::type_name::<T>()
+    const { intrinsics::type_name::<T>() }
 }
 
 /// Returns the type name of the pointed-to value as a string slice.

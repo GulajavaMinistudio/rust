@@ -332,7 +332,11 @@ pub enum ObligationCauseCode<'tcx> {
     },
 
     /// Computing common supertype in an if expression
-    IfExpression(Box<IfExpressionCause<'tcx>>),
+    IfExpression {
+        expr_id: HirId,
+        // Is the expectation of this match expression an RPIT?
+        tail_defines_return_position_impl_trait: Option<LocalDefId>,
+    },
 
     /// Computing common supertype of an if expression with no else counter-part
     IfExpressionWithNoElse,
@@ -385,10 +389,14 @@ pub enum ObligationCauseCode<'tcx> {
     /// against.
     MatchImpl(ObligationCause<'tcx>, DefId),
 
+    UnOp {
+        hir_id: HirId,
+    },
+
     BinOp {
         lhs_hir_id: HirId,
-        rhs_hir_id: Option<HirId>,
-        rhs_span: Option<Span>,
+        rhs_hir_id: HirId,
+        rhs_span: Span,
         rhs_is_lit: bool,
         output_ty: Option<Ty<'tcx>>,
     },
@@ -396,6 +404,8 @@ pub enum ObligationCauseCode<'tcx> {
     AscribeUserTypeProvePredicate(Span),
 
     RustCall,
+
+    DynCompatible(Span),
 
     /// Obligations to prove that a `Drop` or negative auto trait impl is not stronger than
     /// the ADT it's being implemented for.
@@ -406,6 +416,10 @@ pub enum ObligationCauseCode<'tcx> {
 
     /// Obligations emitted during the normalization of a free type alias.
     TypeAlias(ObligationCauseCodeHandle<'tcx>, Span, DefId),
+
+    /// Only reachable if the `unsized_fn_params` feature is used. Unsized function arguments must
+    /// be place expressions because we can't store them in MIR locals as temporaries.
+    UnsizedNonPlaceExpr(Span),
 }
 
 /// Whether a value can be extracted into a const.
@@ -546,18 +560,6 @@ pub struct PatternOriginExpr {
     /// Does the peeled expression need to be wrapped in parentheses for
     /// a prefix suggestion (i.e., dereference) to be valid.
     pub peeled_prefix_suggestion_parentheses: bool,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[derive(TypeFoldable, TypeVisitable, HashStable, TyEncodable, TyDecodable)]
-pub struct IfExpressionCause<'tcx> {
-    pub then_id: HirId,
-    pub else_id: HirId,
-    pub then_ty: Ty<'tcx>,
-    pub else_ty: Ty<'tcx>,
-    pub outer_span: Option<Span>,
-    // Is the expectation of this match expression an RPIT?
-    pub tail_defines_return_position_impl_trait: Option<LocalDefId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, HashStable, TyEncodable, TyDecodable)]
@@ -762,6 +764,9 @@ pub enum DynCompatibilityViolation {
     // Supertrait has a non-lifetime `for<T>` binder.
     SupertraitNonLifetimeBinder(SmallVec<[Span; 1]>),
 
+    // Trait has a `const Trait` supertrait.
+    SupertraitConst(SmallVec<[Span; 1]>),
+
     /// Method has something illegal.
     Method(Symbol, MethodViolationCode, Span),
 
@@ -786,6 +791,9 @@ impl DynCompatibilityViolation {
             }
             DynCompatibilityViolation::SupertraitNonLifetimeBinder(_) => {
                 "where clause cannot reference non-lifetime `for<...>` variables".into()
+            }
+            DynCompatibilityViolation::SupertraitConst(_) => {
+                "it cannot have a `const` supertrait".into()
             }
             DynCompatibilityViolation::Method(name, MethodViolationCode::StaticMethod(_), _) => {
                 format!("associated function `{name}` has no `self` parameter").into()
@@ -814,6 +822,9 @@ impl DynCompatibilityViolation {
             }
             DynCompatibilityViolation::Method(name, MethodViolationCode::AsyncFn, _) => {
                 format!("method `{name}` is `async`").into()
+            }
+            DynCompatibilityViolation::Method(name, MethodViolationCode::CVariadic, _) => {
+                format!("method `{name}` is C-variadic").into()
             }
             DynCompatibilityViolation::Method(
                 name,
@@ -844,7 +855,8 @@ impl DynCompatibilityViolation {
         match self {
             DynCompatibilityViolation::SizedSelf(_)
             | DynCompatibilityViolation::SupertraitSelf(_)
-            | DynCompatibilityViolation::SupertraitNonLifetimeBinder(..) => {
+            | DynCompatibilityViolation::SupertraitNonLifetimeBinder(..)
+            | DynCompatibilityViolation::SupertraitConst(_) => {
                 DynCompatibilityViolationSolution::None
             }
             DynCompatibilityViolation::Method(
@@ -875,15 +887,17 @@ impl DynCompatibilityViolation {
         match self {
             DynCompatibilityViolation::SupertraitSelf(spans)
             | DynCompatibilityViolation::SizedSelf(spans)
-            | DynCompatibilityViolation::SupertraitNonLifetimeBinder(spans) => spans.clone(),
+            | DynCompatibilityViolation::SupertraitNonLifetimeBinder(spans)
+            | DynCompatibilityViolation::SupertraitConst(spans) => spans.clone(),
             DynCompatibilityViolation::AssocConst(_, span)
             | DynCompatibilityViolation::GAT(_, span)
-            | DynCompatibilityViolation::Method(_, _, span)
-                if *span != DUMMY_SP =>
-            {
-                smallvec![*span]
+            | DynCompatibilityViolation::Method(_, _, span) => {
+                if *span != DUMMY_SP {
+                    smallvec![*span]
+                } else {
+                    smallvec![]
+                }
             }
-            _ => smallvec![],
         }
     }
 }
@@ -965,6 +979,9 @@ pub enum MethodViolationCode {
 
     /// e.g., `fn foo<A>()`
     Generic,
+
+    /// e.g., `fn (mut ap: ...)`
+    CVariadic,
 
     /// the method's receiver (`self` argument) can't be dispatched on
     UndispatchableReceiver(Option<Span>),

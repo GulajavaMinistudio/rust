@@ -1,4 +1,5 @@
 use std::io;
+use std::io::ErrorKind;
 
 use crate::*;
 
@@ -12,6 +13,29 @@ pub enum IoError {
     Raw(Scalar),
 }
 pub use self::IoError::*;
+
+impl IoError {
+    pub(crate) fn into_ntstatus(self) -> i32 {
+        let raw = match self {
+            HostError(e) =>
+                match e.kind() {
+                    // STATUS_MEDIA_WRITE_PROTECTED
+                    ErrorKind::ReadOnlyFilesystem => 0xC00000A2u32,
+                    // STATUS_FILE_INVALID
+                    ErrorKind::InvalidInput => 0xC0000098,
+                    // STATUS_DISK_FULL
+                    ErrorKind::QuotaExceeded => 0xC000007F,
+                    // STATUS_ACCESS_DENIED
+                    ErrorKind::PermissionDenied => 0xC0000022,
+                    // For the default error code we arbitrarily pick 0xC0000185, STATUS_IO_DEVICE_ERROR.
+                    _ => 0xC0000185,
+                },
+            // For the default error code we arbitrarily pick 0xC0000185, STATUS_IO_DEVICE_ERROR.
+            _ => 0xC0000185,
+        };
+        raw.cast_signed()
+    }
+}
 
 impl From<io::Error> for IoError {
     fn from(value: io::Error) -> Self {
@@ -32,7 +56,7 @@ impl From<Scalar> for IoError {
 }
 
 // This mapping should match `decode_error_kind` in
-// <https://github.com/rust-lang/rust/blob/master/library/std/src/sys/pal/unix/mod.rs>.
+// <https://github.com/rust-lang/rust/blob/HEAD/library/std/src/sys/pal/unix/mod.rs>.
 const UNIX_IO_ERROR_TABLE: &[(&str, std::io::ErrorKind)] = {
     use std::io::ErrorKind::*;
     &[
@@ -79,7 +103,7 @@ const UNIX_IO_ERROR_TABLE: &[(&str, std::io::ErrorKind)] = {
     ]
 };
 // This mapping should match `decode_error_kind` in
-// <https://github.com/rust-lang/rust/blob/master/library/std/src/sys/pal/windows/mod.rs>.
+// <https://github.com/rust-lang/rust/blob/HEAD/library/std/src/sys/pal/windows/mod.rs>.
 const WINDOWS_IO_ERROR_TABLE: &[(&str, std::io::ErrorKind)] = {
     use std::io::ErrorKind::*;
     // It's common for multiple error codes to map to the same io::ErrorKind. We have all for the

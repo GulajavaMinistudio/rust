@@ -104,10 +104,10 @@ impl<'tcx> Visitor<'tcx> for ReachableContext<'tcx> {
 
     fn visit_inline_asm(&mut self, asm: &'tcx hir::InlineAsm<'tcx>, id: hir::HirId) {
         for (op, _) in asm.operands {
-            if let hir::InlineAsmOperand::SymStatic { def_id, .. } = op {
-                if let Some(def_id) = def_id.as_local() {
-                    self.reachable_symbols.insert(def_id);
-                }
+            if let hir::InlineAsmOperand::SymStatic { def_id, .. } = op
+                && let Some(def_id) = def_id.as_local()
+            {
+                self.reachable_symbols.insert(def_id);
             }
         }
         intravisit::walk_inline_asm(self, asm, id);
@@ -217,7 +217,7 @@ impl<'tcx> ReachableContext<'tcx> {
                             // We can't figure out which value the constant will evaluate to. In
                             // lieu of that, we have to consider everything mentioned in the const
                             // initializer reachable, since it *may* end up in the final value.
-                            Err(ErrorHandled::TooGeneric(_)) => self.visit_nested_body(init),
+                            Err(ErrorHandled::TooGeneric(_)) => self.visit_const_item_rhs(init),
                             // If there was an error evaluating the const, nothing can be reachable
                             // via it, and anyway compilation will fail.
                             Err(ErrorHandled::Reported(..)) => {}
@@ -253,16 +253,16 @@ impl<'tcx> ReachableContext<'tcx> {
                     | hir::TraitItemKind::Fn(_, hir::TraitFn::Required(_)) => {
                         // Keep going, nothing to get exported
                     }
-                    hir::TraitItemKind::Const(_, Some(body_id))
-                    | hir::TraitItemKind::Fn(_, hir::TraitFn::Provided(body_id)) => {
+                    hir::TraitItemKind::Const(_, Some(rhs)) => self.visit_const_item_rhs(rhs),
+                    hir::TraitItemKind::Fn(_, hir::TraitFn::Provided(body_id)) => {
                         self.visit_nested_body(body_id);
                     }
                     hir::TraitItemKind::Type(..) => {}
                 }
             }
             Node::ImplItem(impl_item) => match impl_item.kind {
-                hir::ImplItemKind::Const(_, body) => {
-                    self.visit_nested_body(body);
+                hir::ImplItemKind::Const(_, rhs) => {
+                    self.visit_const_item_rhs(rhs);
                 }
                 hir::ImplItemKind::Fn(_, body) => {
                     if recursively_reachable(self.tcx, impl_item.hir_id().owner.to_def_id()) {
@@ -325,6 +325,7 @@ impl<'tcx> ReachableContext<'tcx> {
                         self.visit(args);
                     }
                 }
+                GlobalAlloc::TypeId { ty, .. } => self.visit(ty),
                 GlobalAlloc::Memory(alloc) => self.propagate_from_alloc(alloc),
             }
         }
@@ -403,9 +404,7 @@ fn check_item<'tcx>(
     let items = tcx.associated_item_def_ids(id.owner_id);
     worklist.extend(items.iter().map(|ii_ref| ii_ref.expect_local()));
 
-    let Some(trait_def_id) = tcx.trait_id_of_impl(id.owner_id.to_def_id()) else {
-        unreachable!();
-    };
+    let trait_def_id = tcx.impl_trait_id(id.owner_id.to_def_id());
 
     if !trait_def_id.is_local() {
         return;
@@ -422,12 +421,13 @@ fn has_custom_linkage(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     if !tcx.def_kind(def_id).has_codegen_attrs() {
         return false;
     }
+
     let codegen_attrs = tcx.codegen_fn_attrs(def_id);
     codegen_attrs.contains_extern_indicator()
         // FIXME(nbdd0121): `#[used]` are marked as reachable here so it's picked up by
         // `linked_symbols` in cg_ssa. They won't be exported in binary or cdylib due to their
         // `SymbolExportLevel::Rust` export level but may end up being exported in dylibs.
-        || codegen_attrs.flags.contains(CodegenFnAttrFlags::USED)
+        || codegen_attrs.flags.contains(CodegenFnAttrFlags::USED_COMPILER)
         || codegen_attrs.flags.contains(CodegenFnAttrFlags::USED_LINKER)
 }
 

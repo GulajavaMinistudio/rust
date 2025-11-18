@@ -11,7 +11,7 @@
 /// This destructor consists of two components:
 /// - A call to `Drop::drop` for that value, if this special `Drop` trait is implemented for its type.
 /// - The automatically generated "drop glue" which recursively calls the destructors
-///     of all the fields of this value.
+///   of all the fields of this value.
 ///
 /// As Rust automatically calls the destructors of all contained fields,
 /// you don't have to implement `Drop` in most cases. But there are some cases where
@@ -203,9 +203,8 @@
 /// [nomicon]: ../../nomicon/phantom-data.html#an-exception-the-special-case-of-the-standard-library-and-its-unstable-may_dangle
 #[lang = "drop"]
 #[stable(feature = "rust1", since = "1.0.0")]
-#[const_trait]
 #[rustc_const_unstable(feature = "const_destruct", issue = "133214")]
-pub trait Drop {
+pub const trait Drop {
     /// Executes the destructor for this type.
     ///
     /// This method is called implicitly when the value goes out of scope,

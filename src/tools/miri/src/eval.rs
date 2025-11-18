@@ -1,6 +1,7 @@
 //! Main evaluator loop and setting up the initial stack frame.
 
 use std::ffi::{OsStr, OsString};
+use std::num::NonZeroI32;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -11,14 +12,15 @@ use rustc_abi::ExternAbi;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::def::Namespace;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
+use rustc_middle::ty::layout::{HasTyCtxt, HasTypingEnv, LayoutCx};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::config::EntryFnType;
+use rustc_target::spec::Os;
 
 use crate::concurrency::GenmcCtx;
 use crate::concurrency::thread::TlsAllocAction;
 use crate::diagnostics::report_leaks;
-use crate::shims::tls;
+use crate::shims::{global_ctor, tls};
 use crate::*;
 
 #[derive(Copy, Clone, Debug)]
@@ -31,65 +33,6 @@ pub enum MiriEntryFnType {
 /// But we must only do that a finite number of times, or a background thread running `loop {}`
 /// will hang the program.
 const MAIN_THREAD_YIELDS_AT_SHUTDOWN: u32 = 256;
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum AlignmentCheck {
-    /// Do not check alignment.
-    None,
-    /// Check alignment "symbolically", i.e., using only the requested alignment for an allocation and not its real base address.
-    Symbolic,
-    /// Check alignment on the actual physical integer address.
-    Int,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum RejectOpWith {
-    /// Isolated op is rejected with an abort of the machine.
-    Abort,
-
-    /// If not Abort, miri returns an error for an isolated op.
-    /// Following options determine if user should be warned about such error.
-    /// Do not print warning about rejected isolated op.
-    NoWarning,
-
-    /// Print a warning about rejected isolated op, with backtrace.
-    Warning,
-
-    /// Print a warning about rejected isolated op, without backtrace.
-    WarningWithoutBacktrace,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum IsolatedOp {
-    /// Reject an op requiring communication with the host. By
-    /// default, miri rejects the op with an abort. If not, it returns
-    /// an error code, and prints a warning about it. Warning levels
-    /// are controlled by `RejectOpWith` enum.
-    Reject(RejectOpWith),
-
-    /// Execute op requiring communication with the host, i.e. disable isolation.
-    Allow,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum BacktraceStyle {
-    /// Prints a terser backtrace which ideally only contains relevant information.
-    Short,
-    /// Prints a backtrace with all possible information.
-    Full,
-    /// Prints only the frame that the error occurs in.
-    Off,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ValidationMode {
-    /// Do not perform any kind of validation.
-    No,
-    /// Validate the interior of the value, but not things behind references.
-    Shallow,
-    /// Fully recursively validate references.
-    Deep,
-}
 
 /// Configuration needed to spawn a Miri instance.
 #[derive(Clone)]
@@ -125,8 +68,8 @@ pub struct MiriConfig {
     pub data_race_detector: bool,
     /// Determine if weak memory emulation should be enabled. Requires data race detection to be enabled.
     pub weak_memory_emulation: bool,
-    /// Determine if we are running in GenMC mode. In this mode, Miri will explore multiple concurrent executions of the given program.
-    pub genmc_mode: bool,
+    /// Determine if we are running in GenMC mode and with which settings. In GenMC mode, Miri will explore multiple concurrent executions of the given program.
+    pub genmc_config: Option<GenmcConfig>,
     /// Track when an outdated (weak memory) load happens.
     pub track_outdated_loads: bool,
     /// Rate of spurious failures for compare_exchange_weak atomic operations,
@@ -146,11 +89,10 @@ pub struct MiriConfig {
     pub preemption_rate: f64,
     /// Report the current instruction being executed every N basic blocks.
     pub report_progress: Option<u32>,
-    /// Whether Stacked Borrows and Tree Borrows retagging should recurse into fields of datatypes.
-    pub retag_fields: RetagFields,
-    /// The location of a shared object file to load when calling external functions
-    /// FIXME! consider allowing users to specify paths to multiple files, or to a directory
-    pub native_lib: Option<PathBuf>,
+    /// The location of the shared object files to load when calling external functions
+    pub native_lib: Vec<PathBuf>,
+    /// Whether to enable the new native lib tracing system.
+    pub native_lib_enable_tracing: bool,
     /// Run a garbage collector for BorTags every N basic blocks.
     pub gc_interval: u32,
     /// The number of CPUs to be reported by miri.
@@ -167,6 +109,14 @@ pub struct MiriConfig {
     pub fixed_scheduling: bool,
     /// Always prefer the intrinsic fallback body over the native Miri implementation.
     pub force_intrinsic_fallback: bool,
+    /// Whether floating-point operations can behave non-deterministically.
+    pub float_nondet: bool,
+    /// Whether floating-point operations can have a non-deterministic rounding error.
+    pub float_rounding_error: FloatRoundingErrorMode,
+    /// Whether Miri artifically introduces short reads/writes on file descriptors.
+    pub short_fd_operations: bool,
+    /// A list of crates that are considered user-relevant.
+    pub user_relevant_crates: Vec<String>,
 }
 
 impl Default for MiriConfig {
@@ -187,7 +137,7 @@ impl Default for MiriConfig {
             track_alloc_accesses: false,
             data_race_detector: true,
             weak_memory_emulation: true,
-            genmc_mode: false,
+            genmc_config: None,
             track_outdated_loads: false,
             cmpxchg_weak_failure_rate: 0.8, // 80%
             measureme_out: None,
@@ -196,8 +146,8 @@ impl Default for MiriConfig {
             mute_stdout_stderr: false,
             preemption_rate: 0.01, // 1%
             report_progress: None,
-            retag_fields: RetagFields::Yes,
-            native_lib: None,
+            native_lib: vec![],
+            native_lib_enable_tracing: false,
             gc_interval: 10_000,
             num_cpus: 1,
             page_size: None,
@@ -206,14 +156,26 @@ impl Default for MiriConfig {
             address_reuse_cross_thread_rate: 0.1,
             fixed_scheduling: false,
             force_intrinsic_fallback: false,
+            float_nondet: true,
+            float_rounding_error: FloatRoundingErrorMode::Random,
+            short_fd_operations: true,
+            user_relevant_crates: vec![],
         }
     }
 }
 
 /// The state of the main thread. Implementation detail of `on_main_stack_empty`.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 enum MainThreadState<'tcx> {
-    #[default]
+    GlobalCtors {
+        ctor_state: global_ctor::GlobalCtorState<'tcx>,
+        /// The main function to call.
+        entry_id: DefId,
+        entry_type: MiriEntryFnType,
+        /// Arguments passed to `main`.
+        argc: ImmTy<'tcx>,
+        argv: ImmTy<'tcx>,
+    },
     Running,
     TlsDtors(tls::TlsDtorsState<'tcx>),
     Yield {
@@ -229,6 +191,15 @@ impl<'tcx> MainThreadState<'tcx> {
     ) -> InterpResult<'tcx, Poll<()>> {
         use MainThreadState::*;
         match self {
+            GlobalCtors { ctor_state, entry_id, entry_type, argc, argv } => {
+                match ctor_state.on_stack_empty(this)? {
+                    Poll::Pending => {} // just keep going
+                    Poll::Ready(()) => {
+                        call_main(this, *entry_id, *entry_type, argc.clone(), argv.clone())?;
+                        *self = Running;
+                    }
+                }
+            }
             Running => {
                 *self = TlsDtors(Default::default());
             }
@@ -278,18 +249,21 @@ impl<'tcx> MainThreadState<'tcx> {
                 // to be like a global `static`, so that all memory reached by it is considered to "not leak".
                 this.terminate_active_thread(TlsAllocAction::Leak)?;
 
-                // Machine cleanup. Only do this if all threads have terminated; threads that are still running
-                // might cause Stacked Borrows errors (https://github.com/rust-lang/miri/issues/2396).
-                if this.have_all_terminated() {
-                    // Even if all threads have terminated, we have to beware of data races since some threads
-                    // might not have joined the main thread (https://github.com/rust-lang/miri/issues/2020,
-                    // https://github.com/rust-lang/miri/issues/2508).
-                    this.allow_data_races_all_threads_done();
-                    EnvVars::cleanup(this).expect("error during env var cleanup");
+                // In GenMC mode, we do not immediately stop execution on main thread exit.
+                if let Some(genmc_ctx) = this.machine.data_race.as_genmc_ref() {
+                    // If there's no error, execution will continue (on another thread).
+                    genmc_ctx.handle_exit(
+                        ThreadId::MAIN_THREAD,
+                        exit_code,
+                        crate::concurrency::ExitType::MainThreadFinish,
+                    )?;
+                } else {
+                    // Stop interpreter loop.
+                    throw_machine_stop!(TerminationInfo::Exit {
+                        code: exit_code,
+                        leak_check: true
+                    });
                 }
-
-                // Stop interpreter loop.
-                throw_machine_stop!(TerminationInfo::Exit { code: exit_code, leak_check: true });
             }
         }
         interp_ok(Poll::Pending)
@@ -314,32 +288,19 @@ pub fn create_ecx<'tcx>(
         MiriMachine::new(config, layout_cx, genmc_ctx),
     );
 
-    // Some parts of initialization require a full `InterpCx`.
-    MiriMachine::late_init(&mut ecx, config, {
-        let mut state = MainThreadState::default();
-        // Cannot capture anything GC-relevant here.
-        Box::new(move |m| state.on_main_stack_empty(m))
-    })?;
-
     // Make sure we have MIR. We check MIR for some stable monomorphic function in libcore.
     let sentinel =
         helpers::try_resolve_path(tcx, &["core", "ascii", "escape_default"], Namespace::ValueNS);
     if !matches!(sentinel, Some(s) if tcx.is_mir_available(s.def.def_id())) {
         tcx.dcx().fatal(
-            "the current sysroot was built without `-Zalways-encode-mir`, or libcore seems missing. \
-            Use `cargo miri setup` to prepare a sysroot that is suitable for Miri."
+            "the current sysroot was built without `-Zalways-encode-mir`, or libcore seems missing.\n\
+            Note that directly invoking the `miri` binary is not supported; please use `cargo miri` instead."
         );
     }
 
-    // Setup first stack frame.
-    let entry_instance = ty::Instance::mono(tcx, entry_id);
-
-    // First argument is constructed later, because it's skipped for `miri_start.`
-
-    // Second argument (argc): length of `config.args`.
+    // Compute argc and argv from `config.args`.
     let argc =
         ImmTy::from_int(i64::try_from(config.args.len()).unwrap(), ecx.machine.layouts.isize);
-    // Third argument (`argv`): created from `config.args`.
     let argv = {
         // Put each argument in memory, collect pointers.
         let mut argvs = Vec::<Immediate<Provenance>>::with_capacity(config.args.len());
@@ -354,18 +315,17 @@ pub fn create_ecx<'tcx>(
             argvs.push(arg_place.to_ref(&ecx));
         }
         // Make an array with all these pointers, in the Miri memory.
-        let argvs_layout = ecx.layout_of(Ty::new_array(
-            tcx,
-            Ty::new_imm_ptr(tcx, tcx.types.u8),
-            u64::try_from(argvs.len()).unwrap(),
-        ))?;
+        let u8_ptr_type = Ty::new_imm_ptr(tcx, tcx.types.u8);
+        let u8_ptr_ptr_type = Ty::new_imm_ptr(tcx, u8_ptr_type);
+        let argvs_layout =
+            ecx.layout_of(Ty::new_array(tcx, u8_ptr_type, u64::try_from(argvs.len()).unwrap()))?;
         let argvs_place = ecx.allocate(argvs_layout, MiriMemoryKind::Machine.into())?;
-        for (idx, arg) in argvs.into_iter().enumerate() {
-            let place = ecx.project_field(&argvs_place, idx)?;
+        for (arg, idx) in argvs.into_iter().zip(0..) {
+            let place = ecx.project_index(&argvs_place, idx)?;
             ecx.write_immediate(arg, &place)?;
         }
         ecx.mark_immutable(&argvs_place);
-        // Store `argc` and `argv` for macOS `_NSGetArg{c,v}`.
+        // Store `argc` and `argv` for macOS `_NSGetArg{c,v}`, and for the GC to see them.
         {
             let argc_place =
                 ecx.allocate(ecx.machine.layouts.isize, MiriMemoryKind::Machine.into())?;
@@ -373,16 +333,14 @@ pub fn create_ecx<'tcx>(
             ecx.mark_immutable(&argc_place);
             ecx.machine.argc = Some(argc_place.ptr());
 
-            let argv_place = ecx.allocate(
-                ecx.layout_of(Ty::new_imm_ptr(tcx, tcx.types.unit))?,
-                MiriMemoryKind::Machine.into(),
-            )?;
+            let argv_place =
+                ecx.allocate(ecx.layout_of(u8_ptr_ptr_type)?, MiriMemoryKind::Machine.into())?;
             ecx.write_pointer(argvs_place.ptr(), &argv_place)?;
             ecx.mark_immutable(&argv_place);
             ecx.machine.argv = Some(argv_place.ptr());
         }
         // Store command line as UTF-16 for Windows `GetCommandLineW`.
-        {
+        if tcx.sess.target.os == Os::Windows {
             // Construct a command string with all the arguments.
             let cmd_utf16: Vec<u16> = args_to_utf16_command_string(config.args.iter());
 
@@ -392,20 +350,54 @@ pub fn create_ecx<'tcx>(
                 ecx.allocate(ecx.layout_of(cmd_type)?, MiriMemoryKind::Machine.into())?;
             ecx.machine.cmd_line = Some(cmd_place.ptr());
             // Store the UTF-16 string. We just allocated so we know the bounds are fine.
-            for (idx, &c) in cmd_utf16.iter().enumerate() {
-                let place = ecx.project_field(&cmd_place, idx)?;
+            for (&c, idx) in cmd_utf16.iter().zip(0..) {
+                let place = ecx.project_index(&cmd_place, idx)?;
                 ecx.write_scalar(Scalar::from_u16(c), &place)?;
             }
             ecx.mark_immutable(&cmd_place);
         }
-        ecx.mplace_to_ref(&argvs_place)?
+        let imm = argvs_place.to_ref(&ecx);
+        let layout = ecx.layout_of(u8_ptr_ptr_type)?;
+        ImmTy::from_immediate(imm, layout)
     };
+
+    // Some parts of initialization require a full `InterpCx`.
+    MiriMachine::late_init(&mut ecx, config, {
+        let mut main_thread_state = MainThreadState::GlobalCtors {
+            entry_id,
+            entry_type,
+            argc,
+            argv,
+            ctor_state: global_ctor::GlobalCtorState::default(),
+        };
+
+        // Cannot capture anything GC-relevant here.
+        // `argc` and `argv` *are* GC_relevant, but they also get stored in `machine.argc` and
+        // `machine.argv` so we are good.
+        Box::new(move |m| main_thread_state.on_main_stack_empty(m))
+    })?;
+
+    interp_ok(ecx)
+}
+
+// Call the entry function.
+fn call_main<'tcx>(
+    ecx: &mut MiriInterpCx<'tcx>,
+    entry_id: DefId,
+    entry_type: MiriEntryFnType,
+    argc: ImmTy<'tcx>,
+    argv: ImmTy<'tcx>,
+) -> InterpResult<'tcx, ()> {
+    let tcx = ecx.tcx();
+
+    // Setup first stack frame.
+    let entry_instance = ty::Instance::mono(tcx, entry_id);
 
     // Return place (in static memory so that it does not count as leak).
     let ret_place = ecx.allocate(ecx.machine.layouts.isize, MiriMemoryKind::Machine.into())?;
     ecx.machine.main_fn_ret_place = Some(ret_place.clone());
-    // Call start function.
 
+    // Call start function.
     match entry_type {
         MiriEntryFnType::Rustc(EntryFnType::Main { .. }) => {
             let start_id = tcx.lang_items().start_fn().unwrap_or_else(|| {
@@ -415,7 +407,7 @@ pub fn create_ecx<'tcx>(
             let main_ret_ty = main_ret_ty.no_bound_vars().unwrap();
             let start_instance = ty::Instance::try_resolve(
                 tcx,
-                typing_env,
+                ecx.typing_env(),
                 start_id,
                 tcx.mk_args(&[ty::GenericArg::from(main_ret_ty)]),
             )
@@ -433,7 +425,7 @@ pub fn create_ecx<'tcx>(
                 ExternAbi::Rust,
                 &[
                     ImmTy::from_scalar(
-                        Scalar::from_pointer(main_ptr, &ecx),
+                        Scalar::from_pointer(main_ptr, ecx),
                         // FIXME use a proper fn ptr type
                         ecx.machine.layouts.const_raw_ptr,
                     ),
@@ -442,7 +434,7 @@ pub fn create_ecx<'tcx>(
                     ImmTy::from_uint(sigpipe, ecx.machine.layouts.u8),
                 ],
                 Some(&ret_place),
-                StackPopCleanup::Root { cleanup: true },
+                ReturnContinuation::Stop { cleanup: true },
             )?;
         }
         MiriEntryFnType::MiriStart => {
@@ -451,12 +443,12 @@ pub fn create_ecx<'tcx>(
                 ExternAbi::Rust,
                 &[argc, argv],
                 Some(&ret_place),
-                StackPopCleanup::Root { cleanup: true },
+                ReturnContinuation::Stop { cleanup: true },
             )?;
         }
     }
 
-    interp_ok(ecx)
+    interp_ok(())
 }
 
 /// Evaluates the entry function specified by `entry_id`.
@@ -468,13 +460,9 @@ pub fn eval_entry<'tcx>(
     entry_type: MiriEntryFnType,
     config: &MiriConfig,
     genmc_ctx: Option<Rc<GenmcCtx>>,
-) -> Option<i32> {
+) -> Result<(), NonZeroI32> {
     // Copy setting before we move `config`.
     let ignore_leaks = config.ignore_leaks;
-
-    if let Some(genmc_ctx) = &genmc_ctx {
-        genmc_ctx.handle_execution_start();
-    }
 
     let mut ecx = match create_ecx(tcx, entry_id, entry_type, config, genmc_ctx).report_err() {
         Ok(v) => v,
@@ -492,44 +480,50 @@ pub fn eval_entry<'tcx>(
         ecx.handle_ice();
         panic::resume_unwind(panic_payload)
     });
-    // `Ok` can never happen; the interpreter loop always exits with an "error"
-    // (but that "error" might be just "regular program termination").
-    let Err(err) = res.report_err();
+    // Obtain the result of the execution. This is always an `Err`, but that doesn't necessarily
+    // indicate an error.
+    let Err(res) = res.report_err();
 
-    // Show diagnostic, if any.
-    let (return_code, leak_check) = report_error(&ecx, err)?;
+    // Error reporting: if we survive all checks, we return the exit code the program gave us.
+    'miri_error: {
+        // Show diagnostic, if any.
+        let Some((return_code, leak_check)) = report_result(&ecx, res) else {
+            break 'miri_error;
+        };
 
-    // We inform GenMC that the execution is complete.
-    if let Some(genmc_ctx) = ecx.machine.data_race.as_genmc_ref()
-        && let Err(error) = genmc_ctx.handle_execution_end(&ecx)
-    {
-        // FIXME(GenMC): Improve error reporting.
-        tcx.dcx().err(format!("GenMC returned an error: \"{error}\""));
-        return None;
+        // If we get here there was no fatal error -- yet.
+        // Possibly check for memory leaks.
+        if leak_check && !ignore_leaks {
+            // Check for thread leaks.
+            if !ecx.have_all_terminated() {
+                tcx.dcx()
+                    .err("the main thread terminated without waiting for all remaining threads");
+                tcx.dcx().note("set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check");
+                break 'miri_error;
+            }
+            // Check for memory leaks.
+            info!("Additional static roots: {:?}", ecx.machine.static_roots);
+            let leaks = ecx.take_leaked_allocations(|ecx| &ecx.machine.static_roots);
+            if !leaks.is_empty() {
+                report_leaks(&ecx, leaks);
+                tcx.dcx().note("set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check");
+                // Ignore the provided return code - let the reported error
+                // determine the return code.
+                break 'miri_error;
+            }
+        }
+
+        // The interpreter has not reported an error.
+        // (There could still be errors in the session if there are other interpreters.)
+        return match NonZeroI32::new(return_code) {
+            None => Ok(()),
+            Some(return_code) => Err(return_code),
+        };
     }
 
-    // If we get here there was no fatal error.
-
-    // Possibly check for memory leaks.
-    if leak_check && !ignore_leaks {
-        // Check for thread leaks.
-        if !ecx.have_all_terminated() {
-            tcx.dcx().err("the main thread terminated without waiting for all remaining threads");
-            tcx.dcx().note("set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check");
-            return None;
-        }
-        // Check for memory leaks.
-        info!("Additional static roots: {:?}", ecx.machine.static_roots);
-        let leaks = ecx.take_leaked_allocations(|ecx| &ecx.machine.static_roots);
-        if !leaks.is_empty() {
-            report_leaks(&ecx, leaks);
-            tcx.dcx().note("set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check");
-            // Ignore the provided return code - let the reported error
-            // determine the return code.
-            return None;
-        }
-    }
-    Some(return_code)
+    // The interpreter reported an error.
+    assert!(tcx.dcx().has_errors().is_some());
+    Err(NonZeroI32::new(rustc_driver::EXIT_FAILURE).unwrap())
 }
 
 /// Turns an array of arguments into a Windows command line string.

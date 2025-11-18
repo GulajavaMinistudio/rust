@@ -50,6 +50,7 @@ pub struct Query {
     case_sensitive: bool,
     only_types: bool,
     libs: bool,
+    exclude_imports: bool,
 }
 
 impl Query {
@@ -63,6 +64,7 @@ impl Query {
             mode: SearchMode::Fuzzy,
             assoc_mode: AssocSearchMode::Include,
             case_sensitive: false,
+            exclude_imports: false,
         }
     }
 
@@ -93,6 +95,10 @@ impl Query {
 
     pub fn case_sensitive(&mut self) {
         self.case_sensitive = true;
+    }
+
+    pub fn exclude_imports(&mut self) {
+        self.exclude_imports = true;
     }
 }
 
@@ -127,23 +133,27 @@ pub trait SymbolsDatabase: HirDatabase + SourceDatabase {
 fn library_symbols(db: &dyn SymbolsDatabase, source_root_id: SourceRootId) -> Arc<SymbolIndex> {
     let _p = tracing::info_span!("library_symbols").entered();
 
-    let mut symbol_collector = SymbolCollector::new(db);
+    // We call this without attaching because this runs in parallel, so we need to attach here.
+    hir::attach_db(db, || {
+        let mut symbol_collector = SymbolCollector::new(db);
 
-    db.source_root_crates(source_root_id)
-        .iter()
-        .flat_map(|&krate| Crate::from(krate).modules(db))
-        // we specifically avoid calling other SymbolsDatabase queries here, even though they do the same thing,
-        // as the index for a library is not going to really ever change, and we do not want to store each
-        // the module or crate indices for those in salsa unless we need to.
-        .for_each(|module| symbol_collector.collect(module));
+        db.source_root_crates(source_root_id)
+            .iter()
+            .flat_map(|&krate| Crate::from(krate).modules(db))
+            // we specifically avoid calling other SymbolsDatabase queries here, even though they do the same thing,
+            // as the index for a library is not going to really ever change, and we do not want to store each
+            // the module or crate indices for those in salsa unless we need to.
+            .for_each(|module| symbol_collector.collect(module));
 
-    Arc::new(SymbolIndex::new(symbol_collector.finish()))
+        Arc::new(SymbolIndex::new(symbol_collector.finish()))
+    })
 }
 
 fn module_symbols(db: &dyn SymbolsDatabase, module: Module) -> Arc<SymbolIndex> {
     let _p = tracing::info_span!("module_symbols").entered();
 
-    Arc::new(SymbolIndex::new(SymbolCollector::new_module(db, module)))
+    // We call this without attaching because this runs in parallel, so we need to attach here.
+    hir::attach_db(db, || Arc::new(SymbolIndex::new(SymbolCollector::new_module(db, module))))
 }
 
 pub fn crate_symbols(db: &dyn SymbolsDatabase, krate: Crate) -> Box<[Arc<SymbolIndex>]> {
@@ -246,10 +256,10 @@ impl SymbolIndex {
         let mut last_batch_start = 0;
 
         for idx in 0..symbols.len() {
-            if let Some(next_symbol) = symbols.get(idx + 1) {
-                if cmp(&symbols[last_batch_start], next_symbol) == Ordering::Equal {
-                    continue;
-                }
+            if let Some(next_symbol) = symbols.get(idx + 1)
+                && cmp(&symbols[last_batch_start], next_symbol) == Ordering::Equal
+            {
+                continue;
             }
 
             let start = last_batch_start;
@@ -351,7 +361,6 @@ impl Query {
                             hir::ModuleDef::Adt(..)
                                 | hir::ModuleDef::TypeAlias(..)
                                 | hir::ModuleDef::BuiltinType(..)
-                                | hir::ModuleDef::TraitAlias(..)
                                 | hir::ModuleDef::Trait(..)
                         );
                     if non_type_for_type_only_query || !self.matches_assoc_mode(symbol.is_assoc) {
@@ -362,10 +371,13 @@ impl Query {
                     if ignore_underscore_prefixed && symbol_name.starts_with("__") {
                         continue;
                     }
-                    if self.mode.check(&self.query, self.case_sensitive, symbol_name) {
-                        if let Some(b) = cb(symbol).break_value() {
-                            return Some(b);
-                        }
+                    if self.exclude_imports && symbol.is_import {
+                        continue;
+                    }
+                    if self.mode.check(&self.query, self.case_sensitive, symbol_name)
+                        && let Some(b) = cb(symbol).break_value()
+                    {
+                        return Some(b);
                     }
                 }
             }
@@ -385,7 +397,8 @@ impl Query {
 mod tests {
 
     use expect_test::expect_file;
-    use test_fixture::WithFixture;
+    use salsa::Durability;
+    use test_fixture::{WORKSPACE, WithFixture};
 
     use super::*;
 
@@ -505,5 +518,32 @@ struct Duplicate;
             .collect();
 
         expect_file!["./test_data/test_doc_alias.txt"].assert_debug_eq(&symbols);
+    }
+
+    #[test]
+    fn test_exclude_imports() {
+        let (mut db, _) = RootDatabase::with_many_files(
+            r#"
+//- /lib.rs
+mod foo;
+pub use foo::Foo;
+
+//- /foo.rs
+pub struct Foo;
+"#,
+        );
+
+        let mut local_roots = FxHashSet::default();
+        local_roots.insert(WORKSPACE);
+        db.set_local_roots_with_durability(Arc::new(local_roots), Durability::HIGH);
+
+        let mut query = Query::new("Foo".to_owned());
+        let mut symbols = world_symbols(&db, query.clone());
+        symbols.sort_by_key(|x| x.is_import);
+        expect_file!["./test_data/test_symbols_with_imports.txt"].assert_debug_eq(&symbols);
+
+        query.exclude_imports();
+        let symbols = world_symbols(&db, query);
+        expect_file!["./test_data/test_symbols_exclude_imports.txt"].assert_debug_eq(&symbols);
     }
 }

@@ -27,11 +27,11 @@
 #![feature(panic_can_unwind)]
 #![feature(restricted_std)]
 #![feature(rustc_attrs)]
-#![feature(stmt_expr_attributes)]
 #![feature(extend_one)]
 #![recursion_limit = "256"]
 #![allow(internal_features)]
 #![deny(ffi_unwind_calls)]
+#![allow(rustc::internal)] // Can't use FxHashMap when compiled as part of the standard library
 #![warn(rustdoc::unescaped_backticks)]
 #![warn(unreachable_pub)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -44,6 +44,7 @@ mod diagnostic;
 mod escape;
 mod to_tokens;
 
+use core::ops::BitOr;
 use std::ffi::CStr;
 use std::ops::{Range, RangeBounds};
 use std::path::PathBuf;
@@ -54,7 +55,7 @@ use std::{error, fmt};
 pub use diagnostic::{Diagnostic, Level, MultiSpan};
 #[unstable(feature = "proc_macro_value", issue = "136652")]
 pub use rustc_literal_escaper::EscapeError;
-use rustc_literal_escaper::{MixedUnit, Mode, byte_from_char, unescape_mixed, unescape_unicode};
+use rustc_literal_escaper::{MixedUnit, unescape_byte_str, unescape_c_str, unescape_str};
 #[unstable(feature = "proc_macro_totokens", issue = "130977")]
 pub use to_tokens::ToTokens;
 
@@ -95,7 +96,7 @@ pub fn is_available() -> bool {
 ///
 /// This is both the input and output of `#[proc_macro]`, `#[proc_macro_attribute]`
 /// and `#[proc_macro_derive]` definitions.
-#[rustc_diagnostic_item = "TokenStream"]
+#[cfg_attr(feature = "rustc-dep-of-std", rustc_diagnostic_item = "TokenStream")]
 #[stable(feature = "proc_macro_lib", since = "1.15.0")]
 #[derive(Clone)]
 pub struct TokenStream(Option<bridge::client::TokenStream>);
@@ -236,7 +237,7 @@ impl Default for TokenStream {
 }
 
 #[unstable(feature = "proc_macro_quote", issue = "54722")]
-pub use quote::{quote, quote_span};
+pub use quote::{HasIterator, RepInterp, ThereIsNoIteratorInRepetition, ext, quote, quote_span};
 
 fn tree_to_bridge_tree(
     tree: TokenTree,
@@ -374,6 +375,21 @@ impl Extend<TokenStream> for TokenStream {
         builder.append_to(self);
     }
 }
+
+macro_rules! extend_items {
+    ($($item:ident)*) => {
+        $(
+            #[stable(feature = "token_stream_extend_tt_items", since = "1.92.0")]
+            impl Extend<$item> for TokenStream {
+                fn extend<T: IntoIterator<Item = $item>>(&mut self, iter: T) {
+                    self.extend(iter.into_iter().map(TokenTree::$item));
+                }
+            }
+        )*
+    };
+}
+
+extend_items!(Group Literal Punct Ident);
 
 /// Public implementation details for the `TokenStream` type, such as iterators.
 #[stable(feature = "proc_macro_lib2", since = "1.29.0")]
@@ -1438,10 +1454,9 @@ impl Literal {
                     // Force-inlining here is aggressive but the closure is
                     // called on every char in the string, so it can be hot in
                     // programs with many long strings containing escapes.
-                    unescape_unicode(
+                    unescape_str(
                         symbol,
-                        Mode::Str,
-                        &mut #[inline(always)]
+                        #[inline(always)]
                         |_, c| match c {
                             Ok(c) => buf.push(c),
                             Err(err) => {
@@ -1470,11 +1485,11 @@ impl Literal {
                 let mut error = None;
                 let mut buf = Vec::with_capacity(symbol.len());
 
-                unescape_mixed(symbol, Mode::CStr, &mut |_span, c| match c {
+                unescape_c_str(symbol, |_span, res| match res {
                     Ok(MixedUnit::Char(c)) => {
-                        buf.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes())
+                        buf.extend_from_slice(c.get().encode_utf8(&mut [0; 4]).as_bytes())
                     }
-                    Ok(MixedUnit::HighByte(b)) => buf.push(b),
+                    Ok(MixedUnit::HighByte(b)) => buf.push(b.get()),
                     Err(err) => {
                         if err.is_fatal() {
                             error = Some(ConversionErrorKind::FailedToUnescape(err));
@@ -1509,8 +1524,8 @@ impl Literal {
                 let mut buf = Vec::with_capacity(symbol.len());
                 let mut error = None;
 
-                unescape_unicode(symbol, Mode::ByteStr, &mut |_, c| match c {
-                    Ok(c) => buf.push(byte_from_char(c)),
+                unescape_byte_str(symbol, |_, res| match res {
+                    Ok(b) => buf.push(b),
                     Err(err) => {
                         if err.is_fatal() {
                             error = Some(ConversionErrorKind::FailedToUnescape(err));

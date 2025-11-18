@@ -84,9 +84,9 @@ pub struct Response {
     // request id. We fail deserialization in that case, so we just
     // make this field mandatory.
     pub id: RequestId,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub result: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error: Option<ResponseError>,
 }
 
@@ -94,7 +94,7 @@ pub struct Response {
 pub struct ResponseError {
     pub code: i32,
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub data: Option<serde_json::Value>,
 }
 
@@ -175,7 +175,7 @@ impl Message {
         let msg = match serde_json::from_str(&text) {
             Ok(msg) => msg,
             Err(e) => {
-                return Err(invalid_data!("malformed LSP payload: {:?}", e));
+                return Err(invalid_data!("malformed LSP payload `{e:?}`: {text:?}"));
             }
         };
 
@@ -283,12 +283,12 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     buf.resize(size, 0);
     inp.read_exact(&mut buf)?;
     let buf = String::from_utf8(buf).map_err(invalid_data)?;
-    log::debug!("< {}", buf);
+    log::debug!("< {buf}");
     Ok(Some(buf))
 }
 
 fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
-    log::debug!("> {}", msg);
+    log::debug!("> {msg}");
     write!(out, "Content-Length: {}\r\n\r\n", msg.len())?;
     out.write_all(msg.as_bytes())?;
     out.flush()?;

@@ -241,10 +241,10 @@ impl Step for Link {
         if run.builder.config.dry_run() {
             return;
         }
-        if let [cmd] = &run.paths[..] {
-            if cmd.assert_single_path().path.as_path().as_os_str() == "link" {
-                run.builder.ensure(Link);
-            }
+        if let [cmd] = &run.paths[..]
+            && cmd.assert_single_path().path.as_path().as_os_str() == "link"
+        {
+            run.builder.ensure(Link);
         }
     }
     fn run(self, builder: &Builder<'_>) -> Self::Output {
@@ -260,7 +260,7 @@ impl Step for Link {
         }
 
         let stage_path =
-            ["build", config.build.rustc_target_arg(), "stage1"].join(MAIN_SEPARATOR_STR);
+            ["build", config.host_target.rustc_target_arg(), "stage1"].join(MAIN_SEPARATOR_STR);
 
         if stage_dir_exists(&stage_path[..]) && !config.dry_run() {
             attempt_toolchain_link(builder, &stage_path[..]);
@@ -272,7 +272,7 @@ fn rustup_installed(builder: &Builder<'_>) -> bool {
     let mut rustup = command("rustup");
     rustup.arg("--version");
 
-    rustup.allow_failure().run_always().run_capture_stdout(builder).is_success()
+    rustup.allow_failure().run_in_dry_run().run_capture_stdout(builder).is_success()
 }
 
 fn stage_dir_exists(stage_path: &str) -> bool {
@@ -457,10 +457,10 @@ impl Step for Hook {
     }
 
     fn make_run(run: RunConfig<'_>) {
-        if let [cmd] = &run.paths[..] {
-            if cmd.assert_single_path().path.as_path().as_os_str() == "hook" {
-                run.builder.ensure(Hook);
-            }
+        if let [cmd] = &run.paths[..]
+            && cmd.assert_single_path().path.as_path().as_os_str() == "hook"
+        {
+            run.builder.ensure(Hook);
         }
     }
 
@@ -531,7 +531,7 @@ enum EditorKind {
 
 impl EditorKind {
     // Used in `./tests.rs`.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub const ALL: &[EditorKind] = &[
         EditorKind::Emacs,
         EditorKind::Helix,
@@ -585,11 +585,17 @@ Select which editor you would like to set up [default: None]: ";
                 "d29af4d949bbe2371eac928a3c31cf9496b1701aa1c45f11cd6c759865ad5c45",
                 "b5dd299b93dca3ceeb9b335f929293cb3d4bf4977866fbe7ceeac2a8a9f99088",
                 "631c837b0e98ae35fd48b0e5f743b1ca60adadf2d0a2b23566ba25df372cf1a9",
+                "080955765db84bb6cbf178879f489c4e2369397626a6ecb3debedb94a9d0b3ce",
+                "f501475c6654187091c924ae26187fa5791d74d4a8ab3fb61fbbe4c0275aade1",
+                "54bc48fe1996177f5eef86d7231b33978e6d8b737cb0a899e622b7e975c95308",
             ],
             EditorKind::Helix => &[
                 "2d3069b8cf1b977e5d4023965eb6199597755e6c96c185ed5f2854f98b83d233",
                 "6736d61409fbebba0933afd2e4c44ff2f97c1cb36cf0299a7f4a7819b8775040",
                 "f252dcc30ca85a193a699581e5e929d5bd6c19d40d7a7ade5e257a9517a124a5",
+                "198c195ed0c070d15907b279b8b4ea96198ca71b939f5376454f3d636ab54da5",
+                "1c43ead340b20792b91d02b08494ee68708e7e09f56b6766629b4b72079208f1",
+                "eec09a09452682060afd23dd5d3536ccac5615b3cdbf427366446901215fb9f6",
             ],
             EditorKind::Vim | EditorKind::VsCode => &[
                 "ea67e259dedf60d4429b6c349a564ffcd1563cf41c920a856d1f5b16b4701ac8",
@@ -604,11 +610,17 @@ Select which editor you would like to set up [default: None]: ";
                 "c394386e6133bbf29ffd32c8af0bb3d4aac354cba9ee051f29612aa9350f8f8d",
                 "e53e9129ca5ee5dcbd6ec8b68c2d87376474eb154992deba3c6d9ab1703e0717",
                 "f954316090936c7e590c253ca9d524008375882fa13c5b41d7e2547a896ff893",
+                "701b73751efd7abd6487f2c79348dab698af7ac4427b79fa3d2087c867144b12",
+                "a61df796c0c007cb6512127330564e49e57d558dec715703916a928b072a1054",
+                "02a49ac2d31f00ef6e4531c44e00dac51cea895112e480553f1ba060b3942a47",
             ],
             EditorKind::Zed => &[
                 "bbce727c269d1bd0c98afef4d612eb4ce27aea3c3a8968c5f10b31affbc40b6c",
                 "a5380cf5dd9328731aecc5dfb240d16dac46ed272126b9728006151ef42f5909",
                 "2e96bf0d443852b12f016c8fc9840ab3d0a2b4fe0b0fb3a157e8d74d5e7e0e26",
+                "4fadd4c87389a601a27db0d3d74a142fa3a2e656ae78982e934dbe24bee32ad6",
+                "f0bb3d23ab1a49175ab0ef5c4071af95bb03d01d460776cdb716d91333443382",
+                "5ef83292111d9a8bb63b6afc3abf42d0bc78fe24985f0d2e039e73258b5dab8f",
             ],
         }
     }
@@ -668,10 +680,10 @@ impl Step for Editor {
         if run.builder.config.dry_run() {
             return;
         }
-        if let [cmd] = &run.paths[..] {
-            if cmd.assert_single_path().path.as_path().as_os_str() == "editor" {
-                run.builder.ensure(Editor);
-            }
+        if let [cmd] = &run.paths[..]
+            && cmd.assert_single_path().path.as_path().as_os_str() == "editor"
+        {
+            run.builder.ensure(Editor);
         }
     }
 

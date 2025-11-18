@@ -55,7 +55,7 @@ use tracing::{debug, instrument};
 
 use crate::inherent::*;
 use crate::visit::{TypeVisitable, TypeVisitableExt as _};
-use crate::{self as ty, Interner, TypeFlags};
+use crate::{self as ty, BoundVarIndexKind, Interner, TypeFlags};
 
 /// This trait is implemented for every type that can be folded,
 /// providing the skeleton of the traversal.
@@ -152,6 +152,10 @@ pub trait TypeFolder<I: Interner>: Sized {
     fn fold_predicate(&mut self, p: I::Predicate) -> I::Predicate {
         p.super_fold_with(self)
     }
+
+    fn fold_clauses(&mut self, c: I::Clauses) -> I::Clauses {
+        c.super_fold_with(self)
+    }
 }
 
 /// This trait is implemented for every folding traversal. There is a fold
@@ -189,6 +193,10 @@ pub trait FallibleTypeFolder<I: Interner>: Sized {
 
     fn try_fold_predicate(&mut self, p: I::Predicate) -> Result<I::Predicate, Self::Error> {
         p.try_super_fold_with(self)
+    }
+
+    fn try_fold_clauses(&mut self, c: I::Clauses) -> Result<I::Clauses, Self::Error> {
+        c.try_super_fold_with(self)
     }
 }
 
@@ -390,7 +398,9 @@ impl<I: Interner> TypeFolder<I> for Shifter<I> {
 
     fn fold_region(&mut self, r: I::Region) -> I::Region {
         match r.kind() {
-            ty::ReBound(debruijn, br) if debruijn >= self.current_index => {
+            ty::ReBound(ty::BoundVarIndexKind::Bound(debruijn), br)
+                if debruijn >= self.current_index =>
+            {
                 let debruijn = debruijn.shifted_in(self.amount);
                 Region::new_bound(self.cx, debruijn, br)
             }
@@ -400,7 +410,9 @@ impl<I: Interner> TypeFolder<I> for Shifter<I> {
 
     fn fold_ty(&mut self, ty: I::Ty) -> I::Ty {
         match ty.kind() {
-            ty::Bound(debruijn, bound_ty) if debruijn >= self.current_index => {
+            ty::Bound(BoundVarIndexKind::Bound(debruijn), bound_ty)
+                if debruijn >= self.current_index =>
+            {
                 let debruijn = debruijn.shifted_in(self.amount);
                 Ty::new_bound(self.cx, debruijn, bound_ty)
             }
@@ -412,7 +424,9 @@ impl<I: Interner> TypeFolder<I> for Shifter<I> {
 
     fn fold_const(&mut self, ct: I::Const) -> I::Const {
         match ct.kind() {
-            ty::ConstKind::Bound(debruijn, bound_ct) if debruijn >= self.current_index => {
+            ty::ConstKind::Bound(ty::BoundVarIndexKind::Bound(debruijn), bound_ct)
+                if debruijn >= self.current_index =>
+            {
                 let debruijn = debruijn.shifted_in(self.amount);
                 Const::new_bound(self.cx, debruijn, bound_ct)
             }
@@ -427,7 +441,7 @@ impl<I: Interner> TypeFolder<I> for Shifter<I> {
 
 pub fn shift_region<I: Interner>(cx: I, region: I::Region, amount: u32) -> I::Region {
     match region.kind() {
-        ty::ReBound(debruijn, br) if amount > 0 => {
+        ty::ReBound(ty::BoundVarIndexKind::Bound(debruijn), br) if amount > 0 => {
             Region::new_bound(cx, debruijn.shifted_in(amount), br)
         }
         _ => region,
@@ -507,7 +521,13 @@ where
     #[instrument(skip(self), level = "debug", ret)]
     fn fold_region(&mut self, r: I::Region) -> I::Region {
         match r.kind() {
-            ty::ReBound(debruijn, _) if debruijn < self.current_index => {
+            ty::ReBound(ty::BoundVarIndexKind::Bound(debruijn), _)
+                if debruijn < self.current_index =>
+            {
+                debug!(?self.current_index, "skipped bound region");
+                r
+            }
+            ty::ReBound(ty::BoundVarIndexKind::Canonical, _) => {
                 debug!(?self.current_index, "skipped bound region");
                 r
             }

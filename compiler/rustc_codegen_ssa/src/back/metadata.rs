@@ -20,7 +20,7 @@ use rustc_metadata::fs::METADATA_FILENAME;
 use rustc_middle::bug;
 use rustc_session::Session;
 use rustc_span::sym;
-use rustc_target::spec::{RelocModel, Target, ef_avr_arch};
+use rustc_target::spec::{Abi, Os, RelocModel, Target, ef_avr_arch};
 use tracing::debug;
 
 use super::apple;
@@ -260,10 +260,10 @@ pub(crate) fn create_object_file(sess: &Session) -> Option<write::Object<'static
 }
 
 pub(super) fn elf_os_abi(sess: &Session) -> u8 {
-    match sess.target.options.os.as_ref() {
-        "hermit" => elf::ELFOSABI_STANDALONE,
-        "freebsd" => elf::ELFOSABI_FREEBSD,
-        "solaris" => elf::ELFOSABI_SOLARIS,
+    match sess.target.options.os {
+        Os::Hermit => elf::ELFOSABI_STANDALONE,
+        Os::FreeBsd => elf::ELFOSABI_FREEBSD,
+        Os::Solaris => elf::ELFOSABI_SOLARIS,
         _ => elf::ELFOSABI_NONE,
     }
 }
@@ -301,7 +301,7 @@ pub(super) fn elf_e_flags(architecture: Architecture, sess: &Session) -> u32 {
                 "n32" if !is_32bit => e_flags |= elf::EF_MIPS_ABI2,
                 "n64" if !is_32bit => {}
                 "" if is_32bit => e_flags |= elf::EF_MIPS_ABI_O32,
-                "" => sess.dcx().fatal("LLVM ABI must be specifed for 64-bit MIPS targets"),
+                "" => sess.dcx().fatal("LLVM ABI must be specified for 64-bit MIPS targets"),
                 s if is_32bit => {
                     sess.dcx().fatal(format!("invalid LLVM ABI `{}` for 32-bit MIPS target", s))
                 }
@@ -329,10 +329,16 @@ pub(super) fn elf_e_flags(architecture: Architecture, sess: &Session) -> u32 {
             // Source: https://github.com/riscv-non-isa/riscv-elf-psabi-doc/blob/079772828bd10933d34121117a222b4cc0ee2200/riscv-elf.adoc
             let mut e_flags: u32 = 0x0;
 
-            // Check if compressed is enabled
-            // `unstable_target_features` is used here because "c" is gated behind riscv_target_feature.
-            if sess.unstable_target_features.contains(&sym::c) {
+            // Check if compression is enabled
+            // `unstable_target_features` is used here because "zca" is gated behind riscv_target_feature.
+            if sess.unstable_target_features.contains(&sym::zca) {
                 e_flags |= elf::EF_RISCV_RVC;
+            }
+
+            // Check if RVTSO is enabled
+            // `unstable_target_features` is used here because "ztso" is gated behind riscv_target_feature.
+            if sess.unstable_target_features.contains(&sym::ztso) {
+                e_flags |= elf::EF_RISCV_TSO;
             }
 
             // Set the appropriate flag based on ABI
@@ -348,7 +354,7 @@ pub(super) fn elf_e_flags(architecture: Architecture, sess: &Session) -> u32 {
 
             e_flags
         }
-        Architecture::LoongArch64 => {
+        Architecture::LoongArch32 | Architecture::LoongArch64 => {
             // Source: https://github.com/loongson/la-abi-specs/blob/release/laelf.adoc#e_flags-identifies-abi-type-and-version
             let mut e_flags: u32 = elf::EF_LARCH_OBJABI_V1;
 
@@ -373,11 +379,29 @@ pub(super) fn elf_e_flags(architecture: Architecture, sess: &Session) -> u32 {
             }
         }
         Architecture::Csky => {
-            let e_flags = match sess.target.options.abi.as_ref() {
-                "abiv2" => elf::EF_CSKY_ABIV2,
-                _ => elf::EF_CSKY_ABIV1,
-            };
-            e_flags
+            if matches!(sess.target.options.abi, Abi::AbiV2) {
+                elf::EF_CSKY_ABIV2
+            } else {
+                elf::EF_CSKY_ABIV1
+            }
+        }
+        Architecture::PowerPc64 => {
+            const EF_PPC64_ABI_UNKNOWN: u32 = 0;
+            const EF_PPC64_ABI_ELF_V1: u32 = 1;
+            const EF_PPC64_ABI_ELF_V2: u32 = 2;
+
+            match sess.target.options.llvm_abiname.as_ref() {
+                // If the flags do not correctly indicate the ABI,
+                // linkers such as ld.lld assume that the ppc64 object files are always ELFv2
+                // which leads to broken binaries if ELFv1 is used for the object files.
+                "elfv1" => EF_PPC64_ABI_ELF_V1,
+                "elfv2" => EF_PPC64_ABI_ELF_V2,
+                "" if sess.target.options.binary_format.to_object() == BinaryFormat::Elf => {
+                    bug!("No ABI specified for this PPC64 ELF target");
+                }
+                // Fall back
+                _ => EF_PPC64_ABI_UNKNOWN,
+            }
         }
         _ => 0,
     }

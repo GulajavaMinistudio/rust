@@ -6,6 +6,7 @@
     extern_types,
     decl_macro,
     rustc_attrs,
+    rustc_private,
     transparent_unions,
     auto_traits,
     freeze_impls,
@@ -14,8 +15,14 @@
 #![no_core]
 #![allow(dead_code, internal_features, ambiguous_wide_pointer_comparisons)]
 
+#[lang = "pointee_sized"]
+pub trait PointeeSized {}
+
+#[lang = "meta_sized"]
+pub trait MetaSized: PointeeSized {}
+
 #[lang = "sized"]
-pub trait Sized {}
+pub trait Sized: MetaSized {}
 
 #[lang = "destruct"]
 pub trait Destruct {}
@@ -24,35 +31,35 @@ pub trait Destruct {}
 pub trait Tuple {}
 
 #[lang = "unsize"]
-pub trait Unsize<T: ?Sized> {}
+pub trait Unsize<T: PointeeSized>: PointeeSized {}
 
 #[lang = "coerce_unsized"]
 pub trait CoerceUnsized<T> {}
 
-impl<'a, 'b: 'a, T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<&'a U> for &'b T {}
-impl<'a, T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<&'a mut U> for &'a mut T {}
-impl<T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<*const U> for *const T {}
-impl<T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<*mut U> for *mut T {}
+impl<'a, 'b: 'a, T: PointeeSized + Unsize<U>, U: PointeeSized> CoerceUnsized<&'a U> for &'b T {}
+impl<'a, T: PointeeSized + Unsize<U>, U: PointeeSized> CoerceUnsized<&'a mut U> for &'a mut T {}
+impl<T: PointeeSized + Unsize<U>, U: PointeeSized> CoerceUnsized<*const U> for *const T {}
+impl<T: PointeeSized + Unsize<U>, U: PointeeSized> CoerceUnsized<*mut U> for *mut T {}
 
 #[lang = "dispatch_from_dyn"]
 pub trait DispatchFromDyn<T> {}
 
 // &T -> &U
-impl<'a, T: ?Sized + Unsize<U>, U: ?Sized> DispatchFromDyn<&'a U> for &'a T {}
+impl<'a, T: PointeeSized + Unsize<U>, U: PointeeSized> DispatchFromDyn<&'a U> for &'a T {}
 // &mut T -> &mut U
-impl<'a, T: ?Sized + Unsize<U>, U: ?Sized> DispatchFromDyn<&'a mut U> for &'a mut T {}
+impl<'a, T: PointeeSized + Unsize<U>, U: PointeeSized> DispatchFromDyn<&'a mut U> for &'a mut T {}
 // *const T -> *const U
-impl<T: ?Sized + Unsize<U>, U: ?Sized> DispatchFromDyn<*const U> for *const T {}
+impl<T: PointeeSized + Unsize<U>, U: PointeeSized> DispatchFromDyn<*const U> for *const T {}
 // *mut T -> *mut U
-impl<T: ?Sized + Unsize<U>, U: ?Sized> DispatchFromDyn<*mut U> for *mut T {}
-impl<T: ?Sized + Unsize<U>, U: ?Sized> DispatchFromDyn<Box<U>> for Box<T> {}
+impl<T: PointeeSized + Unsize<U>, U: PointeeSized> DispatchFromDyn<*mut U> for *mut T {}
+impl<T: MetaSized + Unsize<U>, U: MetaSized> DispatchFromDyn<Box<U>> for Box<T> {}
 
 #[lang = "legacy_receiver"]
 pub trait LegacyReceiver {}
 
-impl<T: ?Sized> LegacyReceiver for &T {}
-impl<T: ?Sized> LegacyReceiver for &mut T {}
-impl<T: ?Sized> LegacyReceiver for Box<T> {}
+impl<T: PointeeSized> LegacyReceiver for &T {}
+impl<T: PointeeSized> LegacyReceiver for &mut T {}
+impl<T: MetaSized> LegacyReceiver for Box<T> {}
 
 #[lang = "copy"]
 pub trait Copy {}
@@ -74,9 +81,9 @@ impl Copy for isize {}
 impl Copy for f32 {}
 impl Copy for f64 {}
 impl Copy for char {}
-impl<'a, T: ?Sized> Copy for &'a T {}
-impl<T: ?Sized> Copy for *const T {}
-impl<T: ?Sized> Copy for *mut T {}
+impl<'a, T: PointeeSized> Copy for &'a T {}
+impl<T: PointeeSized> Copy for *const T {}
+impl<T: PointeeSized> Copy for *mut T {}
 impl<T: Copy> Copy for Option<T> {}
 
 #[lang = "sync"]
@@ -94,17 +101,17 @@ unsafe impl Sync for i32 {}
 unsafe impl Sync for isize {}
 unsafe impl Sync for char {}
 unsafe impl Sync for f32 {}
-unsafe impl<'a, T: ?Sized> Sync for &'a T {}
+unsafe impl<'a, T: PointeeSized> Sync for &'a T {}
 unsafe impl<T: Sync, const N: usize> Sync for [T; N] {}
 
 #[lang = "freeze"]
 unsafe auto trait Freeze {}
 
-unsafe impl<T: ?Sized> Freeze for PhantomData<T> {}
-unsafe impl<T: ?Sized> Freeze for *const T {}
-unsafe impl<T: ?Sized> Freeze for *mut T {}
-unsafe impl<T: ?Sized> Freeze for &T {}
-unsafe impl<T: ?Sized> Freeze for &mut T {}
+unsafe impl<T: PointeeSized> Freeze for PhantomData<T> {}
+unsafe impl<T: PointeeSized> Freeze for *const T {}
+unsafe impl<T: PointeeSized> Freeze for *mut T {}
+unsafe impl<T: PointeeSized> Freeze for &T {}
+unsafe impl<T: PointeeSized> Freeze for &mut T {}
 
 #[lang = "structural_peq"]
 pub trait StructuralPartialEq {}
@@ -443,7 +450,7 @@ pub enum Option<T> {
 pub use Option::*;
 
 #[lang = "phantom_data"]
-pub struct PhantomData<T: ?Sized>;
+pub struct PhantomData<T: PointeeSized>;
 
 #[lang = "fn_once"]
 #[rustc_paren_sugar]
@@ -521,8 +528,26 @@ fn panic_cannot_unwind() -> ! {
 }
 
 #[lang = "eh_personality"]
-fn eh_personality() -> ! {
+// FIXME personality signature depends on target
+fn eh_personality(
+    _version: i32,
+    _actions: i32,
+    _exception_class: u64,
+    _exception_object: *mut (),
+    _context: *mut (),
+) -> i32 {
     loop {}
+}
+
+#[lang = "panic_in_cleanup"]
+fn panic_in_cleanup() -> ! {
+    loop {}
+}
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+#[link(name = "gcc_s")]
+unsafe extern "C" {
+    fn _Unwind_Resume(exc: *mut ()) -> !;
 }
 
 #[lang = "drop_in_place"]
@@ -530,7 +555,9 @@ fn eh_personality() -> ! {
 pub unsafe fn drop_in_place<T: ?Sized>(to_drop: *mut T) {
     // Code here does not matter - this is replaced by the
     // real drop glue by the compiler.
-    drop_in_place(to_drop);
+    unsafe {
+        drop_in_place(to_drop);
+    }
 }
 
 #[lang = "unpin"]
@@ -546,18 +573,18 @@ pub trait Deref {
 #[repr(transparent)]
 #[rustc_layout_scalar_valid_range_start(1)]
 #[rustc_nonnull_optimization_guaranteed]
-pub struct NonNull<T: ?Sized>(pub *const T);
+pub struct NonNull<T: PointeeSized>(pub *const T);
 
-impl<T: ?Sized, U: ?Sized> CoerceUnsized<NonNull<U>> for NonNull<T> where T: Unsize<U> {}
-impl<T: ?Sized, U: ?Sized> DispatchFromDyn<NonNull<U>> for NonNull<T> where T: Unsize<U> {}
+impl<T: PointeeSized, U: PointeeSized> CoerceUnsized<NonNull<U>> for NonNull<T> where T: Unsize<U> {}
+impl<T: PointeeSized, U: PointeeSized> DispatchFromDyn<NonNull<U>> for NonNull<T> where T: Unsize<U> {}
 
-pub struct Unique<T: ?Sized> {
+pub struct Unique<T: PointeeSized> {
     pub pointer: NonNull<T>,
     pub _marker: PhantomData<T>,
 }
 
-impl<T: ?Sized, U: ?Sized> CoerceUnsized<Unique<U>> for Unique<T> where T: Unsize<U> {}
-impl<T: ?Sized, U: ?Sized> DispatchFromDyn<Unique<U>> for Unique<T> where T: Unsize<U> {}
+impl<T: PointeeSized, U: PointeeSized> CoerceUnsized<Unique<U>> for Unique<T> where T: Unsize<U> {}
+impl<T: PointeeSized, U: PointeeSized> DispatchFromDyn<Unique<U>> for Unique<T> where T: Unsize<U> {}
 
 #[lang = "global_alloc_ty"]
 pub struct Global;
@@ -570,7 +597,7 @@ impl<T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<Box<U>> for Box<T> {}
 impl<T> Box<T> {
     pub fn new(val: T) -> Box<T> {
         unsafe {
-            let size = intrinsics::size_of::<T>();
+            let size = size_of::<T>();
             let ptr = libc::malloc(size);
             intrinsics::copy(&val as *const T as *const u8, ptr, size);
             Box(Unique { pointer: NonNull(ptr as *const T), _marker: PhantomData }, Global)
@@ -597,7 +624,7 @@ impl<T: ?Sized> Deref for Box<T> {
 
 #[lang = "exchange_malloc"]
 unsafe fn allocate(size: usize, _align: usize) -> *mut u8 {
-    libc::malloc(size)
+    unsafe { libc::malloc(size) }
 }
 
 #[lang = "drop"]
@@ -622,13 +649,13 @@ pub mod intrinsics {
     #[rustc_intrinsic]
     pub fn abort() -> !;
     #[rustc_intrinsic]
-    pub fn size_of<T>() -> usize;
+    pub const fn size_of<T>() -> usize;
     #[rustc_intrinsic]
-    pub unsafe fn size_of_val<T: ?::Sized>(val: *const T) -> usize;
+    pub unsafe fn size_of_val<T: ?crate::Sized>(val: *const T) -> usize;
     #[rustc_intrinsic]
-    pub fn min_align_of<T>() -> usize;
+    pub const fn align_of<T>() -> usize;
     #[rustc_intrinsic]
-    pub unsafe fn min_align_of_val<T: ?::Sized>(val: *const T) -> usize;
+    pub unsafe fn align_of_val<T: ?crate::Sized>(val: *const T) -> usize;
     #[rustc_intrinsic]
     pub unsafe fn copy<T>(src: *const T, dst: *mut T, count: usize);
     #[rustc_intrinsic]
@@ -636,7 +663,7 @@ pub mod intrinsics {
     #[rustc_intrinsic]
     pub unsafe fn ctlz_nonzero<T>(x: T) -> u32;
     #[rustc_intrinsic]
-    pub fn needs_drop<T: ?::Sized>() -> bool;
+    pub const fn needs_drop<T: ?crate::Sized>() -> bool;
     #[rustc_intrinsic]
     pub fn bitreverse<T>(x: T) -> T;
     #[rustc_intrinsic]
@@ -653,13 +680,13 @@ pub mod libc {
     // symbols to link against.
     #[cfg_attr(unix, link(name = "c"))]
     #[cfg_attr(target_env = "msvc", link(name = "legacy_stdio_definitions"))]
-    extern "C" {
+    unsafe extern "C" {
         pub fn printf(format: *const i8, ...) -> i32;
     }
 
     #[cfg_attr(unix, link(name = "c"))]
     #[cfg_attr(target_env = "msvc", link(name = "msvcrt"))]
-    extern "C" {
+    unsafe extern "C" {
         pub fn puts(s: *const i8) -> i32;
         pub fn malloc(size: usize) -> *mut u8;
         pub fn free(ptr: *mut u8);
@@ -691,7 +718,24 @@ impl<T> Index<usize> for [T] {
     }
 }
 
-extern "C" {
+pub const fn size_of<T>() -> usize {
+    <T as SizedTypeProperties>::SIZE
+}
+
+pub const fn align_of<T>() -> usize {
+    <T as SizedTypeProperties>::ALIGN
+}
+
+trait SizedTypeProperties: Sized {
+    #[lang = "mem_size_const"]
+    const SIZE: usize = intrinsics::size_of::<Self>();
+
+    #[lang = "mem_align_const"]
+    const ALIGN: usize = intrinsics::align_of::<Self>();
+}
+impl<T> SizedTypeProperties for T {}
+
+unsafe extern "C" {
     type VaListImpl;
 }
 
@@ -750,7 +794,7 @@ struct PanicLocation {
     column: u32,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[cfg(not(all(windows, target_env = "gnu")))]
 pub fn get_tls() -> u8 {
     #[thread_local]

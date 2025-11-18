@@ -261,6 +261,19 @@ fn opt_item_without_modifiers(p: &mut Parser<'_>, m: Marker) -> Result<(), Marke
         T![const] if (la == IDENT || la == T![_] || la == T![mut]) => consts::konst(p, m),
         T![static] if (la == IDENT || la == T![_] || la == T![mut]) => consts::static_(p, m),
 
+        IDENT
+            if p.at_contextual_kw(T![builtin])
+                && p.nth_at(1, T![#])
+                && p.nth_at_contextual_kw(2, T![global_asm]) =>
+        {
+            p.bump_remap(T![builtin]);
+            p.bump(T![#]);
+            p.bump_remap(T![global_asm]);
+            // test global_asm
+            // builtin#global_asm("")
+            expressions::parse_asm_expr(p, m);
+        }
+
         _ => return Err(m),
     };
     Ok(())
@@ -410,6 +423,14 @@ fn fn_(p: &mut Parser<'_>, m: Marker) {
     // fn foo() {}
     // fn bar() -> () {}
     opt_ret_type(p);
+
+    // test_err fn_ret_recovery
+    // fn foo() -> A>]) { let x = 1; }
+    // fn foo() -> A>]) where T: Copy { let x = 1; }
+    while p.at(T![')']) | p.at(T![']']) | p.at(T![>]) {
+        // recover from unbalanced return type brackets
+        p.err_and_bump("expected a curly brace");
+    }
 
     // test function_where_clause
     // fn foo<T>() where T: Copy {}

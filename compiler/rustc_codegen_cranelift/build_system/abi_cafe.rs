@@ -6,8 +6,8 @@ use crate::{CodegenBackend, SysrootKind, build_sysroot};
 static ABI_CAFE_REPO: GitRepo = GitRepo::github(
     "Gankra",
     "abi-cafe",
-    "f1220cfd13b57f5c0082c26529163865ee25e115",
-    "fe93a9acd461425d",
+    "94d38030419eb00a1ba80e5e2b4d763dcee58db4",
+    "6efb4457893c8670",
     "abi-cafe",
 );
 
@@ -19,6 +19,7 @@ pub(crate) fn run(
     cg_clif_dylib: &CodegenBackend,
     rustup_toolchain_name: Option<&str>,
     bootstrap_host_compiler: &Compiler,
+    panic_unwind_support: bool,
 ) {
     std::fs::create_dir_all(&dirs.download_dir).unwrap();
     ABI_CAFE_REPO.fetch(dirs);
@@ -32,6 +33,7 @@ pub(crate) fn run(
         bootstrap_host_compiler,
         rustup_toolchain_name,
         bootstrap_host_compiler.triple.clone(),
+        panic_unwind_support,
     );
 
     eprintln!("Running abi-cafe");
@@ -45,6 +47,10 @@ pub(crate) fn run(
 
     let mut cmd = ABI_CAFE.run(bootstrap_host_compiler, dirs);
     cmd.arg("--");
+
+    cmd.arg("--debug");
+
+    cmd.arg("--rules").arg(dirs.source_dir.join("scripts/abi-cafe-rules.toml"));
 
     // stdcall, vectorcall and such don't work yet
     cmd.arg("--conventions").arg("c").arg("--conventions").arg("rust");

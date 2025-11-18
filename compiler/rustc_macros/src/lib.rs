@@ -3,7 +3,6 @@
 #![feature(if_let_guard)]
 #![feature(never_type)]
 #![feature(proc_macro_diagnostic)]
-#![feature(proc_macro_span)]
 #![feature(proc_macro_tracked_env)]
 // tidy-alphabetical-end
 
@@ -19,9 +18,9 @@ mod print_attribute;
 mod query;
 mod serialize;
 mod symbols;
-mod try_from;
 mod type_foldable;
 mod type_visitable;
+mod visitable;
 
 // Reads the rust version (e.g. "1.75.0") from the CFG_RELEASE env var and
 // produces a `RustcVersion` literal containing that version (e.g.
@@ -102,6 +101,16 @@ decl_derive!(
     /// visited (and its type is not required to implement `TypeVisitable`).
     type_visitable::type_visitable_derive
 );
+decl_derive!(
+    [Walkable, attributes(visitable)] =>
+    /// Derives `Walkable` for the annotated `struct` or `enum` (`union` is not supported).
+    ///
+    /// Each field of the struct or enum variant will be visited in definition order, using the
+    /// `Walkable` implementation for its type. However, if a field of a struct or an enum
+    /// variant is annotated with `#[visitable(ignore)]` then that field will not be
+    /// visited (and its type is not required to implement `Walkable`).
+    visitable::visitable_derive
+);
 decl_derive!([Lift, attributes(lift)] => lift::lift_derive);
 decl_derive!(
     [Diagnostic, attributes(
@@ -167,18 +176,10 @@ decl_derive!(
 );
 
 decl_derive! {
-    [TryFromU32] =>
-    /// Derives `TryFrom<u32>` for the annotated `enum`, which must have no fields.
-    /// Each variant maps to the value it would produce under an `as u32` cast.
-    ///
-    /// The error type is `u32`.
-    try_from::try_from_u32
-}
-decl_derive! {
     [PrintAttribute] =>
     /// Derives `PrintAttribute` for `AttributeKind`.
-    /// This macro is pretty specific to `rustc_attr_data_structures` and likely not that useful in
-    /// other places. It's deriving something close to `Debug` without printing some extraenous
+    /// This macro is pretty specific to `rustc_hir::attrs` and likely not that useful in
+    /// other places. It's deriving something close to `Debug` without printing some extraneous
     /// things like spans.
     print_attribute::print_attribute
 }

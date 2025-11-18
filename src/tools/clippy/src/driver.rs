@@ -1,7 +1,6 @@
 #![allow(rustc::diagnostic_outside_of_impl)]
 #![allow(rustc::untranslatable_diagnostic)]
 #![feature(rustc_private)]
-#![feature(let_chains)]
 // warn on lints, that are included in `rust-lang/rust`s bootstrap
 #![warn(rust_2018_idioms, unused_lifetimes)]
 // warn on rustc internal lints
@@ -14,7 +13,13 @@ extern crate rustc_interface;
 extern crate rustc_session;
 extern crate rustc_span;
 
+// See docs in https://github.com/rust-lang/rust/blob/HEAD/compiler/rustc/src/main.rs
+// about jemalloc.
+#[cfg(feature = "jemalloc")]
+extern crate tikv_jemalloc_sys as jemalloc_sys;
+
 use clippy_utils::sym;
+use declare_clippy_lint::LintListBuilder;
 use rustc_interface::interface;
 use rustc_session::EarlyDiagCtxt;
 use rustc_session::config::ErrorOutputType;
@@ -97,16 +102,11 @@ fn track_files(psess: &mut ParseSess) {
 
     // During development track the `clippy-driver` executable so that cargo will re-run clippy whenever
     // it is rebuilt
-    #[expect(
-        clippy::collapsible_if,
-        reason = "Due to a bug in let_chains this if statement can't be collapsed"
-    )]
-    if cfg!(debug_assertions) {
-        if let Ok(current_exe) = env::current_exe()
-            && let Some(current_exe) = current_exe.to_str()
-        {
-            file_depinfo.insert(Symbol::intern(current_exe));
-        }
+    if cfg!(debug_assertions)
+        && let Ok(current_exe) = env::current_exe()
+        && let Some(current_exe) = current_exe.to_str()
+    {
+        file_depinfo.insert(Symbol::intern(current_exe));
     }
 }
 
@@ -133,8 +133,7 @@ struct ClippyCallbacks {
 }
 
 impl rustc_driver::Callbacks for ClippyCallbacks {
-    // JUSTIFICATION: necessary in clippy driver to set `mir_opt_level`
-    #[allow(rustc::bad_opt_access)]
+    #[expect(rustc::bad_opt_access, reason = "necessary in clippy driver to set `mir_opt_level`")]
     fn config(&mut self, config: &mut interface::Config) {
         let conf_path = clippy_config::lookup_conf_file();
         let previous = config.register_lints.take();
@@ -157,8 +156,13 @@ impl rustc_driver::Callbacks for ClippyCallbacks {
                 (previous)(sess, lint_store);
             }
 
+            let mut list_builder = LintListBuilder::default();
+            list_builder.insert(clippy_lints::declared_lints::LINTS);
+            list_builder.register(lint_store);
+
             let conf = clippy_config::Conf::read(sess, &conf_path);
-            clippy_lints::register_lints(lint_store, conf);
+            clippy_lints::register_lint_passes(lint_store, conf);
+
             #[cfg(feature = "internal")]
             clippy_lints_internal::register_lints(lint_store);
         }));
@@ -177,16 +181,44 @@ impl rustc_driver::Callbacks for ClippyCallbacks {
     }
 }
 
-#[allow(clippy::ignored_unit_patterns)]
 fn display_help() {
     println!("{}", help_message());
 }
 
 const BUG_REPORT_URL: &str = "https://github.com/rust-lang/rust-clippy/issues/new?template=ice.yml";
 
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::ignored_unit_patterns)]
+#[expect(clippy::too_many_lines)]
 pub fn main() {
+    // See docs in https://github.com/rust-lang/rust/blob/HEAD/compiler/rustc/src/main.rs
+    // about jemalloc.
+    #[cfg(feature = "jemalloc")]
+    {
+        use std::os::raw::{c_int, c_void};
+
+        #[used]
+        static _F1: unsafe extern "C" fn(usize, usize) -> *mut c_void = jemalloc_sys::calloc;
+        #[used]
+        static _F2: unsafe extern "C" fn(*mut *mut c_void, usize, usize) -> c_int = jemalloc_sys::posix_memalign;
+        #[used]
+        static _F3: unsafe extern "C" fn(usize, usize) -> *mut c_void = jemalloc_sys::aligned_alloc;
+        #[used]
+        static _F4: unsafe extern "C" fn(usize) -> *mut c_void = jemalloc_sys::malloc;
+        #[used]
+        static _F5: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void = jemalloc_sys::realloc;
+        #[used]
+        static _F6: unsafe extern "C" fn(*mut c_void) = jemalloc_sys::free;
+
+        #[cfg(target_os = "macos")]
+        {
+            unsafe extern "C" {
+                fn _rjem_je_zone_register();
+            }
+
+            #[used]
+            static _F7: unsafe extern "C" fn() = _rjem_je_zone_register;
+        }
+    }
+
     let early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
 
     rustc_driver::init_rustc_env_logger(&early_dcx);
@@ -295,7 +327,8 @@ pub fn main() {
 
         // Do not run Clippy for Cargo's info queries so that invalid CLIPPY_ARGS are not cached
         // https://github.com/rust-lang/cargo/issues/14385
-        let info_query = has_arg(&orig_args, "-vV") || has_arg(&orig_args, "--print");
+        let info_query = has_arg(&orig_args, "-vV")
+            || arg_value(&orig_args, "--print", |val| val != "crate-root-lint-levels").is_some();
 
         let clippy_enabled = !cap_lints_allow && relevant_package && !info_query;
         if clippy_enabled {

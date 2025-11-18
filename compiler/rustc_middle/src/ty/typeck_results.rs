@@ -11,13 +11,13 @@ use rustc_hir::def_id::{DefId, LocalDefId, LocalDefIdMap};
 use rustc_hir::hir_id::OwnerId;
 use rustc_hir::{
     self as hir, BindingMode, ByRef, HirId, ItemLocalId, ItemLocalMap, ItemLocalSet, Mutability,
+    Pinnedness,
 };
 use rustc_index::IndexVec;
 use rustc_macros::{HashStable, TyDecodable, TyEncodable, TypeFoldable, TypeVisitable};
 use rustc_session::Session;
 use rustc_span::Span;
 
-use super::RvalueScopes;
 use crate::hir::place::Place as HirPlace;
 use crate::infer::canonical::Canonical;
 use crate::mir::FakeReadCause;
@@ -167,7 +167,7 @@ pub struct TypeckResults<'tcx> {
     /// We also store the type here, so that the compiler can use it as a hint
     /// for figuring out hidden types, even if they are only set in dead code
     /// (which doesn't show up in MIR).
-    pub concrete_opaque_types: FxIndexMap<LocalDefId, ty::OpaqueHiddenType<'tcx>>,
+    pub hidden_types: FxIndexMap<LocalDefId, ty::DefinitionSiteHiddenType<'tcx>>,
 
     /// Tracks the minimum captures required for a closure;
     /// see `MinCaptureInformationMap` for more details.
@@ -197,18 +197,28 @@ pub struct TypeckResults<'tcx> {
     /// issue by fake reading `t`.
     pub closure_fake_reads: LocalDefIdMap<Vec<(HirPlace<'tcx>, FakeReadCause, HirId)>>,
 
-    /// Tracks the rvalue scoping rules which defines finer scoping for rvalue expressions
-    /// by applying extended parameter rules.
-    /// Details may be find in `rustc_hir_analysis::check::rvalue_scopes`.
-    pub rvalue_scopes: RvalueScopes,
-
     /// Stores the predicates that apply on coroutine witness types.
     /// formatting modified file tests/ui/coroutine/retain-resume-ref.rs
     pub coroutine_stalled_predicates: FxIndexSet<(ty::Predicate<'tcx>, ObligationCause<'tcx>)>,
 
+    /// Goals proven during HIR typeck which may be potentially region dependent.
+    ///
+    /// Borrowck *uniquifies* regions which may cause these goal to be ambiguous in MIR
+    /// type check. We ICE if goals fail in borrowck to detect bugs during MIR building or
+    /// missed checks in HIR typeck. To avoid ICE due to region dependence we store all
+    /// goals which may be region dependent and reprove them in case borrowck encounters
+    /// an error.
+    pub potentially_region_dependent_goals:
+        FxIndexSet<(ty::Predicate<'tcx>, ObligationCause<'tcx>)>,
+
     /// Contains the data for evaluating the effect of feature `capture_disjoint_fields`
     /// on closure size.
     pub closure_size_eval: LocalDefIdMap<ClosureSizeProfileData<'tcx>>,
+
+    /// Stores the types involved in calls to `transmute` intrinsic. These are meant to be checked
+    /// outside of typeck and borrowck to avoid cycles with opaque types and coroutine layout
+    /// computation.
+    pub transmutes_to_check: Vec<(Ty<'tcx>, Ty<'tcx>, HirId)>,
 
     /// Container types and field indices of `offset_of!` expressions
     offset_of_data: ItemLocalMap<(Ty<'tcx>, Vec<(VariantIdx, FieldIdx)>)>,
@@ -235,12 +245,13 @@ impl<'tcx> TypeckResults<'tcx> {
             coercion_casts: Default::default(),
             used_trait_imports: Default::default(),
             tainted_by_errors: None,
-            concrete_opaque_types: Default::default(),
+            hidden_types: Default::default(),
             closure_min_captures: Default::default(),
             closure_fake_reads: Default::default(),
-            rvalue_scopes: Default::default(),
             coroutine_stalled_predicates: Default::default(),
+            potentially_region_dependent_goals: Default::default(),
             closure_size_eval: Default::default(),
+            transmutes_to_check: Default::default(),
             offset_of_data: Default::default(),
         }
     }
@@ -249,7 +260,7 @@ impl<'tcx> TypeckResults<'tcx> {
     pub fn qpath_res(&self, qpath: &hir::QPath<'_>, id: HirId) -> Res {
         match *qpath {
             hir::QPath::Resolved(_, path) => path.res,
-            hir::QPath::TypeRelative(..) | hir::QPath::LangItem(..) => self
+            hir::QPath::TypeRelative(..) => self
                 .type_dependent_def(id)
                 .map_or(Res::Err, |(kind, def_id)| Res::Def(kind, def_id)),
         }
@@ -462,7 +473,7 @@ impl<'tcx> TypeckResults<'tcx> {
         let mut has_ref_mut = false;
         pat.walk(|pat| {
             if let hir::PatKind::Binding(_, id, _, _) = pat.kind
-                && let Some(BindingMode(ByRef::Yes(Mutability::Mut), _)) =
+                && let Some(BindingMode(ByRef::Yes(_, Mutability::Mut), _)) =
                     self.pat_binding_modes().get(id)
             {
                 has_ref_mut = true;
@@ -486,7 +497,7 @@ impl<'tcx> TypeckResults<'tcx> {
             ByRef::No
         } else {
             let mutable = self.pat_has_ref_mut_binding(inner);
-            ByRef::Yes(if mutable { Mutability::Mut } else { Mutability::Not })
+            ByRef::Yes(Pinnedness::Not, if mutable { Mutability::Mut } else { Mutability::Not })
         }
     }
 
@@ -777,31 +788,31 @@ impl<'tcx> IsIdentity for CanonicalUserType<'tcx> {
                     return false;
                 }
 
-                iter::zip(user_args.args, BoundVar::ZERO..).all(|(kind, cvar)| {
-                    match kind.unpack() {
+                iter::zip(user_args.args, BoundVar::ZERO..).all(|(arg, cvar)| {
+                    match arg.kind() {
                         GenericArgKind::Type(ty) => match ty.kind() {
                             ty::Bound(debruijn, b) => {
-                                // We only allow a `ty::INNERMOST` index in generic parameters.
-                                assert_eq!(*debruijn, ty::INNERMOST);
+                                // We only allow a `ty::BoundVarIndexKind::Canonical` index in generic parameters.
+                                assert_eq!(*debruijn, ty::BoundVarIndexKind::Canonical);
                                 cvar == b.var
                             }
                             _ => false,
                         },
 
                         GenericArgKind::Lifetime(r) => match r.kind() {
-                            ty::ReBound(debruijn, br) => {
-                                // We only allow a `ty::INNERMOST` index in generic parameters.
-                                assert_eq!(debruijn, ty::INNERMOST);
-                                cvar == br.var
+                            ty::ReBound(debruijn, b) => {
+                                // We only allow a `ty::BoundVarIndexKind::Canonical` index in generic parameters.
+                                assert_eq!(debruijn, ty::BoundVarIndexKind::Canonical);
+                                cvar == b.var
                             }
                             _ => false,
                         },
 
                         GenericArgKind::Const(ct) => match ct.kind() {
                             ty::ConstKind::Bound(debruijn, b) => {
-                                // We only allow a `ty::INNERMOST` index in generic parameters.
-                                assert_eq!(debruijn, ty::INNERMOST);
-                                cvar == b
+                                // We only allow a `ty::BoundVarIndexKind::Canonical` index in generic parameters.
+                                assert_eq!(debruijn, ty::BoundVarIndexKind::Canonical);
+                                cvar == b.var
                             }
                             _ => false,
                         },
@@ -841,8 +852,10 @@ impl<'tcx> std::fmt::Display for UserTypeKind<'tcx> {
 pub struct Rust2024IncompatiblePatInfo {
     /// Labeled spans for `&`s, `&mut`s, and binding modifiers incompatible with Rust 2024.
     pub primary_labels: Vec<(Span, String)>,
-    /// Whether any binding modifiers occur under a non-`move` default binding mode.
-    pub bad_modifiers: bool,
+    /// Whether any `mut` binding modifiers occur under a non-`move` default binding mode.
+    pub bad_mut_modifiers: bool,
+    /// Whether any `ref`/`ref mut` binding modifiers occur under a non-`move` default binding mode.
+    pub bad_ref_modifiers: bool,
     /// Whether any `&` or `&mut` patterns occur under a non-`move` default binding mode.
     pub bad_ref_pats: bool,
     /// If `true`, we can give a simpler suggestion solely by eliding explicit binding modifiers.

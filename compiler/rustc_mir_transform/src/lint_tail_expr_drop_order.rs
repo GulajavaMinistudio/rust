@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::hash_map;
 use std::rc::Rc;
 
+use itertools::Itertools as _;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
 use rustc_data_structures::unord::{UnordMap, UnordSet};
 use rustc_errors::Subdiagnostic;
@@ -12,8 +13,8 @@ use rustc_index::{IndexSlice, IndexVec};
 use rustc_macros::{LintDiagnostic, Subdiagnostic};
 use rustc_middle::bug;
 use rustc_middle::mir::{
-    self, BasicBlock, Body, ClearCrossCrate, Local, Location, Place, StatementKind, TerminatorKind,
-    dump_mir,
+    self, BasicBlock, Body, ClearCrossCrate, Local, Location, MirDumper, Place, StatementKind,
+    TerminatorKind,
 };
 use rustc_middle::ty::significant_drop_order::{
     extract_component_with_significant_dtor, ty_dtor_span,
@@ -227,7 +228,10 @@ pub(crate) fn run_lint<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId, body: &Body<
         return;
     }
 
-    dump_mir(tcx, false, "lint_tail_expr_drop_order", &0 as _, body, |_, _| Ok(()));
+    if let Some(dumper) = MirDumper::new(tcx, "lint_tail_expr_drop_order", body) {
+        dumper.dump_mir(body);
+    }
+
     let locals_with_user_names = collect_user_names(body);
     let is_closure_like = tcx.is_closure_like(def_id.to_def_id());
 
@@ -336,9 +340,9 @@ pub(crate) fn run_lint<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId, body: &Body<
             // Suppose that all BIDs point into the same local,
             // we can remove the this local from the observed drops,
             // so that we can focus our diagnosis more on the others.
-            if candidates.iter().all(|&(_, place)| candidates[0].1.local == place.local) {
+            if let Ok(local) = candidates.iter().map(|&(_, place)| place.local).all_equal_value() {
                 for path_idx in all_locals_dropped.iter() {
-                    if move_data.move_paths[path_idx].place.local == candidates[0].1.local {
+                    if move_data.move_paths[path_idx].place.local == local {
                         to_exclude.insert(path_idx);
                     }
                 }
@@ -516,8 +520,12 @@ struct LocalLabel<'a> {
 /// A custom `Subdiagnostic` implementation so that the notes are delivered in a specific order
 impl Subdiagnostic for LocalLabel<'_> {
     fn add_to_diag<G: rustc_errors::EmissionGuarantee>(self, diag: &mut rustc_errors::Diag<'_, G>) {
+        // Because parent uses this field , we need to remove it delay before adding it.
+        diag.remove_arg("name");
         diag.arg("name", self.name);
+        diag.remove_arg("is_generated_name");
         diag.arg("is_generated_name", self.is_generated_name);
+        diag.remove_arg("is_dropped_first_edition_2024");
         diag.arg("is_dropped_first_edition_2024", self.is_dropped_first_edition_2024);
         let msg = diag.eagerly_translate(crate::fluent_generated::mir_transform_tail_expr_local);
         diag.span_label(self.span, msg);

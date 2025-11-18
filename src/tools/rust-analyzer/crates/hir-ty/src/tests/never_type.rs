@@ -104,7 +104,7 @@ enum Option<T> { None, Some(T) }
 fn test() {
     let a = if true { Option::None } else { Option::Some(return) };
     a;
-  //^ Option<&'static str>
+  //^ Option<&'? str>
     match 42 {
         42 => a,
         _ => Option::Some("str"),
@@ -362,12 +362,12 @@ fn diverging_expression_3_break() {
             140..141 'x': u32
             149..175 '{ for ...; }; }': u32
             151..172 'for a ...eak; }': fn into_iter<{unknown}>({unknown}) -> <{unknown} as IntoIterator>::IntoIter
-            151..172 'for a ...eak; }': {unknown}
+            151..172 'for a ...eak; }': <{unknown} as IntoIterator>::IntoIter
             151..172 'for a ...eak; }': !
             151..172 'for a ...eak; }': {unknown}
             151..172 'for a ...eak; }': &'? mut {unknown}
             151..172 'for a ...eak; }': fn next<{unknown}>(&'? mut {unknown}) -> Option<<{unknown} as Iterator>::Item>
-            151..172 'for a ...eak; }': Option<{unknown}>
+            151..172 'for a ...eak; }': Option<<{unknown} as Iterator>::Item>
             151..172 'for a ...eak; }': ()
             151..172 'for a ...eak; }': ()
             151..172 'for a ...eak; }': ()
@@ -379,12 +379,12 @@ fn diverging_expression_3_break() {
             226..227 'x': u32
             235..253 '{ for ... {}; }': u32
             237..250 'for a in b {}': fn into_iter<{unknown}>({unknown}) -> <{unknown} as IntoIterator>::IntoIter
-            237..250 'for a in b {}': {unknown}
+            237..250 'for a in b {}': <{unknown} as IntoIterator>::IntoIter
             237..250 'for a in b {}': !
             237..250 'for a in b {}': {unknown}
             237..250 'for a in b {}': &'? mut {unknown}
             237..250 'for a in b {}': fn next<{unknown}>(&'? mut {unknown}) -> Option<<{unknown} as Iterator>::Item>
-            237..250 'for a in b {}': Option<{unknown}>
+            237..250 'for a in b {}': Option<<{unknown} as Iterator>::Item>
             237..250 'for a in b {}': ()
             237..250 'for a in b {}': ()
             237..250 'for a in b {}': ()
@@ -395,12 +395,12 @@ fn diverging_expression_3_break() {
             304..305 'x': u32
             313..340 '{ for ...; }; }': u32
             315..337 'for a ...urn; }': fn into_iter<{unknown}>({unknown}) -> <{unknown} as IntoIterator>::IntoIter
-            315..337 'for a ...urn; }': {unknown}
+            315..337 'for a ...urn; }': <{unknown} as IntoIterator>::IntoIter
             315..337 'for a ...urn; }': !
             315..337 'for a ...urn; }': {unknown}
             315..337 'for a ...urn; }': &'? mut {unknown}
             315..337 'for a ...urn; }': fn next<{unknown}>(&'? mut {unknown}) -> Option<<{unknown} as Iterator>::Item>
-            315..337 'for a ...urn; }': Option<{unknown}>
+            315..337 'for a ...urn; }': Option<<{unknown} as Iterator>::Item>
             315..337 'for a ...urn; }': ()
             315..337 'for a ...urn; }': ()
             315..337 'for a ...urn; }': ()
@@ -784,4 +784,32 @@ fn make_up_a_pointer<T>() -> *const T {
             95..108: expected *const T, got *const !
         "#]],
     )
+}
+
+#[test]
+fn diverging_destructuring_assignment() {
+    check_infer_with_mismatches(
+        r#"
+fn foo() {
+    let n = match 42 {
+        0 => _ = loop {},
+        _ => 0,
+    };
+}
+    "#,
+        expect![[r#"
+            9..84 '{     ...  }; }': ()
+            19..20 'n': i32
+            23..81 'match ...     }': i32
+            29..31 '42': i32
+            42..43 '0': i32
+            42..43 '0': i32
+            47..48 '_': !
+            47..58 '_ = loop {}': i32
+            51..58 'loop {}': !
+            56..58 '{}': ()
+            68..69 '_': i32
+            73..74 '0': i32
+        "#]],
+    );
 }

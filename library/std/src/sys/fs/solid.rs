@@ -459,6 +459,10 @@ impl File {
         self.tell()
     }
 
+    pub fn size(&self) -> Option<io::Result<u64>> {
+        None
+    }
+
     pub fn tell(&self) -> io::Result<u64> {
         unsafe {
             let mut out_offset = MaybeUninit::uninit();
@@ -532,6 +536,14 @@ pub fn set_perm(p: &Path, perm: FilePermissions) -> io::Result<()> {
     })
     .map_err(|e| e.as_io_error())?;
     Ok(())
+}
+
+pub fn set_times(_p: &Path, _times: FileTimes) -> io::Result<()> {
+    unsupported()
+}
+
+pub fn set_times_nofollow(_p: &Path, _times: FileTimes) -> io::Result<()> {
+    unsupported()
 }
 
 pub fn rmdir(p: &Path) -> io::Result<()> {

@@ -194,7 +194,7 @@ macro_rules! int_module {
         }
 
         #[test]
-        fn test_isolate_most_significant_one() {
+        fn test_isolate_highest_one() {
             const BITS: $T = -1;
             const MOST_SIG_ONE: $T = 1 << (<$T>::BITS - 1);
 
@@ -203,15 +203,15 @@ macro_rules! int_module {
             let mut i = 0;
             while i < <$T>::BITS {
                 assert_eq!(
-                    (BITS >> i).isolate_most_significant_one(),
-                    (MOST_SIG_ONE >> i).isolate_most_significant_one()
+                    (BITS >> i).isolate_highest_one(),
+                    (MOST_SIG_ONE >> i).isolate_highest_one()
                 );
                 i += 1;
             }
         }
 
         #[test]
-        fn test_isolate_least_significant_one() {
+        fn test_isolate_lowest_one() {
             const BITS: $T = -1;
             const LEAST_SIG_ONE: $T = 1;
 
@@ -220,10 +220,50 @@ macro_rules! int_module {
             let mut i = 0;
             while i < <$T>::BITS {
                 assert_eq!(
-                    (BITS << i).isolate_least_significant_one(),
-                    (LEAST_SIG_ONE << i).isolate_least_significant_one()
+                    (BITS << i).isolate_lowest_one(),
+                    (LEAST_SIG_ONE << i).isolate_lowest_one()
                 );
                 i += 1;
+            }
+        }
+
+        #[test]
+        fn test_highest_one() {
+            const ZERO: $T = 0;
+            const ONE: $T = 1;
+            const MINUS_ONE: $T = -1;
+
+            assert_eq!(ZERO.highest_one(), None);
+
+            for i in 0..<$T>::BITS {
+                // Set single bit.
+                assert_eq!((ONE << i).highest_one(), Some(i));
+                if i != <$T>::BITS - 1 {
+                    // Set lowest bits.
+                    assert_eq!((<$T>::MAX >> i).highest_one(), Some(<$T>::BITS - i - 2));
+                }
+                // Set highest bits.
+                assert_eq!((MINUS_ONE << i).highest_one(), Some(<$T>::BITS - 1));
+            }
+        }
+
+        #[test]
+        fn test_lowest_one() {
+            const ZERO: $T = 0;
+            const ONE: $T = 1;
+            const MINUS_ONE: $T = -1;
+
+            assert_eq!(ZERO.lowest_one(), None);
+
+            for i in 0..<$T>::BITS {
+                // Set single bit.
+                assert_eq!((ONE << i).lowest_one(), Some(i));
+                if i != <$T>::BITS - 1 {
+                    // Set lowest bits.
+                    assert_eq!((<$T>::MAX >> i).lowest_one(), Some(0));
+                }
+                // Set highest bits.
+                assert_eq!((MINUS_ONE << i).lowest_one(), Some(i));
             }
         }
 
@@ -681,6 +721,45 @@ macro_rules! int_module {
                 assert_eq_const_safe!($T: <$T>::unbounded_shr(17, SHIFT_AMOUNT_OVERFLOW), 0);
                 assert_eq_const_safe!($T: <$T>::unbounded_shr(17, SHIFT_AMOUNT_OVERFLOW2), 0);
                 assert_eq_const_safe!($T: <$T>::unbounded_shr(17, SHIFT_AMOUNT_OVERFLOW3), 0);
+            }
+        }
+
+        const DIV_EXACT_SUCCESS_DIVIDEND1: $T = 42;
+        const DIV_EXACT_SUCCESS_DIVISOR1: $T = 6;
+        const DIV_EXACT_SUCCESS_QUOTIENT1: $T = 7;
+        const DIV_EXACT_SUCCESS_DIVIDEND2: $T = 18;
+        const DIV_EXACT_SUCCESS_DIVISOR2: $T = 3;
+        const DIV_EXACT_SUCCESS_QUOTIENT2: $T = 6;
+        const DIV_EXACT_SUCCESS_DIVIDEND3: $T = -91;
+        const DIV_EXACT_SUCCESS_DIVISOR3: $T = 13;
+        const DIV_EXACT_SUCCESS_QUOTIENT3: $T = -7;
+        const DIV_EXACT_SUCCESS_DIVIDEND4: $T = -57;
+        const DIV_EXACT_SUCCESS_DIVISOR4: $T = -3;
+        const DIV_EXACT_SUCCESS_QUOTIENT4: $T = 19;
+
+        test_runtime_and_compiletime! {
+            fn test_div_exact() {
+                // 42 / 6
+                assert_eq_const_safe!(Option<$T>: <$T>::checked_div_exact(DIV_EXACT_SUCCESS_DIVIDEND1, DIV_EXACT_SUCCESS_DIVISOR1), Some(DIV_EXACT_SUCCESS_QUOTIENT1));
+                assert_eq_const_safe!(Option<$T>: <$T>::div_exact(DIV_EXACT_SUCCESS_DIVIDEND1, DIV_EXACT_SUCCESS_DIVISOR1), Some(DIV_EXACT_SUCCESS_QUOTIENT1));
+
+                // 18 / 3
+                assert_eq_const_safe!(Option<$T>: <$T>::checked_div_exact(DIV_EXACT_SUCCESS_DIVIDEND2, DIV_EXACT_SUCCESS_DIVISOR2), Some(DIV_EXACT_SUCCESS_QUOTIENT2));
+                assert_eq_const_safe!(Option<$T>: <$T>::div_exact(DIV_EXACT_SUCCESS_DIVIDEND2, DIV_EXACT_SUCCESS_DIVISOR2), Some(DIV_EXACT_SUCCESS_QUOTIENT2));
+
+                // -91 / 13
+                assert_eq_const_safe!(Option<$T>: <$T>::checked_div_exact(DIV_EXACT_SUCCESS_DIVIDEND3, DIV_EXACT_SUCCESS_DIVISOR3), Some(DIV_EXACT_SUCCESS_QUOTIENT3));
+                assert_eq_const_safe!(Option<$T>: <$T>::div_exact(DIV_EXACT_SUCCESS_DIVIDEND3, DIV_EXACT_SUCCESS_DIVISOR3), Some(DIV_EXACT_SUCCESS_QUOTIENT3));
+
+                // -57 / -3
+                assert_eq_const_safe!(Option<$T>: <$T>::checked_div_exact(DIV_EXACT_SUCCESS_DIVIDEND4, DIV_EXACT_SUCCESS_DIVISOR4), Some(DIV_EXACT_SUCCESS_QUOTIENT4));
+                assert_eq_const_safe!(Option<$T>: <$T>::div_exact(DIV_EXACT_SUCCESS_DIVIDEND4, DIV_EXACT_SUCCESS_DIVISOR4), Some(DIV_EXACT_SUCCESS_QUOTIENT4));
+
+                // failures
+                assert_eq_const_safe!(Option<$T>: <$T>::checked_div_exact(1, 2), None);
+                assert_eq_const_safe!(Option<$T>: <$T>::div_exact(1, 2), None);
+                assert_eq_const_safe!(Option<$T>: <$T>::checked_div_exact(<$T>::MIN, -1), None);
+                assert_eq_const_safe!(Option<$T>: <$T>::checked_div_exact(0, 0), None);
             }
         }
     };

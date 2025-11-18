@@ -1,7 +1,5 @@
-//@no-rustfix
+//@no-rustfix: only some diagnostics have suggestions
 
-#![feature(repr128)]
-#![allow(incomplete_features)]
 #![warn(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -570,4 +568,17 @@ fn issue12721() {
 
     (255 % 999999u64) as u8;
     //~^ cast_possible_truncation
+}
+
+mod issue14150 {
+    #[clippy::msrv = "1.87"]
+    fn msrv_supports_cast_signed() {
+        _ = 1u8 as i8;
+        //~^ cast_possible_wrap
+    }
+    #[clippy::msrv = "1.86"]
+    fn msrv_doesnt_supports_cast_signed() {
+        _ = 1u8 as i8;
+        //~^ cast_possible_wrap
+    }
 }

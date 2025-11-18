@@ -4,12 +4,12 @@ use clippy_config::Conf;
 use clippy_utils::diagnostics::span_lint_and_then;
 use clippy_utils::macros::span_is_local;
 use clippy_utils::msrvs::{self, Msrv};
-use clippy_utils::path_def_id;
+use clippy_utils::res::MaybeResPath;
 use clippy_utils::source::SpanRangeExt;
 use rustc_errors::Applicability;
 use rustc_hir::intravisit::{Visitor, walk_path};
 use rustc_hir::{
-    FnRetTy, GenericArg, GenericArgs, HirId, Impl, ImplItemKind, ImplItemRef, Item, ItemKind, PatKind, Path,
+    FnRetTy, GenericArg, GenericArgs, HirId, Impl, ImplItemId, ImplItemKind, Item, ItemKind, PatKind, Path,
     PathSegment, Ty, TyKind,
 };
 use rustc_lint::{LateContext, LateLintPass};
@@ -67,17 +67,16 @@ impl_lint_pass!(FromOverInto => [FROM_OVER_INTO]);
 impl<'tcx> LateLintPass<'tcx> for FromOverInto {
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'_>) {
         if let ItemKind::Impl(Impl {
-            of_trait: Some(hir_trait_ref),
+            of_trait: Some(of_trait),
             self_ty,
             items: [impl_item_ref],
             ..
         }) = item.kind
-            && let Some(into_trait_seg) = hir_trait_ref.path.segments.last()
+            && let Some(into_trait_seg) = of_trait.trait_ref.path.segments.last()
             // `impl Into<target_ty> for self_ty`
             && let Some(GenericArgs { args: [GenericArg::Type(target_ty)], .. }) = into_trait_seg.args
             && span_is_local(item.span)
-            && let Some(middle_trait_ref) = cx.tcx.impl_trait_ref(item.owner_id)
-            .map(ty::EarlyBinder::instantiate_identity)
+            && let middle_trait_ref = cx.tcx.impl_trait_ref(item.owner_id).instantiate_identity()
             && cx.tcx.is_diagnostic_item(sym::Into, middle_trait_ref.def_id)
             && !matches!(middle_trait_ref.args.type_at(1).kind(), ty::Alias(ty::Opaque, _))
             && self.msrv.meets(cx, msrvs::RE_REBALANCING_COHERENCE)
@@ -90,7 +89,12 @@ impl<'tcx> LateLintPass<'tcx> for FromOverInto {
                 |diag| {
                     // If the target type is likely foreign mention the orphan rules as it's a common source of
                     // confusion
-                    if path_def_id(cx, target_ty.peel_refs()).is_none_or(|id| !id.is_local()) {
+                    if target_ty
+                        .peel_refs()
+                        .basic_res()
+                        .opt_def_id()
+                        .is_none_or(|id| !id.is_local())
+                    {
                         diag.help(
                             "`impl From<Local> for Foreign` is allowed by the orphan rules, for more information see\n\
                             https://doc.rust-lang.org/reference/items/implementations.html#trait-implementation-coherence"
@@ -102,7 +106,7 @@ impl<'tcx> LateLintPass<'tcx> for FromOverInto {
                         middle_trait_ref.self_ty()
                     );
                     if let Some(suggestions) =
-                        convert_to_from(cx, into_trait_seg, target_ty.as_unambig_ty(), self_ty, impl_item_ref)
+                        convert_to_from(cx, into_trait_seg, target_ty.as_unambig_ty(), self_ty, *impl_item_ref)
                     {
                         diag.multipart_suggestion(message, suggestions, Applicability::MachineApplicable);
                     } else {
@@ -164,14 +168,14 @@ fn convert_to_from(
     into_trait_seg: &PathSegment<'_>,
     target_ty: &Ty<'_>,
     self_ty: &Ty<'_>,
-    impl_item_ref: &ImplItemRef,
+    impl_item_ref: ImplItemId,
 ) -> Option<Vec<(Span, String)>> {
     if !target_ty.find_self_aliases().is_empty() {
         // It's tricky to expand self-aliases correctly, we'll ignore it to not cause a
         // bad suggestion/fix.
         return None;
     }
-    let impl_item = cx.tcx.hir_impl_item(impl_item_ref.id);
+    let impl_item = cx.tcx.hir_impl_item(impl_item_ref);
     let ImplItemKind::Fn(ref sig, body_id) = impl_item.kind else {
         return None;
     };

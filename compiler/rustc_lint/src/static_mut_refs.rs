@@ -54,7 +54,7 @@ declare_lint! {
     "creating a shared reference to mutable static",
     @future_incompatible = FutureIncompatibleInfo {
         reason: FutureIncompatibilityReason::EditionError(Edition::Edition2024),
-        reference: "<https://doc.rust-lang.org/nightly/edition-guide/rust-2024/static-mut-references.html>",
+        reference: "<https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>",
         explain_reason: false,
     };
     @edition Edition2024 => Deny;
@@ -108,7 +108,7 @@ impl<'tcx> LateLintPass<'tcx> for StaticMutRefs {
     fn check_stmt(&mut self, cx: &LateContext<'tcx>, stmt: &Stmt<'_>) {
         if let hir::StmtKind::Let(loc) = stmt.kind
             && let hir::PatKind::Binding(ba, _, _, _) = loc.pat.kind
-            && let hir::ByRef::Yes(m) = ba.0
+            && let hir::ByRef::Yes(_, m) = ba.0
             && let Some(init) = loc.init
             && let Some(err_span) = path_is_static_mut(init, init.span)
         {

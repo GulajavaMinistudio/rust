@@ -1,5 +1,4 @@
 use super::unsupported;
-use crate::error::Error as StdError;
 use crate::ffi::{OsStr, OsString};
 use crate::marker::PhantomData;
 use crate::os::xous::ffi::Error as XousError;
@@ -62,14 +61,6 @@ mod c_compat {
         }
         exit(unsafe { main() });
     }
-
-    // This function is needed by the panic runtime. The symbol is named in
-    // pre-link args for the target specification, so keep that in sync.
-    #[unsafe(no_mangle)]
-    // NB. used by both libunwind and libpanic_abort
-    pub extern "C" fn __rust_abort() -> ! {
-        exit(101);
-    }
 }
 
 pub fn errno() -> i32 {
@@ -118,12 +109,7 @@ impl fmt::Display for JoinPathsError {
     }
 }
 
-impl StdError for JoinPathsError {
-    #[allow(deprecated)]
-    fn description(&self) -> &str {
-        "not supported on this platform yet"
-    }
-}
+impl crate::error::Error for JoinPathsError {}
 
 pub fn current_exe() -> io::Result<PathBuf> {
     unsupported()

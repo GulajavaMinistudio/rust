@@ -1,7 +1,5 @@
 # Using tracing to debug the compiler
 
-<!-- toc -->
-
 The compiler has a lot of [`debug!`] (or `trace!`) calls, which print out logging information
 at many points. These are very useful to at least narrow down the location of
 a bug if not to find it entirely, or just to orient yourself as to why the
@@ -82,7 +80,7 @@ RUSTC_LOG=[typeck{key=.*name_of_item.*}]
 
 Different queries have different arguments. You can find a list of queries and
 their arguments in
-[`rustc_middle/src/query/mod.rs`](https://github.com/rust-lang/rust/blob/master/compiler/rustc_middle/src/query/mod.rs#L18).
+[`rustc_middle/src/query/mod.rs`](https://github.com/rust-lang/rust/blob/HEAD/compiler/rustc_middle/src/query/mod.rs#L18).
 
 ## Broad module level filters
 
@@ -111,7 +109,7 @@ Miri, use `MIRI_LOG` instead. You get the idea :)
 
 See the [`tracing`] crate's docs, and specifically the docs for [`debug!`] to
 see the full syntax you can use. (Note: unlike the compiler, the [`tracing`]
-crate and its examples use the `RUST_LOG` environment variable. rustc, rustdoc,
+crate and its examples use the `RUSTC_LOG` environment variable. rustc, rustdoc,
 and other tools set custom environment variables.)
 
 **Note that unless you use a very strict filter, the logger will emit a lot of

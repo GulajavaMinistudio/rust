@@ -16,28 +16,33 @@ fn check_with_config(
     expect: Expect,
 ) {
     let (db, position) = crate::tests::position(ra_fixture);
-    let (ctx, analysis) = crate::context::CompletionContext::new(&db, position, &config).unwrap();
+    let (ctx, analysis) =
+        crate::context::CompletionContext::new(&db, position, &config, None).unwrap();
 
     let mut acc = crate::completions::Completions::default();
-    if let CompletionAnalysis::Name(NameContext { kind: NameKind::IdentPat(pat_ctx), .. }) =
-        &analysis
-    {
-        crate::completions::flyimport::import_on_the_fly_pat(&mut acc, &ctx, pat_ctx);
-    }
-    if let CompletionAnalysis::NameRef(name_ref_ctx) = &analysis {
-        match &name_ref_ctx.kind {
-            NameRefKind::Path(path) => {
-                crate::completions::flyimport::import_on_the_fly_path(&mut acc, &ctx, path);
-            }
-            NameRefKind::DotAccess(dot_access) => {
-                crate::completions::flyimport::import_on_the_fly_dot(&mut acc, &ctx, dot_access);
-            }
-            NameRefKind::Pattern(pattern) => {
-                crate::completions::flyimport::import_on_the_fly_pat(&mut acc, &ctx, pattern);
-            }
-            _ => (),
+    hir::attach_db(ctx.db, || {
+        if let CompletionAnalysis::Name(NameContext { kind: NameKind::IdentPat(pat_ctx), .. }) =
+            &analysis
+        {
+            crate::completions::flyimport::import_on_the_fly_pat(&mut acc, &ctx, pat_ctx);
         }
-    }
+        if let CompletionAnalysis::NameRef(name_ref_ctx) = &analysis {
+            match &name_ref_ctx.kind {
+                NameRefKind::Path(path) => {
+                    crate::completions::flyimport::import_on_the_fly_path(&mut acc, &ctx, path);
+                }
+                NameRefKind::DotAccess(dot_access) => {
+                    crate::completions::flyimport::import_on_the_fly_dot(
+                        &mut acc, &ctx, dot_access,
+                    );
+                }
+                NameRefKind::Pattern(pattern) => {
+                    crate::completions::flyimport::import_on_the_fly_pat(&mut acc, &ctx, pattern);
+                }
+                _ => (),
+            }
+        }
+    });
 
     expect.assert_eq(&super::render_completion_list(Vec::from(acc)));
 }
@@ -114,7 +119,7 @@ fn main() {
 }
 "#,
         r#"
-use dep::{some_module::{SecondStruct, ThirdStruct}, FirstStruct};
+use dep::{FirstStruct, some_module::{SecondStruct, ThirdStruct}};
 
 fn main() {
     ThirdStruct
@@ -1946,5 +1951,27 @@ fn foo() {
 }
         "#,
         expect![""],
+    );
+}
+
+#[test]
+fn multiple_matches_with_qualifier() {
+    check(
+        r#"
+//- /foo.rs crate:foo
+pub mod env {
+    pub fn var() {}
+    pub fn _var() {}
+}
+
+//- /bar.rs crate:bar deps:foo
+fn main() {
+    env::var$0
+}
+    "#,
+        expect![[r#"
+            fn _var() (use foo::env) fn()
+            fn var() (use foo::env)  fn()
+        "#]],
     );
 }

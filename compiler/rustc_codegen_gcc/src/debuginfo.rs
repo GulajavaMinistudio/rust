@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use gccjit::{Location, RValue};
+use gccjit::{Function, Location, RValue};
 use rustc_abi::Size;
 use rustc_codegen_ssa::mir::debuginfo::{DebugScope, FunctionDebugContext, VariableKind};
 use rustc_codegen_ssa::traits::{DebugInfoBuilderMethods, DebugInfoCodegenMethods};
@@ -19,7 +19,7 @@ use crate::context::CodegenCx;
 pub(super) const UNKNOWN_LINE_NUMBER: u32 = 0;
 pub(super) const UNKNOWN_COLUMN_NUMBER: u32 = 0;
 
-impl<'a, 'gcc, 'tcx> DebugInfoBuilderMethods for Builder<'a, 'gcc, 'tcx> {
+impl<'a, 'gcc, 'tcx> DebugInfoBuilderMethods<'tcx> for Builder<'a, 'gcc, 'tcx> {
     // FIXME(eddyb) find a common convention for all of the debuginfo-related
     // names (choose between `dbg`, `debug`, `debuginfo`, `debug_info` etc.).
     fn dbg_var_addr(
@@ -29,11 +29,22 @@ impl<'a, 'gcc, 'tcx> DebugInfoBuilderMethods for Builder<'a, 'gcc, 'tcx> {
         _variable_alloca: Self::Value,
         _direct_offset: Size,
         _indirect_offsets: &[Size],
-        _fragment: Option<Range<Size>>,
+        _fragment: &Option<Range<Size>>,
     ) {
         // FIXME(tempdragon): Not sure if this is correct, probably wrong but still keep it here.
         #[cfg(feature = "master")]
         _variable_alloca.set_location(_dbg_loc);
+    }
+
+    fn dbg_var_value(
+        &mut self,
+        _dbg_var: Self::DIVariable,
+        _dbg_loc: Self::DILocation,
+        _value: Self::Value,
+        _direct_offset: Size,
+        _indirect_offsets: &[Size],
+        _fragment: &Option<Range<Size>>,
+    ) {
     }
 
     fn insert_reference_to_gdb_debug_scripts_section_global(&mut self) {
@@ -51,10 +62,6 @@ impl<'a, 'gcc, 'tcx> DebugInfoBuilderMethods for Builder<'a, 'gcc, 'tcx> {
 
     fn clear_dbg_loc(&mut self) {
         self.location = None;
-    }
-
-    fn get_dbg_loc(&self) -> Option<Self::DILocation> {
-        self.location
     }
 }
 
@@ -225,7 +232,7 @@ impl<'gcc, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'gcc, 'tcx> {
         &self,
         instance: Instance<'tcx>,
         fn_abi: &FnAbi<'tcx, Ty<'tcx>>,
-        llfn: RValue<'gcc>,
+        llfn: Function<'gcc>,
         mir: &mir::Body<'tcx>,
     ) -> Option<FunctionDebugContext<'tcx, Self::DIScope, Self::DILocation>> {
         if self.sess().opts.debuginfo == DebugInfo::None {
@@ -276,7 +283,7 @@ impl<'gcc, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'gcc, 'tcx> {
         &self,
         _instance: Instance<'tcx>,
         _fn_abi: &FnAbi<'tcx, Ty<'tcx>>,
-        _maybe_definition_llfn: Option<RValue<'gcc>>,
+        _maybe_definition_llfn: Option<Function<'gcc>>,
     ) -> Self::DIScope {
         // TODO(antoyo): implement.
     }
@@ -289,7 +296,7 @@ impl<'gcc, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'gcc, 'tcx> {
     ) -> Self::DILocation {
         let pos = span.lo();
         let DebugLoc { file, line, col } = self.lookup_debug_loc(pos);
-        let loc = match file.name {
+        match file.name {
             rustc_span::FileName::Real(ref name) => match *name {
                 rustc_span::RealFileName::LocalPath(ref name) => {
                     if let Some(name) = name.to_str() {
@@ -314,7 +321,6 @@ impl<'gcc, 'tcx> DebugInfoCodegenMethods<'tcx> for CodegenCx<'gcc, 'tcx> {
                 }
             },
             _ => Location::null(),
-        };
-        loc
+        }
     }
 }

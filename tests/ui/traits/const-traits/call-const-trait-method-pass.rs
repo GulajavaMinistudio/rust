@@ -1,6 +1,5 @@
-//@ known-bug: #110395
-
-#![feature(const_trait_impl, const_ops)]
+#![feature(const_trait_impl, const_ops, const_cmp)]
+//@ check-pass
 
 struct Int(i32);
 
@@ -21,8 +20,7 @@ impl const PartialEq for Int {
     }
 }
 
-#[const_trait]
-pub trait Plus {
+pub const trait Plus {
     fn plus(self, rhs: Self) -> Self;
 }
 

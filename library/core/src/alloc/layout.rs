@@ -61,8 +61,8 @@ impl Layout {
     /// * `align` must be a power of two,
     ///
     /// * `size`, when rounded up to the nearest multiple of `align`,
-    ///    must not overflow `isize` (i.e., the rounded value must be
-    ///    less than or equal to `isize::MAX`).
+    ///   must not overflow `isize` (i.e., the rounded value must be
+    ///   less than or equal to `isize::MAX`).
     #[stable(feature = "alloc_layout", since = "1.28.0")]
     #[rustc_const_stable(feature = "const_alloc_layout_size_align", since = "1.50.0")]
     #[inline]
@@ -126,6 +126,7 @@ impl Layout {
     #[rustc_const_stable(feature = "const_alloc_layout_unchecked", since = "1.36.0")]
     #[must_use]
     #[inline]
+    #[track_caller]
     pub const unsafe fn from_size_align_unchecked(size: usize, align: usize) -> Self {
         assert_unsafe_precondition!(
             check_library_ub,
@@ -225,10 +226,10 @@ impl Layout {
 
     /// Creates a `NonNull` that is dangling, but well-aligned for this Layout.
     ///
-    /// Note that the pointer value may potentially represent a valid pointer,
-    /// which means this must not be used as a "not yet initialized"
-    /// sentinel value. Types that lazily allocate must track initialization by
-    /// some other means.
+    /// Note that the address of the returned pointer may potentially
+    /// be that of a valid pointer, which means this must not be used
+    /// as a "not yet initialized" sentinel value.
+    /// Types that lazily allocate must track initialization by some other means.
     #[unstable(feature = "alloc_layout_extra", issue = "55724")]
     #[must_use]
     #[inline]
@@ -315,8 +316,7 @@ impl Layout {
         // Size 1 Align MAX or Size isize::MAX Align 2 round up to `isize::MAX + 1`.)
         unsafe {
             let align_m1 = unchecked_sub(align.as_usize(), 1);
-            let size_rounded_up = unchecked_add(self.size, align_m1) & !align_m1;
-            size_rounded_up
+            unchecked_add(self.size, align_m1) & !align_m1
         }
     }
 

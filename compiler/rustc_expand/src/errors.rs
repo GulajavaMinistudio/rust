@@ -2,9 +2,13 @@ use std::borrow::Cow;
 
 use rustc_ast::ast;
 use rustc_errors::codes::*;
-use rustc_macros::{Diagnostic, Subdiagnostic};
-use rustc_session::Limit;
+use rustc_hir::limit::Limit;
+use rustc_macros::{Diagnostic, LintDiagnostic, Subdiagnostic};
 use rustc_span::{Ident, MacroRulesNormalizedIdent, Span, Symbol};
+
+#[derive(LintDiagnostic)]
+#[diag(expand_cfg_attr_no_attributes)]
+pub(crate) struct CfgAttrNoAttributes;
 
 #[derive(Diagnostic)]
 #[diag(expand_expr_repeat_no_syntax_vars)]
@@ -28,19 +32,28 @@ pub(crate) struct CountRepetitionMisplaced {
 }
 
 #[derive(Diagnostic)]
-#[diag(expand_meta_var_expr_unrecognized_var)]
-pub(crate) struct MetaVarExprUnrecognizedVar {
-    #[primary_span]
-    pub span: Span,
-    pub key: MacroRulesNormalizedIdent,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_var_still_repeating)]
-pub(crate) struct VarStillRepeating {
+#[diag(expand_metavar_still_repeating)]
+pub(crate) struct MacroVarStillRepeating {
     #[primary_span]
     pub span: Span,
     pub ident: MacroRulesNormalizedIdent,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(expand_metavar_still_repeating)]
+pub(crate) struct MetaVarStillRepeatingLint {
+    #[label]
+    pub label: Span,
+    pub ident: MacroRulesNormalizedIdent,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(expand_metavariable_wrong_operator)]
+pub(crate) struct MetaVariableWrongOperator {
+    #[label(expand_binder_label)]
+    pub binder: Span,
+    #[label(expand_occurrence_label)]
+    pub occurrence: Span,
 }
 
 #[derive(Diagnostic)]
@@ -49,6 +62,12 @@ pub(crate) struct MetaVarsDifSeqMatchers {
     #[primary_span]
     pub span: Span,
     pub msg: String,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(expand_unknown_macro_variable)]
+pub(crate) struct UnknownMacroVariable {
+    pub name: MacroRulesNormalizedIdent,
 }
 
 #[derive(Diagnostic)]
@@ -87,79 +106,16 @@ pub(crate) struct MacroBodyStability {
 }
 
 #[derive(Diagnostic)]
-#[diag(expand_attr_no_arguments)]
-pub(crate) struct AttrNoArguments {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_not_a_meta_item)]
-pub(crate) struct NotAMetaItem {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_only_one_word)]
-pub(crate) struct OnlyOneWord {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_cannot_be_name_of_macro)]
-pub(crate) struct CannotBeNameOfMacro<'a> {
-    #[primary_span]
-    pub span: Span,
-    pub trait_ident: Ident,
-    pub macro_type: &'a str,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_arg_not_attributes)]
-pub(crate) struct ArgumentNotAttributes {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_attributes_wrong_form)]
-pub(crate) struct AttributesWrongForm {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_attribute_meta_item)]
-pub(crate) struct AttributeMetaItem {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_attribute_single_word)]
-pub(crate) struct AttributeSingleWord {
-    #[primary_span]
-    pub span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag(expand_helper_attribute_name_invalid)]
-pub(crate) struct HelperAttributeNameInvalid {
-    #[primary_span]
-    pub span: Span,
-    pub name: Ident,
-}
-
-#[derive(Diagnostic)]
 #[diag(expand_feature_removed, code = E0557)]
+#[note]
 pub(crate) struct FeatureRemoved<'a> {
     #[primary_span]
     #[label]
     pub span: Span,
     #[subdiagnostic]
     pub reason: Option<FeatureRemovedReason<'a>>,
+    pub removed_rustc_version: &'a str,
+    pub pull_note: String,
 }
 
 #[derive(Subdiagnostic)]
@@ -179,12 +135,12 @@ pub(crate) struct FeatureNotAllowed {
 #[derive(Diagnostic)]
 #[diag(expand_recursion_limit_reached)]
 #[help]
-pub(crate) struct RecursionLimitReached<'a> {
+pub(crate) struct RecursionLimitReached {
     #[primary_span]
     pub span: Span,
     pub descr: String,
     pub suggested_limit: Limit,
-    pub crate_name: &'a str,
+    pub crate_name: Symbol,
 }
 
 #[derive(Diagnostic)]
@@ -309,6 +265,7 @@ pub(crate) struct ModuleCircular {
 
 #[derive(Diagnostic)]
 #[diag(expand_module_in_block)]
+#[note]
 pub(crate) struct ModuleInBlock {
     #[primary_span]
     pub span: Span,
@@ -317,7 +274,7 @@ pub(crate) struct ModuleInBlock {
 }
 
 #[derive(Subdiagnostic)]
-#[note(expand_note)]
+#[help(expand_help)]
 pub(crate) struct ModuleInBlockName {
     #[primary_span]
     pub span: Span,
@@ -416,6 +373,15 @@ pub(crate) struct DuplicateMatcherBinding {
     pub prev: Span,
 }
 
+#[derive(LintDiagnostic)]
+#[diag(expand_duplicate_matcher_binding)]
+pub(crate) struct DuplicateMatcherBindingLint {
+    #[label]
+    pub span: Span,
+    #[label(expand_label2)]
+    pub prev: Span,
+}
+
 #[derive(Diagnostic)]
 #[diag(expand_missing_fragment_specifier)]
 #[note]
@@ -440,7 +406,7 @@ pub(crate) struct InvalidFragmentSpecifier {
     #[primary_span]
     pub span: Span,
     pub fragment: Ident,
-    pub help: String,
+    pub help: &'static str,
 }
 
 #[derive(Diagnostic)]
@@ -495,4 +461,116 @@ pub(crate) struct GlobDelegationTraitlessQpath {
 pub(crate) struct ProcMacroBackCompat {
     pub crate_name: String,
     pub fixed_version: String,
+}
+
+pub(crate) use metavar_exprs::*;
+mod metavar_exprs {
+    use super::*;
+
+    #[derive(Diagnostic, Default)]
+    #[diag(expand_mve_extra_tokens)]
+    pub(crate) struct MveExtraTokens {
+        #[primary_span]
+        #[suggestion(code = "", applicability = "machine-applicable")]
+        pub span: Span,
+        #[label]
+        pub ident_span: Span,
+        pub extra_count: usize,
+
+        // The rest is only used for specific diagnostics and can be default if neither
+        // `note` is `Some`.
+        #[note(expand_exact)]
+        pub exact_args_note: Option<()>,
+        #[note(expand_range)]
+        pub range_args_note: Option<()>,
+        pub min_or_exact_args: usize,
+        pub max_args: usize,
+        pub name: String,
+    }
+
+    #[derive(Diagnostic)]
+    #[note]
+    #[diag(expand_mve_missing_paren)]
+    pub(crate) struct MveMissingParen {
+        #[primary_span]
+        #[label]
+        pub ident_span: Span,
+        #[label(expand_unexpected)]
+        pub unexpected_span: Option<Span>,
+        #[suggestion(code = "( /* ... */ )", applicability = "has-placeholders")]
+        pub insert_span: Option<Span>,
+    }
+
+    #[derive(Diagnostic)]
+    #[note]
+    #[diag(expand_mve_unrecognized_expr)]
+    pub(crate) struct MveUnrecognizedExpr {
+        #[primary_span]
+        #[label]
+        pub span: Span,
+        pub valid_expr_list: &'static str,
+    }
+
+    #[derive(Diagnostic)]
+    #[diag(expand_mve_unrecognized_var)]
+    pub(crate) struct MveUnrecognizedVar {
+        #[primary_span]
+        pub span: Span,
+        pub key: MacroRulesNormalizedIdent,
+    }
+}
+
+#[derive(Diagnostic)]
+#[diag(expand_macro_args_bad_delim)]
+pub(crate) struct MacroArgsBadDelim {
+    #[primary_span]
+    pub span: Span,
+    #[subdiagnostic]
+    pub sugg: MacroArgsBadDelimSugg,
+    pub rule_kw: Symbol,
+}
+
+#[derive(Subdiagnostic)]
+#[multipart_suggestion(expand_macro_args_bad_delim_sugg, applicability = "machine-applicable")]
+pub(crate) struct MacroArgsBadDelimSugg {
+    #[suggestion_part(code = "(")]
+    pub open: Span,
+    #[suggestion_part(code = ")")]
+    pub close: Span,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(expand_macro_call_unused_doc_comment)]
+#[help]
+pub(crate) struct MacroCallUnusedDocComment {
+    #[label]
+    pub span: Span,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(expand_or_patterns_back_compat)]
+pub(crate) struct OrPatternsBackCompat {
+    #[suggestion(code = "{suggestion}", applicability = "machine-applicable")]
+    pub span: Span,
+    pub suggestion: String,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(expand_trailing_semi_macro)]
+pub(crate) struct TrailingMacro {
+    #[note(expand_note1)]
+    #[note(expand_note2)]
+    pub is_trailing: bool,
+    pub name: Ident,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(expand_unused_builtin_attribute)]
+pub(crate) struct UnusedBuiltinAttribute {
+    #[note]
+    pub invoc_span: Span,
+    pub attr_name: Symbol,
+    pub macro_name: String,
+    #[suggestion(code = "", applicability = "machine-applicable", style = "tool-only")]
+    pub attr_span: Span,
 }

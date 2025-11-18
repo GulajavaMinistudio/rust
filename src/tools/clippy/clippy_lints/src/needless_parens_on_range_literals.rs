@@ -5,7 +5,6 @@ use clippy_utils::source::{snippet, snippet_with_applicability};
 use rustc_ast::ast;
 use rustc_errors::Applicability;
 use rustc_hir::{Expr, ExprKind};
-
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_session::declare_lint_pass;
 
@@ -75,7 +74,7 @@ fn check_for_parens(cx: &LateContext<'_>, e: &Expr<'_>, is_start: bool) {
 
 impl<'tcx> LateLintPass<'tcx> for NeedlessParensOnRangeLiterals {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>) {
-        if let Some(higher::Range { start, end, .. }) = higher::Range::hir(expr) {
+        if let Some(higher::Range { start, end, .. }) = higher::Range::hir(cx, expr) {
             if let Some(start) = start {
                 check_for_parens(cx, start, true);
             }

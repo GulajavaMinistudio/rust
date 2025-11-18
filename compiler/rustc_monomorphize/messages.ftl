@@ -12,6 +12,17 @@ monomorphize_abi_error_disabled_vector_type =
   } here
   .help = consider enabling it globally (`-C target-feature=+{$required_feature}`) or locally (`#[target_feature(enable="{$required_feature}")]`)
 
+monomorphize_abi_error_unsupported_unsized_parameter =
+  this function {$is_call ->
+    [true] call
+    *[false] definition
+  } uses unsized type `{$ty}` which is not supported with the chosen ABI
+  .label = function {$is_call ->
+    [true] called
+    *[false] defined
+  } here
+  .help = only rustic ABIs support unsized parameters
+
 monomorphize_abi_error_unsupported_vector_type =
   this function {$is_call ->
     [true] call
@@ -40,7 +51,10 @@ monomorphize_couldnt_dump_mono_stats =
     unexpected error occurred while dumping monomorphization stats: {$error}
 
 monomorphize_encountered_error_while_instantiating =
-    the above error was encountered while instantiating `{$formatted_item}`
+    the above error was encountered while instantiating `{$kind} {$instance}`
+
+monomorphize_encountered_error_while_instantiating_global_asm =
+    the above error was encountered while instantiating `global_asm`
 
 monomorphize_large_assignments =
     moving {$size} bytes
@@ -52,19 +66,10 @@ monomorphize_no_optimized_mir =
     .note = missing optimized MIR for this item (was the crate `{$crate_name}` compiled with `--emit=metadata`?)
 
 monomorphize_recursion_limit =
-    reached the recursion limit while instantiating `{$shrunk}`
+    reached the recursion limit while instantiating `{$instance}`
     .note = `{$def_path_str}` defined here
 
 monomorphize_start_not_found = using `fn main` requires the standard library
     .help = use `#![no_main]` to bypass the Rust generated entrypoint and declare a platform specific entrypoint yourself, usually with `#[no_mangle]`
 
 monomorphize_symbol_already_defined = symbol `{$symbol}` is already defined
-
-monomorphize_wasm_c_abi_transition =
-    this function {$is_call ->
-      [true] call
-      *[false] definition
-    } involves an argument of type `{$ty}` which is affected by the wasm ABI transition
-    .help = the "C" ABI Rust uses on wasm32-unknown-unknown will change to align with the standard "C" ABI for this target
-
-monomorphize_written_to_path = the full type name has been written to '{$path}'

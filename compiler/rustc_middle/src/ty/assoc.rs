@@ -3,15 +3,17 @@ use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Namespace};
 use rustc_hir::def_id::DefId;
 use rustc_macros::{Decodable, Encodable, HashStable};
-use rustc_span::{Ident, Symbol, sym};
+use rustc_span::{ErrorGuaranteed, Ident, Symbol};
 
 use super::{TyCtxt, Visibility};
 use crate::ty;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, HashStable, Hash, Encodable, Decodable)]
-pub enum AssocItemContainer {
+pub enum AssocContainer {
     Trait,
-    Impl,
+    InherentImpl,
+    /// The `DefId` points to the trait item being implemented.
+    TraitImpl(Result<DefId, ErrorGuaranteed>),
 }
 
 /// Information about an associated item
@@ -19,11 +21,7 @@ pub enum AssocItemContainer {
 pub struct AssocItem {
     pub def_id: DefId,
     pub kind: AssocKind,
-    pub container: AssocItemContainer,
-
-    /// If this is an item in an impl of a trait then this is the `DefId` of
-    /// the associated item on the trait that this implements.
-    pub trait_item_def_id: Option<DefId>,
+    pub container: AssocContainer,
 }
 
 impl AssocItem {
@@ -53,7 +51,34 @@ impl AssocItem {
     ///
     /// [`type_of`]: crate::ty::TyCtxt::type_of
     pub fn defaultness(&self, tcx: TyCtxt<'_>) -> hir::Defaultness {
-        tcx.defaultness(self.def_id)
+        match self.container {
+            AssocContainer::InherentImpl => hir::Defaultness::Final,
+            AssocContainer::Trait | AssocContainer::TraitImpl(_) => tcx.defaultness(self.def_id),
+        }
+    }
+
+    pub fn expect_trait_impl(&self) -> Result<DefId, ErrorGuaranteed> {
+        let AssocContainer::TraitImpl(trait_item_id) = self.container else {
+            bug!("expected item to be in a trait impl: {:?}", self.def_id);
+        };
+        trait_item_id
+    }
+
+    /// If this is a trait impl item, returns the `DefId` of the trait item this implements.
+    /// Otherwise, returns `DefId` for self. Returns an Err in case the trait item was not
+    /// resolved successfully.
+    pub fn trait_item_or_self(&self) -> Result<DefId, ErrorGuaranteed> {
+        match self.container {
+            AssocContainer::TraitImpl(id) => id,
+            AssocContainer::Trait | AssocContainer::InherentImpl => Ok(self.def_id),
+        }
+    }
+
+    pub fn trait_item_def_id(&self) -> Option<DefId> {
+        match self.container {
+            AssocContainer::TraitImpl(Ok(id)) => Some(id),
+            _ => None,
+        }
     }
 
     #[inline]
@@ -69,16 +94,18 @@ impl AssocItem {
     #[inline]
     pub fn trait_container(&self, tcx: TyCtxt<'_>) -> Option<DefId> {
         match self.container {
-            AssocItemContainer::Impl => None,
-            AssocItemContainer::Trait => Some(tcx.parent(self.def_id)),
+            AssocContainer::InherentImpl | AssocContainer::TraitImpl(_) => None,
+            AssocContainer::Trait => Some(tcx.parent(self.def_id)),
         }
     }
 
     #[inline]
     pub fn impl_container(&self, tcx: TyCtxt<'_>) -> Option<DefId> {
         match self.container {
-            AssocItemContainer::Impl => Some(tcx.parent(self.def_id)),
-            AssocItemContainer::Trait => None,
+            AssocContainer::InherentImpl | AssocContainer::TraitImpl(_) => {
+                Some(tcx.parent(self.def_id))
+            }
+            AssocContainer::Trait => None,
         }
     }
 
@@ -143,24 +170,6 @@ impl AssocItem {
 
     pub fn is_impl_trait_in_trait(&self) -> bool {
         matches!(self.kind, AssocKind::Type { data: AssocTypeData::Rpitit(_) })
-    }
-
-    /// Returns true if:
-    /// - This trait associated item has the `#[type_const]` attribute,
-    /// - If it is in a trait impl, the item from the original trait has this attribute, or
-    /// - It is an inherent assoc const.
-    pub fn is_type_const_capable(&self, tcx: TyCtxt<'_>) -> bool {
-        if !matches!(self.kind, ty::AssocKind::Const { .. }) {
-            return false;
-        }
-
-        let def_id = match (self.container, self.trait_item_def_id) {
-            (AssocItemContainer::Trait, _) => self.def_id,
-            (AssocItemContainer::Impl, Some(trait_item_did)) => trait_item_did,
-            // Inherent impl but this attr is only applied to trait assoc items.
-            (AssocItemContainer::Impl, None) => return true,
-        };
-        tcx.has_attr(def_id, sym::type_const)
     }
 }
 
@@ -257,6 +266,16 @@ impl AssocItems {
     }
 
     /// Returns the associated item with the given identifier and `AssocKind`, if one exists.
+    /// The identifier is ignoring hygiene. This is meant to be used for lints and diagnostics.
+    pub fn filter_by_name_unhygienic_and_kind(
+        &self,
+        name: Symbol,
+        assoc_tag: AssocTag,
+    ) -> impl '_ + Iterator<Item = &ty::AssocItem> {
+        self.filter_by_name_unhygienic(name).filter(move |item| item.as_tag() == assoc_tag)
+    }
+
+    /// Returns the associated item with the given identifier and `AssocKind`, if one exists.
     /// The identifier is matched hygienically.
     pub fn find_by_ident_and_kind(
         &self,
@@ -282,5 +301,24 @@ impl AssocItems {
         self.filter_by_name_unhygienic(ident.name)
             .filter(|item| item.namespace() == ns)
             .find(|item| tcx.hygienic_eq(ident, item.ident(tcx), parent_def_id))
+    }
+}
+
+impl<'tcx> TyCtxt<'tcx> {
+    /// Given an `fn_def_id` of a trait or a trait implementation:
+    ///
+    /// if `fn_def_id` is a function defined inside a trait, then it synthesizes
+    /// a new def id corresponding to a new associated type for each return-
+    /// position `impl Trait` in the signature.
+    ///
+    /// if `fn_def_id` is a function inside of an impl, then for each synthetic
+    /// associated type generated for the corresponding trait function described
+    /// above, synthesize a corresponding associated type in the impl.
+    pub fn associated_types_for_impl_traits_in_associated_fn(
+        self,
+        fn_def_id: DefId,
+    ) -> &'tcx [DefId] {
+        let parent_def_id = self.parent(fn_def_id);
+        &self.associated_types_for_impl_traits_in_trait_or_impl(parent_def_id)[&fn_def_id]
     }
 }

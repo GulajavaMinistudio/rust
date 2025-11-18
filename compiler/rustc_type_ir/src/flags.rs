@@ -130,6 +130,12 @@ bitflags::bitflags! {
 
         /// Does this have any binders with bound vars (e.g. that need to be anonymized)?
         const HAS_BINDER_VARS             = 1 << 23;
+
+        /// Does this type have any coroutines in it?
+        const HAS_TY_CORO                 = 1 << 24;
+
+        /// Does this have have a `Bound(BoundVarIndexKind::Canonical, _)`?
+        const HAS_CANONICAL_BOUND      = 1 << 25;
     }
 }
 
@@ -241,13 +247,22 @@ impl<I: Interner> FlagComputation<I> {
             }
 
             ty::Closure(_, args)
-            | ty::Coroutine(_, args)
             | ty::CoroutineClosure(_, args)
             | ty::CoroutineWitness(_, args) => {
                 self.add_args(args.as_slice());
             }
 
-            ty::Bound(debruijn, _) => {
+            ty::Coroutine(_, args) => {
+                self.add_flags(TypeFlags::HAS_TY_CORO);
+                self.add_args(args.as_slice());
+            }
+
+            ty::Bound(ty::BoundVarIndexKind::Canonical, _) => {
+                self.add_flags(TypeFlags::HAS_TY_BOUND);
+                self.add_flags(TypeFlags::HAS_CANONICAL_BOUND);
+            }
+
+            ty::Bound(ty::BoundVarIndexKind::Bound(debruijn), _) => {
                 self.add_bound_var(debruijn);
                 self.add_flags(TypeFlags::HAS_TY_BOUND);
             }
@@ -281,7 +296,7 @@ impl<I: Interner> FlagComputation<I> {
                 self.add_alias_ty(data);
             }
 
-            ty::Dynamic(obj, r, _) => {
+            ty::Dynamic(obj, r) => {
                 for predicate in obj.iter() {
                     self.bound_computation(predicate, |computation, predicate| match predicate {
                         ty::ExistentialPredicate::Trait(tr) => {
@@ -340,6 +355,7 @@ impl<I: Interner> FlagComputation<I> {
 
     fn add_ty_pat(&mut self, pat: <I as Interner>::Pat) {
         self.add_flags(pat.flags());
+        self.add_exclusive_binder(pat.outer_exclusive_binder());
     }
 
     fn add_predicate(&mut self, binder: ty::Binder<I, ty::PredicateKind<I>>) {
@@ -401,7 +417,6 @@ impl<I: Interner> FlagComputation<I> {
                 self.add_const(expected);
                 self.add_const(found);
             }
-            ty::PredicateKind::Ambiguous => {}
             ty::PredicateKind::NormalizesTo(ty::NormalizesTo { alias, term }) => {
                 self.add_alias_term(alias);
                 self.add_term(term);
@@ -410,6 +425,8 @@ impl<I: Interner> FlagComputation<I> {
                 self.add_term(t1);
                 self.add_term(t2);
             }
+            ty::PredicateKind::Clause(ty::ClauseKind::UnstableFeature(_sym)) => {}
+            ty::PredicateKind::Ambiguous => {}
         }
     }
 
@@ -426,7 +443,7 @@ impl<I: Interner> FlagComputation<I> {
 
     fn add_region(&mut self, r: I::Region) {
         self.add_flags(r.flags());
-        if let ty::ReBound(debruijn, _) = r.kind() {
+        if let ty::ReBound(ty::BoundVarIndexKind::Bound(debruijn), _) = r.kind() {
             self.add_bound_var(debruijn);
         }
     }
@@ -446,9 +463,13 @@ impl<I: Interner> FlagComputation<I> {
                 ty::InferConst::Fresh(_) => self.add_flags(TypeFlags::HAS_CT_FRESH),
                 ty::InferConst::Var(_) => self.add_flags(TypeFlags::HAS_CT_INFER),
             },
-            ty::ConstKind::Bound(debruijn, _) => {
+            ty::ConstKind::Bound(ty::BoundVarIndexKind::Bound(debruijn), _) => {
                 self.add_bound_var(debruijn);
                 self.add_flags(TypeFlags::HAS_CT_BOUND);
+            }
+            ty::ConstKind::Bound(ty::BoundVarIndexKind::Canonical, _) => {
+                self.add_flags(TypeFlags::HAS_CT_BOUND);
+                self.add_flags(TypeFlags::HAS_CANONICAL_BOUND);
             }
             ty::ConstKind::Param(_) => {
                 self.add_flags(TypeFlags::HAS_CT_PARAM);
@@ -479,8 +500,8 @@ impl<I: Interner> FlagComputation<I> {
     }
 
     fn add_args(&mut self, args: &[I::GenericArg]) {
-        for kind in args {
-            match kind.kind() {
+        for arg in args {
+            match arg.kind() {
                 ty::GenericArgKind::Type(ty) => self.add_ty(ty),
                 ty::GenericArgKind::Lifetime(lt) => self.add_region(lt),
                 ty::GenericArgKind::Const(ct) => self.add_const(ct),

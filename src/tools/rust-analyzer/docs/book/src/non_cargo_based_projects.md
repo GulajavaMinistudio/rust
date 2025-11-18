@@ -5,7 +5,7 @@ build system, you’ll have to describe the structure of your project for
 rust-analyzer in the `rust-project.json` format:
 
 ```typescript
-interface JsonProject {
+interface ProjectJson {
     /// Path to the sysroot directory.
     ///
     /// The sysroot is where rustc looks for the
@@ -31,7 +31,7 @@ interface JsonProject {
     /// It should point to the directory where std,
     /// core, and friends can be found:
     ///
-    /// https://github.com/rust-lang/rust/tree/master/library.
+    /// https://github.com/rust-lang/rust/tree/HEAD/library.
     ///
     /// If provided, rust-analyzer automatically adds
     /// dependencies on sysroot crates. Conversely,
@@ -40,6 +40,9 @@ interface JsonProject {
     /// several different "sysroots" in one graph of
     /// crates.
     sysroot_src?: string;
+    /// A ProjectJson describing the crates of the sysroot.
+    sysroot_project?: ProjectJson;
+
     /// List of groups of common cfg values, to allow
     /// sharing them between crates.
     ///

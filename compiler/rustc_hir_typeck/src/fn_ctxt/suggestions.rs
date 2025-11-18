@@ -1,3 +1,4 @@
+// ignore-tidy-filelength
 use core::cmp::min;
 use core::iter;
 
@@ -10,7 +11,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::{
     self as hir, Arm, CoroutineDesugaring, CoroutineKind, CoroutineSource, Expr, ExprKind,
     GenericBound, HirId, Node, PatExpr, PatExprKind, Path, QPath, Stmt, StmtKind, TyKind,
-    WherePredicateKind, expr_needs_parens,
+    WherePredicateKind, expr_needs_parens, is_range_literal,
 };
 use rustc_hir_analysis::hir_ty_lowering::HirTyLowerer;
 use rustc_hir_analysis::suggest_impl_trait;
@@ -399,7 +400,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     // so we remove the user's `clone` call.
                     {
                         vec![(receiver_method.ident.span, conversion_method_name.to_string())]
-                    } else if expr.precedence() < ExprPrecedence::Unambiguous {
+                    } else if self.precedence(expr) < ExprPrecedence::Unambiguous {
                         vec![
                             (expr.span.shrink_to_lo(), "(".to_string()),
                             (expr.span.shrink_to_hi(), format!(").{}()", conversion_method_name)),
@@ -585,6 +586,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 {
                     errors::SuggestBoxing::AsyncBody
                 }
+                _ if let Node::ExprField(expr_field) = self.tcx.parent_hir_node(hir_id)
+                    && expr_field.is_shorthand =>
+                {
+                    errors::SuggestBoxing::ExprFieldShorthand {
+                        start: span.shrink_to_lo(),
+                        end: span.shrink_to_hi(),
+                        ident: expr_field.ident,
+                    }
+                }
                 _ => errors::SuggestBoxing::Other {
                     start: span.shrink_to_lo(),
                     end: span.shrink_to_hi(),
@@ -606,31 +616,31 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Ty<'tcx>,
         found: Ty<'tcx>,
     ) -> bool {
-        if let (ty::FnPtr(..), ty::Closure(def_id, _)) = (expected.kind(), found.kind()) {
-            if let Some(upvars) = self.tcx.upvars_mentioned(*def_id) {
-                // Report upto four upvars being captured to reduce the amount error messages
-                // reported back to the user.
-                let spans_and_labels = upvars
-                    .iter()
-                    .take(4)
-                    .map(|(var_hir_id, upvar)| {
-                        let var_name = self.tcx.hir_name(*var_hir_id).to_string();
-                        let msg = format!("`{var_name}` captured here");
-                        (upvar.span, msg)
-                    })
-                    .collect::<Vec<_>>();
+        if let (ty::FnPtr(..), ty::Closure(def_id, _)) = (expected.kind(), found.kind())
+            && let Some(upvars) = self.tcx.upvars_mentioned(*def_id)
+        {
+            // Report upto four upvars being captured to reduce the amount error messages
+            // reported back to the user.
+            let spans_and_labels = upvars
+                .iter()
+                .take(4)
+                .map(|(var_hir_id, upvar)| {
+                    let var_name = self.tcx.hir_name(*var_hir_id).to_string();
+                    let msg = format!("`{var_name}` captured here");
+                    (upvar.span, msg)
+                })
+                .collect::<Vec<_>>();
 
-                let mut multi_span: MultiSpan =
-                    spans_and_labels.iter().map(|(sp, _)| *sp).collect::<Vec<_>>().into();
-                for (sp, label) in spans_and_labels {
-                    multi_span.push_span_label(sp, label);
-                }
-                err.span_note(
-                    multi_span,
-                    "closures can only be coerced to `fn` types if they do not capture any variables"
-                );
-                return true;
+            let mut multi_span: MultiSpan =
+                spans_and_labels.iter().map(|(sp, _)| *sp).collect::<Vec<_>>().into();
+            for (sp, label) in spans_and_labels {
+                multi_span.push_span_label(sp, label);
             }
+            err.span_note(
+                multi_span,
+                "closures can only be coerced to `fn` types if they do not capture any variables",
+            );
+            return true;
         }
         false
     }
@@ -755,43 +765,120 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expression: &'tcx hir::Expr<'tcx>,
         expected: Ty<'tcx>,
         needs_block: bool,
+        parent_is_closure: bool,
     ) {
-        if expected.is_unit() {
-            // `BlockTailExpression` only relevant if the tail expr would be
-            // useful on its own.
-            match expression.kind {
-                ExprKind::Call(..)
-                | ExprKind::MethodCall(..)
-                | ExprKind::Loop(..)
-                | ExprKind::If(..)
-                | ExprKind::Match(..)
-                | ExprKind::Block(..)
-                    if expression.can_have_side_effects()
-                        // If the expression is from an external macro, then do not suggest
-                        // adding a semicolon, because there's nowhere to put it.
-                        // See issue #81943.
-                        && !expression.span.in_external_macro(self.tcx.sess.source_map()) =>
+        if !expected.is_unit() {
+            return;
+        }
+        // `BlockTailExpression` only relevant if the tail expr would be
+        // useful on its own.
+        match expression.kind {
+            ExprKind::Call(..)
+            | ExprKind::MethodCall(..)
+            | ExprKind::Loop(..)
+            | ExprKind::If(..)
+            | ExprKind::Match(..)
+            | ExprKind::Block(..)
+                if expression.can_have_side_effects()
+                    // If the expression is from an external macro, then do not suggest
+                    // adding a semicolon, because there's nowhere to put it.
+                    // See issue #81943.
+                    && !expression.span.in_external_macro(self.tcx.sess.source_map()) =>
+            {
+                if needs_block {
+                    err.multipart_suggestion(
+                        "consider using a semicolon here",
+                        vec![
+                            (expression.span.shrink_to_lo(), "{ ".to_owned()),
+                            (expression.span.shrink_to_hi(), "; }".to_owned()),
+                        ],
+                        Applicability::MachineApplicable,
+                    );
+                } else if let hir::Node::Block(block) = self.tcx.parent_hir_node(expression.hir_id)
+                    && let hir::Node::Expr(expr) = self.tcx.parent_hir_node(block.hir_id)
+                    && let hir::Node::Expr(if_expr) = self.tcx.parent_hir_node(expr.hir_id)
+                    && let hir::ExprKind::If(_cond, _then, Some(_else)) = if_expr.kind
+                    && let hir::Node::Stmt(stmt) = self.tcx.parent_hir_node(if_expr.hir_id)
+                    && let hir::StmtKind::Expr(_) = stmt.kind
+                    && self.is_next_stmt_expr_continuation(stmt.hir_id)
                 {
-                    if needs_block {
-                        err.multipart_suggestion(
-                            "consider using a semicolon here",
-                            vec![
-                                (expression.span.shrink_to_lo(), "{ ".to_owned()),
-                                (expression.span.shrink_to_hi(), "; }".to_owned()),
-                            ],
-                            Applicability::MachineApplicable,
-                        );
-                    } else {
-                        err.span_suggestion(
-                            expression.span.shrink_to_hi(),
-                            "consider using a semicolon here",
-                            ";",
-                            Applicability::MachineApplicable,
-                        );
-                    }
+                    err.multipart_suggestion(
+                        "parentheses are required to parse this as an expression",
+                        vec![
+                            (stmt.span.shrink_to_lo(), "(".to_string()),
+                            (stmt.span.shrink_to_hi(), ")".to_string()),
+                        ],
+                        Applicability::MachineApplicable,
+                    );
+                } else {
+                    err.span_suggestion(
+                        expression.span.shrink_to_hi(),
+                        "consider using a semicolon here",
+                        ";",
+                        Applicability::MachineApplicable,
+                    );
                 }
-                _ => (),
             }
+            ExprKind::Path(..) | ExprKind::Lit(_)
+                if parent_is_closure
+                    && !expression.span.in_external_macro(self.tcx.sess.source_map()) =>
+            {
+                err.span_suggestion_verbose(
+                    expression.span.shrink_to_lo(),
+                    "consider ignoring the value",
+                    "_ = ",
+                    Applicability::MachineApplicable,
+                );
+            }
+            _ => {
+                if let hir::Node::Block(block) = self.tcx.parent_hir_node(expression.hir_id)
+                    && let hir::Node::Expr(expr) = self.tcx.parent_hir_node(block.hir_id)
+                    && let hir::Node::Expr(if_expr) = self.tcx.parent_hir_node(expr.hir_id)
+                    && let hir::ExprKind::If(_cond, _then, Some(_else)) = if_expr.kind
+                    && let hir::Node::Stmt(stmt) = self.tcx.parent_hir_node(if_expr.hir_id)
+                    && let hir::StmtKind::Expr(_) = stmt.kind
+                    && self.is_next_stmt_expr_continuation(stmt.hir_id)
+                {
+                    // The error is pointing at an arm of an if-expression, and we want to get the
+                    // `Span` of the whole if-expression for the suggestion. This only works for a
+                    // single level of nesting, which is fine.
+                    // We have something like `if true { false } else { true } && true`. Suggest
+                    // wrapping in parentheses. We find the statement or expression following the
+                    // `if` (`&& true`) and see if it is something that can reasonably be
+                    // interpreted as a binop following an expression.
+                    err.multipart_suggestion(
+                        "parentheses are required to parse this as an expression",
+                        vec![
+                            (stmt.span.shrink_to_lo(), "(".to_string()),
+                            (stmt.span.shrink_to_hi(), ")".to_string()),
+                        ],
+                        Applicability::MachineApplicable,
+                    );
+                }
+            }
+        }
+    }
+
+    pub(crate) fn is_next_stmt_expr_continuation(&self, hir_id: HirId) -> bool {
+        if let hir::Node::Block(b) = self.tcx.parent_hir_node(hir_id)
+            && let mut stmts = b.stmts.iter().skip_while(|s| s.hir_id != hir_id)
+            && let Some(_) = stmts.next() // The statement the statement that was passed in
+            && let Some(next) = match (stmts.next(), b.expr) { // The following statement
+                (Some(next), _) => match next.kind {
+                    hir::StmtKind::Expr(next) | hir::StmtKind::Semi(next) => Some(next),
+                    _ => None,
+                },
+                (None, Some(next)) => Some(next),
+                _ => None,
+            }
+            && let hir::ExprKind::AddrOf(..) // prev_stmt && next
+                | hir::ExprKind::Unary(..) // prev_stmt * next
+                | hir::ExprKind::Err(_) = next.kind
+        // prev_stmt + next
+        {
+            true
+        } else {
+            false
         }
     }
 
@@ -915,7 +1002,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             Node::ImplItem(item) => {
                 // If it doesn't impl a trait, we can add a return type
                 let Node::Item(&hir::Item {
-                    kind: hir::ItemKind::Impl(&hir::Impl { of_trait, .. }),
+                    kind: hir::ItemKind::Impl(hir::Impl { of_trait, .. }),
                     ..
                 }) = self.tcx.parent_hir_node(item.hir_id())
                 else {
@@ -1045,7 +1132,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             })
             .collect::<Vec<String>>();
 
-        if all_matching_bounds_strs.len() == 0 {
+        if all_matching_bounds_strs.is_empty() {
             return;
         }
 
@@ -1249,7 +1336,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     expected_ty = *inner_expected_ty;
                 }
                 (hir::ExprKind::Block(blk, _), _, _) => {
-                    self.suggest_block_to_brackets(diag, *blk, expr_ty, expected_ty);
+                    self.suggest_block_to_brackets(diag, blk, expr_ty, expected_ty);
                     break true;
                 }
                 _ => break false,
@@ -1271,7 +1358,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .infcx
                 .type_implements_trait(
                     clone_trait_def,
-                    [self.tcx.erase_regions(expected_ty)],
+                    [self.tcx.erase_and_anonymize_regions(expected_ty)],
                     self.param_env,
                 )
                 .must_apply_modulo_regions()
@@ -1281,8 +1368,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 None => ".clone()".to_string(),
             };
 
+            let span = expr.span.find_ancestor_not_from_macro().unwrap_or(expr.span).shrink_to_hi();
+
             diag.span_suggestion_verbose(
-                expr.span.shrink_to_hi(),
+                span,
                 "consider using clone here",
                 suggestion,
                 Applicability::MachineApplicable,
@@ -1372,9 +1461,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .macro_backtrace()
                 .any(|x| matches!(x.kind, ExpnKind::Macro(MacroKind::Attr | MacroKind::Derive, ..)))
         {
-            let span = expr.span.find_oldest_ancestor_in_same_ctxt();
+            let span = expr
+                .span
+                .find_ancestor_not_from_extern_macro(self.tcx.sess.source_map())
+                .unwrap_or(expr.span);
 
-            let mut sugg = if expr.precedence() >= ExprPrecedence::Unambiguous {
+            let mut sugg = if self.precedence(expr) >= ExprPrecedence::Unambiguous {
                 vec![(span.shrink_to_hi(), ".into()".to_owned())]
             } else {
                 vec![
@@ -1572,38 +1664,49 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return false;
         }
         match expr.kind {
-            ExprKind::Struct(QPath::LangItem(LangItem::Range, ..), [start, end], _) => {
+            ExprKind::Struct(&qpath, [start, end], _)
+                if is_range_literal(expr)
+                    && self.tcx.qpath_is_lang_item(qpath, LangItem::Range) =>
+            {
                 err.span_suggestion_verbose(
-                    start.span.shrink_to_hi().with_hi(end.span.lo()),
+                    start.expr.span.shrink_to_hi().with_hi(end.expr.span.lo()),
                     "remove the unnecessary `.` operator for a floating point literal",
                     '.',
                     Applicability::MaybeIncorrect,
                 );
                 true
             }
-            ExprKind::Struct(QPath::LangItem(LangItem::RangeFrom, ..), [start], _) => {
-                err.span_suggestion_verbose(
-                    expr.span.with_lo(start.span.hi()),
-                    "remove the unnecessary `.` operator for a floating point literal",
-                    '.',
-                    Applicability::MaybeIncorrect,
-                );
-                true
-            }
-            ExprKind::Struct(QPath::LangItem(LangItem::RangeTo, ..), [end], _) => {
-                err.span_suggestion_verbose(
-                    expr.span.until(end.span),
-                    "remove the unnecessary `.` operator and add an integer part for a floating point literal",
-                    "0.",
-                    Applicability::MaybeIncorrect,
-                );
+            ExprKind::Struct(&qpath, [arg], _)
+                if is_range_literal(expr)
+                    && let Some(qpath @ (LangItem::RangeFrom | LangItem::RangeTo)) =
+                        self.tcx.qpath_lang_item(qpath) =>
+            {
+                let range_span = expr.span.parent_callsite().unwrap();
+                match qpath {
+                    LangItem::RangeFrom => {
+                        err.span_suggestion_verbose(
+                            range_span.with_lo(arg.expr.span.hi()),
+                            "remove the unnecessary `.` operator for a floating point literal",
+                            '.',
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
+                    _ => {
+                        err.span_suggestion_verbose(
+                            range_span.until(arg.expr.span),
+                            "remove the unnecessary `.` operator and add an integer part for a floating point literal",
+                            "0.",
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
+                }
                 true
             }
             ExprKind::Lit(Spanned {
                 node: rustc_ast::LitKind::Int(lit, rustc_ast::LitIntType::Unsuffixed),
                 span,
             }) => {
-                let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(*span) else {
+                let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span) else {
                     return false;
                 };
                 if !(snippet.starts_with("0x") || snippet.starts_with("0X")) {
@@ -1662,7 +1765,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         // We have satisfied all requirements to provide a suggestion. Emit it.
         err.span_suggestion(
-            *span,
+            span,
             format!("if you meant to create a null pointer, use `{null_path_str}()`"),
             null_path_str + "()",
             Applicability::MachineApplicable,
@@ -1790,7 +1893,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if segment.ident.name == sym::clone
             && results.type_dependent_def_id(expr.hir_id).is_some_and(|did| {
                     let assoc_item = self.tcx.associated_item(did);
-                    assoc_item.container == ty::AssocItemContainer::Trait
+                    assoc_item.container == ty::AssocContainer::Trait
                         && assoc_item.container_id(self.tcx) == clone_trait_did
                 })
             // If that clone call hasn't already dereferenced the self type (i.e. don't give this
@@ -1861,7 +1964,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                 }
-                self.suggest_derive(diag, &[(trait_ref.upcast(self.tcx), None, None)]);
+                self.suggest_derive(diag, &vec![(trait_ref.upcast(self.tcx), None, None)]);
             }
         }
     }
@@ -2034,11 +2137,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
 
         let sugg = match self.tcx.hir_maybe_get_struct_pattern_shorthand_field(expr) {
+            Some(_) if expr.span.from_expansion() => return false,
             Some(ident) => format!(": {ident}{sugg}"),
             None => sugg.to_string(),
         };
 
-        let span = expr.span.find_oldest_ancestor_in_same_ctxt();
+        let span = expr
+            .span
+            .find_ancestor_not_from_extern_macro(self.tcx.sess.source_map())
+            .unwrap_or(expr.span);
         err.span_suggestion_verbose(span.shrink_to_hi(), msg, sugg, Applicability::HasPlaceholders);
         true
     }
@@ -2150,7 +2257,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             let src_map = tcx.sess.source_map();
             let suggestion = if src_map.is_multiline(expr.span) {
-                let indentation = src_map.indentation_before(span).unwrap_or_else(String::new);
+                let indentation = src_map.indentation_before(span).unwrap_or_default();
                 format!("\n{indentation}/* {suggestion} */")
             } else {
                 // If the entire expr is on a single line
@@ -2182,7 +2289,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Check if `expr` is contained in array of two elements
         if let hir::Node::Expr(array_expr) = self.tcx.parent_hir_node(expr.hir_id)
             && let hir::ExprKind::Array(elements) = array_expr.kind
-            && let [first, second] = &elements[..]
+            && let [first, second] = elements
             && second.hir_id == expr.hir_id
         {
             // Span between the two elements of the array
@@ -2347,6 +2454,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 })
                 .filter_map(|variant| {
                     let sole_field = &variant.single_field();
+
+                    // When expected_ty and expr_ty are the same ADT, we prefer to compare their internal generic params,
+                    // When the current variant has a sole field whose type is still an unresolved inference variable,
+                    // suggestions would be often wrong. So suppress the suggestion. See #145294.
+                    if let (ty::Adt(exp_adt, _), ty::Adt(act_adt, _)) = (expected.kind(), expr_ty.kind())
+                        && exp_adt.did() == act_adt.did()
+                        && sole_field.ty(self.tcx, args).is_ty_var() {
+                            return None;
+                    }
 
                     let field_is_local = sole_field.did.is_local();
                     let field_is_accessible =
@@ -2588,7 +2704,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         bool, /* suggest `&` or `&mut` type annotation */
     )> {
         let sess = self.sess();
-        let sp = expr.span;
+        let sp = expr.range_span().unwrap_or(expr.span);
         let sm = sess.source_map();
 
         // If the span is from an external macro, there's no suggestion we can make.
@@ -2657,7 +2773,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let mut sugg_sp = sp;
                     if let hir::ExprKind::MethodCall(segment, receiver, args, _) = expr.kind {
                         let clone_trait =
-                            self.tcx.require_lang_item(LangItem::Clone, Some(segment.ident.span));
+                            self.tcx.require_lang_item(LangItem::Clone, segment.ident.span);
                         if args.is_empty()
                             && self
                                 .typeck_results
@@ -2689,6 +2805,31 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             true,
                             false,
                         ));
+                    }
+
+                    // Don't try to suggest ref/deref on an `if` expression, because:
+                    // - The `if` could be part of a desugared `if else` statement,
+                    //   which would create impossible suggestions such as `if ... { ... } else &if { ... } else { ... }`.
+                    // - In general the suggestions it creates such as `&if ... { ... } else { ... }` are not very helpful.
+                    // We try to generate a suggestion such as `if ... { &... } else { &... }` instead.
+                    if let hir::ExprKind::If(_c, then, els) = expr.kind {
+                        // The `then` of a `Expr::If` always contains a block, and that block may have a final expression that we can borrow
+                        // If the block does not have a final expression, it will return () and we do not make a suggestion to borrow that.
+                        let ExprKind::Block(then, _) = then.kind else { return None };
+                        let Some(then) = then.expr else { return None };
+                        let (mut suggs, help, app, verbose, mutref) =
+                            self.suggest_deref_or_ref(then, checked_ty, expected)?;
+
+                        // If there is no `else`, the return type of this `if` will be (), so suggesting to change the `then` block is useless
+                        let els_expr = match els?.kind {
+                            ExprKind::Block(block, _) => block.expr?,
+                            _ => els?,
+                        };
+                        let (else_suggs, ..) =
+                            self.suggest_deref_or_ref(els_expr, checked_ty, expected)?;
+                        suggs.extend(else_suggs);
+
+                        return Some((suggs, help, app, verbose, mutref));
                     }
 
                     if let Some((sugg, msg)) = self.can_use_as_ref(expr) {
@@ -2891,6 +3032,28 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         )
                     {
                         let deref_kind = if checked_ty.is_box() {
+                            // detect Box::new(..)
+                            if let ExprKind::Call(box_new, [_]) = expr.kind
+                                && let ExprKind::Path(qpath) = &box_new.kind
+                                && let Res::Def(DefKind::AssocFn, fn_id) =
+                                    self.typeck_results.borrow().qpath_res(qpath, box_new.hir_id)
+                                && let Some(impl_id) = self.tcx.inherent_impl_of_assoc(fn_id)
+                                && self.tcx.type_of(impl_id).skip_binder().is_box()
+                                && self.tcx.item_name(fn_id) == sym::new
+                            {
+                                let l_paren = self.tcx.sess.source_map().next_point(box_new.span);
+                                let r_paren = self.tcx.sess.source_map().end_point(expr.span);
+                                return Some((
+                                    vec![
+                                        (box_new.span.to(l_paren), String::new()),
+                                        (r_paren, String::new()),
+                                    ],
+                                    "consider removing the Box".to_string(),
+                                    Applicability::MachineApplicable,
+                                    false,
+                                    false,
+                                ));
+                            }
                             "unboxing the value"
                         } else if checked_ty.is_ref() {
                             "dereferencing the borrow"
@@ -2959,13 +3122,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// Returns whether the given expression is an `else if`.
     fn is_else_if_block(&self, expr: &hir::Expr<'_>) -> bool {
-        if let hir::ExprKind::If(..) = expr.kind {
-            if let Node::Expr(hir::Expr {
-                kind: hir::ExprKind::If(_, _, Some(else_expr)), ..
-            }) = self.tcx.parent_hir_node(expr.hir_id)
-            {
-                return else_expr.hir_id == expr.hir_id;
-            }
+        if let hir::ExprKind::If(..) = expr.kind
+            && let Node::Expr(hir::Expr { kind: hir::ExprKind::If(_, _, Some(else_expr)), .. }) =
+                self.tcx.parent_hir_node(expr.hir_id)
+        {
+            return else_expr.hir_id == expr.hir_id;
         }
         false
     }
@@ -3059,7 +3220,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             "change the type of the numeric literal from `{checked_ty}` to `{expected_ty}`",
         );
 
-        let close_paren = if expr.precedence() < ExprPrecedence::Unambiguous {
+        let close_paren = if self.precedence(expr) < ExprPrecedence::Unambiguous {
             sugg.push((expr.span.shrink_to_lo(), "(".to_string()));
             ")"
         } else {
@@ -3084,7 +3245,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let len = src.trim_end_matches(&checked_ty.to_string()).len();
                 span.with_lo(span.lo() + BytePos(len as u32))
             },
-            if expr.precedence() < ExprPrecedence::Unambiguous {
+            if self.precedence(expr) < ExprPrecedence::Unambiguous {
                 // Readd `)`
                 format!("{expected_ty})")
             } else {
@@ -3345,11 +3506,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         if !hir::is_range_literal(expr) {
             return;
         }
-        let hir::ExprKind::Struct(hir::QPath::LangItem(LangItem::Range, ..), [start, end], _) =
-            expr.kind
-        else {
+        let hir::ExprKind::Struct(&qpath, [start, end], _) = expr.kind else {
             return;
         };
+        if !self.tcx.qpath_is_lang_item(qpath, LangItem::Range) {
+            return;
+        }
         if let hir::Node::ExprField(_) = self.tcx.parent_hir_node(expr.hir_id) {
             // Ignore `Foo { field: a..Default::default() }`
             return;
@@ -3486,7 +3648,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .must_apply_modulo_regions()
         {
             let sm = self.tcx.sess.source_map();
-            if let Ok(rhs_snippet) = sm.span_to_snippet(rhs_expr.span)
+            // If the span of rhs_expr or lhs_expr is in an external macro,
+            // we just suppress the suggestion. See issue #139050
+            if !rhs_expr.span.in_external_macro(sm)
+                && !lhs_expr.span.in_external_macro(sm)
+                && let Ok(rhs_snippet) = sm.span_to_snippet(rhs_expr.span)
                 && let Ok(lhs_snippet) = sm.span_to_snippet(lhs_expr.span)
             {
                 err.note(format!("`{rhs_ty}` implements `PartialEq<{lhs_ty}>`"));

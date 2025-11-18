@@ -18,19 +18,20 @@ use rustc_codegen_ssa::base::maybe_create_entry_wrapper;
 use rustc_codegen_ssa::mono_item::MonoItemExt;
 use rustc_codegen_ssa::traits::*;
 use rustc_data_structures::small_c_str::SmallCStr;
+use rustc_hir::attrs::Linkage;
 use rustc_middle::dep_graph;
-use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
-use rustc_middle::mir::mono::{Linkage, Visibility};
+use rustc_middle::middle::codegen_fn_attrs::{CodegenFnAttrs, SanitizerFnAttrs};
+use rustc_middle::mir::mono::Visibility;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::DebugInfo;
 use rustc_span::Symbol;
 use rustc_target::spec::SanitizerSet;
 
 use super::ModuleLlvm;
+use crate::attributes;
 use crate::builder::Builder;
 use crate::context::CodegenCx;
-use crate::value::Value;
-use crate::{attributes, llvm};
+use crate::llvm::{self, Value};
 
 pub(crate) struct ValueIter<'ll> {
     cur: Option<&'ll Value>,
@@ -86,19 +87,39 @@ pub(crate) fn compile_codegen_unit(
             let mut cx = CodegenCx::new(tcx, cgu, &llvm_module);
             let mono_items = cx.codegen_unit.items_in_deterministic_order(cx.tcx);
             for &(mono_item, data) in &mono_items {
-                mono_item.predefine::<Builder<'_, '_, '_>>(&cx, data.linkage, data.visibility);
+                mono_item.predefine::<Builder<'_, '_, '_>>(
+                    &mut cx,
+                    cgu_name.as_str(),
+                    data.linkage,
+                    data.visibility,
+                );
             }
 
             // ... and now that we have everything pre-defined, fill out those definitions.
             for &(mono_item, item_data) in &mono_items {
-                mono_item.define::<Builder<'_, '_, '_>>(&mut cx, item_data);
+                mono_item.define::<Builder<'_, '_, '_>>(&mut cx, cgu_name.as_str(), item_data);
             }
 
             // If this codegen unit contains the main function, also create the
             // wrapper here
-            if let Some(entry) = maybe_create_entry_wrapper::<Builder<'_, '_, '_>>(&cx) {
-                let attrs = attributes::sanitize_attrs(&cx, SanitizerSet::empty());
+            if let Some(entry) =
+                maybe_create_entry_wrapper::<Builder<'_, '_, '_>>(&cx, cx.codegen_unit)
+            {
+                let attrs = attributes::sanitize_attrs(&cx, tcx, SanitizerFnAttrs::default());
                 attributes::apply_to_llfn(entry, llvm::AttributePlace::Function, &attrs);
+            }
+
+            // Define Objective-C module info and module flags. Note, the module info will
+            // also be added to the `llvm.compiler.used` variable, created later.
+            //
+            // These are only necessary when we need the linker to do its Objective-C-specific
+            // magic. We could theoretically do it unconditionally, but at a slight cost to linker
+            // performance in the common case where it's unnecessary.
+            if !cx.objc_classrefs.borrow().is_empty() || !cx.objc_selrefs.borrow().is_empty() {
+                if cx.objc_abi_version() == 1 {
+                    cx.define_objc_module_info();
+                }
+                cx.add_objc_module_flags();
             }
 
             // Finalize code coverage by injecting the coverage map. Note, the coverage map will
@@ -107,15 +128,17 @@ pub(crate) fn compile_codegen_unit(
                 cx.coverageinfo_finalize();
             }
 
-            // Create the llvm.used and llvm.compiler.used variables.
-            if !cx.used_statics.borrow().is_empty() {
-                cx.create_used_variable_impl(c"llvm.used", &*cx.used_statics.borrow());
+            // Create the llvm.used variable.
+            if !cx.used_statics.is_empty() {
+                cx.create_used_variable_impl(c"llvm.used", &cx.used_statics);
             }
-            if !cx.compiler_used_statics.borrow().is_empty() {
-                cx.create_used_variable_impl(
-                    c"llvm.compiler.used",
-                    &*cx.compiler_used_statics.borrow(),
-                );
+
+            // Create the llvm.compiler.used variable.
+            {
+                let compiler_used_statics = cx.compiler_used_statics.borrow();
+                if !compiler_used_statics.is_empty() {
+                    cx.create_used_variable_impl(c"llvm.compiler.used", &compiler_used_statics);
+                }
             }
 
             // Run replace-all-uses-with for statics that need it. This must
@@ -168,10 +191,10 @@ pub(crate) fn visibility_to_llvm(linkage: Visibility) -> llvm::Visibility {
 }
 
 pub(crate) fn set_variable_sanitizer_attrs(llval: &Value, attrs: &CodegenFnAttrs) {
-    if attrs.no_sanitize.contains(SanitizerSet::ADDRESS) {
+    if attrs.sanitizers.disabled.contains(SanitizerSet::ADDRESS) {
         unsafe { llvm::LLVMRustSetNoSanitizeAddress(llval) };
     }
-    if attrs.no_sanitize.contains(SanitizerSet::HWADDRESS) {
+    if attrs.sanitizers.disabled.contains(SanitizerSet::HWADDRESS) {
         unsafe { llvm::LLVMRustSetNoSanitizeHWAddress(llval) };
     }
 }

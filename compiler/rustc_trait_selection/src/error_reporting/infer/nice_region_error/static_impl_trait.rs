@@ -45,7 +45,8 @@ impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
         let return_sp = sub_origin.span();
         let param = self.find_param_with_region(*sup_r, *sub_r)?;
         let simple_ident = param.param.pat.simple_ident();
-        let lifetime_name = if sup_r.has_name() { sup_r.to_string() } else { "'_".to_owned() };
+        let lifetime_name =
+            if sup_r.is_named(self.tcx()) { sup_r.to_string() } else { "'_".to_owned() };
 
         let (mention_influencer, influencer_point) =
             if sup_origin.span().overlaps(param.param_ty_span) {
@@ -99,7 +100,7 @@ impl<'a, 'tcx> NiceRegionError<'a, 'tcx> {
             // We don't need a note, it's already at the end, it can be shown as a `span_label`.
             require_span_as_label: (!require_as_note).then_some(require_span),
 
-            has_lifetime: sup_r.has_name(),
+            has_lifetime: sup_r.is_named(self.tcx()),
             lifetime: lifetime_name.clone(),
             has_param_name: simple_ident.is_some(),
             param_name: simple_ident.map(|x| x.to_string()).unwrap_or_default(),
@@ -304,7 +305,7 @@ fn make_elided_region_spans_suggs<'a>(
                 consecutive_brackets += 1;
             } else if let Some(bracket_span) = bracket_span.take() {
                 let sugg = std::iter::once("<")
-                    .chain(std::iter::repeat(name).take(consecutive_brackets).intersperse(", "))
+                    .chain(std::iter::repeat_n(name, consecutive_brackets).intersperse(", "))
                     .chain([">"])
                     .collect();
                 spans_suggs.push((bracket_span.shrink_to_hi(), sugg));
@@ -398,7 +399,7 @@ pub struct TraitObjectVisitor(pub FxIndexSet<DefId>);
 impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for TraitObjectVisitor {
     fn visit_ty(&mut self, t: Ty<'tcx>) {
         match t.kind() {
-            ty::Dynamic(preds, re, _) if re.is_static() => {
+            ty::Dynamic(preds, re) if re.is_static() => {
                 if let Some(def_id) = preds.principal_def_id() {
                     self.0.insert(def_id);
                 }

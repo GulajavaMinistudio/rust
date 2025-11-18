@@ -1,7 +1,6 @@
 //@revisions: stack tree
 //@[tree]compile-flags: -Zmiri-tree-borrows
 //@compile-flags: -Zmiri-strict-provenance
-#![feature(btree_extract_if)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
@@ -26,7 +25,7 @@ fn test_all_refs<'a, T: 'a>(dummy: &mut T, iter: impl Iterator<Item = &'a mut T>
     }
 }
 
-pub fn main() {
+fn main() {
     let mut b = BTreeSet::new();
     b.insert(Foo::A("\'"));
     b.insert(Foo::A("/="));
@@ -50,7 +49,7 @@ pub fn main() {
     test_all_refs(&mut 13, b.values_mut());
 
     // Test forgetting the extractor.
-    let mut d = b.extract_if(|_, i| *i < 30);
+    let mut d = b.extract_if(.., |_, i| *i < 30);
     d.next().unwrap();
     mem::forget(d);
 }

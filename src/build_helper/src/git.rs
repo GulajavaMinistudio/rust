@@ -13,7 +13,7 @@ pub struct GitConfig<'a> {
 pub fn output_result(cmd: &mut Command) -> Result<String, String> {
     let output = match cmd.stderr(Stdio::inherit()).output() {
         Ok(status) => status,
-        Err(e) => return Err(format!("failed to run command: {:?}: {}", cmd, e)),
+        Err(e) => return Err(format!("failed to run command: {cmd:?}: {e}")),
     };
     if !output.status.success() {
         return Err(format!(
@@ -62,22 +62,22 @@ pub enum PathFreshness {
 /// The function behaves differently in CI and outside CI.
 ///
 /// - Outside CI, we want to find out if `target_paths` were modified in some local commit on
-/// top of the latest upstream commit that is available in local git history.
-/// If not, we try to find the most recent upstream commit (which we assume are commits
-/// made by bors) that modified `target_paths`.
-/// We don't want to simply take the latest master commit to avoid changing the output of
-/// this function frequently after rebasing on the latest master branch even if `target_paths`
-/// were not modified upstream in the meantime. In that case we would be redownloading CI
-/// artifacts unnecessarily.
+///   top of the latest upstream commit that is available in local git history.
+///   If not, we try to find the most recent upstream commit (which we assume are commits
+///   made by bors) that modified `target_paths`.
+///   We don't want to simply take the latest master commit to avoid changing the output of
+///   this function frequently after rebasing on the latest master branch even if `target_paths`
+///   were not modified upstream in the meantime. In that case we would be redownloading CI
+///   artifacts unnecessarily.
 ///
 /// - In CI, we use a shallow clone of depth 2, i.e., we fetch only a single parent commit
-/// (which will be the most recent bors merge commit) and do not have access
-/// to the full git history. Luckily, we only need to distinguish between two situations:
-/// 1) The current PR made modifications to `target_paths`.
-/// In that case, a build is typically necessary.
-/// 2) The current PR did not make modifications to `target_paths`.
-/// In that case we simply take the latest upstream commit, because on CI there is no need to avoid
-/// redownloading.
+///   (which will be the most recent bors merge commit) and do not have access
+///   to the full git history. Luckily, we only need to distinguish between two situations:
+///   1) The current PR made modifications to `target_paths`.
+///      In that case, a build is typically necessary.
+///   2) The current PR did not make modifications to `target_paths`.
+///      In that case we simply take the latest upstream commit, because on CI there is no need to avoid
+///      redownloading.
 pub fn check_path_modifications(
     git_dir: &Path,
     config: &GitConfig<'_>,
@@ -143,14 +143,13 @@ pub fn check_path_modifications(
 
 /// Returns true if any of the passed `paths` have changed since the `base` commit.
 pub fn has_changed_since(git_dir: &Path, base: &str, paths: &[&str]) -> bool {
-    let mut git = Command::new("git");
-    git.current_dir(git_dir);
+    run_git_diff_index(Some(git_dir), |cmd| {
+        cmd.args(["--quiet", base, "--"]).args(paths);
 
-    git.args(["diff-index", "--quiet", base, "--"]).args(paths);
-
-    // Exit code 0 => no changes
-    // Exit code 1 => some changes were detected
-    !git.status().expect("cannot run git diff-index").success()
+        // Exit code 0 => no changes
+        // Exit code 1 => some changes were detected
+        !cmd.status().expect("cannot run git diff-index").success()
+    })
 }
 
 /// Returns the latest upstream commit that modified `target_paths`, or `None` if no such commit
@@ -198,7 +197,7 @@ fn get_latest_upstream_commit_that_modified_files(
 /// author.
 ///
 /// If we are in CI, we simply return our first parent.
-fn get_closest_upstream_commit(
+pub fn get_closest_upstream_commit(
     git_dir: Option<&Path>,
     config: &GitConfig<'_>,
     env: CiEnv,
@@ -232,7 +231,7 @@ fn get_closest_upstream_commit(
         "--author-date-order",
         &format!("--author={}", config.git_merge_commit_email),
         "-n1",
-        &base,
+        base,
     ]);
 
     let output = output_result(&mut git)?.trim().to_owned();
@@ -267,29 +266,47 @@ pub fn get_git_modified_files(
         return Err("No upstream commit was found".to_string());
     };
 
-    let mut git = Command::new("git");
-    if let Some(git_dir) = git_dir {
-        git.current_dir(git_dir);
-    }
-    let files = output_result(git.args(["diff-index", "--name-status", merge_base.trim()]))?
-        .lines()
-        .filter_map(|f| {
-            let (status, name) = f.trim().split_once(char::is_whitespace).unwrap();
-            if status == "D" {
-                None
-            } else if Path::new(name).extension().map_or(extensions.is_empty(), |ext| {
-                // If there is no extension, we allow the path if `extensions` is empty
-                // If there is an extension, we allow it if `extension` is empty or it contains the
-                // extension.
-                extensions.is_empty() || extensions.contains(&ext.to_str().unwrap())
-            }) {
-                Some(name.to_owned())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let files = run_git_diff_index(git_dir, |cmd| {
+        output_result(cmd.args(["--name-status", merge_base.trim()]))
+    })?
+    .lines()
+    .filter_map(|f| {
+        let (status, name) = f.trim().split_once(char::is_whitespace).unwrap();
+        if status == "D" {
+            None
+        } else if Path::new(name).extension().map_or(extensions.is_empty(), |ext| {
+            // If there is no extension, we allow the path if `extensions` is empty
+            // If there is an extension, we allow it if `extension` is empty or it contains the
+            // extension.
+            extensions.is_empty() || extensions.contains(&ext.to_str().unwrap())
+        }) {
+            Some(name.to_owned())
+        } else {
+            None
+        }
+    })
+    .collect();
     Ok(files)
+}
+
+/// diff-index can return outdated information, because it does not update the git index.
+/// This function uses `update-index` to update the index first, and then provides `func` with a
+/// command prepared to run `git diff-index`.
+fn run_git_diff_index<F, T>(git_dir: Option<&Path>, func: F) -> T
+where
+    F: FnOnce(&mut Command) -> T,
+{
+    let git = || {
+        let mut git = Command::new("git");
+        if let Some(git_dir) = git_dir {
+            git.current_dir(git_dir);
+        }
+        git
+    };
+
+    // We ignore the exit code, as it errors out when some files are modified.
+    let _ = output_result(git().args(["update-index", "--refresh", "-q"]));
+    func(git().arg("diff-index"))
 }
 
 /// Returns the files that haven't been added to git yet.

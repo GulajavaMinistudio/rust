@@ -1,4 +1,5 @@
 use clippy_utils::msrvs::{self, Msrv};
+use clippy_utils::res::MaybeDef;
 use rustc_errors::Diag;
 use rustc_hir as hir;
 use rustc_lint::{LateContext, LintContext};
@@ -6,7 +7,7 @@ use rustc_middle::ty::{self, Ty};
 use rustc_span::{Span, sym};
 
 use clippy_utils::diagnostics::{span_lint_and_help, span_lint_and_then};
-use clippy_utils::ty::{AdtVariantInfo, approx_ty_size, is_type_diagnostic_item};
+use clippy_utils::ty::{AdtVariantInfo, approx_ty_size};
 use clippy_utils::{is_no_std_crate, trait_ref_of_method};
 
 use super::{RESULT_LARGE_ERR, RESULT_UNIT_ERR};
@@ -24,7 +25,7 @@ fn result_err_ty<'tcx>(
         && let ty = cx
             .tcx
             .instantiate_bound_regions_with_erased(cx.tcx.fn_sig(id).instantiate_identity().output())
-        && is_type_diagnostic_item(cx, ty, sym::Result)
+        && ty.is_diag_item(cx, sym::Result)
         && let ty::Adt(_, args) = ty.kind()
     {
         let err_ty = args.type_at(1);
@@ -55,7 +56,7 @@ pub(super) fn check_impl_item<'tcx>(
     // Don't lint if method is a trait's implementation, we can't do anything about those
     if let hir::ImplItemKind::Fn(ref sig, _) = item.kind
         && let Some((hir_ty, err_ty)) = result_err_ty(cx, sig.decl, item.owner_id.def_id, item.span)
-        && trait_ref_of_method(cx, item.owner_id.def_id).is_none()
+        && trait_ref_of_method(cx, item.owner_id).is_none()
     {
         if cx.effective_visibilities.is_exported(item.owner_id.def_id) {
             let fn_header_span = item.span.with_hi(sig.decl.output.span().hi());
@@ -97,13 +98,9 @@ fn check_result_unit_err(cx: &LateContext<'_>, err_ty: Ty<'_>, fn_header_span: S
 
 fn check_result_large_err<'tcx>(cx: &LateContext<'tcx>, err_ty: Ty<'tcx>, hir_ty_span: Span, large_err_threshold: u64) {
     if let ty::Adt(adt, subst) = err_ty.kind()
-        && let Some(local_def_id) = err_ty
-            .ty_adt_def()
-            .expect("already checked this is adt")
-            .did()
-            .as_local()
+        && let Some(local_def_id) = adt.did().as_local()
         && let hir::Node::Item(item) = cx.tcx.hir_node_by_def_id(local_def_id)
-        && let hir::ItemKind::Enum(_, ref def, _) = item.kind
+        && let hir::ItemKind::Enum(_, _, ref def) = item.kind
     {
         let variants_size = AdtVariantInfo::new(cx, *adt, subst);
         if let Some((first_variant, variants)) = variants_size.split_first()

@@ -1,6 +1,6 @@
 //! Provides the `extern static` that this platform expects.
 
-use rustc_symbol_mangling::mangle_internal_symbol;
+use rustc_target::spec::Os;
 
 use crate::*;
 
@@ -45,47 +45,34 @@ impl<'tcx> MiriMachine<'tcx> {
 
     /// Sets up the "extern statics" for this machine.
     pub fn init_extern_statics(ecx: &mut MiriInterpCx<'tcx>) -> InterpResult<'tcx> {
-        // "__rust_no_alloc_shim_is_unstable"
-        let val = ImmTy::from_int(0, ecx.machine.layouts.u8); // always 0, value does not matter
-        Self::alloc_extern_static(ecx, "__rust_no_alloc_shim_is_unstable", val)?;
-
-        // "__rust_alloc_error_handler_should_panic"
-        let val = ecx.tcx.sess.opts.unstable_opts.oom.should_panic();
-        let val = ImmTy::from_int(val, ecx.machine.layouts.u8);
-        Self::alloc_extern_static(
-            ecx,
-            &mangle_internal_symbol(*ecx.tcx, "__rust_alloc_error_handler_should_panic"),
-            val,
-        )?;
-
         if ecx.target_os_is_unix() {
             // "environ" is mandated by POSIX.
             let environ = ecx.machine.env_vars.unix().environ();
             Self::add_extern_static(ecx, "environ", environ);
         }
 
-        match ecx.tcx.sess.target.os.as_ref() {
-            "linux" => {
+        match &ecx.tcx.sess.target.os {
+            Os::Linux => {
                 Self::null_ptr_extern_statics(
                     ecx,
                     &["__cxa_thread_atexit_impl", "__clock_gettime64"],
                 )?;
-                Self::weak_symbol_extern_statics(ecx, &["getrandom", "statx"])?;
+                Self::weak_symbol_extern_statics(ecx, &["getrandom", "gettid", "statx"])?;
             }
-            "freebsd" => {
+            Os::FreeBsd => {
                 Self::null_ptr_extern_statics(ecx, &["__cxa_thread_atexit_impl"])?;
             }
-            "android" => {
+            Os::Android => {
                 Self::null_ptr_extern_statics(ecx, &["bsd_signal"])?;
-                Self::weak_symbol_extern_statics(ecx, &["signal", "getrandom"])?;
+                Self::weak_symbol_extern_statics(ecx, &["signal", "getrandom", "gettid"])?;
             }
-            "windows" => {
+            Os::Windows => {
                 // "_tls_used"
                 // This is some obscure hack that is part of the Windows TLS story. It's a `u8`.
                 let val = ImmTy::from_int(0, ecx.machine.layouts.u8);
                 Self::alloc_extern_static(ecx, "_tls_used", val)?;
             }
-            "illumos" | "solaris" => {
+            Os::Illumos | Os::Solaris => {
                 Self::weak_symbol_extern_statics(ecx, &["pthread_setname_np"])?;
             }
             _ => {} // No "extern statics" supported on this target

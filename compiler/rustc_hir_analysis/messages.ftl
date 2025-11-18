@@ -1,3 +1,7 @@
+hir_analysis_abi_custom_clothed_function =
+    items with the "custom" ABI can only be declared externally or defined via naked functions
+    .suggestion = convert this to an `#[unsafe(naked)]` function
+
 hir_analysis_ambiguous_assoc_item = ambiguous associated {$assoc_kind} `{$assoc_ident}` in bounds of `{$qself}`
     .label = ambiguous associated {$assoc_kind} `{$assoc_ident}`
 
@@ -37,10 +41,13 @@ hir_analysis_assoc_kind_mismatch = expected {$expected}, found {$got}
 
 hir_analysis_assoc_kind_mismatch_wrap_in_braces_sugg = consider adding braces here
 
-hir_analysis_associated_type_trait_uninferred_generic_params = cannot use the associated {$what} of a trait with uninferred generic parameters
+hir_analysis_associated_type_trait_uninferred_generic_params = cannot use the {$what} of a trait with uninferred generic parameters
     .suggestion = use a fully qualified path with inferred lifetimes
 
 hir_analysis_associated_type_trait_uninferred_generic_params_multipart_suggestion = use a fully qualified path with explicit lifetimes
+
+hir_analysis_async_drop_without_sync_drop = `AsyncDrop` impl without `Drop` impl
+    .help = type implementing `AsyncDrop` trait must also implement `Drop` trait to be used in sync context and unwinds
 
 hir_analysis_auto_deref_reached_recursion_limit = reached the recursion limit while auto-dereferencing `{$ty}`
     .label = deref recursion limit reached
@@ -65,19 +72,16 @@ hir_analysis_cannot_capture_late_bound_ty =
 hir_analysis_closure_implicit_hrtb = implicit types in closure signatures are forbidden when `for<...>` is present
     .label = `for<...>` is here
 
-hir_analysis_cmse_call_generic =
-    function pointers with the `"C-cmse-nonsecure-call"` ABI cannot contain generics in their type
+hir_analysis_cmse_generic =
+    generics are not allowed in `extern {$abi}` signatures
 
-hir_analysis_cmse_entry_generic =
-    functions with the `"C-cmse-nonsecure-entry"` ABI cannot contain generics in their type
+hir_analysis_cmse_impl_trait =
+    `impl Trait` is not allowed in `extern {$abi}` signatures
 
 hir_analysis_cmse_inputs_stack_spill =
     arguments for `{$abi}` function too large to pass via registers
-    .label = {$plural ->
-        [false] this argument doesn't
-        *[true] these arguments don't
-    } fit in the available registers
-    .note = functions with the `{$abi}` ABI must pass all their arguments via the 4 32-bit available argument registers
+    .label = does not fit in the available registers
+    .note = functions with the `{$abi}` ABI must pass all their arguments via the 4 32-bit argument registers
 
 hir_analysis_cmse_output_stack_spill =
     return value of `{$abi}` function too large to pass via registers
@@ -99,6 +103,8 @@ hir_analysis_coerce_pointee_not_struct = `derive(CoercePointee)` is only applica
 
 hir_analysis_coerce_pointee_not_transparent = `derive(CoercePointee)` is only applicable to `struct` with `repr(transparent)` layout
 
+hir_analysis_coerce_same_pat_kind = only pattern types with the same pattern can be coerced between each other
+
 hir_analysis_coerce_unsized_field_validity = for `{$ty}` to have a valid implementation of `{$trait_name}`, it must be possible to coerce the field of type `{$field_ty}`
     .label = `{$field_ty}` must be a pointer, reference, or smart pointer that is allowed to be unsized
 
@@ -110,15 +116,15 @@ hir_analysis_coercion_between_struct_same_note = expected coercion between the s
 
 hir_analysis_coercion_between_struct_single_note = expected a single field to be coerced, none found
 
-hir_analysis_const_bound_for_non_const_trait = `{$modifier}` can only be applied to `#[const_trait]` traits
+hir_analysis_const_bound_for_non_const_trait = `{$modifier}` can only be applied to `const` traits
     .label = can't be applied to `{$trait_name}`
-    .note = `{$trait_name}` can't be used with `{$modifier}` because it isn't annotated with `#[const_trait]`
-    .suggestion = {$suggestion_pre}mark `{$trait_name}` as `#[const_trait]` to allow it to have `const` implementations
+    .note = `{$trait_name}` can't be used with `{$modifier}` because it isn't `const`
+    .suggestion = {$suggestion_pre}mark `{$trait_name}` as `const` to allow it to have `const` implementations
 
-hir_analysis_const_impl_for_non_const_trait = const `impl` for trait `{$trait_name}` which is not marked with `#[const_trait]`
+hir_analysis_const_impl_for_non_const_trait = const `impl` for trait `{$trait_name}` which is not `const`
     .label = this trait is not `const`
-    .suggestion = {$suggestion_pre}mark `{$trait_name}` as `#[const_trait]` to allow it to have `const` implementations
-    .note = marking a trait with `#[const_trait]` ensures all default method bodies are `const`
+    .suggestion = {$suggestion_pre}mark `{$trait_name}` as `const` to allow it to have `const` implementations
+    .note = marking a trait with `const` ensures all default method bodies are `const`
     .adding = adding a non-const method body in the future would be a breaking change
 
 hir_analysis_const_param_ty_impl_on_non_adt =
@@ -151,7 +157,7 @@ hir_analysis_dispatch_from_dyn_zst = the trait `DispatchFromDyn` may only be imp
 hir_analysis_drop_impl_negative = negative `Drop` impls are not supported
 
 hir_analysis_drop_impl_on_wrong_item =
-    the `Drop` trait may only be implemented for local structs, enums, and unions
+    the `{$trait_}` trait may only be implemented for local structs, enums, and unions
     .label = must be a struct, enum, or union in the current crate
 
 hir_analysis_drop_impl_reservation = reservation `Drop` impls are not supported
@@ -364,9 +370,6 @@ hir_analysis_missing_type_params =
         *[other] parameters
     } must be specified on the object type
 
-hir_analysis_multiple_relaxed_default_bounds =
-    type parameter has more than one relaxed default bound, only one is supported
-
 hir_analysis_must_be_name_of_associated_function = must be a name of an associated function
 
 hir_analysis_must_implement_not_function = not a function
@@ -440,6 +443,7 @@ hir_analysis_parenthesized_fn_trait_expansion =
 
 hir_analysis_placeholder_not_allowed_item_signatures = the placeholder `_` is not allowed within types on item signatures for {$kind}
     .label = not allowed in type signatures
+
 hir_analysis_precise_capture_self_alias = `Self` can't be captured in `use<...>` precise captures list, since it is an alias
     .label = `Self` is not a generic argument, but an alias to the type of the {$what}
 
@@ -504,10 +508,6 @@ hir_analysis_supertrait_item_shadowee = item from `{$supertrait}` is shadowed by
 
 hir_analysis_supertrait_item_shadowing = trait item `{$item}` from `{$subtrait}` shadows identically named item from supertrait
 
-hir_analysis_tait_forward_compat2 = item does not constrain `{$opaque_type}`
-    .note = consider removing `#[define_opaque]` or adding an empty `#[define_opaque()]`
-    .opaque = this opaque type is supposed to be constrained
-
 hir_analysis_target_feature_on_main = `main` function is not allowed to have `#[target_feature]`
 
 hir_analysis_too_large_static = extern static is too large for the target architecture
@@ -565,10 +565,6 @@ hir_analysis_unconstrained_generic_parameter = the {$param_def_kind} `{$param_na
 hir_analysis_unconstrained_opaque_type = unconstrained opaque type
     .note = `{$name}` must be used in combination with a concrete type within the same {$what}
 
-hir_analysis_unrecognized_atomic_operation =
-    unrecognized atomic operation function: `{$op}`
-    .label = unrecognized atomic operation
-
 hir_analysis_unrecognized_intrinsic_function =
     unrecognized intrinsic function: `{$name}`
     .label = unrecognized intrinsic
@@ -599,7 +595,7 @@ hir_analysis_value_of_associated_struct_already_specified =
     .label = re-bound here
     .previous_bound_label = `{$item_name}` bound here first
 
-hir_analysis_variadic_function_compatible_convention = C-variadic function must have a compatible calling convention, like {$conventions}
+hir_analysis_variadic_function_compatible_convention = C-variadic functions with the {$convention} calling convention are not supported
     .label = C-variadic function must have a compatible calling convention
 
 hir_analysis_variances_of = {$variances}

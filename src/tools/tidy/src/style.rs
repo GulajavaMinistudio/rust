@@ -24,6 +24,7 @@ use std::sync::LazyLock;
 use regex::RegexSetBuilder;
 use rustc_hash::FxHashMap;
 
+use crate::diagnostics::{CheckId, TidyCtx};
 use crate::walk::{filter_dirs, walk};
 
 #[cfg(test)]
@@ -94,10 +95,9 @@ fn generate_problems<'a>(
     letter_digit: &'a FxHashMap<char, char>,
 ) -> impl Iterator<Item = u32> + 'a {
     consts.iter().flat_map(move |const_value| {
-        let problem =
-            letter_digit.iter().fold(format!("{:X}", const_value), |acc, (key, value)| {
-                acc.replace(&value.to_string(), &key.to_string())
-            });
+        let problem = letter_digit.iter().fold(format!("{const_value:X}"), |acc, (key, value)| {
+            acc.replace(&value.to_string(), &key.to_string())
+        });
         let indexes: Vec<usize> = problem
             .chars()
             .enumerate()
@@ -339,9 +339,11 @@ fn is_unexplained_ignore(extension: &str, line: &str) -> bool {
     true
 }
 
-pub fn check(path: &Path, bad: &mut bool) {
+pub fn check(path: &Path, tidy_ctx: TidyCtx) {
+    let mut check = tidy_ctx.start_check(CheckId::new("style").path(path));
+
     fn skip(path: &Path, is_dir: bool) -> bool {
-        if path.file_name().map_or(false, |name| name.to_string_lossy().starts_with(".#")) {
+        if path.file_name().is_some_and(|name| name.to_string_lossy().starts_with(".#")) {
             // vim or emacs temporary file
             return true;
         }
@@ -358,12 +360,12 @@ pub fn check(path: &Path, bad: &mut bool) {
         let extensions = ["rs", "py", "js", "sh", "c", "cpp", "h", "md", "css", "ftl", "goml"];
 
         // NB: don't skip paths without extensions (or else we'll skip all directories and will only check top level files)
-        if path.extension().map_or(true, |ext| !extensions.iter().any(|e| ext == OsStr::new(e))) {
+        if path.extension().is_none_or(|ext| !extensions.iter().any(|e| ext == OsStr::new(e))) {
             return true;
         }
 
         // We only check CSS files in rustdoc.
-        path.extension().map_or(false, |e| e == "css") && !is_in(path, "src", "librustdoc")
+        path.extension().is_some_and(|e| e == "css") && !is_in(path, "src", "librustdoc")
     }
 
     // This creates a RegexSet as regex contains performance optimizations to be able to deal with these over
@@ -392,7 +394,7 @@ pub fn check(path: &Path, bad: &mut bool) {
             });
 
         if contents.is_empty() {
-            tidy_error!(bad, "{}: empty file", file.display());
+            check.error(format!("{}: empty file", file.display()));
         }
 
         let extension = file.extension().unwrap().to_string_lossy();
@@ -418,10 +420,10 @@ pub fn check(path: &Path, bad: &mut bool) {
             return;
         }
         // Shell completions are automatically generated
-        if let Some(p) = file.parent() {
-            if p.ends_with(Path::new("src/etc/completions")) {
-                return;
-            }
+        if let Some(p) = file.parent()
+            && p.ends_with(Path::new("src/etc/completions"))
+        {
+            return;
         }
         let [
             mut skip_cr,
@@ -435,7 +437,7 @@ pub fn check(path: &Path, bad: &mut bool) {
             mut skip_copyright,
             mut skip_dbg,
             mut skip_odd_backticks,
-        ] = contains_ignore_directives(&path_str, can_contain, &contents, CONFIGURABLE_CHECKS);
+        ] = contains_ignore_directives(&path_str, can_contain, contents, CONFIGURABLE_CHECKS);
         let mut leading_new_lines = false;
         let mut trailing_new_lines = 0;
         let mut lines = 0;
@@ -468,7 +470,7 @@ pub fn check(path: &Path, bad: &mut bool) {
             }
 
             let mut err = |msg: &str| {
-                tidy_error!(bad, "{}:{}: {}", file.display(), i + 1, msg);
+                check.error(format!("{}:{}: {msg}", file.display(), i + 1));
             };
 
             if trimmed.contains("dbg!")
@@ -520,8 +522,11 @@ pub fn check(path: &Path, bad: &mut bool) {
                         .any(|directive| matches!(directive, Directive::Ignore(_)));
                 let has_alphabetical_directive = line.contains("tidy-alphabetical-start")
                     || line.contains("tidy-alphabetical-end");
-                let has_recognized_directive =
-                    has_recognized_ignore_directive || has_alphabetical_directive;
+                let has_other_tidy_ignore_directive =
+                    line.contains("ignore-tidy-target-specific-tests");
+                let has_recognized_directive = has_recognized_ignore_directive
+                    || has_alphabetical_directive
+                    || has_other_tidy_ignore_directive;
                 if contains_potential_directive && (!has_recognized_directive) {
                     err("Unrecognized tidy directive")
                 }
@@ -605,37 +610,37 @@ pub fn check(path: &Path, bad: &mut bool) {
                         backtick_count += comment_text.chars().filter(|ch| *ch == '`').count();
                     }
                     comment_block = Some((start_line, backtick_count));
-                } else if let Some((start_line, backtick_count)) = comment_block.take() {
-                    if backtick_count % 2 == 1 {
-                        let mut err = |msg: &str| {
-                            tidy_error!(bad, "{}:{start_line}: {msg}", file.display());
-                        };
-                        let block_len = (i + 1) - start_line;
-                        if block_len == 1 {
-                            suppressible_tidy_err!(
-                                err,
-                                skip_odd_backticks,
-                                "comment with odd number of backticks"
-                            );
-                        } else {
-                            suppressible_tidy_err!(
-                                err,
-                                skip_odd_backticks,
-                                "{block_len}-line comment block with odd number of backticks"
-                            );
-                        }
+                } else if let Some((start_line, backtick_count)) = comment_block.take()
+                    && backtick_count % 2 == 1
+                {
+                    let mut err = |msg: &str| {
+                        check.error(format!("{}:{start_line}: {msg}", file.display()));
+                    };
+                    let block_len = (i + 1) - start_line;
+                    if block_len == 1 {
+                        suppressible_tidy_err!(
+                            err,
+                            skip_odd_backticks,
+                            "comment with odd number of backticks"
+                        );
+                    } else {
+                        suppressible_tidy_err!(
+                            err,
+                            skip_odd_backticks,
+                            "{block_len}-line comment block with odd number of backticks"
+                        );
                     }
                 }
             }
         }
         if leading_new_lines {
             let mut err = |_| {
-                tidy_error!(bad, "{}: leading newline", file.display());
+                check.error(format!("{}: leading newline", file.display()));
             };
             suppressible_tidy_err!(err, skip_leading_newlines, "missing leading newline");
         }
         let mut err = |msg: &str| {
-            tidy_error!(bad, "{}: {}", file.display(), msg);
+            check.error(format!("{}: {}", file.display(), msg));
         };
         match trailing_new_lines {
             0 => suppressible_tidy_err!(err, skip_trailing_newlines, "missing trailing newline"),
@@ -648,38 +653,36 @@ pub fn check(path: &Path, bad: &mut bool) {
         };
         if lines > LINES {
             let mut err = |_| {
-                tidy_error!(
-                    bad,
-                    "{}: too many lines ({}) (add `// \
+                check.error(format!(
+                    "{}: too many lines ({lines}) (add `// \
                      ignore-tidy-filelength` to the file to suppress this error)",
                     file.display(),
-                    lines
-                );
+                ));
             };
             suppressible_tidy_err!(err, skip_file_length, "");
         }
 
         if let Directive::Ignore(false) = skip_cr {
-            tidy_error!(bad, "{}: ignoring CR characters unnecessarily", file.display());
+            check.error(format!("{}: ignoring CR characters unnecessarily", file.display()));
         }
         if let Directive::Ignore(false) = skip_tab {
-            tidy_error!(bad, "{}: ignoring tab characters unnecessarily", file.display());
+            check.error(format!("{}: ignoring tab characters unnecessarily", file.display()));
         }
         if let Directive::Ignore(false) = skip_end_whitespace {
-            tidy_error!(bad, "{}: ignoring trailing whitespace unnecessarily", file.display());
+            check.error(format!("{}: ignoring trailing whitespace unnecessarily", file.display()));
         }
         if let Directive::Ignore(false) = skip_trailing_newlines {
-            tidy_error!(bad, "{}: ignoring trailing newlines unnecessarily", file.display());
+            check.error(format!("{}: ignoring trailing newlines unnecessarily", file.display()));
         }
         if let Directive::Ignore(false) = skip_leading_newlines {
-            tidy_error!(bad, "{}: ignoring leading newlines unnecessarily", file.display());
+            check.error(format!("{}: ignoring leading newlines unnecessarily", file.display()));
         }
         if let Directive::Ignore(false) = skip_copyright {
-            tidy_error!(bad, "{}: ignoring copyright unnecessarily", file.display());
+            check.error(format!("{}: ignoring copyright unnecessarily", file.display()));
         }
         // We deliberately do not warn about these being unnecessary,
         // that would just lead to annoying churn.
         let _unused = skip_line_length;
         let _unused = skip_file_length;
-    })
+    });
 }

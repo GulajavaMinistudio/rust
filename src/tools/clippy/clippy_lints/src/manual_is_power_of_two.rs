@@ -3,7 +3,7 @@ use clippy_utils::diagnostics::span_lint_and_sugg;
 use clippy_utils::msrvs::{self, Msrv};
 use clippy_utils::sugg::Sugg;
 use clippy_utils::ty::ty_from_hir_ty;
-use clippy_utils::{SpanlessEq, is_in_const_context, is_integer_literal};
+use clippy_utils::{SpanlessEq, is_in_const_context, is_integer_literal, sym};
 use rustc_errors::Applicability;
 use rustc_hir::{BinOpKind, Expr, ExprKind, QPath};
 use rustc_lint::{LateContext, LateLintPass};
@@ -70,12 +70,12 @@ impl<'tcx> LateLintPass<'tcx> for ManualIsPowerOfTwo {
         if !expr.span.from_expansion()
             && let Some((lhs, rhs)) = unexpanded_binop_operands(expr, BinOpKind::Eq)
         {
-            if let Some(a) = count_ones_receiver(cx, lhs)
-                && is_integer_literal(rhs, 1)
+            if is_integer_literal(rhs, 1)
+                && let Some(a) = count_ones_receiver(cx, lhs)
             {
                 self.build_sugg(cx, expr, a);
-            } else if let Some(a) = count_ones_receiver(cx, rhs)
-                && is_integer_literal(lhs, 1)
+            } else if is_integer_literal(lhs, 1)
+                && let Some(a) = count_ones_receiver(cx, rhs)
             {
                 self.build_sugg(cx, expr, a);
             } else if is_integer_literal(rhs, 0)
@@ -103,7 +103,7 @@ fn count_ones_receiver<'tcx>(cx: &LateContext<'tcx>, expr: &Expr<'tcx>) -> Optio
     } else {
         return None;
     };
-    (method.ident.as_str() == "count_ones" && matches!(ty.kind(), ty::Uint(_))).then_some(receiver)
+    (method.ident.name == sym::count_ones && matches!(ty.kind(), ty::Uint(_))).then_some(receiver)
 }
 
 /// Return `greater` if `smaller == greater - 1`

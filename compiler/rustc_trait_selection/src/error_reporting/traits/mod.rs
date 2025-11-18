@@ -1,6 +1,6 @@
 pub mod ambiguity;
 pub mod call_kind;
-mod fulfillment_errors;
+pub mod fulfillment_errors;
 pub mod on_unimplemented;
 pub mod on_unimplemented_condition;
 pub mod on_unimplemented_format;
@@ -10,18 +10,19 @@ pub mod suggestions;
 use std::{fmt, iter};
 
 use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
+use rustc_data_structures::unord::UnordSet;
 use rustc_errors::{Applicability, Diag, E0038, E0276, MultiSpan, struct_span_code_err};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::Visitor;
-use rustc_hir::{self as hir, AmbigArg, LangItem};
+use rustc_hir::{self as hir, AmbigArg};
 use rustc_infer::traits::solve::Goal;
 use rustc_infer::traits::{
     DynCompatibilityViolation, Obligation, ObligationCause, ObligationCauseCode,
     PredicateObligation, SelectionError,
 };
 use rustc_middle::ty::print::{PrintTraitRefExt as _, with_no_trimmed_paths};
-use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_span::{ErrorGuaranteed, ExpnKind, Span};
+use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt as _};
+use rustc_span::{DesugaringKind, ErrorGuaranteed, ExpnKind, Span, Symbol};
 use tracing::{info, instrument};
 
 pub use self::overflow::*;
@@ -50,8 +51,6 @@ enum GetSafeTransmuteErrorAndReason {
     Default,
     Error { err_msg: String, safe_transmute_explanation: Option<String> },
 }
-
-struct UnsatisfiedConst(pub bool);
 
 /// Crude way of getting back an `Expr` from a `Span`.
 pub struct FindExprBySpan<'hir> {
@@ -141,10 +140,6 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         &self,
         mut errors: Vec<FulfillmentError<'tcx>>,
     ) -> ErrorGuaranteed {
-        self.sub_relations
-            .borrow_mut()
-            .add_constraints(self, errors.iter().map(|e| e.obligation.predicate));
-
         #[derive(Debug)]
         struct ErrorDescriptor<'tcx> {
             goal: Goal<'tcx, ty::Predicate<'tcx>>,
@@ -160,17 +155,53 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             })
             .collect();
 
-        // Ensure `T: Sized` and `T: WF` obligations come last. This lets us display diagnostics
-        // with more relevant type information and hide redundant E0282 errors.
-        errors.sort_by_key(|e| match e.obligation.predicate.kind().skip_binder() {
-            ty::PredicateKind::Clause(ty::ClauseKind::Trait(pred))
-                if self.tcx.is_lang_item(pred.def_id(), LangItem::Sized) =>
-            {
-                1
+        // Ensure `T: Sized`, `T: MetaSized`, `T: PointeeSized` and `T: WF` obligations come last,
+        // and `Subtype` obligations from `FormatLiteral` desugarings come first.
+        // This lets us display diagnostics with more relevant type information and hide redundant
+        // E0282 errors.
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+        enum ErrorSortKey {
+            SubtypeFormat(usize, usize),
+            OtherKind,
+            SizedTrait,
+            MetaSizedTrait,
+            PointeeSizedTrait,
+            Coerce,
+            WellFormed,
+        }
+        errors.sort_by_key(|e| {
+            let maybe_sizedness_did = match e.obligation.predicate.kind().skip_binder() {
+                ty::PredicateKind::Clause(ty::ClauseKind::Trait(pred)) => Some(pred.def_id()),
+                ty::PredicateKind::Clause(ty::ClauseKind::HostEffect(pred)) => Some(pred.def_id()),
+                _ => None,
+            };
+
+            match e.obligation.predicate.kind().skip_binder() {
+                ty::PredicateKind::Subtype(_)
+                    if matches!(
+                        e.obligation.cause.span.desugaring_kind(),
+                        Some(DesugaringKind::FormatLiteral { .. })
+                    ) =>
+                {
+                    let (_, row, col, ..) =
+                        self.tcx.sess.source_map().span_to_location_info(e.obligation.cause.span);
+                    ErrorSortKey::SubtypeFormat(row, col)
+                }
+                _ if maybe_sizedness_did == self.tcx.lang_items().sized_trait() => {
+                    ErrorSortKey::SizedTrait
+                }
+                _ if maybe_sizedness_did == self.tcx.lang_items().meta_sized_trait() => {
+                    ErrorSortKey::MetaSizedTrait
+                }
+                _ if maybe_sizedness_did == self.tcx.lang_items().pointee_sized_trait() => {
+                    ErrorSortKey::PointeeSizedTrait
+                }
+                ty::PredicateKind::Coerce(_) => ErrorSortKey::Coerce,
+                ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(_)) => {
+                    ErrorSortKey::WellFormed
+                }
+                _ => ErrorSortKey::OtherKind,
             }
-            ty::PredicateKind::Coerce(_) => 2,
-            ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(_)) => 3,
-            _ => 0,
         });
 
         for (index, error) in errors.iter().enumerate() {
@@ -220,26 +251,30 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
         }
 
         let mut reported = None;
-
         for from_expansion in [false, true] {
             for (error, suppressed) in iter::zip(&errors, &is_suppressed) {
                 if !suppressed && error.obligation.cause.span.from_expansion() == from_expansion {
-                    let guar = self.report_fulfillment_error(error);
-                    self.infcx.set_tainted_by_errors(guar);
-                    reported = Some(guar);
-                    // We want to ignore desugarings here: spans are equivalent even
-                    // if one is the result of a desugaring and the other is not.
-                    let mut span = error.obligation.cause.span;
-                    let expn_data = span.ctxt().outer_expn_data();
-                    if let ExpnKind::Desugaring(_) = expn_data.kind {
-                        span = expn_data.call_site;
+                    if !error.references_error() {
+                        let guar = self.report_fulfillment_error(error);
+                        self.infcx.set_tainted_by_errors(guar);
+                        reported = Some(guar);
+                        // We want to ignore desugarings here: spans are equivalent even
+                        // if one is the result of a desugaring and the other is not.
+                        let mut span = error.obligation.cause.span;
+                        let expn_data = span.ctxt().outer_expn_data();
+                        if let ExpnKind::Desugaring(_) = expn_data.kind {
+                            span = expn_data.call_site;
+                        }
+                        self.reported_trait_errors
+                            .borrow_mut()
+                            .entry(span)
+                            .or_insert_with(|| (vec![], guar))
+                            .0
+                            .push(error.obligation.as_goal());
                     }
-                    self.reported_trait_errors
-                        .borrow_mut()
-                        .entry(span)
-                        .or_insert_with(|| (vec![], guar))
-                        .0
-                        .push(error.obligation.as_goal());
+                    if let Some(guar) = self.dcx().has_errors() {
+                        self.infcx.set_tainted_by_errors(guar);
+                    }
                 }
             }
         }
@@ -317,6 +352,80 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             FulfillmentErrorCode::Cycle(ref cycle) => self.report_overflow_obligation_cycle(cycle),
         }
     }
+
+    fn get_extern_crate_renamed_symbol(&self, trait_def_id: DefId) -> Option<Symbol> {
+        if !trait_def_id.is_local()
+            && let Some(data) = self.tcx.extern_crate(trait_def_id.krate)
+            && let rustc_session::cstore::ExternCrateSource::Extern(def_id) = data.src
+        {
+            self.tcx.opt_item_name(def_id)
+        } else {
+            None
+        }
+    }
+
+    pub fn check_same_definition_different_crate<F>(
+        &self,
+        err: &mut Diag<'_>,
+        expected_did: DefId,
+        found_dids: impl Iterator<Item = DefId>,
+        get_impls: F,
+        ty: &str,
+    ) -> bool
+    where
+        F: Fn(DefId) -> Vec<Span>,
+    {
+        let krate = self.tcx.crate_name(expected_did.krate);
+        let name = self.tcx.item_name(expected_did);
+        let locally_renamed_krate = self
+            .get_extern_crate_renamed_symbol(expected_did)
+            .map_or(None, |s| if s != krate { Some(s) } else { None });
+        let definitions_with_same_path: UnordSet<_> = found_dids
+            .filter(|def_id| {
+                def_id.krate != expected_did.krate
+                    && (locally_renamed_krate == self.get_extern_crate_renamed_symbol(*def_id)
+                        || self.tcx.crate_name(def_id.krate) == krate)
+                    && self.tcx.item_name(def_id) == name
+            })
+            .map(|def_id| (self.tcx.def_path_str(def_id), def_id))
+            .collect();
+
+        let definitions_with_same_path =
+            definitions_with_same_path.into_items().into_sorted_stable_ord_by_key(|(p, _)| p);
+        let mut suggested = false;
+        let mut trait_is_impl = false;
+
+        if !definitions_with_same_path.is_empty() {
+            let mut span: MultiSpan = self.tcx.def_span(expected_did).into();
+            span.push_span_label(
+                self.tcx.def_span(expected_did),
+                format!("this is the expected {ty}"),
+            );
+            suggested = true;
+            for (_, definition_with_same_path) in &definitions_with_same_path {
+                let definitions_impls = get_impls(*definition_with_same_path);
+                if definitions_impls.is_empty() {
+                    continue;
+                }
+
+                for candidate_span in definitions_impls {
+                    span.push_span_label(candidate_span, format!("this is the found {ty}"));
+                    trait_is_impl = true;
+                }
+            }
+            if !trait_is_impl {
+                for (_, def_id) in definitions_with_same_path {
+                    span.push_span_label(
+                        self.tcx.def_span(def_id),
+                        format!("this is the {ty} that was imported"),
+                    );
+                }
+            }
+            self.note_two_crate_versions(expected_did, span, err);
+            err.help("you can use `cargo tree` to explore your dependency tree");
+        }
+        suggested
+    }
 }
 
 /// Recovers the "impl X for Y" signature from `impl_def_id` and returns it as a
@@ -324,22 +433,29 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
 pub(crate) fn to_pretty_impl_header(tcx: TyCtxt<'_>, impl_def_id: DefId) -> Option<String> {
     use std::fmt::Write;
 
-    let trait_ref = tcx.impl_trait_ref(impl_def_id)?.instantiate_identity();
+    let trait_ref = tcx.impl_opt_trait_ref(impl_def_id)?.instantiate_identity();
     let mut w = "impl".to_owned();
+
+    #[derive(Debug, Default)]
+    struct SizednessFound {
+        sized: bool,
+        meta_sized: bool,
+    }
+
+    let mut types_with_sizedness_bounds = FxIndexMap::<_, SizednessFound>::default();
 
     let args = ty::GenericArgs::identity_for_item(tcx, impl_def_id);
 
-    // FIXME: Currently only handles ?Sized.
-    //        Needs to support ?Move and ?DynSized when they are implemented.
-    let mut types_without_default_bounds = FxIndexSet::default();
-    let sized_trait = tcx.lang_items().sized_trait();
-
     let arg_names = args.iter().map(|k| k.to_string()).filter(|k| k != "'_").collect::<Vec<_>>();
     if !arg_names.is_empty() {
-        types_without_default_bounds.extend(args.types());
         w.push('<');
         w.push_str(&arg_names.join(", "));
         w.push('>');
+
+        for ty in args.types() {
+            // `PointeeSized` params might have no predicates.
+            types_with_sizedness_bounds.insert(ty, SizednessFound::default());
+        }
     }
 
     write!(
@@ -351,24 +467,47 @@ pub(crate) fn to_pretty_impl_header(tcx: TyCtxt<'_>, impl_def_id: DefId) -> Opti
     )
     .unwrap();
 
-    // The predicates will contain default bounds like `T: Sized`. We need to
-    // remove these bounds, and add `T: ?Sized` to any untouched type parameters.
     let predicates = tcx.predicates_of(impl_def_id).predicates;
-    let mut pretty_predicates =
-        Vec::with_capacity(predicates.len() + types_without_default_bounds.len());
+    let mut pretty_predicates = Vec::with_capacity(predicates.len());
+
+    let sized_trait = tcx.lang_items().sized_trait();
+    let meta_sized_trait = tcx.lang_items().meta_sized_trait();
 
     for (p, _) in predicates {
-        if let Some(poly_trait_ref) = p.as_trait_clause() {
-            if Some(poly_trait_ref.def_id()) == sized_trait {
-                // FIXME(#120456) - is `swap_remove` correct?
-                types_without_default_bounds.swap_remove(&poly_trait_ref.self_ty().skip_binder());
+        // Accumulate the sizedness bounds for each self ty.
+        if let Some(trait_clause) = p.as_trait_clause() {
+            let self_ty = trait_clause.self_ty().skip_binder();
+            let sizedness_of = types_with_sizedness_bounds.entry(self_ty).or_default();
+            if Some(trait_clause.def_id()) == sized_trait {
+                sizedness_of.sized = true;
+                continue;
+            } else if Some(trait_clause.def_id()) == meta_sized_trait {
+                sizedness_of.meta_sized = true;
                 continue;
             }
         }
+
         pretty_predicates.push(p.to_string());
     }
 
-    pretty_predicates.extend(types_without_default_bounds.iter().map(|ty| format!("{ty}: ?Sized")));
+    for (ty, sizedness) in types_with_sizedness_bounds {
+        if !tcx.features().sized_hierarchy() {
+            if sizedness.sized {
+                // Maybe a default bound, don't write anything.
+            } else {
+                pretty_predicates.push(format!("{ty}: ?Sized"));
+            }
+        } else {
+            if sizedness.sized {
+                // Maybe a default bound, don't write anything.
+                pretty_predicates.push(format!("{ty}: Sized"));
+            } else if sizedness.meta_sized {
+                pretty_predicates.push(format!("{ty}: MetaSized"));
+            } else {
+                pretty_predicates.push(format!("{ty}: PointeeSized"));
+            }
+        }
+    }
 
     if !pretty_predicates.is_empty() {
         write!(w, "\n  where {}", pretty_predicates.join(", ")).unwrap();
@@ -416,9 +555,8 @@ pub fn report_dyn_incompatibility<'tcx>(
     let trait_str = tcx.def_path_str(trait_def_id);
     let trait_span = tcx.hir_get_if_local(trait_def_id).and_then(|node| match node {
         hir::Node::Item(item) => match item.kind {
-            hir::ItemKind::Trait(_, _, ident, ..) | hir::ItemKind::TraitAlias(ident, _, _) => {
-                Some(ident.span)
-            }
+            hir::ItemKind::Trait(_, _, _, ident, ..)
+            | hir::ItemKind::TraitAlias(_, ident, _, _) => Some(ident.span),
             _ => unreachable!(),
         },
         _ => None,
@@ -519,11 +657,11 @@ fn attempt_dyn_to_enum_suggestion(
             let Some(impl_type) = tcx.type_of(*impl_id).no_bound_vars() else { return None };
 
             // Obviously unsized impl types won't be usable in an enum.
-            // Note: this doesn't use `Ty::is_trivially_sized` because that function
+            // Note: this doesn't use `Ty::has_trivial_sizedness` because that function
             // defaults to assuming that things are *not* sized, whereas we want to
             // fall back to assuming that things may be sized.
             match impl_type.kind() {
-                ty::Str | ty::Slice(_) | ty::Dynamic(_, _, ty::DynKind::Dyn) => {
+                ty::Str | ty::Slice(_) | ty::Dynamic(_, _) => {
                     return None;
                 }
                 _ => {}

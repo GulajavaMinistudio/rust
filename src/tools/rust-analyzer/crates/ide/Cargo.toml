@@ -10,6 +10,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [lib]
+doctest = false
 
 [dependencies]
 cov-mark = "2.0.0"
@@ -25,7 +26,7 @@ dot.workspace = true
 smallvec.workspace = true
 triomphe.workspace = true
 nohash-hasher.workspace = true
-rustc_apfloat = "0.2.2"
+rustc_apfloat = "0.2.3"
 
 # local deps
 cfg.workspace = true
@@ -41,6 +42,7 @@ span.workspace = true
 # ide should depend only on the top-level `hir` package. if you need
 # something from some `hir-xxx` subpackage, reexport the API via `hir`.
 hir.workspace = true
+macros.workspace = true
 
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "emscripten")))'.dependencies]
 toolchain.workspace = true

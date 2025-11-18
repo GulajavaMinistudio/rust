@@ -89,7 +89,7 @@ pub(super) fn vtable_allocation_provider<'tcx>(
 
     let vtable_entries = if let Some(poly_trait_ref) = poly_trait_ref {
         let trait_ref = poly_trait_ref.with_self_ty(tcx, ty);
-        let trait_ref = tcx.erase_regions(trait_ref);
+        let trait_ref = tcx.erase_and_anonymize_regions(trait_ref);
 
         tcx.vtable_entries(trait_ref)
     } else {
@@ -104,13 +104,13 @@ pub(super) fn vtable_allocation_provider<'tcx>(
         .expect("failed to build vtable representation");
     assert!(layout.is_sized(), "can't create a vtable for an unsized type");
     let size = layout.size.bytes();
-    let align = layout.align.abi.bytes();
+    let align = layout.align.bytes();
 
-    let ptr_size = tcx.data_layout.pointer_size;
-    let ptr_align = tcx.data_layout.pointer_align.abi;
+    let ptr_size = tcx.data_layout.pointer_size();
+    let ptr_align = tcx.data_layout.pointer_align().abi;
 
     let vtable_size = ptr_size * u64::try_from(vtable_entries.len()).unwrap();
-    let mut vtable = Allocation::new(vtable_size, ptr_align, AllocInit::Uninit);
+    let mut vtable = Allocation::new(vtable_size, ptr_align, AllocInit::Uninit, ());
 
     // No need to do any alignment checks on the memory accesses below, because we know the
     // allocation is correctly aligned as we created it above. Also we're only offsetting by

@@ -8,25 +8,31 @@ use rustc_middle::ty::layout::{HasTyCtxt, LayoutCx, TyAndLayout};
 pub(super) fn layout_sanity_check<'tcx>(cx: &LayoutCx<'tcx>, layout: &TyAndLayout<'tcx>) {
     let tcx = cx.tcx();
 
-    // Type-level uninhabitedness should always imply ABI uninhabitedness.
+    if !layout.size.bytes().is_multiple_of(layout.align.bytes()) {
+        bug!("size is not a multiple of align, in the following layout:\n{layout:#?}");
+    }
+    if layout.size.bytes() >= tcx.data_layout.obj_size_bound() {
+        bug!("size is too large, in the following layout:\n{layout:#?}");
+    }
+    // FIXME(#124403): Once `repr_c_enums_larger_than_int` is a hard error, we could assert
+    // here that a repr(c) enum discriminant is never larger than a c_int.
+
+    if !cfg!(debug_assertions) {
+        // Stop here, the rest is kind of expensive.
+        return;
+    }
+
+    // Type-level uninhabitedness should always imply ABI uninhabitedness. This can be expensive on
+    // big non-exhaustive types, and is [hard to
+    // fix](https://github.com/rust-lang/rust/issues/141006#issuecomment-2883415000) in general.
+    // Only doing this sanity check when debug assertions are turned on avoids the issue for the
+    // very specific case of #140944.
     if layout.ty.is_privately_uninhabited(tcx, cx.typing_env) {
         assert!(
             layout.is_uninhabited(),
             "{:?} is type-level uninhabited but not ABI-uninhabited?",
             layout.ty
         );
-    }
-
-    if layout.size.bytes() % layout.align.abi.bytes() != 0 {
-        bug!("size is not a multiple of align, in the following layout:\n{layout:#?}");
-    }
-    if layout.size.bytes() >= tcx.data_layout.obj_size_bound() {
-        bug!("size is too large, in the following layout:\n{layout:#?}");
-    }
-
-    if !cfg!(debug_assertions) {
-        // Stop here, the rest is kind of expensive.
-        return;
     }
 
     /// Yields non-ZST fields of the type
@@ -273,6 +279,12 @@ pub(super) fn layout_sanity_check<'tcx>(cx: &LayoutCx<'tcx>, layout: &TyAndLayou
                     if !variant.is_uninhabited() {
                         assert!(idx == *untagged_variant || niche_variants.contains(&idx));
                     }
+
+                    // Ensure that for niche encoded tags the discriminant coincides with the variant index.
+                    assert_eq!(
+                        layout.ty.discriminant_for_variant(tcx, idx).unwrap().val,
+                        u128::from(idx.as_u32()),
+                    );
                 }
             }
             for variant in variants.iter() {
@@ -290,8 +302,8 @@ pub(super) fn layout_sanity_check<'tcx>(cx: &LayoutCx<'tcx>, layout: &TyAndLayou
                 if variant.align.abi > layout.align.abi {
                     bug!(
                         "Type with alignment {} bytes has variant with alignment {} bytes: {layout:#?}",
-                        layout.align.abi.bytes(),
-                        variant.align.abi.bytes(),
+                        layout.align.bytes(),
+                        variant.align.bytes(),
                     )
                 }
                 // Skip empty variants.

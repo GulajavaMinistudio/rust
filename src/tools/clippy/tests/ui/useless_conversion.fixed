@@ -1,5 +1,5 @@
 #![deny(clippy::useless_conversion)]
-#![allow(clippy::needless_if, clippy::unnecessary_wraps)]
+#![allow(clippy::needless_ifs, clippy::unnecessary_wraps, unused)]
 // FIXME(static_mut_refs): Do not allow `static_mut_refs` lint
 #![allow(static_mut_refs)]
 
@@ -426,4 +426,19 @@ mod issue11819 {
             //~^ useless_conversion
         }
     }
+}
+
+fn issue14739() {
+    use std::ops::Range;
+
+    const R: Range<u32> = 2..7;
+
+    R.into_iter().all(|_x| true); // no lint
+
+    R.into_iter().any(|_x| true); // no lint
+
+    R.for_each(|_x| {});
+    //~^ useless_conversion
+    let _ = R.map(|_x| 0);
+    //~^ useless_conversion
 }

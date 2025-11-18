@@ -1,6 +1,5 @@
 //! Extern block hints
 use ide_db::{famous_defs::FamousDefs, text_edit::TextEdit};
-use span::EditionedFileId;
 use syntax::{AstNode, SyntaxToken, ast};
 
 use crate::{InlayHint, InlayHintsConfig};
@@ -8,8 +7,7 @@ use crate::{InlayHint, InlayHintsConfig};
 pub(super) fn extern_block_hints(
     acc: &mut Vec<InlayHint>,
     FamousDefs(sema, _): &FamousDefs<'_, '_>,
-    config: &InlayHintsConfig,
-    _file_id: EditionedFileId,
+    config: &InlayHintsConfig<'_>,
     extern_block: ast::ExternBlock,
 ) -> Option<()> {
     if extern_block.unsafe_token().is_some() {
@@ -35,8 +33,7 @@ pub(super) fn extern_block_hints(
 pub(super) fn fn_hints(
     acc: &mut Vec<InlayHint>,
     FamousDefs(sema, _): &FamousDefs<'_, '_>,
-    config: &InlayHintsConfig,
-    _file_id: EditionedFileId,
+    config: &InlayHintsConfig<'_>,
     fn_: &ast::Fn,
     extern_block: &ast::ExternBlock,
 ) -> Option<()> {
@@ -54,8 +51,7 @@ pub(super) fn fn_hints(
 pub(super) fn static_hints(
     acc: &mut Vec<InlayHint>,
     FamousDefs(sema, _): &FamousDefs<'_, '_>,
-    config: &InlayHintsConfig,
-    _file_id: EditionedFileId,
+    config: &InlayHintsConfig<'_>,
     static_: &ast::Static,
     extern_block: &ast::ExternBlock,
 ) -> Option<()> {
@@ -71,7 +67,7 @@ pub(super) fn static_hints(
 }
 
 fn item_hint(
-    config: &InlayHintsConfig,
+    config: &InlayHintsConfig<'_>,
     extern_block: &ast::ExternBlock,
     token: SyntaxToken,
 ) -> InlayHint {
@@ -85,10 +81,10 @@ fn item_hint(
         text_edit: Some(config.lazy_text_edit(|| {
             let mut builder = TextEdit::builder();
             builder.insert(token.text_range().start(), "unsafe ".to_owned());
-            if extern_block.unsafe_token().is_none() {
-                if let Some(abi) = extern_block.abi() {
-                    builder.insert(abi.syntax().text_range().start(), "unsafe ".to_owned());
-                }
+            if extern_block.unsafe_token().is_none()
+                && let Some(abi) = extern_block.abi()
+            {
+                builder.insert(abi.syntax().text_range().start(), "unsafe ".to_owned());
             }
             builder.finish()
         })),

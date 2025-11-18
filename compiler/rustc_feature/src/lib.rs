@@ -11,12 +11,6 @@
 //! even if it is stabilized or removed, *do not remove it*. Instead, move the
 //! symbol to the `accepted` or `removed` modules respectively.
 
-// tidy-alphabetical-start
-#![allow(internal_features)]
-#![doc(rust_logo)]
-#![feature(rustdoc_internals)]
-// tidy-alphabetical-end
-
 mod accepted;
 mod builtin_attrs;
 mod removed;
@@ -38,14 +32,6 @@ pub struct Feature {
     /// version it got added, sometimes the version it got removed.
     pub since: &'static str,
     issue: Option<NonZero<u32>>,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum Stability {
-    Unstable,
-    // First argument is tracking issue link; second argument is an optional
-    // help message, which defaults to "remove this attribute".
-    Deprecated(&'static str, Option<&'static str>),
 }
 
 #[derive(Clone, Copy, Debug, Hash)]
@@ -144,9 +130,8 @@ pub fn find_feature_issue(feature: Symbol, issue: GateIssue) -> Option<NonZero<u
 pub use accepted::ACCEPTED_LANG_FEATURES;
 pub use builtin_attrs::{
     AttributeDuplicates, AttributeGate, AttributeSafety, AttributeTemplate, AttributeType,
-    BUILTIN_ATTRIBUTE_MAP, BUILTIN_ATTRIBUTES, BuiltinAttribute, GatedCfg, deprecated_attributes,
-    encode_cross_crate, find_gated_cfg, is_builtin_attr_name, is_stable_diagnostic_attribute,
-    is_valid_for_get_attr,
+    BUILTIN_ATTRIBUTE_MAP, BUILTIN_ATTRIBUTES, BuiltinAttribute, GatedCfg, encode_cross_crate,
+    find_gated_cfg, is_builtin_attr_name, is_stable_diagnostic_attribute, is_valid_for_get_attr,
 };
 pub use removed::REMOVED_LANG_FEATURES;
 pub use unstable::{

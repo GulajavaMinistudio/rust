@@ -1,5 +1,8 @@
+use crate::get_enclosing_block;
+use crate::msrvs::Msrv;
+use crate::qualify_min_const_fn::is_stable_const_fn;
+use crate::res::MaybeResPath;
 use crate::ty::needs_ordered_drop;
-use crate::{get_enclosing_block, path_to_local_id};
 use core::ops::ControlFlow;
 use rustc_ast::visit::{VisitorResult, try_visit};
 use rustc_hir::def::{CtorKind, DefKind, Res};
@@ -310,7 +313,7 @@ pub fn is_res_used(cx: &LateContext<'_>, res: Res, body: BodyId) -> bool {
 /// Checks if the given local is used.
 pub fn is_local_used<'tcx>(cx: &LateContext<'tcx>, visitable: impl Visitable<'tcx>, id: HirId) -> bool {
     for_each_expr(cx, visitable, |e| {
-        if path_to_local_id(e, id) {
+        if e.res_local_id() == Some(id) {
             ControlFlow::Break(())
         } else {
             ControlFlow::Continue(())
@@ -343,17 +346,17 @@ pub fn is_const_evaluatable<'tcx>(cx: &LateContext<'tcx>, e: &'tcx Expr<'_>) -> 
                     .cx
                     .qpath_res(p, hir_id)
                     .opt_def_id()
-                    .is_some_and(|id| self.cx.tcx.is_const_fn(id)) => {},
+                    .is_some_and(|id| is_stable_const_fn(self.cx, id, Msrv::default())) => {},
                 ExprKind::MethodCall(..)
                     if self
                         .cx
                         .typeck_results()
                         .type_dependent_def_id(e.hir_id)
-                        .is_some_and(|id| self.cx.tcx.is_const_fn(id)) => {},
+                        .is_some_and(|id| is_stable_const_fn(self.cx, id, Msrv::default())) => {},
                 ExprKind::Binary(_, lhs, rhs)
                     if self.cx.typeck_results().expr_ty(lhs).peel_refs().is_primitive_ty()
                         && self.cx.typeck_results().expr_ty(rhs).peel_refs().is_primitive_ty() => {},
-                ExprKind::Unary(UnOp::Deref, e) if self.cx.typeck_results().expr_ty(e).is_ref() => (),
+                ExprKind::Unary(UnOp::Deref, e) if self.cx.typeck_results().expr_ty(e).is_raw_ptr() => (),
                 ExprKind::Unary(_, e) if self.cx.typeck_results().expr_ty(e).peel_refs().is_primitive_ty() => (),
                 ExprKind::Index(base, _, _)
                     if matches!(
@@ -388,7 +391,8 @@ pub fn is_const_evaluatable<'tcx>(cx: &LateContext<'tcx>, e: &'tcx Expr<'_>) -> 
                 | ExprKind::Repeat(..)
                 | ExprKind::Struct(..)
                 | ExprKind::Tup(_)
-                | ExprKind::Type(..) => (),
+                | ExprKind::Type(..)
+                | ExprKind::UnsafeBinderCast(..) => (),
 
                 _ => {
                     return ControlFlow::Break(());
@@ -457,7 +461,8 @@ pub fn is_expr_unsafe<'tcx>(cx: &LateContext<'tcx>, e: &'tcx Expr<'_>) -> bool {
         }
         fn visit_nested_item(&mut self, id: ItemId) -> Self::Result {
             if let ItemKind::Impl(i) = &self.cx.tcx.hir_item(id).kind
-                && i.safety.is_unsafe()
+                && let Some(of_trait) = i.of_trait
+                && of_trait.safety.is_unsafe()
             {
                 ControlFlow::Break(())
             } else {
@@ -560,7 +565,7 @@ pub fn for_each_local_use_after_expr<'tcx, B>(
             if self.res.is_break() {
                 return;
             }
-            if path_to_local_id(e, self.local_id) {
+            if e.res_local_id() == Some(self.local_id) {
                 self.res = (self.f)(e);
             } else {
                 walk_expr(self, e);
@@ -587,7 +592,7 @@ pub fn for_each_local_use_after_expr<'tcx, B>(
 // Calls the given function for every unconsumed temporary created by the expression. Note the
 // function is only guaranteed to be called for types which need to be dropped, but it may be called
 // for other types.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 pub fn for_each_unconsumed_temporary<'tcx, B>(
     cx: &LateContext<'tcx>,
     e: &'tcx Expr<'tcx>,
@@ -676,10 +681,7 @@ pub fn for_each_unconsumed_temporary<'tcx, B>(
                     helper(typeck, true, else_expr, f)?;
                 }
             },
-            ExprKind::Type(e, _) => {
-                helper(typeck, consume, e, f)?;
-            },
-            ExprKind::UnsafeBinderCast(_, e, _) => {
+            ExprKind::Type(e, _) | ExprKind::UnsafeBinderCast(_, e, _) => {
                 helper(typeck, consume, e, f)?;
             },
 
@@ -739,7 +741,7 @@ pub fn for_each_local_assignment<'tcx, B>(
         fn visit_expr(&mut self, e: &'tcx Expr<'tcx>) {
             if let ExprKind::Assign(lhs, rhs, _) = e.kind
                 && self.res.is_continue()
-                && path_to_local_id(lhs, self.local_id)
+                && lhs.res_local_id() == Some(self.local_id)
             {
                 self.res = (self.f)(rhs);
                 self.visit_expr(rhs);
@@ -784,7 +786,7 @@ pub fn local_used_once<'tcx>(
     let mut expr = None;
 
     let cf = for_each_expr(cx, visitable, |e| {
-        if path_to_local_id(e, id) && expr.replace(e).is_some() {
+        if e.res_local_id() == Some(id) && expr.replace(e).is_some() {
             ControlFlow::Break(())
         } else {
             ControlFlow::Continue(())

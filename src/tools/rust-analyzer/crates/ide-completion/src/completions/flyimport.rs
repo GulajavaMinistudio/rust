@@ -111,7 +111,7 @@ use crate::{
 pub(crate) fn import_on_the_fly_path(
     acc: &mut Completions,
     ctx: &CompletionContext<'_>,
-    path_ctx: &PathCompletionCtx,
+    path_ctx: &PathCompletionCtx<'_>,
 ) -> Option<()> {
     if !ctx.config.enable_imports_on_the_fly {
         return None;
@@ -175,7 +175,7 @@ pub(crate) fn import_on_the_fly_pat(
 pub(crate) fn import_on_the_fly_dot(
     acc: &mut Completions,
     ctx: &CompletionContext<'_>,
-    dot_access: &DotAccess,
+    dot_access: &DotAccess<'_>,
 ) -> Option<()> {
     if !ctx.config.enable_imports_on_the_fly {
         return None;
@@ -203,8 +203,8 @@ pub(crate) fn import_on_the_fly_dot(
 fn import_on_the_fly(
     acc: &mut Completions,
     ctx: &CompletionContext<'_>,
-    path_ctx @ PathCompletionCtx { kind, .. }: &PathCompletionCtx,
-    import_assets: ImportAssets,
+    path_ctx @ PathCompletionCtx { kind, .. }: &PathCompletionCtx<'_>,
+    import_assets: ImportAssets<'_>,
     position: SyntaxNode,
     potential_import_name: String,
 ) -> Option<()> {
@@ -257,7 +257,7 @@ fn import_on_the_fly(
     };
     let user_input_lowercased = potential_import_name.to_lowercase();
 
-    let import_cfg = ctx.config.import_path_config(ctx.is_nightly);
+    let import_cfg = ctx.config.import_path_config();
 
     import_assets
         .search_for_imports(&ctx.sema, import_cfg, ctx.config.insert_use.prefix_kind)
@@ -290,7 +290,7 @@ fn import_on_the_fly_pat_(
     acc: &mut Completions,
     ctx: &CompletionContext<'_>,
     pattern_ctx: &PatternContext,
-    import_assets: ImportAssets,
+    import_assets: ImportAssets<'_>,
     position: SyntaxNode,
     potential_import_name: String,
 ) -> Option<()> {
@@ -304,7 +304,7 @@ fn import_on_the_fly_pat_(
         ItemInNs::Values(def) => matches!(def, hir::ModuleDef::Const(_)),
     };
     let user_input_lowercased = potential_import_name.to_lowercase();
-    let cfg = ctx.config.import_path_config(ctx.is_nightly);
+    let cfg = ctx.config.import_path_config();
 
     import_assets
         .search_for_imports(&ctx.sema, cfg, ctx.config.insert_use.prefix_kind)
@@ -335,8 +335,8 @@ fn import_on_the_fly_pat_(
 fn import_on_the_fly_method(
     acc: &mut Completions,
     ctx: &CompletionContext<'_>,
-    dot_access: &DotAccess,
-    import_assets: ImportAssets,
+    dot_access: &DotAccess<'_>,
+    import_assets: ImportAssets<'_>,
     position: SyntaxNode,
     potential_import_name: String,
 ) -> Option<()> {
@@ -346,7 +346,7 @@ fn import_on_the_fly_method(
 
     let user_input_lowercased = potential_import_name.to_lowercase();
 
-    let cfg = ctx.config.import_path_config(ctx.is_nightly);
+    let cfg = ctx.config.import_path_config();
 
     import_assets
         .search_for_imports(&ctx.sema, cfg, ctx.config.insert_use.prefix_kind)
@@ -400,11 +400,11 @@ fn import_name(ctx: &CompletionContext<'_>) -> String {
     if token_kind.is_any_identifier() { ctx.token.to_string() } else { String::new() }
 }
 
-fn import_assets_for_path(
-    ctx: &CompletionContext<'_>,
+fn import_assets_for_path<'db>(
+    ctx: &CompletionContext<'db>,
     potential_import_name: &str,
     qualifier: Option<ast::Path>,
-) -> Option<ImportAssets> {
+) -> Option<ImportAssets<'db>> {
     let _p =
         tracing::info_span!("import_assets_for_path", ?potential_import_name, ?qualifier).entered();
 

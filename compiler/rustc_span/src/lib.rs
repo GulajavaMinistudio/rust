@@ -17,19 +17,15 @@
 
 // tidy-alphabetical-start
 #![allow(internal_features)]
-#![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
-#![doc(rust_logo)]
+#![cfg_attr(target_arch = "loongarch64", feature(stdarch_loongarch))]
 #![feature(array_windows)]
-#![feature(cfg_match)]
+#![feature(cfg_select)]
 #![feature(core_io_borrowed_buf)]
-#![feature(hash_set_entry)]
 #![feature(if_let_guard)]
 #![feature(map_try_insert)]
 #![feature(negative_impls)]
 #![feature(read_buf)]
-#![feature(round_char_boundary)]
 #![feature(rustc_attrs)]
-#![feature(rustdoc_internals)]
 // tidy-alphabetical-end
 
 // The code produced by the `Encodable`/`Decodable` derive macros refer to
@@ -66,7 +62,10 @@ mod span_encoding;
 pub use span_encoding::{DUMMY_SP, Span};
 
 pub mod symbol;
-pub use symbol::{Ident, MacroRulesNormalizedIdent, STDLIB_STABLE_CRATES, Symbol, kw, sym};
+pub use symbol::{
+    ByteSymbol, Ident, MacroRulesNormalizedIdent, Macros20NormalizedIdent, STDLIB_STABLE_CRATES,
+    Symbol, kw, sym,
+};
 
 mod analyze_source_file;
 pub mod fatal_error;
@@ -166,6 +165,7 @@ where
     }
 }
 
+#[inline]
 pub fn with_session_globals<R, F>(f: F) -> R
 where
     F: FnOnce(&SessionGlobals) -> R,
@@ -417,7 +417,7 @@ impl FileName {
         }
     }
 
-    pub fn prefer_remapped_unconditionaly(&self) -> FileNameDisplay<'_> {
+    pub fn prefer_remapped_unconditionally(&self) -> FileNameDisplay<'_> {
         FileNameDisplay { inner: self, display_pref: FileNameDisplayPreference::Remapped }
     }
 
@@ -707,18 +707,23 @@ impl Span {
         if !ctxt.is_root() { ctxt.outer_expn_data().call_site.source_callsite() } else { self }
     }
 
-    /// The `Span` for the tokens in the previous macro expansion from which `self` was generated,
-    /// if any.
+    /// Returns the call-site span of the last macro expansion which produced this `Span`.
+    /// (see [`ExpnData::call_site`]). Returns `None` if this is not an expansion.
     pub fn parent_callsite(self) -> Option<Span> {
         let ctxt = self.ctxt();
         (!ctxt.is_root()).then(|| ctxt.outer_expn_data().call_site)
     }
 
-    /// Walk down the expansion ancestors to find a span that's contained within `outer`.
+    /// Find the first ancestor span that's contained within `outer`.
     ///
-    /// The span returned by this method may have a different [`SyntaxContext`] as `outer`.
+    /// This method traverses the macro expansion ancestors until it finds the first span
+    /// that's contained within `outer`.
+    ///
+    /// The span returned by this method may have a different [`SyntaxContext`] than `outer`.
     /// If you need to extend the span, use [`find_ancestor_inside_same_ctxt`] instead,
     /// because joining spans with different syntax contexts can create unexpected results.
+    ///
+    /// This is used to find the span of the macro call when a parent expr span, i.e. `outer`, is known.
     ///
     /// [`find_ancestor_inside_same_ctxt`]: Self::find_ancestor_inside_same_ctxt
     pub fn find_ancestor_inside(mut self, outer: Span) -> Option<Span> {
@@ -728,8 +733,10 @@ impl Span {
         Some(self)
     }
 
-    /// Walk down the expansion ancestors to find a span with the same [`SyntaxContext`] as
-    /// `other`.
+    /// Find the first ancestor span with the same [`SyntaxContext`] as `other`.
+    ///
+    /// This method traverses the macro expansion ancestors until it finds a span
+    /// that has the same [`SyntaxContext`] as `other`.
     ///
     /// Like [`find_ancestor_inside_same_ctxt`], but specifically for when spans might not
     /// overlap. Take care when using this, and prefer [`find_ancestor_inside`] or
@@ -745,8 +752,11 @@ impl Span {
         Some(self)
     }
 
-    /// Walk down the expansion ancestors to find a span that's contained within `outer` and
+    /// Find the first ancestor span that's contained within `outer` and
     /// has the same [`SyntaxContext`] as `outer`.
+    ///
+    /// This method traverses the macro expansion ancestors until it finds a span
+    /// that is both contained within `outer` and has the same [`SyntaxContext`] as `outer`.
     ///
     /// This method is the combination of [`find_ancestor_inside`] and
     /// [`find_ancestor_in_same_ctxt`] and should be preferred when extending the returned span.
@@ -761,43 +771,43 @@ impl Span {
         Some(self)
     }
 
-    /// Recursively walk down the expansion ancestors to find the oldest ancestor span with the same
-    /// [`SyntaxContext`] the initial span.
+    /// Find the first ancestor span that does not come from an external macro.
     ///
-    /// This method is suitable for peeling through *local* macro expansions to find the "innermost"
-    /// span that is still local and shares the same [`SyntaxContext`]. For example, given
+    /// This method traverses the macro expansion ancestors until it finds a span
+    /// that is either from user-written code or from a local macro (defined in the current crate).
     ///
-    /// ```ignore (illustrative example, contains type error)
-    ///  macro_rules! outer {
-    ///      ($x: expr) => {
-    ///          inner!($x)
-    ///      }
-    ///  }
+    /// External macros are those defined in dependencies or the standard library.
+    /// This method is useful for reporting errors in user-controllable code and avoiding
+    /// diagnostics inside external macros.
     ///
-    ///  macro_rules! inner {
-    ///      ($x: expr) => {
-    ///          format!("error: {}", $x)
-    ///          //~^ ERROR mismatched types
-    ///      }
-    ///  }
+    /// # See also
     ///
-    ///  fn bar(x: &str) -> Result<(), Box<dyn std::error::Error>> {
-    ///      Err(outer!(x))
-    ///  }
-    /// ```
-    ///
-    /// if provided the initial span of `outer!(x)` inside `bar`, this method will recurse
-    /// the parent callsites until we reach `format!("error: {}", $x)`, at which point it is the
-    /// oldest ancestor span that is both still local and shares the same [`SyntaxContext`] as the
-    /// initial span.
-    pub fn find_oldest_ancestor_in_same_ctxt(self) -> Span {
-        let mut cur = self;
-        while cur.eq_ctxt(self)
-            && let Some(parent_callsite) = cur.parent_callsite()
-        {
-            cur = parent_callsite;
+    /// - [`Self::find_ancestor_not_from_macro`]
+    /// - [`Self::in_external_macro`]
+    pub fn find_ancestor_not_from_extern_macro(mut self, sm: &SourceMap) -> Option<Span> {
+        while self.in_external_macro(sm) {
+            self = self.parent_callsite()?;
         }
-        cur
+        Some(self)
+    }
+
+    /// Find the first ancestor span that does not come from any macro expansion.
+    ///
+    /// This method traverses the macro expansion ancestors until it finds a span
+    /// that originates from user-written code rather than any macro-generated code.
+    ///
+    /// This method is useful for reporting errors at the exact location users wrote code
+    /// and providing suggestions at directly editable locations.
+    ///
+    /// # See also
+    ///
+    /// - [`Self::find_ancestor_not_from_extern_macro`]
+    /// - [`Span::from_expansion`]
+    pub fn find_ancestor_not_from_macro(mut self) -> Option<Span> {
+        while self.from_expansion() {
+            self = self.parent_callsite()?;
+        }
+        Some(self)
     }
 
     /// Edition of the crate from which this span came.
@@ -1184,11 +1194,12 @@ rustc_index::newtype_index! {
 /// It is similar to rustc_type_ir's TyEncoder.
 pub trait SpanEncoder: Encoder {
     fn encode_span(&mut self, span: Span);
-    fn encode_symbol(&mut self, symbol: Symbol);
+    fn encode_symbol(&mut self, sym: Symbol);
+    fn encode_byte_symbol(&mut self, byte_sym: ByteSymbol);
     fn encode_expn_id(&mut self, expn_id: ExpnId);
     fn encode_syntax_context(&mut self, syntax_context: SyntaxContext);
-    /// As a local identifier, a `CrateNum` is only meaningful within its context, e.g. within a tcx.
-    /// Therefore, make sure to include the context when encode a `CrateNum`.
+    /// As a local identifier, a `CrateNum` is only meaningful within its context, e.g. within a
+    /// tcx. Therefore, make sure to include the context when encode a `CrateNum`.
     fn encode_crate_num(&mut self, crate_num: CrateNum);
     fn encode_def_index(&mut self, def_index: DefIndex);
     fn encode_def_id(&mut self, def_id: DefId);
@@ -1201,8 +1212,12 @@ impl SpanEncoder for FileEncoder {
         span.hi.encode(self);
     }
 
-    fn encode_symbol(&mut self, symbol: Symbol) {
-        self.emit_str(symbol.as_str());
+    fn encode_symbol(&mut self, sym: Symbol) {
+        self.emit_str(sym.as_str());
+    }
+
+    fn encode_byte_symbol(&mut self, byte_sym: ByteSymbol) {
+        self.emit_byte_str(byte_sym.as_byte_str());
     }
 
     fn encode_expn_id(&mut self, _expn_id: ExpnId) {
@@ -1236,6 +1251,12 @@ impl<E: SpanEncoder> Encodable<E> for Span {
 impl<E: SpanEncoder> Encodable<E> for Symbol {
     fn encode(&self, s: &mut E) {
         s.encode_symbol(*self);
+    }
+}
+
+impl<E: SpanEncoder> Encodable<E> for ByteSymbol {
+    fn encode(&self, s: &mut E) {
+        s.encode_byte_symbol(*self);
     }
 }
 
@@ -1280,6 +1301,7 @@ impl<E: SpanEncoder> Encodable<E> for AttrId {
 pub trait SpanDecoder: Decoder {
     fn decode_span(&mut self) -> Span;
     fn decode_symbol(&mut self) -> Symbol;
+    fn decode_byte_symbol(&mut self) -> ByteSymbol;
     fn decode_expn_id(&mut self) -> ExpnId;
     fn decode_syntax_context(&mut self) -> SyntaxContext;
     fn decode_crate_num(&mut self) -> CrateNum;
@@ -1298,6 +1320,10 @@ impl SpanDecoder for MemDecoder<'_> {
 
     fn decode_symbol(&mut self) -> Symbol {
         Symbol::intern(self.read_str())
+    }
+
+    fn decode_byte_symbol(&mut self) -> ByteSymbol {
+        ByteSymbol::intern(self.read_byte_str())
     }
 
     fn decode_expn_id(&mut self) -> ExpnId {
@@ -1334,6 +1360,12 @@ impl<D: SpanDecoder> Decodable<D> for Span {
 impl<D: SpanDecoder> Decodable<D> for Symbol {
     fn decode(s: &mut D) -> Symbol {
         s.decode_symbol()
+    }
+}
+
+impl<D: SpanDecoder> Decodable<D> for ByteSymbol {
+    fn decode(s: &mut D) -> ByteSymbol {
+        s.decode_byte_symbol()
     }
 }
 
@@ -1691,8 +1723,10 @@ pub struct SourceFile {
     pub external_src: FreezeLock<ExternalSource>,
     /// The start position of this source in the `SourceMap`.
     pub start_pos: BytePos,
-    /// The byte length of this source.
-    pub source_len: RelativeBytePos,
+    /// The byte length of this source after normalization.
+    pub normalized_source_len: RelativeBytePos,
+    /// The byte length of this source before normalization.
+    pub unnormalized_source_len: u32,
     /// Locations of lines beginnings in the source code.
     pub lines: FreezeLock<SourceFileLines>,
     /// Locations of multi-byte characters in the source code.
@@ -1716,7 +1750,8 @@ impl Clone for SourceFile {
             checksum_hash: self.checksum_hash,
             external_src: self.external_src.clone(),
             start_pos: self.start_pos,
-            source_len: self.source_len,
+            normalized_source_len: self.normalized_source_len,
+            unnormalized_source_len: self.unnormalized_source_len,
             lines: self.lines.clone(),
             multibyte_chars: self.multibyte_chars.clone(),
             normalized_pos: self.normalized_pos.clone(),
@@ -1732,7 +1767,8 @@ impl<S: SpanEncoder> Encodable<S> for SourceFile {
         self.src_hash.encode(s);
         self.checksum_hash.encode(s);
         // Do not encode `start_pos` as it's global state for this session.
-        self.source_len.encode(s);
+        self.normalized_source_len.encode(s);
+        self.unnormalized_source_len.encode(s);
 
         // We are always in `Lines` form by the time we reach here.
         assert!(self.lines.read().is_lines());
@@ -1805,7 +1841,8 @@ impl<D: SpanDecoder> Decodable<D> for SourceFile {
         let name: FileName = Decodable::decode(d);
         let src_hash: SourceFileHash = Decodable::decode(d);
         let checksum_hash: Option<SourceFileHash> = Decodable::decode(d);
-        let source_len: RelativeBytePos = Decodable::decode(d);
+        let normalized_source_len: RelativeBytePos = Decodable::decode(d);
+        let unnormalized_source_len = Decodable::decode(d);
         let lines = {
             let num_lines: u32 = Decodable::decode(d);
             if num_lines > 0 {
@@ -1827,7 +1864,8 @@ impl<D: SpanDecoder> Decodable<D> for SourceFile {
         SourceFile {
             name,
             start_pos: BytePos::from_u32(0),
-            source_len,
+            normalized_source_len,
+            unnormalized_source_len,
             src: None,
             src_hash,
             checksum_hash,
@@ -1927,12 +1965,17 @@ impl SourceFile {
                 SourceFileHash::new_in_memory(checksum_hash_kind, src.as_bytes())
             }
         });
+        // Capture the original source length before normalization.
+        let unnormalized_source_len = u32::try_from(src.len()).map_err(|_| OffsetOverflowError)?;
+        if unnormalized_source_len > Self::MAX_FILE_SIZE {
+            return Err(OffsetOverflowError);
+        }
+
         let normalized_pos = normalize_src(&mut src);
 
         let stable_id = StableSourceFileId::from_filename_in_current_crate(&name);
-        let source_len = src.len();
-        let source_len = u32::try_from(source_len).map_err(|_| OffsetOverflowError)?;
-        if source_len > Self::MAX_FILE_SIZE {
+        let normalized_source_len = u32::try_from(src.len()).map_err(|_| OffsetOverflowError)?;
+        if normalized_source_len > Self::MAX_FILE_SIZE {
             return Err(OffsetOverflowError);
         }
 
@@ -1945,7 +1988,8 @@ impl SourceFile {
             checksum_hash,
             external_src: FreezeLock::frozen(ExternalSource::Unneeded),
             start_pos: BytePos::from_u32(0),
-            source_len: RelativeBytePos::from_u32(source_len),
+            normalized_source_len: RelativeBytePos::from_u32(normalized_source_len),
+            unnormalized_source_len,
             lines: FreezeLock::frozen(SourceFileLines::Lines(lines)),
             multibyte_chars,
             normalized_pos,
@@ -2129,7 +2173,7 @@ impl SourceFile {
 
     #[inline]
     pub fn end_position(&self) -> BytePos {
-        self.absolute_position(self.source_len)
+        self.absolute_position(self.normalized_source_len)
     }
 
     /// Finds the line containing the given position. The return value is the
@@ -2165,7 +2209,7 @@ impl SourceFile {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.source_len.to_u32() == 0
+        self.normalized_source_len.to_u32() == 0
     }
 
     /// Calculates the original byte position relative to the start of the file
@@ -2600,7 +2644,7 @@ pub trait HashStableContext {
     fn span_data_to_lines_and_cols(
         &mut self,
         span: &SpanData,
-    ) -> Option<(Arc<SourceFile>, usize, BytePos, usize, BytePos)>;
+    ) -> Option<(StableSourceFileId, usize, BytePos, usize, BytePos)>;
     fn hashing_controls(&self) -> HashingControls;
 }
 
@@ -2657,7 +2701,7 @@ where
         };
 
         Hash::hash(&TAG_VALID_SPAN, hasher);
-        Hash::hash(&file.stable_id, hasher);
+        Hash::hash(&file, hasher);
 
         // Hash both the length and the end location (line/column) of a span. If we
         // hash only the length, for example, then two otherwise equal spans with

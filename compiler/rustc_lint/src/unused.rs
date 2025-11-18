@@ -1,15 +1,17 @@
 use std::iter;
 
-use rustc_ast as ast;
 use rustc_ast::util::{classify, parser};
-use rustc_ast::{ExprKind, StmtKind};
+use rustc_ast::{self as ast, ExprKind, FnRetTy, HasAttrs as _, StmtKind};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::{MultiSpan, pluralize};
+use rustc_hir::attrs::AttributeKind;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::DefId;
-use rustc_hir::{self as hir, LangItem};
+use rustc_hir::{self as hir, LangItem, find_attr};
 use rustc_infer::traits::util::elaborate;
 use rustc_middle::ty::{self, Ty, adjustment};
 use rustc_session::{declare_lint, declare_lint_pass, impl_lint_pass};
+use rustc_span::edition::Edition::Edition2015;
 use rustc_span::{BytePos, Span, Symbol, kw, sym};
 use tracing::instrument;
 
@@ -183,6 +185,7 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
         let mut op_warned = false;
 
         if let Some(must_use_op) = must_use_op {
+            let span = expr.span.find_ancestor_not_from_macro().unwrap_or(expr.span);
             cx.emit_span_lint(
                 UNUSED_MUST_USE,
                 expr.span,
@@ -191,11 +194,11 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                     label: expr.span,
                     suggestion: if expr_is_from_block {
                         UnusedOpSuggestion::BlockTailExpr {
-                            before_span: expr.span.shrink_to_lo(),
-                            after_span: expr.span.shrink_to_hi(),
+                            before_span: span.shrink_to_lo(),
+                            after_span: span.shrink_to_hi(),
                         }
                     } else {
-                        UnusedOpSuggestion::NormalExpr { span: expr.span.shrink_to_lo() }
+                        UnusedOpSuggestion::NormalExpr { span: span.shrink_to_lo() }
                     },
                 },
             );
@@ -270,13 +273,13 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
             expr: &hir::Expr<'_>,
             span: Span,
         ) -> Option<MustUsePath> {
-            if ty.is_unit()
-                || !ty.is_inhabited_from(
-                    cx.tcx,
-                    cx.tcx.parent_module(expr.hir_id).to_def_id(),
-                    cx.typing_env(),
-                )
-            {
+            if ty.is_unit() {
+                return Some(MustUsePath::Suppressed);
+            }
+            let parent_mod_did = cx.tcx.parent_module(expr.hir_id).to_def_id();
+            let is_uninhabited =
+                |t: Ty<'tcx>| !t.is_inhabited_from(cx.tcx, parent_mod_did, cx.typing_env());
+            if is_uninhabited(ty) {
                 return Some(MustUsePath::Suppressed);
             }
 
@@ -289,6 +292,22 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                     let pinned_ty = args.type_at(0);
                     is_ty_must_use(cx, pinned_ty, expr, span)
                         .map(|inner| MustUsePath::Pinned(Box::new(inner)))
+                }
+                // Suppress warnings on `Result<(), Uninhabited>` (e.g. `Result<(), !>`).
+                ty::Adt(def, args)
+                    if cx.tcx.is_diagnostic_item(sym::Result, def.did())
+                        && args.type_at(0).is_unit()
+                        && is_uninhabited(args.type_at(1)) =>
+                {
+                    Some(MustUsePath::Suppressed)
+                }
+                // Suppress warnings on `ControlFlow<Uninhabited, ()>` (e.g. `ControlFlow<!, ()>`).
+                ty::Adt(def, args)
+                    if cx.tcx.is_diagnostic_item(sym::ControlFlow, def.did())
+                        && args.type_at(1).is_unit()
+                        && is_uninhabited(args.type_at(0)) =>
+                {
+                    Some(MustUsePath::Suppressed)
                 }
                 ty::Adt(def, _) => is_def_must_use(cx, def.did(), span),
                 ty::Alias(ty::Opaque | ty::Projection, ty::AliasTy { def_id: def, .. }) => {
@@ -309,7 +328,7 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                         })
                         .map(|inner| MustUsePath::Opaque(Box::new(inner)))
                 }
-                ty::Dynamic(binders, _, _) => binders.iter().find_map(|predicate| {
+                ty::Dynamic(binders, _) => binders.iter().find_map(|predicate| {
                     if let ty::ExistentialPredicate::Trait(ref trait_ref) = predicate.skip_binder()
                     {
                         let def_id = trait_ref.def_id;
@@ -369,10 +388,12 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
         }
 
         fn is_def_must_use(cx: &LateContext<'_>, def_id: DefId, span: Span) -> Option<MustUsePath> {
-            if let Some(attr) = cx.tcx.get_attr(def_id, sym::must_use) {
+            if let Some(reason) = find_attr!(
+                cx.tcx.get_all_attrs(def_id),
+                AttributeKind::MustUse { reason, .. } => reason
+            ) {
                 // check for #[must_use = "..."]
-                let reason = attr.value_str();
-                Some(MustUsePath::Def(span, def_id, reason))
+                Some(MustUsePath::Def(span, def_id, *reason))
             } else {
                 None
             }
@@ -506,9 +527,10 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                     );
                 }
                 MustUsePath::Def(span, def_id, reason) => {
+                    let span = span.find_ancestor_not_from_macro().unwrap_or(*span);
                     cx.emit_span_lint(
                         UNUSED_MUST_USE,
-                        *span,
+                        span,
                         UnusedDef {
                             pre: descr_pre,
                             post: descr_post,
@@ -556,20 +578,19 @@ declare_lint_pass!(PathStatements => [PATH_STATEMENTS]);
 
 impl<'tcx> LateLintPass<'tcx> for PathStatements {
     fn check_stmt(&mut self, cx: &LateContext<'_>, s: &hir::Stmt<'_>) {
-        if let hir::StmtKind::Semi(expr) = s.kind {
-            if let hir::ExprKind::Path(_) = expr.kind {
-                let ty = cx.typeck_results().expr_ty(expr);
-                if ty.needs_drop(cx.tcx, cx.typing_env()) {
-                    let sub = if let Ok(snippet) = cx.sess().source_map().span_to_snippet(expr.span)
-                    {
-                        PathStatementDropSub::Suggestion { span: s.span, snippet }
-                    } else {
-                        PathStatementDropSub::Help { span: s.span }
-                    };
-                    cx.emit_span_lint(PATH_STATEMENTS, s.span, PathStatementDrop { sub })
+        if let hir::StmtKind::Semi(expr) = s.kind
+            && let hir::ExprKind::Path(_) = expr.kind
+        {
+            let ty = cx.typeck_results().expr_ty(expr);
+            if ty.needs_drop(cx.tcx, cx.typing_env()) {
+                let sub = if let Ok(snippet) = cx.sess().source_map().span_to_snippet(expr.span) {
+                    PathStatementDropSub::Suggestion { span: s.span, snippet }
                 } else {
-                    cx.emit_span_lint(PATH_STATEMENTS, s.span, PathStatementNoEffect);
-                }
+                    PathStatementDropSub::Help { span: s.span }
+                };
+                cx.emit_span_lint(PATH_STATEMENTS, s.span, PathStatementDrop { sub })
+            } else {
+                cx.emit_span_lint(PATH_STATEMENTS, s.span, PathStatementNoEffect);
             }
         }
     }
@@ -593,6 +614,7 @@ enum UnusedDelimsCtx {
     AnonConst,
     MatchArmExpr,
     IndexExpr,
+    ClosureBody,
 }
 
 impl From<UnusedDelimsCtx> for &'static str {
@@ -614,6 +636,7 @@ impl From<UnusedDelimsCtx> for &'static str {
             UnusedDelimsCtx::ArrayLenExpr | UnusedDelimsCtx::AnonConst => "const expression",
             UnusedDelimsCtx::MatchArmExpr => "match arm expression",
             UnusedDelimsCtx::IndexExpr => "index expression",
+            UnusedDelimsCtx::ClosureBody => "closure body",
         }
     }
 }
@@ -780,26 +803,30 @@ trait UnusedDelimLint {
         right_pos: Option<BytePos>,
         is_kw: bool,
     ) {
-        let spans = match value.kind {
-            ast::ExprKind::Block(ref block, None) if let [stmt] = block.stmts.as_slice() => stmt
-                .span
-                .find_ancestor_inside(value.span)
-                .map(|span| (value.span.with_hi(span.lo()), value.span.with_lo(span.hi()))),
+        let span_with_attrs = match value.kind {
+            ast::ExprKind::Block(ref block, None) if let [stmt] = block.stmts.as_slice() => {
+                // For the statements with attributes, like `{ #[allow()] println!("Hello!") }`,
+                // the span should contains the attributes, or the suggestion will remove them.
+                if let Some(attr_lo) = stmt.attrs().iter().map(|attr| attr.span.lo()).min() {
+                    stmt.span.with_lo(attr_lo)
+                } else {
+                    stmt.span
+                }
+            }
             ast::ExprKind::Paren(ref expr) => {
                 // For the expr with attributes, like `let _ = (#[inline] || println!("Hello!"));`,
                 // the span should contains the attributes, or the suggestion will remove them.
-                let expr_span_with_attrs =
-                    if let Some(attr_lo) = expr.attrs.iter().map(|attr| attr.span.lo()).min() {
-                        expr.span.with_lo(attr_lo)
-                    } else {
-                        expr.span
-                    };
-                expr_span_with_attrs.find_ancestor_inside(value.span).map(|expr_span| {
-                    (value.span.with_hi(expr_span.lo()), value.span.with_lo(expr_span.hi()))
-                })
+                if let Some(attr_lo) = expr.attrs.iter().map(|attr| attr.span.lo()).min() {
+                    expr.span.with_lo(attr_lo)
+                } else {
+                    expr.span
+                }
             }
             _ => return,
         };
+        let spans = span_with_attrs
+            .find_ancestor_inside(value.span)
+            .map(|span| (value.span.with_hi(span.lo()), value.span.with_lo(span.hi())));
         let keep_space = (
             left_pos.is_some_and(|s| s >= value.span.lo()),
             right_pos.is_some_and(|s| s <= value.span.hi()),
@@ -832,6 +859,10 @@ trait UnusedDelimLint {
                 && !snip.ends_with(' ')
             {
                 " "
+            } else if let Ok(snip) = sm.span_to_prev_source(value_span)
+                && snip.ends_with(|c: char| c.is_alphanumeric())
+            {
+                " "
             } else {
                 ""
             };
@@ -839,6 +870,10 @@ trait UnusedDelimLint {
             let hi_replace = if keep_space.1
                 && let Ok(snip) = sm.span_to_next_source(hi)
                 && !snip.starts_with(' ')
+            {
+                " "
+            } else if let Ok(snip) = sm.span_to_prev_source(value_span)
+                && snip.starts_with(|c: char| c.is_alphanumeric())
             {
                 " "
             } else {
@@ -895,7 +930,16 @@ trait UnusedDelimLint {
                 (value, UnusedDelimsCtx::ReturnValue, false, Some(left), None, true)
             }
 
-            Break(_, Some(ref value)) => {
+            Break(label, Some(ref value)) => {
+                // Don't lint on `break 'label ({...})` - the parens are necessary
+                // to disambiguate from `break 'label {...}` which would be a syntax error.
+                // This avoids conflicts with the `break_with_label_and_loop` lint.
+                if label.is_some()
+                    && matches!(value.kind, ast::ExprKind::Paren(ref inner)
+                        if matches!(inner.kind, ast::ExprKind::Block(..)))
+                {
+                    return;
+                }
                 (value, UnusedDelimsCtx::BreakValue, false, None, None, true)
             }
 
@@ -909,6 +953,11 @@ trait UnusedDelimLint {
                 let (args_to_check, ctx) = match *call_or_other {
                     Call(_, ref args) => (&args[..], UnusedDelimsCtx::FunctionArg),
                     MethodCall(ref call) => (&call.args[..], UnusedDelimsCtx::MethodArg),
+                    Closure(ref closure)
+                        if matches!(closure.fn_decl.output, FnRetTy::Default(_)) =>
+                    {
+                        (&[closure.body.clone()][..], UnusedDelimsCtx::ClosureBody)
+                    }
                     // actual catch-all arm
                     _ => {
                         return;
@@ -983,19 +1032,22 @@ trait UnusedDelimLint {
     fn check_item(&mut self, cx: &EarlyContext<'_>, item: &ast::Item) {
         use ast::ItemKind::*;
 
-        if let Const(box ast::ConstItem { expr: Some(expr), .. })
-        | Static(box ast::StaticItem { expr: Some(expr), .. }) = &item.kind
-        {
-            self.check_unused_delims_expr(
-                cx,
-                expr,
-                UnusedDelimsCtx::AssignedValue,
-                false,
-                None,
-                None,
-                false,
-            );
-        }
+        let expr = if let Const(box ast::ConstItem { rhs: Some(rhs), .. }) = &item.kind {
+            rhs.expr()
+        } else if let Static(box ast::StaticItem { expr: Some(expr), .. }) = &item.kind {
+            expr
+        } else {
+            return;
+        };
+        self.check_unused_delims_expr(
+            cx,
+            expr,
+            UnusedDelimsCtx::AssignedValue,
+            false,
+            None,
+            None,
+            false,
+        );
     }
 }
 
@@ -1026,6 +1078,31 @@ pub(crate) struct UnusedParens {
     /// `1 as (i32) < 2` parses to ExprKind::Lt
     /// `1 as i32 < 2` parses to i32::<2[missing angle bracket]
     parens_in_cast_in_lt: Vec<ast::NodeId>,
+    /// Ty nodes in this map are in TypeNoBounds position. Any bounds they
+    /// contain may be ambiguous w/r/t trailing `+` operators.
+    in_no_bounds_pos: FxHashMap<ast::NodeId, NoBoundsException>,
+}
+
+/// Whether parentheses may be omitted from a type without resulting in ambiguity.
+///
+/// ```
+/// type Example = Box<dyn Fn() -> &'static (dyn Send) + Sync>;
+/// ```
+///
+/// Here, `&'static (dyn Send) + Sync` is a `TypeNoBounds`. As such, it may not directly
+/// contain `ImplTraitType` or `TraitObjectType` which is why `(dyn Send)` is parenthesized.
+/// However, an exception is made for `ImplTraitTypeOneBound` and `TraitObjectTypeOneBound`.
+/// The following is accepted because there is no `+`.
+///
+/// ```
+/// type Example = Box<dyn Fn() -> &'static dyn Send>;
+/// ```
+enum NoBoundsException {
+    /// The type must be parenthesized.
+    None,
+    /// The type is the last bound of the containing type expression. If it has exactly one bound,
+    /// parentheses around the type are unnecessary.
+    OneBound,
 }
 
 impl_lint_pass!(UnusedParens => [UNUSED_PARENS]);
@@ -1230,7 +1307,8 @@ impl EarlyLintPass for UnusedParens {
             Ident(.., Some(p)) | Box(p) | Deref(p) | Guard(p, _) => self.check_unused_parens_pat(cx, p, true, false, keep_space),
             // Avoid linting on `&(mut x)` as `&mut x` has a different meaning, #55342.
             // Also avoid linting on `& mut? (p0 | .. | pn)`, #64106.
-            Ref(p, m) => self.check_unused_parens_pat(cx, p, true, *m == Mutability::Not, keep_space),
+            // FIXME(pin_ergonomics): check pinned patterns
+            Ref(p, _, m) => self.check_unused_parens_pat(cx, p, true, *m == Mutability::Not, keep_space),
         }
     }
 
@@ -1269,23 +1347,108 @@ impl EarlyLintPass for UnusedParens {
                 );
             }
             ast::TyKind::Paren(r) => {
-                match &r.kind {
-                    ast::TyKind::TraitObject(..) => {}
-                    ast::TyKind::BareFn(b)
-                        if self.with_self_ty_parens && b.generic_params.len() > 0 => {}
-                    ast::TyKind::ImplTrait(_, bounds) if bounds.len() > 1 => {}
-                    _ => {
-                        let spans = if !ty.span.from_expansion() {
+                let unused_parens = match &r.kind {
+                    ast::TyKind::ImplTrait(_, bounds) | ast::TyKind::TraitObject(bounds, _) => {
+                        match self.in_no_bounds_pos.get(&ty.id) {
+                            Some(NoBoundsException::None) => false,
+                            Some(NoBoundsException::OneBound) => bounds.len() <= 1,
+                            None => true,
+                        }
+                    }
+                    ast::TyKind::FnPtr(b) => {
+                        !self.with_self_ty_parens || b.generic_params.is_empty()
+                    }
+                    _ => true,
+                };
+
+                if unused_parens {
+                    let spans = (!ty.span.from_expansion())
+                        .then(|| {
                             r.span
                                 .find_ancestor_inside(ty.span)
                                 .map(|r| (ty.span.with_hi(r.lo()), ty.span.with_lo(r.hi())))
+                        })
+                        .flatten();
+
+                    self.emit_unused_delims(cx, ty.span, spans, "type", (false, false), false);
+                }
+
+                self.with_self_ty_parens = false;
+            }
+            ast::TyKind::Ref(_, mut_ty) | ast::TyKind::Ptr(mut_ty) => {
+                // If this type itself appears in no-bounds position, we propagate its
+                // potentially tighter constraint or risk a false posive (issue 143653).
+                let own_constraint = self.in_no_bounds_pos.get(&ty.id);
+                let constraint = match own_constraint {
+                    Some(NoBoundsException::None) => NoBoundsException::None,
+                    Some(NoBoundsException::OneBound) => NoBoundsException::OneBound,
+                    None => NoBoundsException::OneBound,
+                };
+                self.in_no_bounds_pos.insert(mut_ty.ty.id, constraint);
+            }
+            ast::TyKind::TraitObject(bounds, _) | ast::TyKind::ImplTrait(_, bounds) => {
+                for i in 0..bounds.len() {
+                    let is_last = i == bounds.len() - 1;
+
+                    if let ast::GenericBound::Trait(poly_trait_ref) = &bounds[i] {
+                        let fn_with_explicit_ret_ty = if let [.., segment] =
+                            &*poly_trait_ref.trait_ref.path.segments
+                            && let Some(args) = segment.args.as_ref()
+                            && let ast::GenericArgs::Parenthesized(paren_args) = &**args
+                            && let ast::FnRetTy::Ty(ret_ty) = &paren_args.output
+                        {
+                            self.in_no_bounds_pos.insert(
+                                ret_ty.id,
+                                if is_last {
+                                    NoBoundsException::OneBound
+                                } else {
+                                    NoBoundsException::None
+                                },
+                            );
+
+                            true
                         } else {
-                            None
+                            false
                         };
-                        self.emit_unused_delims(cx, ty.span, spans, "type", (false, false), false);
+
+                        // In edition 2015, dyn is a contextual keyword and `dyn::foo::Bar` is
+                        // parsed as a path, so parens are necessary to disambiguate. See
+                        //  - tests/ui/lint/unused/unused-parens-trait-obj-e2015.rs and
+                        //  - https://doc.rust-lang.org/reference/types/trait-object.html#r-type.trait-object.syntax-edition2018
+                        let dyn2015_exception = cx.sess().psess.edition == Edition2015
+                            && matches!(ty.kind, ast::TyKind::TraitObject(..))
+                            && i == 0
+                            && poly_trait_ref
+                                .trait_ref
+                                .path
+                                .segments
+                                .first()
+                                .map(|s| s.ident.name == kw::PathRoot)
+                                .unwrap_or(false);
+
+                        if let ast::Parens::Yes = poly_trait_ref.parens
+                            && (is_last || !fn_with_explicit_ret_ty)
+                            && !dyn2015_exception
+                        {
+                            let s = poly_trait_ref.span;
+                            let spans = (!s.from_expansion()).then(|| {
+                                (
+                                    s.with_hi(s.lo() + rustc_span::BytePos(1)),
+                                    s.with_lo(s.hi() - rustc_span::BytePos(1)),
+                                )
+                            });
+
+                            self.emit_unused_delims(
+                                cx,
+                                poly_trait_ref.span,
+                                spans,
+                                "type",
+                                (false, false),
+                                false,
+                            );
+                        }
                     }
                 }
-                self.with_self_ty_parens = false;
             }
             _ => {}
         }
@@ -1293,6 +1456,10 @@ impl EarlyLintPass for UnusedParens {
 
     fn check_item(&mut self, cx: &EarlyContext<'_>, item: &ast::Item) {
         <Self as UnusedDelimLint>::check_item(self, cx, item)
+    }
+
+    fn check_item_post(&mut self, _: &EarlyContext<'_>, _: &rustc_ast::Item) {
+        self.in_no_bounds_pos.clear();
     }
 
     fn enter_where_predicate(&mut self, _: &EarlyContext<'_>, pred: &ast::WherePredicate) {
@@ -1386,20 +1553,19 @@ impl UnusedDelimLint for UnusedBraces {
                 //      let _: A<{produces_literal!()}>;
                 //      ```
                 // FIXME(const_generics): handle paths when #67075 is fixed.
-                if let [stmt] = inner.stmts.as_slice() {
-                    if let ast::StmtKind::Expr(ref expr) = stmt.kind {
-                        if !Self::is_expr_delims_necessary(expr, ctx, followed_by_block)
-                            && (ctx != UnusedDelimsCtx::AnonConst
-                                || (matches!(expr.kind, ast::ExprKind::Lit(_))
-                                    && !expr.span.from_expansion()))
-                            && !cx.sess().source_map().is_multiline(value.span)
-                            && value.attrs.is_empty()
-                            && !value.span.from_expansion()
-                            && !inner.span.from_expansion()
-                        {
-                            self.emit_unused_delims_expr(cx, value, ctx, left_pos, right_pos, is_kw)
-                        }
-                    }
+                if let [stmt] = inner.stmts.as_slice()
+                    && let ast::StmtKind::Expr(ref expr) = stmt.kind
+                    && !Self::is_expr_delims_necessary(expr, ctx, followed_by_block)
+                    && (ctx != UnusedDelimsCtx::AnonConst
+                        || (matches!(expr.kind, ast::ExprKind::Lit(_))
+                            && !expr.span.from_expansion()))
+                    && ctx != UnusedDelimsCtx::ClosureBody
+                    && !cx.sess().source_map().is_multiline(value.span)
+                    && value.attrs.is_empty()
+                    && !value.span.from_expansion()
+                    && !inner.span.from_expansion()
+                {
+                    self.emit_unused_delims_expr(cx, value, ctx, left_pos, right_pos, is_kw)
                 }
             }
             ast::ExprKind::Let(_, ref expr, _, _) => {
