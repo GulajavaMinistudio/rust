@@ -35,6 +35,15 @@ pub(crate) enum VisibilityNotPermittedNote {
     #[note(ast_passes_individual_foreign_items)]
     IndividualForeignItems,
 }
+#[derive(Diagnostic)]
+#[diag(ast_passes_impl_fn_const)]
+pub(crate) struct ImplFnConst {
+    #[primary_span]
+    #[suggestion(ast_passes_label, code = "", applicability = "machine-applicable")]
+    pub span: Span,
+    #[label(ast_passes_parent_constness)]
+    pub parent_constness: Span,
+}
 
 #[derive(Diagnostic)]
 #[diag(ast_passes_trait_fn_const, code = E0379)]
@@ -67,7 +76,7 @@ pub(crate) struct TraitFnConst {
 pub(crate) struct AsyncFnInConstTraitOrTraitImpl {
     #[primary_span]
     pub async_keyword: Span,
-    pub in_impl: bool,
+    pub context: &'static str,
     #[label]
     pub const_keyword: Span,
 }
@@ -418,6 +427,14 @@ pub(crate) struct AutoTraitItems {
     pub total: Span,
     #[label]
     pub ident: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(ast_passes_const_auto_trait)]
+#[help]
+pub(crate) struct ConstAutoTrait {
+    #[primary_span]
+    pub span: Span,
 }
 
 #[derive(Diagnostic)]

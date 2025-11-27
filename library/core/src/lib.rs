@@ -149,6 +149,7 @@
 #![feature(decl_macro)]
 #![feature(deprecated_suggestion)]
 #![feature(derive_const)]
+#![feature(diagnostic_on_const)]
 #![feature(doc_cfg)]
 #![feature(doc_notable_trait)]
 #![feature(extern_types)]
@@ -195,6 +196,7 @@
 // tidy-alphabetical-start
 #![feature(aarch64_unstable_target_feature)]
 #![feature(arm_target_feature)]
+#![feature(avx10_target_feature)]
 #![feature(hexagon_target_feature)]
 #![feature(loongarch_target_feature)]
 #![feature(mips_target_feature)]
