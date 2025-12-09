@@ -56,7 +56,7 @@ pub use proc_macro::Delimiter;
 
 pub use crate::bridge::*;
 pub use crate::server_impl::literal_from_str;
-pub use crate::token_stream::{TokenStream, literal_to_string};
+pub use crate::token_stream::{TokenStream, TokenStreamIter, literal_to_string};
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ProcMacroKind {
@@ -80,6 +80,14 @@ impl<'env> ProcMacroSrv<'env> {
             env,
             temp_dir: TempDir::with_prefix("proc-macro-srv").unwrap(),
         }
+    }
+
+    pub fn join_spans(&self, first: Span, second: Span) -> Option<Span> {
+        first.join(second, |_, _| {
+            // FIXME: Once we can talk back to the client, implement a "long join" request for anchors
+            // that differ in [AstId]s as joining those spans requires resolving the AstIds.
+            None
+        })
     }
 }
 
@@ -169,7 +177,13 @@ impl ProcMacroSrvSpan for SpanId {
     type Server = server_impl::token_id::SpanIdServer;
 
     fn make_server(call_site: Self, def_site: Self, mixed_site: Self) -> Self::Server {
-        Self::Server { call_site, def_site, mixed_site }
+        Self::Server {
+            call_site,
+            def_site,
+            mixed_site,
+            tracked_env_vars: Default::default(),
+            tracked_paths: Default::default(),
+        }
     }
 }
 impl ProcMacroSrvSpan for Span {

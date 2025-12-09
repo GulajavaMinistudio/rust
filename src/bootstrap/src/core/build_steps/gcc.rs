@@ -27,6 +27,7 @@ pub struct Gcc {
 #[derive(Clone)]
 pub struct GccOutput {
     pub libgccjit: PathBuf,
+    target: TargetSelection,
 }
 
 impl GccOutput {
@@ -36,12 +37,7 @@ impl GccOutput {
             return;
         }
 
-        // At build time, cg_gcc has to link to libgccjit.so (the unversioned symbol).
-        // However, at runtime, it will by default look for libgccjit.so.0.
-        // So when we install the built libgccjit.so file to the target `directory`, we add it there
-        // with the `.0` suffix.
-        let mut target_filename = self.libgccjit.file_name().unwrap().to_str().unwrap().to_string();
-        target_filename.push_str(".0");
+        let target_filename = self.libgccjit.file_name().unwrap().to_str().unwrap().to_string();
 
         // If we build libgccjit ourselves, then `self.libgccjit` can actually be a symlink.
         // In that case, we have to resolve it first, otherwise we'd create a symlink to a symlink,
@@ -51,7 +47,9 @@ impl GccOutput {
             format!("Cannot find libgccjit at {}", self.libgccjit.display())
         );
 
-        let dst = directory.join(target_filename);
+        let dest_dir = directory.join("rustlib").join(self.target).join("lib");
+        t!(fs::create_dir_all(&dest_dir));
+        let dst = dest_dir.join(target_filename);
         builder.copy_link(&actual_libgccjit_path, &dst, FileType::NativeLibrary);
     }
 }
@@ -75,7 +73,7 @@ impl Step for Gcc {
 
         // If GCC has already been built, we avoid building it again.
         let metadata = match get_gcc_build_status(builder, target) {
-            GccBuildStatus::AlreadyBuilt(path) => return GccOutput { libgccjit: path },
+            GccBuildStatus::AlreadyBuilt(path) => return GccOutput { libgccjit: path, target },
             GccBuildStatus::ShouldBuild(m) => m,
         };
 
@@ -85,14 +83,14 @@ impl Step for Gcc {
 
         let libgccjit_path = libgccjit_built_path(&metadata.install_dir);
         if builder.config.dry_run() {
-            return GccOutput { libgccjit: libgccjit_path };
+            return GccOutput { libgccjit: libgccjit_path, target };
         }
 
         build_gcc(&metadata, builder, target);
 
         t!(metadata.stamp.write());
 
-        GccOutput { libgccjit: libgccjit_path }
+        GccOutput { libgccjit: libgccjit_path, target }
     }
 }
 

@@ -74,7 +74,7 @@ impl GlobalState {
             && !self.fetch_workspaces_queue.op_in_progress()
             && !self.fetch_build_data_queue.op_in_progress()
             && !self.fetch_proc_macros_queue.op_in_progress()
-            && !self.discover_workspace_queue.op_in_progress()
+            && self.discover_jobs_active == 0
             && self.vfs_progress_config_version >= self.vfs_config_version
     }
 
@@ -297,7 +297,7 @@ impl GlobalState {
                 .collect();
             let cargo_config = self.config.cargo(None);
             let discover_command = self.config.discover_workspace_config().cloned();
-            let is_quiescent = !(self.discover_workspace_queue.op_in_progress()
+            let is_quiescent = !(self.discover_jobs_active > 0
                 || self.vfs_progress_config_version < self.vfs_config_version
                 || !self.vfs_done);
 
@@ -700,7 +700,7 @@ impl GlobalState {
                 };
                 info!("Using proc-macro server at {path}");
 
-                Some(ProcMacroClient::spawn(&path, &env).map_err(|err| {
+                Some(ProcMacroClient::spawn(&path, &env, ws.toolchain.as_ref()).map_err(|err| {
                     tracing::error!(
                         "Failed to run proc-macro server from path {path}, error: {err:?}",
                     );

@@ -372,6 +372,8 @@ macro_rules! int_impl {
         ///
         /// On big endian this is a no-op. On little endian the bytes are swapped.
         ///
+        /// See also [from_be_bytes()](Self::from_be_bytes).
+        ///
         /// # Examples
         ///
         /// ```
@@ -402,6 +404,8 @@ macro_rules! int_impl {
         ///
         /// On little endian this is a no-op. On big endian the bytes are swapped.
         ///
+        /// See also [from_le_bytes()](Self::from_le_bytes).
+        ///
         /// # Examples
         ///
         /// ```
@@ -428,9 +432,15 @@ macro_rules! int_impl {
             }
         }
 
-        /// Converts `self` to big endian from the target's endianness.
+        /// Swaps bytes of `self` on little endian targets.
         ///
-        /// On big endian this is a no-op. On little endian the bytes are swapped.
+        /// On big endian this is a no-op.
+        ///
+        /// The returned value has the same type as `self`, and will be interpreted
+        /// as (a potentially different) value of a native-endian
+        #[doc = concat!("`", stringify!($SelfT), "`.")]
+        ///
+        /// See [`to_be_bytes()`](Self::to_be_bytes) for a type-safe alternative.
         ///
         /// # Examples
         ///
@@ -459,9 +469,15 @@ macro_rules! int_impl {
             }
         }
 
-        /// Converts `self` to little endian from the target's endianness.
+        /// Swaps bytes of `self` on big endian targets.
         ///
-        /// On little endian this is a no-op. On big endian the bytes are swapped.
+        /// On little endian this is a no-op.
+        ///
+        /// The returned value has the same type as `self`, and will be interpreted
+        /// as (a potentially different) value of a native-endian
+        #[doc = concat!("`", stringify!($SelfT), "`.")]
+        ///
+        /// See [`to_le_bytes()`](Self::to_le_bytes) for a type-safe alternative.
         ///
         /// # Examples
         ///
@@ -1259,11 +1275,8 @@ macro_rules! int_impl {
         /// i.e. when [`checked_neg`] would return `None`.
         ///
         #[doc = concat!("[`checked_neg`]: ", stringify!($SelfT), "::checked_neg")]
-        #[unstable(
-            feature = "unchecked_neg",
-            reason = "niche optimization path",
-            issue = "85122",
-        )]
+        #[stable(feature = "unchecked_neg", since = "CURRENT_RUSTC_VERSION")]
+        #[rustc_const_stable(feature = "unchecked_neg", since = "CURRENT_RUSTC_VERSION")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline(always)]
@@ -1379,11 +1392,8 @@ macro_rules! int_impl {
         /// i.e. when [`checked_shl`] would return `None`.
         ///
         #[doc = concat!("[`checked_shl`]: ", stringify!($SelfT), "::checked_shl")]
-        #[unstable(
-            feature = "unchecked_shifts",
-            reason = "niche optimization path",
-            issue = "85122",
-        )]
+        #[stable(feature = "unchecked_shifts", since = "CURRENT_RUSTC_VERSION")]
+        #[rustc_const_stable(feature = "unchecked_shifts", since = "CURRENT_RUSTC_VERSION")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline(always)]
@@ -1554,11 +1564,8 @@ macro_rules! int_impl {
         /// i.e. when [`checked_shr`] would return `None`.
         ///
         #[doc = concat!("[`checked_shr`]: ", stringify!($SelfT), "::checked_shr")]
-        #[unstable(
-            feature = "unchecked_shifts",
-            reason = "niche optimization path",
-            issue = "85122",
-        )]
+        #[stable(feature = "unchecked_shifts", since = "CURRENT_RUSTC_VERSION")]
+        #[rustc_const_stable(feature = "unchecked_shifts", since = "CURRENT_RUSTC_VERSION")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline(always)]
@@ -3140,7 +3147,8 @@ macro_rules! int_impl {
         }
 
 
-        /// Calculates the least nonnegative remainder of `self (mod rhs)`.
+        /// Calculates the least nonnegative remainder of `self` when
+        /// divided by `rhs`.
         ///
         /// This is done as if by the Euclidean division algorithm -- given
         /// `r = self.rem_euclid(rhs)`, the result satisfies
@@ -3520,11 +3528,7 @@ macro_rules! int_impl {
                       without modifying the original"]
         #[inline]
         pub const fn checked_ilog10(self) -> Option<u32> {
-            if self > 0 {
-                Some(int_log10::$ActualT(self as $ActualT))
-            } else {
-                None
-            }
+            int_log10::$ActualT(self as $ActualT)
         }
 
         /// Computes the absolute value of `self`.
@@ -3870,6 +3874,33 @@ macro_rules! int_impl {
         #[rustc_diagnostic_item = concat!(stringify!($SelfT), "_legacy_fn_max_value")]
         pub const fn max_value() -> Self {
             Self::MAX
+        }
+
+        /// Clamps this number to a symmetric range centred around zero.
+        ///
+        /// The method clamps the number's magnitude (absolute value) to be at most `limit`.
+        ///
+        /// This is functionally equivalent to `self.clamp(-limit, limit)`, but is more
+        /// explicit about the intent.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// #![feature(clamp_magnitude)]
+        #[doc = concat!("assert_eq!(120", stringify!($SelfT), ".clamp_magnitude(100), 100);")]
+        #[doc = concat!("assert_eq!(-120", stringify!($SelfT), ".clamp_magnitude(100), -100);")]
+        #[doc = concat!("assert_eq!(80", stringify!($SelfT), ".clamp_magnitude(100), 80);")]
+        #[doc = concat!("assert_eq!(-80", stringify!($SelfT), ".clamp_magnitude(100), -80);")]
+        /// ```
+        #[must_use = "this returns the clamped value and does not modify the original"]
+        #[unstable(feature = "clamp_magnitude", issue = "148519")]
+        #[inline]
+        pub fn clamp_magnitude(self, limit: $UnsignedT) -> Self {
+            if let Ok(limit) = core::convert::TryInto::<$SelfT>::try_into(limit) {
+                self.clamp(-limit, limit)
+            } else {
+                self
+            }
         }
     }
 }

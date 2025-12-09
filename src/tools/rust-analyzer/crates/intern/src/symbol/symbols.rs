@@ -127,6 +127,7 @@ define_symbols! {
     as_str,
     asm,
     assert,
+    attr,
     attributes,
     begin_panic,
     bench,
@@ -523,4 +524,5 @@ define_symbols! {
     arbitrary_self_types,
     arbitrary_self_types_pointers,
     supertrait_item_shadowing,
+    define_opaque,
 }

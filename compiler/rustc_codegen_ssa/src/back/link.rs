@@ -1763,10 +1763,6 @@ fn link_output_kind(sess: &Session, crate_type: CrateType) -> LinkOutputKind {
 
 // Returns true if linker is located within sysroot
 fn detect_self_contained_mingw(sess: &Session, linker: &Path) -> bool {
-    // Assume `-C linker=rust-lld` as self-contained mode
-    if linker == Path::new("rust-lld") {
-        return true;
-    }
     let linker_with_extension = if cfg!(windows) && linker.extension().is_none() {
         linker.with_extension("exe")
     } else {
@@ -2558,7 +2554,7 @@ fn add_order_independent_options(
         && sess.target.is_like_windows
         && let Some(s) = &codegen_results.crate_info.windows_subsystem
     {
-        cmd.subsystem(s);
+        cmd.windows_subsystem(*s);
     }
 
     // Try to strip as much out of the generated object by removing unused

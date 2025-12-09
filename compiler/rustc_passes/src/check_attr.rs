@@ -57,7 +57,10 @@ struct DiagnosticOnUnimplementedOnlyForTraits;
 
 #[derive(LintDiagnostic)]
 #[diag(passes_diagnostic_diagnostic_on_const_only_for_trait_impls)]
-struct DiagnosticOnConstOnlyForTraitImpls;
+struct DiagnosticOnConstOnlyForTraitImpls {
+    #[label]
+    item_span: Span,
+}
 
 fn target_from_impl_item<'tcx>(tcx: TyCtxt<'tcx>, impl_item: &hir::ImplItem<'_>) -> Target {
     match impl_item.kind {
@@ -287,7 +290,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::DebuggerVisualizer(..)
                     | AttributeKind::RustcMain
                     | AttributeKind::RustcPassIndirectlyInNonRusticAbis(..)
-                    | AttributeKind::PinV2(..),
+                    | AttributeKind::PinV2(..)
+                    | AttributeKind::WindowsSubsystem(..)
                 ) => { /* do nothing  */ }
                 Attribute::Unparsed(attr_item) => {
                     style = Some(attr_item.style);
@@ -361,7 +365,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             // need to be fixed
                             | sym::cfi_encoding // FIXME(cfi_encoding)
                             | sym::instruction_set // broken on stable!!!
-                            | sym::windows_subsystem // broken on stable!!!
                             | sym::patchable_function_entry // FIXME(patchable_function_entry)
                             | sym::deprecated_safe // FIXME(deprecated_safe)
                             // internal
@@ -541,11 +544,12 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 ItemLike::ForeignItem => {}
             }
         }
+        let item_span = self.tcx.hir_span(hir_id);
         self.tcx.emit_node_span_lint(
             MISPLACED_DIAGNOSTIC_ATTRIBUTES,
             hir_id,
             attr_span,
-            DiagnosticOnConstOnlyForTraitImpls,
+            DiagnosticOnConstOnlyForTraitImpls { item_span },
         );
     }
 
