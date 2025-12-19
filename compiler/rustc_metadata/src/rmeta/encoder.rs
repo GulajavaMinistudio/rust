@@ -35,6 +35,7 @@ use rustc_span::{
 };
 use tracing::{debug, instrument, trace};
 
+use crate::eii::EiiMapEncodedKeyValue;
 use crate::errors::{FailCreateFileEncoder, FailWriteFile};
 use crate::rmeta::*;
 
@@ -541,8 +542,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         // is done.
         let required_source_files = self.required_source_files.take().unwrap();
 
-        let working_directory = &self.tcx.sess.opts.working_dir;
-
         let mut adapted = TableBuilder::default();
 
         let local_crate_stable_id = self.tcx.stable_crate_id(LOCAL_CRATE);
@@ -567,10 +566,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
             match source_file.name {
                 FileName::Real(ref original_file_name) => {
-                    let adapted_file_name = source_map
-                        .path_mapping()
-                        .to_embeddable_absolute_path(original_file_name.clone(), working_directory);
-
+                    let mut adapted_file_name = original_file_name.clone();
+                    adapted_file_name.update_for_crate_metadata();
                     adapted_source_file.name = FileName::Real(adapted_file_name);
                 }
                 _ => {
@@ -619,6 +616,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
         // We have already encoded some things. Get their combined size from the current position.
         stats.push(("preamble", self.position()));
+
+        let externally_implementable_items = stat!("externally-implementable-items", || self
+            .encode_externally_implementable_items());
 
         let (crate_deps, dylib_dependency_formats) =
             stat!("dep", || (self.encode_crate_deps(), self.encode_dylib_dependency_formats()));
@@ -738,6 +738,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     attrs,
                     sym::default_lib_allocator,
                 ),
+                externally_implementable_items,
                 proc_macro_data,
                 debugger_visualizers,
                 compiler_builtins: ast::attr::contains_name(attrs, sym::compiler_builtins),
@@ -870,26 +871,17 @@ fn analyze_attr(attr: &hir::Attribute, state: &mut AnalyzeAttrState<'_>) -> bool
         && !rustc_feature::encode_cross_crate(name)
     {
         // Attributes not marked encode-cross-crate don't need to be encoded for downstream crates.
-    } else if attr.doc_str().is_some() {
+    } else if let hir::Attribute::Parsed(AttributeKind::DocComment { .. }) = attr {
         // We keep all doc comments reachable to rustdoc because they might be "imported" into
         // downstream crates if they use `#[doc(inline)]` to copy an item's documentation into
         // their own.
         if state.is_exported {
             should_encode = true;
         }
-    } else if attr.has_name(sym::doc) {
-        // If this is a `doc` attribute that doesn't have anything except maybe `inline` (as in
-        // `#[doc(inline)]`), then we can remove it. It won't be inlinable in downstream crates.
-        if let Some(item_list) = attr.meta_item_list() {
-            for item in item_list {
-                if !item.has_name(sym::inline) {
-                    should_encode = true;
-                    if item.has_name(sym::hidden) {
-                        state.is_doc_hidden = true;
-                        break;
-                    }
-                }
-            }
+    } else if let hir::Attribute::Parsed(AttributeKind::Doc(d)) = attr {
+        should_encode = true;
+        if d.hidden.is_some() {
+            state.is_doc_hidden = true;
         }
     } else if let &[sym::diagnostic, seg] = &*attr.path() {
         should_encode = rustc_feature::is_stable_diagnostic_attribute(seg, state.features);
@@ -1455,7 +1447,10 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     _ => false,
                 }
             {
-                continue;
+                // MGCA doesn't have unnecessary DefIds
+                if !tcx.features().min_generic_const_args() {
+                    continue;
+                }
             }
 
             if def_kind == DefKind::Field
@@ -1652,6 +1647,15 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         for (def_id, traits) in &tcx.resolutions(()).doc_link_traits_in_scope {
             record_array!(self.tables.doc_link_traits_in_scope[def_id.to_def_id()] <- traits);
         }
+    }
+
+    fn encode_externally_implementable_items(&mut self) -> LazyArray<EiiMapEncodedKeyValue> {
+        empty_proc_macro!(self);
+        let externally_implementable_items = self.tcx.externally_implementable_items(LOCAL_CRATE);
+
+        self.lazy_array(externally_implementable_items.iter().map(|(decl_did, (decl, impls))| {
+            (*decl_did, (decl.clone(), impls.iter().map(|(impl_did, i)| (*impl_did, *i)).collect()))
+        }))
     }
 
     #[instrument(level = "trace", skip(self))]

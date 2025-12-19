@@ -1310,6 +1310,7 @@ pub fn log2f128(x: f128) -> f128;
 ///
 /// The stabilized version of this intrinsic is
 /// [`f16::mul_add`](../../std/primitive.f16.html#method.mul_add)
+#[rustc_intrinsic_const_stable_indirect]
 #[rustc_intrinsic]
 #[rustc_nounwind]
 pub const fn fmaf16(a: f16, b: f16, c: f16) -> f16;
@@ -1317,6 +1318,7 @@ pub const fn fmaf16(a: f16, b: f16, c: f16) -> f16;
 ///
 /// The stabilized version of this intrinsic is
 /// [`f32::mul_add`](../../std/primitive.f32.html#method.mul_add)
+#[rustc_intrinsic_const_stable_indirect]
 #[rustc_intrinsic]
 #[rustc_nounwind]
 pub const fn fmaf32(a: f32, b: f32, c: f32) -> f32;
@@ -1324,6 +1326,7 @@ pub const fn fmaf32(a: f32, b: f32, c: f32) -> f32;
 ///
 /// The stabilized version of this intrinsic is
 /// [`f64::mul_add`](../../std/primitive.f64.html#method.mul_add)
+#[rustc_intrinsic_const_stable_indirect]
 #[rustc_intrinsic]
 #[rustc_nounwind]
 pub const fn fmaf64(a: f64, b: f64, c: f64) -> f64;
@@ -1331,6 +1334,7 @@ pub const fn fmaf64(a: f64, b: f64, c: f64) -> f64;
 ///
 /// The stabilized version of this intrinsic is
 /// [`f128::mul_add`](../../std/primitive.f128.html#method.mul_add)
+#[rustc_intrinsic_const_stable_indirect]
 #[rustc_intrinsic]
 #[rustc_nounwind]
 pub const fn fmaf128(a: f128, b: f128, c: f128) -> f128;
@@ -2749,6 +2753,22 @@ pub unsafe fn vtable_size(ptr: *const ()) -> usize;
 #[unstable(feature = "core_intrinsics", issue = "none")]
 #[rustc_intrinsic]
 pub unsafe fn vtable_align(ptr: *const ()) -> usize;
+
+/// The intrinsic returns the `U` vtable for `T` if `T` can be coerced to the trait object type `U`.
+///
+/// # Compile-time failures
+/// Determining whether `T` can be coerced to the trait object type `U` requires trait resolution by the compiler.
+/// In some cases, that resolution can exceed the recursion limit,
+/// and compilation will fail instead of this function returning `None`.
+///
+/// # Safety
+///
+/// `ptr` must point to a vtable.
+#[rustc_nounwind]
+#[unstable(feature = "core_intrinsics", issue = "none")]
+#[rustc_intrinsic]
+pub const fn vtable_for<T, U: ptr::Pointee<Metadata = ptr::DynMetadata<U>> + ?Sized>()
+-> Option<ptr::DynMetadata<U>>;
 
 /// The size of a type in bytes.
 ///

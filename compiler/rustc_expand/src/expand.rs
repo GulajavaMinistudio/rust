@@ -470,7 +470,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
             FileName::Real(name) => name
                 .into_local_path()
                 .expect("attempting to resolve a file path in an external file"),
-            other => PathBuf::from(other.prefer_local().to_string()),
+            other => PathBuf::from(other.prefer_local_unconditionally().to_string()),
         };
         let dir_path = file_path.parent().unwrap_or(&file_path).to_owned();
         self.cx.root_path = dir_path.clone();
@@ -2177,7 +2177,7 @@ impl<'a, 'b> InvocationCollector<'a, 'b> {
                 continue;
             }
 
-            if attr.is_doc_comment() {
+            if attr.doc_str_and_fragment_kind().is_some() {
                 self.cx.sess.psess.buffer_lint(
                     UNUSED_DOC_COMMENTS,
                     current_span,

@@ -12,7 +12,7 @@ use rustc_feature::UnstableFeatures;
 use rustc_hashes::Hash64;
 use rustc_macros::{BlobDecodable, Encodable};
 use rustc_span::edition::Edition;
-use rustc_span::{RealFileName, SourceFileHashAlgorithm};
+use rustc_span::{RealFileName, RemapPathScopeComponents, SourceFileHashAlgorithm};
 use rustc_target::spec::{
     CodeModel, FramePointer, LinkerFlavorCli, MergeFunctions, OnBrokenPipe, PanicStrategy,
     RelocModel, RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, SymbolVisibility,
@@ -492,7 +492,9 @@ top_level_options!(
         pretty: Option<PpMode> [UNTRACKED],
 
         /// The (potentially remapped) working directory
+        #[rustc_lint_opt_deny_field_access("use `SourceMap::working_dir` instead of this field")]
         working_dir: RealFileName [TRACKED],
+
         color: ColorConfig [UNTRACKED],
 
         verbose: bool [TRACKED_NO_CRATE_HASH],
@@ -806,7 +808,6 @@ mod desc {
     pub(crate) const parse_on_broken_pipe: &str = "either `kill`, `error`, or `inherit`";
     pub(crate) const parse_patchable_function_entry: &str = "either two comma separated integers (total_nops,prefix_nops), with prefix_nops <= total_nops, or one integer (total_nops)";
     pub(crate) const parse_opt_panic_strategy: &str = parse_panic_strategy;
-    pub(crate) const parse_oom_strategy: &str = "either `panic` or `abort`";
     pub(crate) const parse_relro_level: &str = "one of: `full`, `partial`, or `off`";
     pub(crate) const parse_sanitizers: &str = "comma separated list of sanitizers: `address`, `cfi`, `dataflow`, `hwaddress`, `kcfi`, `kernel-address`, `leak`, `memory`, `memtag`, `safestack`, `shadow-call-stack`, `thread`, or 'realtime'";
     pub(crate) const parse_sanitizer_memory_track_origins: &str = "0, 1, or 2";
@@ -1240,15 +1241,6 @@ pub mod parse {
             return true;
         }
         false
-    }
-
-    pub(crate) fn parse_oom_strategy(slot: &mut OomStrategy, v: Option<&str>) -> bool {
-        match v {
-            Some("panic") => *slot = OomStrategy::Panic,
-            Some("abort") => *slot = OomStrategy::Abort,
-            _ => return false,
-        }
-        true
     }
 
     pub(crate) fn parse_relro_level(slot: &mut Option<RelroLevel>, v: Option<&str>) -> bool {
@@ -2529,8 +2521,6 @@ options! {
         Currently the only option available"),
     on_broken_pipe: OnBrokenPipe = (OnBrokenPipe::Default, parse_on_broken_pipe, [TRACKED],
         "behavior of std::io::ErrorKind::BrokenPipe (SIGPIPE)"),
-    oom: OomStrategy = (OomStrategy::Abort, parse_oom_strategy, [TRACKED],
-        "panic strategy for out-of-memory handling"),
     osx_rpath_install_name: bool = (false, parse_bool, [TRACKED],
         "pass `-install_name @rpath/...` to the macOS linker (default: no)"),
     packed_bundled_libs: bool = (false, parse_bool, [TRACKED],

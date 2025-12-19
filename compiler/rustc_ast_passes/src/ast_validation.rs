@@ -1179,10 +1179,15 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
                     contract: _,
                     body,
                     define_opaque: _,
+                    eii_impls,
                 },
             ) => {
                 self.visit_attrs_vis_ident(&item.attrs, &item.vis, ident);
                 self.check_defaultness(item.span, *defaultness);
+
+                for EiiImpl { eii_macro_path, .. } in eii_impls {
+                    self.visit_path(eii_macro_path);
+                }
 
                 let is_intrinsic = item.attrs.iter().any(|a| a.has_name(sym::rustc_intrinsic));
                 if body.is_none() && !is_intrinsic && !self.is_sdylib_interface {
@@ -1314,6 +1319,14 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
             }
             ItemKind::Struct(ident, generics, vdata) => {
                 self.with_tilde_const(Some(TildeConstReason::Struct { span: item.span }), |this| {
+                    // Scalable vectors can only be tuple structs
+                    let is_scalable_vector =
+                        item.attrs.iter().any(|attr| attr.has_name(sym::rustc_scalable_vector));
+                    if is_scalable_vector && !matches!(vdata, VariantData::Tuple(..)) {
+                        this.dcx()
+                            .emit_err(errors::ScalableVectorNotTupleStruct { span: item.span });
+                    }
+
                     match vdata {
                         VariantData::Struct { fields, .. } => {
                             this.visit_attrs_vis_ident(&item.attrs, &item.vis, ident);
