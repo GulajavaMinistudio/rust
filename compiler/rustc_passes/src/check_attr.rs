@@ -258,9 +258,11 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcNoImplicitAutorefs
                     | AttributeKind::RustcLayoutScalarValidRangeStart(..)
                     | AttributeKind::RustcLayoutScalarValidRangeEnd(..)
+                    | AttributeKind::RustcLintDiagnostics
                     | AttributeKind::RustcLintOptDenyFieldAccess { .. }
                     | AttributeKind::RustcLintOptTy
                     | AttributeKind::RustcLintQueryInstability
+                    | AttributeKind::RustcLintUntrackedQueryInformation
                     | AttributeKind::RustcNeverReturnsNullPointer
                     | AttributeKind::RustcScalableVector { .. }
                     | AttributeKind::RustcSimdMonomorphizeLaneLimit(..)
@@ -295,6 +297,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcPassIndirectlyInNonRusticAbis(..)
                     | AttributeKind::PinV2(..)
                     | AttributeKind::WindowsSubsystem(..)
+                    | AttributeKind::ThreadLocal
                 ) => { /* do nothing  */ }
                 Attribute::Unparsed(attr_item) => {
                     style = Some(attr_item.style);
@@ -307,13 +310,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                         }
                         [sym::diagnostic, sym::on_const, ..] => {
                             self.check_diagnostic_on_const(attr.span(), hir_id, target, item)
-                        }
-                        [sym::thread_local, ..] => self.check_thread_local(attr, span, target),
-                        [sym::rustc_lint_untracked_query_information, ..] => {
-                            self.check_applied_to_fn_or_method(hir_id, attr.span(), span, target)
-                        }
-                        [sym::rustc_lint_diagnostics, ..] => {
-                            self.check_applied_to_fn_or_method(hir_id, attr.span(), span, target)
                         }
                         [sym::rustc_clean, ..]
                         | [sym::rustc_dirty, ..]
@@ -772,19 +768,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
         }
     }
 
-    /// Checks if the `#[thread_local]` attribute on `item` is valid.
-    fn check_thread_local(&self, attr: &Attribute, span: Span, target: Target) {
-        match target {
-            Target::ForeignStatic | Target::Static => {}
-            _ => {
-                self.dcx().emit_err(errors::AttrShouldBeAppliedToStatic {
-                    attr_span: attr.span(),
-                    defn_span: span,
-                });
-            }
-        }
-    }
-
     fn check_doc_alias_value(&self, span: Span, hir_id: HirId, target: Target, alias: Symbol) {
         if let Some(location) = match target {
             Target::AssocTy => {
@@ -1227,25 +1210,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     arg_count,
                 });
             }
-        }
-    }
-
-    /// Helper function for checking that the provided attribute is only applied to a function or
-    /// method.
-    fn check_applied_to_fn_or_method(
-        &self,
-        hir_id: HirId,
-        attr_span: Span,
-        defn_span: Span,
-        target: Target,
-    ) {
-        let is_function = matches!(target, Target::Fn | Target::Method(..));
-        if !is_function {
-            self.dcx().emit_err(errors::AttrShouldBeAppliedToFn {
-                attr_span,
-                defn_span,
-                on_crate: hir_id == CRATE_HIR_ID,
-            });
         }
     }
 

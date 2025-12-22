@@ -931,6 +931,9 @@ pub enum AttributeKind {
     /// Represents `#[rustc_legacy_const_generics]`
     RustcLegacyConstGenerics { fn_indexes: ThinVec<(usize, Span)>, attr_span: Span },
 
+    /// Represents `#[rustc_lint_diagnostics]`
+    RustcLintDiagnostics,
+
     /// Represents `#[rustc_lint_opt_deny_field_access]`
     RustcLintOptDenyFieldAccess { lint_message: Symbol },
 
@@ -939,6 +942,9 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_lint_query_instability]`
     RustcLintQueryInstability,
+
+    /// Represents `#[rustc_lint_untracked_query_information]`
+    RustcLintUntrackedQueryInformation,
 
     /// Represents `#[rustc_main]`.
     RustcMain,
@@ -1003,6 +1009,9 @@ pub enum AttributeKind {
     /// Represents `#[target_feature(enable = "...")]` and
     /// `#[unsafe(force_target_feature(enable = "...")]`.
     TargetFeature { features: ThinVec<(Symbol, Span)>, attr_span: Span, was_forced: bool },
+
+    /// Represents `#[thread_local]`
+    ThreadLocal,
 
     /// Represents `#[track_caller]`
     TrackCaller(Span),
