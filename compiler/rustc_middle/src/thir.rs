@@ -827,23 +827,22 @@ pub enum PatKind<'tcx> {
     ///   much simpler.
     /// * raw pointers derived from integers, other raw pointers will have already resulted in an
     ///   error.
-    /// * `String`, if `string_deref_patterns` is enabled.
     Constant {
         value: ty::Value<'tcx>,
     },
 
-    /// Pattern obtained by converting a constant (inline or named) to its pattern
-    /// representation using `const_to_pat`. This is used for unsafety checking.
+    /// Wrapper node representing a named constant that was lowered to a pattern
+    /// using `const_to_pat`.
+    ///
+    /// This is used by some diagnostics for non-exhaustive matches, to map
+    /// the pattern node back to the `DefId` of its original constant.
+    ///
+    /// FIXME(#150498): Can we make this an `Option<DefId>` field on `Pat`
+    /// instead, so that non-diagnostic code can ignore it more easily?
     ExpandedConstant {
         /// [DefId] of the constant item.
         def_id: DefId,
         /// The pattern that the constant lowered to.
-        ///
-        /// HACK: we need to keep the `DefId` of inline constants around for unsafety checking;
-        /// therefore when a range pattern contains inline constants, we re-wrap the range pattern
-        /// with the `ExpandedConstant` nodes that correspond to the range endpoints. Hence
-        /// `subpattern` may actually be a range pattern, and `def_id` be the constant for one of
-        /// its endpoints.
         subpattern: Box<Pat<'tcx>>,
     },
 
@@ -928,7 +927,7 @@ impl<'tcx> PatRange<'tcx> {
         let lo_is_min = match self.lo {
             PatRangeBoundary::NegInfinity => true,
             PatRangeBoundary::Finite(value) => {
-                let lo = value.try_to_scalar_int().unwrap().to_bits(size) ^ bias;
+                let lo = value.to_leaf().to_bits(size) ^ bias;
                 lo <= min
             }
             PatRangeBoundary::PosInfinity => false,
@@ -937,7 +936,7 @@ impl<'tcx> PatRange<'tcx> {
             let hi_is_max = match self.hi {
                 PatRangeBoundary::NegInfinity => false,
                 PatRangeBoundary::Finite(value) => {
-                    let hi = value.try_to_scalar_int().unwrap().to_bits(size) ^ bias;
+                    let hi = value.to_leaf().to_bits(size) ^ bias;
                     hi > max || hi == max && self.end == RangeEnd::Included
                 }
                 PatRangeBoundary::PosInfinity => true,
@@ -1029,7 +1028,7 @@ impl<'tcx> PatRangeBoundary<'tcx> {
     }
     pub fn to_bits(self, ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> u128 {
         match self {
-            Self::Finite(value) => value.try_to_scalar_int().unwrap().to_bits_unchecked(),
+            Self::Finite(value) => value.to_leaf().to_bits_unchecked(),
             Self::NegInfinity => {
                 // Unwrap is ok because the type is known to be numeric.
                 ty.numeric_min_and_max_as_bits(tcx).unwrap().0
@@ -1057,7 +1056,7 @@ impl<'tcx> PatRangeBoundary<'tcx> {
             // many ranges such as '\u{037A}'..='\u{037F}', and chars can be compared
             // in this way.
             (Finite(a), Finite(b)) if matches!(ty.kind(), ty::Int(_) | ty::Uint(_) | ty::Char) => {
-                if let (Some(a), Some(b)) = (a.try_to_scalar_int(), b.try_to_scalar_int()) {
+                if let (Some(a), Some(b)) = (a.try_to_leaf(), b.try_to_leaf()) {
                     let sz = ty.primitive_size(tcx);
                     let cmp = match ty.kind() {
                         ty::Uint(_) | ty::Char => a.to_uint(sz).cmp(&b.to_uint(sz)),

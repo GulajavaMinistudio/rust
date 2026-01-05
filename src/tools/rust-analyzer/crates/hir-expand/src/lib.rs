@@ -37,7 +37,9 @@ use std::{hash::Hash, ops};
 
 use base_db::Crate;
 use either::Either;
-use span::{Edition, ErasedFileAstId, FileAstId, Span, SyntaxContext};
+use span::{
+    Edition, ErasedFileAstId, FileAstId, NO_DOWNMAP_ERASED_FILE_AST_ID_MARKER, Span, SyntaxContext,
+};
 use syntax::{
     SyntaxNode, SyntaxToken, TextRange, TextSize,
     ast::{self, AstNode},
@@ -64,25 +66,7 @@ pub use crate::{
 pub use base_db::EditionedFileId;
 pub use mbe::{DeclarativeMacro, MacroCallStyle, MacroCallStyles, ValueResult};
 
-pub mod tt {
-    pub use span::Span;
-    pub use tt::{DelimiterKind, IdentIsRaw, LitKind, Spacing, token_to_literal};
-
-    pub type Delimiter = ::tt::Delimiter<Span>;
-    pub type DelimSpan = ::tt::DelimSpan<Span>;
-    pub type Subtree = ::tt::Subtree<Span>;
-    pub type Leaf = ::tt::Leaf<Span>;
-    pub type Literal = ::tt::Literal<Span>;
-    pub type Punct = ::tt::Punct<Span>;
-    pub type Ident = ::tt::Ident<Span>;
-    pub type TokenTree = ::tt::TokenTree<Span>;
-    pub type TopSubtree = ::tt::TopSubtree<Span>;
-    pub type TopSubtreeBuilder = ::tt::TopSubtreeBuilder<Span>;
-    pub type TokenTreesView<'a> = ::tt::TokenTreesView<'a, Span>;
-    pub type SubtreeView<'a> = ::tt::SubtreeView<'a, Span>;
-    pub type TtElement<'a> = ::tt::iter::TtElement<'a, Span>;
-    pub type TtIter<'a> = ::tt::iter::TtIter<'a, Span>;
-}
+pub use tt;
 
 #[macro_export]
 macro_rules! impl_intern_lookup {
@@ -854,6 +838,10 @@ impl ExpansionInfo {
         &self,
         span: Span,
     ) -> Option<InMacroFile<impl Iterator<Item = (SyntaxToken, SyntaxContext)> + '_>> {
+        if span.anchor.ast_id == NO_DOWNMAP_ERASED_FILE_AST_ID_MARKER {
+            return None;
+        }
+
         let tokens = self.exp_map.ranges_with_span_exact(span).flat_map(move |(range, ctx)| {
             self.expanded.value.covering_element(range).into_token().zip(Some(ctx))
         });
@@ -869,6 +857,10 @@ impl ExpansionInfo {
         &self,
         span: Span,
     ) -> Option<InMacroFile<impl Iterator<Item = (SyntaxToken, SyntaxContext)> + '_>> {
+        if span.anchor.ast_id == NO_DOWNMAP_ERASED_FILE_AST_ID_MARKER {
+            return None;
+        }
+
         let tokens = self.exp_map.ranges_with_span(span).flat_map(move |(range, ctx)| {
             self.expanded.value.covering_element(range).into_token().zip(Some(ctx))
         });

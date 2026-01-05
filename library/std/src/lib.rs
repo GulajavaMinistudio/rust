@@ -344,7 +344,6 @@
 #![feature(hint_must_use)]
 #![feature(int_from_ascii)]
 #![feature(ip)]
-#![feature(lazy_get)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(panic_can_unwind)]
 #![feature(panic_internals)]
@@ -682,9 +681,7 @@ pub mod arch {
 #[stable(feature = "simd_x86", since = "1.27.0")]
 pub use std_detect::is_x86_feature_detected;
 
-// Platform-abstraction modules
 mod sys;
-mod sys_common;
 
 pub mod alloc;
 

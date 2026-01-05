@@ -69,8 +69,8 @@ use rustc_middle::middle::privacy::EffectiveVisibilities;
 use rustc_middle::query::Providers;
 use rustc_middle::span_bug;
 use rustc_middle::ty::{
-    self, DelegationFnSig, Feed, MainDefinition, RegisteredTools, ResolverAstLowering,
-    ResolverGlobalCtxt, TyCtxt, TyCtxtFeed, Visibility,
+    self, DelegationFnSig, DelegationInfo, Feed, MainDefinition, RegisteredTools,
+    ResolverAstLowering, ResolverGlobalCtxt, TyCtxt, TyCtxtFeed, Visibility,
 };
 use rustc_query_system::ich::StableHashingContext;
 use rustc_session::config::CrateType;
@@ -123,10 +123,14 @@ enum Scope<'ra> {
     DeriveHelpersCompat,
     /// Textual `let`-like scopes introduced by `macro_rules!` items.
     MacroRules(MacroRulesScopeRef<'ra>),
-    /// Names declared in the given module.
+    /// Non-glob names declared in the given module.
     /// The node ID is for reporting the `PROC_MACRO_DERIVE_RESOLUTION_FALLBACK`
     /// lint if it should be reported.
-    Module(Module<'ra>, Option<NodeId>),
+    ModuleNonGlobs(Module<'ra>, Option<NodeId>),
+    /// Glob names declared in the given module.
+    /// The node ID is for reporting the `PROC_MACRO_DERIVE_RESOLUTION_FALLBACK`
+    /// lint if it should be reported.
+    ModuleGlobs(Module<'ra>, Option<NodeId>),
     /// Names introduced by `#[macro_use]` attributes on `extern crate` items.
     MacroUsePrelude,
     /// Built-in attributes.
@@ -149,6 +153,8 @@ enum Scope<'ra> {
 enum ScopeSet<'ra> {
     /// All scopes with the given namespace.
     All(Namespace),
+    /// Two scopes inside a module, for non-glob and glob bindings.
+    Module(Namespace, Module<'ra>),
     /// A module, then extern prelude (used for mixed 2015-2018 mode in macros).
     ModuleAndExternPrelude(Namespace, Module<'ra>),
     /// Just two extern prelude scopes.
@@ -187,6 +193,7 @@ struct InvocationParent {
     parent_def: LocalDefId,
     impl_trait_context: ImplTraitContext,
     in_attr: bool,
+    const_arg_context: ConstArgContext,
 }
 
 impl InvocationParent {
@@ -194,6 +201,7 @@ impl InvocationParent {
         parent_def: CRATE_DEF_ID,
         impl_trait_context: ImplTraitContext::Existential,
         in_attr: false,
+        const_arg_context: ConstArgContext::NonDirect,
     };
 }
 
@@ -202,6 +210,13 @@ enum ImplTraitContext {
     Existential,
     Universal,
     InBinding,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum ConstArgContext {
+    Direct,
+    /// Either inside of an `AnonConst` or not inside a const argument at all.
+    NonDirect,
 }
 
 /// Used for tracking import use types which will be used for redundant import checking.
@@ -792,7 +807,7 @@ impl<'ra> fmt::Debug for Module<'ra> {
 #[derive(Clone, Copy, Debug)]
 struct NameBindingData<'ra> {
     kind: NameBindingKind<'ra>,
-    ambiguity: Option<(NameBinding<'ra>, AmbiguityKind)>,
+    ambiguity: Option<NameBinding<'ra>>,
     /// Produce a warning instead of an error when reporting ambiguities inside this binding.
     /// May apply to indirect ambiguities under imports, so `ambiguity.is_some()` is not required.
     warn_ambiguity: bool,
@@ -894,22 +909,14 @@ impl AmbiguityKind {
     }
 }
 
-/// Miscellaneous bits of metadata for better ambiguity error reporting.
-#[derive(Clone, Copy, PartialEq)]
-enum AmbiguityErrorMisc {
-    SuggestCrate,
-    SuggestSelf,
-    FromPrelude,
-    None,
-}
-
 struct AmbiguityError<'ra> {
     kind: AmbiguityKind,
     ident: Ident,
     b1: NameBinding<'ra>,
     b2: NameBinding<'ra>,
-    misc1: AmbiguityErrorMisc,
-    misc2: AmbiguityErrorMisc,
+    // `empty_module` in module scope serves as an unknown module here.
+    scope1: Scope<'ra>,
+    scope2: Scope<'ra>,
     warning: bool,
 }
 
@@ -930,9 +937,9 @@ impl<'ra> NameBindingData<'ra> {
 
     fn descent_to_ambiguity(
         self: NameBinding<'ra>,
-    ) -> Option<(NameBinding<'ra>, NameBinding<'ra>, AmbiguityKind)> {
+    ) -> Option<(NameBinding<'ra>, NameBinding<'ra>)> {
         match self.ambiguity {
-            Some((ambig_binding, ambig_kind)) => Some((self, ambig_binding, ambig_kind)),
+            Some(ambig_binding) => Some((self, ambig_binding)),
             None => match self.kind {
                 NameBindingKind::Import { binding, .. } => binding.descent_to_ambiguity(),
                 _ => None,
@@ -1271,11 +1278,10 @@ pub struct Resolver<'ra, 'tcx> {
     /// and how the `impl Trait` fragments were introduced.
     invocation_parents: FxHashMap<LocalExpnId, InvocationParent>,
 
-    legacy_const_generic_args: FxHashMap<DefId, Option<Vec<usize>>>,
     /// Amount of lifetime parameters for each item in the crate.
     item_generics_num_lifetimes: FxHashMap<LocalDefId, usize>,
     delegation_fn_sigs: LocalDefIdMap<DelegationFnSig>,
-    delegation_sig_resolution_nodes: LocalDefIdMap<NodeId>,
+    delegation_infos: LocalDefIdMap<DelegationInfo>,
 
     main_def: Option<MainDefinition> = None,
     trait_impls: FxIndexMap<DefId, Vec<LocalDefId>>,
@@ -1676,7 +1682,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             node_id_to_def_id,
             disambiguator: DisambiguatorState::new(),
             placeholder_field_indices: Default::default(),
-            legacy_const_generic_args: Default::default(),
             invocation_parents,
             item_generics_num_lifetimes: Default::default(),
             trait_impls: Default::default(),
@@ -1694,7 +1699,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             current_crate_outer_attr_insert_span,
             mods_with_parse_errors: Default::default(),
             impl_trait_names: Default::default(),
-            delegation_sig_resolution_nodes: Default::default(),
+            delegation_infos: Default::default(),
             ..
         };
 
@@ -1807,7 +1812,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             stripped_cfg_items,
         };
         let ast_lowering = ty::ResolverAstLowering {
-            legacy_const_generic_args: self.legacy_const_generic_args,
             partial_res_map: self.partial_res_map,
             import_res_map: self.import_res_map,
             label_res_map: self.label_res_map,
@@ -1823,7 +1827,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             lifetime_elision_allowed: self.lifetime_elision_allowed,
             lint_buffer: Steal::new(self.lint_buffer),
             delegation_fn_sigs: self.delegation_fn_sigs,
-            delegation_sig_resolution_nodes: self.delegation_sig_resolution_nodes,
+            delegation_infos: self.delegation_infos,
         };
         ResolverOutputs { global_ctxt, ast_lowering }
     }
@@ -1928,8 +1932,11 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         let scope_set = ScopeSet::All(TypeNS);
         self.cm().visit_scopes(scope_set, parent_scope, ctxt, None, |this, scope, _, _| {
             match scope {
-                Scope::Module(module, _) => {
+                Scope::ModuleNonGlobs(module, _) => {
                     this.get_mut().traits_in_module(module, assoc_item, &mut found_traits);
+                }
+                Scope::ModuleGlobs(..) => {
+                    // Already handled in `ModuleNonGlobs` (but see #144993).
                 }
                 Scope::StdLibPrelude => {
                     if let Some(module) = this.prelude {
@@ -2039,8 +2046,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 && ambiguity_error.ident.span == ambi.ident.span
                 && ambiguity_error.b1.span == ambi.b1.span
                 && ambiguity_error.b2.span == ambi.b2.span
-                && ambiguity_error.misc1 == ambi.misc1
-                && ambiguity_error.misc2 == ambi.misc2
             {
                 return true;
             }
@@ -2059,14 +2064,14 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         used: Used,
         warn_ambiguity: bool,
     ) {
-        if let Some((b2, kind)) = used_binding.ambiguity {
+        if let Some(b2) = used_binding.ambiguity {
             let ambiguity_error = AmbiguityError {
-                kind,
+                kind: AmbiguityKind::GlobVsGlob,
                 ident,
                 b1: used_binding,
                 b2,
-                misc1: AmbiguityErrorMisc::None,
-                misc2: AmbiguityErrorMisc::None,
+                scope1: Scope::ModuleGlobs(self.empty_module, None),
+                scope2: Scope::ModuleGlobs(self.empty_module, None),
                 warning: warn_ambiguity,
             };
             if !self.matches_previous_ambiguity_error(&ambiguity_error) {
@@ -2416,15 +2421,12 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             return None;
         }
 
-        let indexes = find_attr!(
+        find_attr!(
             // we can use parsed attrs here since for other crates they're already available
             self.tcx.get_all_attrs(def_id),
             AttributeKind::RustcLegacyConstGenerics{fn_indexes,..} => fn_indexes
         )
-        .map(|fn_indexes| fn_indexes.iter().map(|(num, _)| *num).collect());
-
-        self.legacy_const_generic_args.insert(def_id, indexes.clone());
-        indexes
+        .map(|fn_indexes| fn_indexes.iter().map(|(num, _)| *num).collect())
     }
 
     fn resolve_main(&mut self) {

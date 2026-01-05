@@ -2064,6 +2064,10 @@ Please disable assertions with `rust.debug-assertions = false`.
             cmd.arg("--has-enzyme");
         }
 
+        if builder.build.config.llvm_offload {
+            cmd.arg("--has-offload");
+        }
+
         if builder.config.cmd.bless() {
             cmd.arg("--bless");
         }
@@ -2255,6 +2259,10 @@ Please disable assertions with `rust.debug-assertions = false`.
 
         if builder.config.std_debug_assertions {
             cmd.arg("--with-std-debug-assertions");
+        }
+
+        if builder.config.rust_remap_debuginfo {
+            cmd.arg("--with-std-remap-debuginfo");
         }
 
         let mut llvm_components_passed = false;

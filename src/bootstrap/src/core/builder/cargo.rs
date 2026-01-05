@@ -503,6 +503,11 @@ impl Builder<'_> {
         let out_dir = self.stage_out(compiler, mode);
         cargo.env("CARGO_TARGET_DIR", &out_dir);
 
+        // Set this unconditionally. Cargo silently ignores `CARGO_BUILD_WARNINGS` when `-Z
+        // warnings` isn't present, which is hard to debug, and it's not worth the effort to keep
+        // them in sync.
+        cargo.arg("-Zwarnings");
+
         // Bootstrap makes a lot of assumptions about the artifacts produced in the target
         // directory. If users override the "build directory" using `build-dir`
         // (https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#build-dir), then
@@ -1025,15 +1030,26 @@ impl Builder<'_> {
                 if let Some(ref map_to) =
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::NonCompiler)
                 {
+                    // Tell the compiler which prefix was used for remapping the standard library
                     cargo.env("CFG_VIRTUAL_RUST_SOURCE_BASE_DIR", map_to);
                 }
 
                 if let Some(ref map_to) =
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::Compiler)
                 {
-                    // When building compiler sources, we want to apply the compiler remap scheme.
-                    cargo.env("RUSTC_DEBUGINFO_MAP", format!("compiler/={map_to}/compiler"));
+                    // Tell the compiler which prefix was used for remapping the compiler it-self
                     cargo.env("CFG_VIRTUAL_RUSTC_DEV_SOURCE_BASE_DIR", map_to);
+
+                    // When building compiler sources, we want to apply the compiler remap scheme.
+                    let map = [
+                        // Cargo use relative paths for workspace members, so let's remap those.
+                        format!("compiler/={map_to}/compiler"),
+                        // rustc creates absolute paths (in part bc of the `rust-src` unremap
+                        // and for working directory) so let's remap the build directory as well.
+                        format!("{}={map_to}", self.build.src.display()),
+                    ]
+                    .join("\t");
+                    cargo.env("RUSTC_DEBUGINFO_MAP", map);
                 }
             }
             Mode::Std
@@ -1044,7 +1060,16 @@ impl Builder<'_> {
                 if let Some(ref map_to) =
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::NonCompiler)
                 {
-                    cargo.env("RUSTC_DEBUGINFO_MAP", format!("library/={map_to}/library"));
+                    // When building the standard library sources, we want to apply the std remap scheme.
+                    let map = [
+                        // Cargo use relative paths for workspace members, so let's remap those.
+                        format!("library/={map_to}/library"),
+                        // rustc creates absolute paths (in part bc of the `rust-src` unremap
+                        // and for working directory) so let's remap the build directory as well.
+                        format!("{}={map_to}", self.build.src.display()),
+                    ]
+                    .join("\t");
+                    cargo.env("RUSTC_DEBUGINFO_MAP", map);
                 }
             }
         }
@@ -1187,8 +1212,10 @@ impl Builder<'_> {
             lint_flags.push("-Wunused_lifetimes");
 
             if self.config.deny_warnings {
-                lint_flags.push("-Dwarnings");
-                rustdocflags.arg("-Dwarnings");
+                // We use this instead of `lint_flags` so that we don't have to rebuild all
+                // workspace dependencies when `deny-warnings` changes, but we still get an error
+                // immediately instead of having to wait until the next rebuild.
+                cargo.env("CARGO_BUILD_WARNINGS", "deny");
             }
 
             rustdocflags.arg("-Wrustdoc::invalid_codeblock_attributes");

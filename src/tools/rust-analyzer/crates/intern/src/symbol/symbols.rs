@@ -161,6 +161,7 @@ define_symbols! {
     cfg_select,
     char,
     clone,
+    trivial_clone,
     Clone,
     coerce_unsized,
     column,
@@ -524,5 +525,10 @@ define_symbols! {
     arbitrary_self_types,
     arbitrary_self_types_pointers,
     supertrait_item_shadowing,
+    hash,
+    partial_cmp,
+    cmp,
+    CoerceUnsized,
+    DispatchFromDyn,
     define_opaque,
 }

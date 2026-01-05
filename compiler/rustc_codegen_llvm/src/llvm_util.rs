@@ -262,6 +262,11 @@ pub(crate) fn to_llvm_features<'a>(sess: &Session, s: &'a str) -> Option<LLVMFea
             "power8-crypto" => Some(LLVMFeature::new("crypto")),
             s => Some(LLVMFeature::new(s)),
         },
+        Arch::RiscV32 | Arch::RiscV64 => match s {
+            // Filter out Rust-specific *virtual* target feature
+            "zkne_or_zknd" => None,
+            s => Some(LLVMFeature::new(s)),
+        },
         Arch::Sparc | Arch::Sparc64 => match s {
             "leoncasa" => Some(LLVMFeature::new("hasleoncasa")),
             s => Some(LLVMFeature::new(s)),
@@ -383,6 +388,7 @@ fn update_target_reliable_float_cfg(sess: &Session, cfg: &mut TargetConfig) {
         // Infinite recursion <https://github.com/llvm/llvm-project/issues/97981>
         (Arch::CSky, _) => false,
         (Arch::Hexagon, _) if major < 21 => false, // (fixed in llvm21)
+        (Arch::LoongArch32 | Arch::LoongArch64, _) if major < 21 => false, // (fixed in llvm21)
         (Arch::PowerPC | Arch::PowerPC64, _) => false,
         (Arch::Sparc | Arch::Sparc64, _) => false,
         (Arch::Wasm32 | Arch::Wasm64, _) => false,

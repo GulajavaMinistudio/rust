@@ -190,10 +190,14 @@ pub enum CoverageLevel {
 }
 
 // The different settings that the `-Z offload` flag can have.
-#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 pub enum Offload {
-    /// Enable the llvm offload pipeline
-    Enable,
+    /// Entry point for `std::offload`, enables kernel compilation for a gpu device
+    Device,
+    /// Second step in the offload pipeline, generates the host code to call kernels.
+    Host(String),
+    /// Test is similar to Host, but allows testing without a device artifact.
+    Test,
 }
 
 /// The different settings that the `-Z autodiff` flag can have.
@@ -1374,7 +1378,6 @@ impl Default for Options {
             crate_types: Vec::new(),
             optimize: OptLevel::No,
             debuginfo: DebugInfo::None,
-            debuginfo_compression: DebugInfoCompression::None,
             lint_opts: Vec::new(),
             lint_cap: None,
             describe_lints: false,
@@ -1796,7 +1799,7 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
             "<OPT>",
         ),
         opt(Stable, Flag, "", "test", "Build a test harness", ""),
-        opt(Stable, Opt, "", "target", "Target triple for which the code is compiled", "<TARGET>"),
+        opt(Stable, Opt, "", "target", "Target tuple for which the code is compiled", "<TARGET>"),
         opt(Stable, Multi, "A", "allow", "Set lint allowed", "<LINT>"),
         opt(Stable, Multi, "W", "warn", "Set lint warnings", "<LINT>"),
         opt(Stable, Multi, "", "force-warn", "Set lint force-warn", "<LINT>"),
@@ -2578,9 +2581,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         )
     }
 
-    if !nightly_options::is_unstable_enabled(matches)
-        && unstable_opts.offload.contains(&Offload::Enable)
-    {
+    if !nightly_options::is_unstable_enabled(matches) && !unstable_opts.offload.is_empty() {
         early_dcx.early_fatal(
             "`-Zoffload=Enable` also requires `-Zunstable-options` \
                 and a nightly compiler",
@@ -2639,7 +2640,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     // for more details.
     let debug_assertions = cg.debug_assertions.unwrap_or(opt_level == OptLevel::No);
     let debuginfo = select_debuginfo(matches, &cg);
-    let debuginfo_compression = unstable_opts.debuginfo_compression;
 
     if !unstable_options_enabled {
         if let Err(error) = cg.linker_features.check_unstable_variants(&target_triple) {
@@ -2747,7 +2747,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         crate_types,
         optimize: opt_level,
         debuginfo,
-        debuginfo_compression,
         lint_opts,
         lint_cap,
         describe_lints,
