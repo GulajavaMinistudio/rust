@@ -104,7 +104,7 @@ impl<'sess, S: Stage> AttributeParser<'sess, S> {
                 let (applied, only) = allowed_targets_applied(allowed_targets, target, cx.features);
                 let name = cx.attr_path.clone();
 
-                let lint = if name.segments[0].name == sym::deprecated
+                let lint = if name.segments[0] == sym::deprecated
                     && ![
                         Target::Closure,
                         Target::Expression,
@@ -310,5 +310,29 @@ pub(crate) const ALL_TARGETS: &'static [Policy] = {
         Allow(Target::Crate),
         Allow(Target::Delegation { mac: false }),
         Allow(Target::Delegation { mac: true }),
+        Allow(Target::GenericParam {
+            kind: rustc_hir::target::GenericParamKind::Const,
+            has_default: false,
+        }),
+        Allow(Target::GenericParam {
+            kind: rustc_hir::target::GenericParamKind::Const,
+            has_default: true,
+        }),
+        Allow(Target::GenericParam {
+            kind: rustc_hir::target::GenericParamKind::Lifetime,
+            has_default: false,
+        }),
+        Allow(Target::GenericParam {
+            kind: rustc_hir::target::GenericParamKind::Lifetime,
+            has_default: true,
+        }),
+        Allow(Target::GenericParam {
+            kind: rustc_hir::target::GenericParamKind::Type,
+            has_default: false,
+        }),
+        Allow(Target::GenericParam {
+            kind: rustc_hir::target::GenericParamKind::Type,
+            has_default: true,
+        }),
     ]
 };

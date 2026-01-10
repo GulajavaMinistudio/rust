@@ -21,8 +21,8 @@ use rustc_feature::{
     BuiltinAttribute,
 };
 use rustc_hir::attrs::{
-    AttributeKind, DocAttribute, DocInline, EiiDecl, EiiImpl, InlineAttr, MirDialect, MirPhase,
-    ReprAttr, SanitizerSet,
+    AttributeKind, DocAttribute, DocInline, EiiDecl, EiiImpl, EiiImplResolution, InlineAttr,
+    MirDialect, MirPhase, ReprAttr, SanitizerSet,
 };
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::LocalModDefId;
@@ -229,6 +229,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::BodyStability { .. }
                     | AttributeKind::ConstStabilityIndirect
                     | AttributeKind::MacroTransparency(_)
+                    | AttributeKind::CfgTrace(..)
                     | AttributeKind::Pointee(..)
                     | AttributeKind::Dummy
                     | AttributeKind::RustcBuiltinMacro { .. }
@@ -302,6 +303,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcPassIndirectlyInNonRusticAbis(..)
                     | AttributeKind::PinV2(..)
                     | AttributeKind::WindowsSubsystem(..)
+                    | AttributeKind::CfgAttrTrace
                     | AttributeKind::ThreadLocal
                     | AttributeKind::CfiEncoding { .. }
                 ) => { /* do nothing  */ }
@@ -338,8 +340,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::forbid
                             | sym::cfg
                             | sym::cfg_attr
-                            | sym::cfg_trace
-                            | sym::cfg_attr_trace
                             // need to be fixed
                             | sym::patchable_function_entry // FIXME(patchable_function_entry)
                             | sym::deprecated_safe // FIXME(deprecated_safe)
@@ -391,7 +391,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             attr.path
                                 .segments
                                 .first()
-                                .and_then(|ident| BUILTIN_ATTRIBUTE_MAP.get(&ident.name))
+                                .and_then(|name| BUILTIN_ATTRIBUTE_MAP.get(&name))
                         {
                             match attr.style {
                                 ast::AttrStyle::Outer => {
@@ -428,7 +428,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
 
             if let Attribute::Unparsed(unparsed_attr) = attr
                 && let Some(BuiltinAttribute { duplicates, .. }) =
-                    attr.ident().and_then(|ident| BUILTIN_ATTRIBUTE_MAP.get(&ident.name))
+                    attr.name().and_then(|name| BUILTIN_ATTRIBUTE_MAP.get(&name))
             {
                 check_duplicates(
                     self.tcx,
@@ -506,7 +506,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
     }
 
     fn check_eii_impl(&self, impls: &[EiiImpl], target: Target) {
-        for EiiImpl { span, inner_span, eii_macro, impl_marked_unsafe, is_default: _ } in impls {
+        for EiiImpl { span, inner_span, resolution, impl_marked_unsafe, is_default: _ } in impls {
             match target {
                 Target::Fn => {}
                 _ => {
@@ -514,7 +514,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 }
             }
 
-            if find_attr!(self.tcx.get_all_attrs(*eii_macro), AttributeKind::EiiExternTarget(EiiDecl { impl_unsafe, .. }) if *impl_unsafe)
+            if let EiiImplResolution::Macro(eii_macro) = resolution
+                && find_attr!(self.tcx.get_all_attrs(*eii_macro), AttributeKind::EiiExternTarget(EiiDecl { impl_unsafe, .. }) if *impl_unsafe)
                 && !impl_marked_unsafe
             {
                 self.dcx().emit_err(errors::EiiImplRequiresUnsafe {
@@ -758,9 +759,14 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                 if let Some(impls) = find_attr!(attrs, AttributeKind::EiiImpls(impls) => impls) {
                     let sig = self.tcx.hir_node(hir_id).fn_sig().unwrap();
                     for i in impls {
+                        let name = match i.resolution {
+                            EiiImplResolution::Macro(def_id) => self.tcx.item_name(def_id),
+                            EiiImplResolution::Known(decl) => decl.name.name,
+                            EiiImplResolution::Error(_eg) => continue,
+                        };
                         self.dcx().emit_err(errors::EiiWithTrackCaller {
                             attr_span,
-                            name: self.tcx.item_name(i.eii_macro),
+                            name,
                             sig_span: sig.span,
                         });
                     }
@@ -1950,12 +1956,10 @@ impl<'tcx> Visitor<'tcx> for CheckAttrVisitor<'tcx> {
         // only `#[cfg]` and `#[cfg_attr]` are allowed, but it should be removed
         // if we allow more attributes (e.g., tool attributes and `allow/deny/warn`)
         // in where clauses. After that, only `self.check_attributes` should be enough.
-        const ATTRS_ALLOWED: &[Symbol] = &[sym::cfg_trace, sym::cfg_attr_trace];
         let spans = self
             .tcx
             .hir_attrs(where_predicate.hir_id)
             .iter()
-            .filter(|attr| !ATTRS_ALLOWED.iter().any(|&sym| attr.has_name(sym)))
             // FIXME: We shouldn't need to special-case `doc`!
             .filter(|attr| {
                 matches!(
