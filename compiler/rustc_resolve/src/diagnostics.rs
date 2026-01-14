@@ -24,7 +24,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::Session;
 use rustc_session::lint::BuiltinLintDiag;
 use rustc_session::lint::builtin::{
-    ABSOLUTE_PATHS_NOT_STARTING_WITH_CRATE, AMBIGUOUS_GLOB_IMPORTS,
+    ABSOLUTE_PATHS_NOT_STARTING_WITH_CRATE, AMBIGUOUS_GLOB_IMPORTS, AMBIGUOUS_PANIC_IMPORTS,
     MACRO_EXPANDED_MACRO_EXPORTS_ACCESSED_BY_ABSOLUTE_PATHS,
 };
 use rustc_session::utils::was_invoked_from_cargo;
@@ -44,10 +44,11 @@ use crate::errors::{
 use crate::imports::{Import, ImportKind};
 use crate::late::{DiagMetadata, PatternSource, Rib};
 use crate::{
-    AmbiguityError, AmbiguityKind, BindingError, BindingKey, Decl, DeclKind, Finalize,
-    ForwardGenericParamBanReason, HasGenericParams, LateDecl, MacroRulesScope, Module, ModuleKind,
-    ModuleOrUniformRoot, ParentScope, PathResult, PrivacyError, ResolutionError, Resolver, Scope,
-    ScopeSet, Segment, UseError, Used, VisResolutionError, errors as errs, path_names_to_string,
+    AmbiguityError, AmbiguityKind, AmbiguityWarning, BindingError, BindingKey, Decl, DeclKind,
+    Finalize, ForwardGenericParamBanReason, HasGenericParams, LateDecl, MacroRulesScope, Module,
+    ModuleKind, ModuleOrUniformRoot, ParentScope, PathResult, PrivacyError, ResolutionError,
+    Resolver, Scope, ScopeSet, Segment, UseError, Used, VisResolutionError, errors as errs,
+    path_names_to_string,
 };
 
 type Res = def::Res<ast::NodeId>;
@@ -146,17 +147,18 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         for ambiguity_error in &self.ambiguity_errors {
             let diag = self.ambiguity_diagnostic(ambiguity_error);
 
-            if ambiguity_error.warning {
+            if let Some(ambiguity_warning) = ambiguity_error.warning {
                 let node_id = match ambiguity_error.b1.0.kind {
                     DeclKind::Import { import, .. } => import.root_id,
                     DeclKind::Def(_) => CRATE_NODE_ID,
                 };
-                self.lint_buffer.buffer_lint(
-                    AMBIGUOUS_GLOB_IMPORTS,
-                    node_id,
-                    diag.ident.span,
-                    diag,
-                );
+
+                let lint = match ambiguity_warning {
+                    AmbiguityWarning::GlobImport => AMBIGUOUS_GLOB_IMPORTS,
+                    AmbiguityWarning::PanicImport => AMBIGUOUS_PANIC_IMPORTS,
+                };
+
+                self.lint_buffer.buffer_lint(lint, node_id, diag.ident.span, diag);
             } else {
                 self.dcx().emit_err(diag);
             }
@@ -1187,7 +1189,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                                 .get(&expn_id)
                                 .into_iter()
                                 .flatten()
-                                .map(|(ident, _)| TypoSuggestion::typo_from_ident(*ident, res)),
+                                .map(|(ident, _)| TypoSuggestion::typo_from_ident(ident.0, res)),
                         );
                     }
                 }
@@ -1199,7 +1201,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         let res = macro_rules_def.decl.res();
                         if filter_fn(res) {
                             suggestions
-                                .push(TypoSuggestion::typo_from_ident(macro_rules_def.ident, res))
+                                .push(TypoSuggestion::typo_from_ident(macro_rules_def.ident.0, res))
                         }
                     }
                 }
@@ -1338,7 +1340,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 }
 
                 let child_accessible =
-                    accessible && this.is_accessible_from(name_binding.vis, parent_scope.module);
+                    accessible && this.is_accessible_from(name_binding.vis(), parent_scope.module);
 
                 // do not venture inside inaccessible items of other crates
                 if in_module_is_extern && !child_accessible {
@@ -1358,8 +1360,8 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
                 // #90113: Do not count an inaccessible reexported item as a candidate.
                 if let DeclKind::Import { source_decl, .. } = name_binding.kind
-                    && this.is_accessible_from(source_decl.vis, parent_scope.module)
-                    && !this.is_accessible_from(name_binding.vis, parent_scope.module)
+                    && this.is_accessible_from(source_decl.vis(), parent_scope.module)
+                    && !this.is_accessible_from(name_binding.vis(), parent_scope.module)
                 {
                     return;
                 }
@@ -2243,7 +2245,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             let first = binding == first_binding;
             let def_span = self.tcx.sess.source_map().guess_head_span(binding.span);
             let mut note_span = MultiSpan::from_span(def_span);
-            if !first && binding.vis.is_public() {
+            if !first && binding.vis().is_public() {
                 let desc = match binding.kind {
                     DeclKind::Import { .. } => "re-export",
                     _ => "directly",
@@ -2892,7 +2894,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             return None;
         }
 
-        let binding_key = BindingKey::new(ident, MacroNS);
+        let binding_key = BindingKey::new(Macros20NormalizedIdent::new(ident), MacroNS);
         let binding = self.resolution(crate_module, binding_key)?.binding()?;
         let Res::Def(DefKind::Macro(kinds), _) = binding.res() else {
             return None;
